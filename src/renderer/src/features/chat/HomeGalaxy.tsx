@@ -1,4 +1,4 @@
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import {
   drawFrame,
   frameViewport,
@@ -105,39 +105,55 @@ function useBoxSize(target: RefObject<Element | null>): { width: number; height:
   return size;
 }
 
-/** 时钟动画的跨度：一个没有效果的 Web Animation，只当「星系走了多少毫秒」的表（与转动层同一条时间线，暂停一起停） */
-const CLOCK_SPAN_MS = 1e12;
+/**
+ * 星系的表：走了多少毫秒。不用一个「空跑的 Web Animation」当表——没有目标的动画在主线程上每帧都要服务一次，
+ * 实测让主线程帧从 0 涨到每秒 100 帧（2026-11-24）。这里只在暂停 / 恢复时记账，读的时候现算。
+ * 时间基准用 document.timeline（与转动层的动画同一条时间线）。
+ */
+export interface GalaxyClock {
+  /** 已走的毫秒数 */
+  now: () => number;
+}
 
-function clockMs(clock: Animation | null): number {
-  const time = clock?.currentTime;
-  return typeof time === "number" ? time : 0;
+function timelineMs(): number {
+  const time = document.timeline.currentTime;
+  return typeof time === "number" ? time : performance.now();
 }
 
 /**
  * 公转（galaxy-motion.ts）：根节点里每个 [data-spin] 元素挂一个无限循环的 transform 动画，由合成器线程跑，React 不再每帧重绘。
  * 停的条件——页面隐藏、窗口失焦、星系滚出 / 被藏出视口（IntersectionObserver）、系统要求减少动效——任何一个成立，
- * 时钟与所有转动层一起 pause()，恢复时一起 play()（同一帧起步，相位不错开）。卸载时 cancel()。
+ * 所有转动层一起 pause()，恢复时按表上的时间重设 currentTime 再 play()（相位不错开）。卸载时 cancel()。
  * 现在跑不跑写在根节点的 data-motion 上（running / paused），验收时可直接读。
  */
-function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: string): { running: boolean; clock: RefObject<Animation | null> } {
-  const clock = useRef<Animation | null>(null);
+function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: string): { running: boolean; clock: GalaxyClock } {
+  const ledger = useRef<{ base: number; start: number | null }>({ base: 0, start: null });
+  const clock = useMemo<GalaxyClock>(
+    () => ({
+      now: () => {
+        const { base, start } = ledger.current;
+        return start === null ? base : base + Math.max(0, timelineMs() - start);
+      },
+    }),
+    [],
+  );
   const spins = useRef<Animation[]>([]);
   const runningRef = useRef(false);
   const [running, setRunning] = useState(false);
   useLayoutEffect(() => {
     const el = target.current;
     if (el === null) return;
-    const timer = new Animation(new KeyframeEffect(null, null, { duration: CLOCK_SPAN_MS }), document.timeline);
-    timer.currentTime = 0;
-    timer.pause();
-    clock.current = timer;
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const inputs: MotionInputs = { hasFocus: document.hasFocus(), visibilityState: document.visibilityState, onScreen: true, reducedMotion: media.matches };
     const sync = () => {
       const run = motionAllowed(inputs);
       if (run !== runningRef.current) {
+        const elapsed = clock.now();
+        ledger.current = run ? { base: elapsed, start: timelineMs() } : { base: elapsed, start: null };
         runningRef.current = run;
-        for (const anim of [timer, ...spins.current]) {
+        for (const anim of spins.current) {
+          const period = Number(anim.effect?.getTiming().duration);
+          if (Number.isFinite(period) && period > 0) anim.currentTime = elapsed % period;
           if (run) anim.play();
           else anim.pause();
         }
@@ -174,17 +190,16 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
       media.removeEventListener("change", onMotionPref);
       for (const anim of spins.current) anim.cancel();
       spins.current = [];
-      timer.cancel();
-      clock.current = null;
+      ledger.current = { base: clock.now(), start: null };
       runningRef.current = false;
     };
-  }, [target]);
-  // 几何一变（画布尺寸、轨道、会话数）就把转动层的动画重挂一遍：相位都从同一个时钟读，不跳
+  }, [target, clock]);
+  // 几何一变（画布尺寸、轨道、会话数）就把转动层的动画重挂一遍：相位都从同一块表读，不跳
   useLayoutEffect(() => {
     const el = target.current;
     if (el === null) return;
     for (const anim of spins.current) anim.cancel();
-    const now = clockMs(clock.current);
+    const now = clock.now();
     const list: Animation[] = [];
     for (const node of el.querySelectorAll<HTMLElement>("[data-spin]")) {
       const from = Number(node.dataset.from);
@@ -197,7 +212,7 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
       list.push(anim);
     }
     spins.current = list;
-  }, [target, signature]);
+  }, [target, clock, signature]);
   return { running, clock };
 }
 
@@ -205,13 +220,13 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
  * 行星 / 碎石块过了换层边界就从主星背后那一层挪到前面那一层（反之亦然）：每颗按到点时间排一个 setTimeout（一圈两次），
  * 不每帧问。两层各有一份同样的 DOM，只切 visibility（不影响正在跑的合成器动画）。
  */
-function useSides(target: RefObject<HTMLDivElement | null>, movers: readonly Mover[], clock: RefObject<Animation | null>, running: boolean, signature: string): void {
+function useSides(target: RefObject<HTMLDivElement | null>, movers: readonly Mover[], clock: GalaxyClock, running: boolean, signature: string): void {
   useLayoutEffect(() => {
     const el = target.current;
     if (el === null) return;
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const apply = (mover: Mover) => {
-      const t = clockMs(clock.current) / 1000;
+      const t = clock.now() / 1000;
       const far = moverFar(mover, t);
       for (const node of el.querySelectorAll<HTMLElement>(`[data-body="${CSS.escape(mover.id)}"]`)) {
         const show = (node.dataset.layer === "far") === far;
@@ -285,7 +300,7 @@ interface OverlayPlan {
 
 const EMPTY_PLAN: OverlayPlan = { key: "", hidden: new Set(), callouts: new Map(), names: new Map() };
 
-function usePlan(compute: ((tSec: number) => OverlayPlan) | null, clock: RefObject<Animation | null>, running: boolean, signature: string): OverlayPlan {
+function usePlan(compute: ((tSec: number) => OverlayPlan) | null, clock: GalaxyClock, running: boolean, signature: string): OverlayPlan {
   const [plan, setPlan] = useState<OverlayPlan>(EMPTY_PLAN);
   const computeRef = useRef(compute);
   computeRef.current = compute;
@@ -295,7 +310,7 @@ function usePlan(compute: ((tSec: number) => OverlayPlan) | null, clock: RefObje
     const tick = () => {
       const fn = computeRef.current;
       if (fn === null) return;
-      const next = fn(clockMs(clock.current) / 1000);
+      const next = fn(clock.now() / 1000);
       if (next.key !== lastKey.current) {
         lastKey.current = next.key;
         setPlan(next);
@@ -433,7 +448,7 @@ function BeltHalf(props: {
  *
  * 编排星系（fill）：每条根会话都是碎石带里的一颗碎石，带子随会话数长大（beltGrowthOf）；新会话从外缘被吸进来（useCaptures）。
  */
-export function HomeGalaxy(props: {
+type HomeGalaxyProps = {
   spec: GalaxySpec;
   label: string;
   starDesign?: GalaxyDesign;
@@ -456,7 +471,20 @@ export function HomeGalaxy(props: {
   workspaceId?: string | null;
   /** 主星的名字（读屏与悬停提示「X（主星）：在设计面板里打开」）；缺省用主星设计稿的名字 */
   starName?: string;
-}) {
+};
+
+/**
+ * 外层只做一件事：把 spec 按内容稳住。ChatView 每来一个运行态事件都会重算一份新的 spec 对象（内容多半没变）；
+ * 按内容比较之后，星系那一大棵 DOM（几百颗碎石、几串转动层）只在真变了的时候重渲染。
+ */
+export function HomeGalaxy(props: HomeGalaxyProps) {
+  const key = JSON.stringify(props.spec);
+  const cache = useRef<{ key: string; spec: GalaxySpec } | null>(null);
+  if (cache.current === null || cache.current.key !== key) cache.current = { key, spec: props.spec };
+  return <GalaxyScene {...props} spec={cache.current.spec} />;
+}
+
+const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const t = useT();
   const actions = useGalaxyActions();
   const uid = useId().replace(/:/g, "");
@@ -837,7 +865,7 @@ export function HomeGalaxy(props: {
       )}
     </div>
   );
-}
+});
 
 /**
  * 单智能体首页的星系数据（原型）：`?galaxy=empty|typical|full` 切三档，不带参数时是 typical。
