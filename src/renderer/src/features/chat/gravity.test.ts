@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { AGENT_READABLE_MAX, GALAXY_MAX_FILL, PLANET_MASS, STAR_DENSITY, STAR_MASS, drawFrame, galaxyBox, makeCamera, starRadius, type PlanetItem, type StarItem } from "./galaxy.ts";
+import { AGENT_READABLE_MAX, GALAXY_MAX_FILL, PLANET_MASS, STAR_DENSITY, STAR_MASS, drawFrame, galaxyBox, makeCamera, project, starRadius, type PlanetItem, type StarItem } from "./galaxy.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
 import { homeGalaxyOf } from "./galaxy-data.ts";
 import { RED_DWARF, redDwarfDesign, radiusOf } from "../galaxy-designer/design.ts";
-import { EARTH_DENSITY, bodyPhysics, massRatio, pitBottom, pitDepth, pitSoftening, ratioText, scanPath, sci, sheetZ, shortNumber, type Well } from "./gravity.ts";
+import { EARTH_DENSITY, bodyPhysics, massRatio, pitBottom, pitDepth, pitSoftening, ratioText, scanPath, sci, sheetZ, shortNumber, unprojectToPlane, type Well } from "./gravity.ts";
 import { binaryGeometry, binaryPhase, binaryPositions, BINARY_ZOOM_MIN } from "./binary.ts";
 
 const near = (a: number, b: number, eps = 1e-9): void => assert.ok(Math.abs(a - b) <= eps * Math.max(1, Math.abs(b)), `${a} ≈ ${b}`);
@@ -79,6 +79,20 @@ describe("引力扫描：坑深只随质量", () => {
     assert.match(a, /^M/);
     assert.notEqual(a, b);
   });
+});
+
+test("落回平面：精确投影的点落回去是原来那一点（各俯角、方位角）", () => {
+  const vp = { width: 800, height: 500, focal: 900, cx: 400, cy: 250 };
+  for (const [elev, az] of [[40, 0], [25, 30], [70, -120]] as const) {
+    const camera = makeCamera(64, elev, undefined, az);
+    for (const p of [{ x: 0, y: 0 }, { x: 30, y: -12 }, { x: -50, y: 44 }]) {
+      const q = project({ ...p, z: 0 }, camera);
+      const back = unprojectToPlane(vp.cx + vp.focal * q.sx, vp.cy + vp.focal * q.sy, camera, vp);
+      assert.ok(back !== null);
+      near(back.x, p.x, 1e-6);
+      near(back.y, p.y, 1e-6);
+    }
+  }
 });
 
 describe("「大行星浅坑」演示：红矮星 + 气态巨行星", () => {

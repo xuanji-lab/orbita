@@ -74,16 +74,19 @@ export function ratioText(ratio: number): string {
 // ── 引力扫描：坑深与网格 ─────────────────────────────────────────────
 
 export const SCAN = {
-  /** 最重的主星（STAR_MASS.max）压出的坑深（世界单位）：比设计面板的井浅一点——这里同时有十来条轨道，坑太深会盖住近侧的行星 */
-  depthMax: 16,
+  /**
+   * 最重的主星（STAR_MASS.max）压出的坑深（世界单位）：比设计面板的井（34）浅得多——这里的天体不能坐进坑里
+   * （它们由合成器在轨道平面上转），坑底落在天体正下方；坑太深，俯看时整片网格沉到天体下面一大截，读成「天体浮在半空」
+   */
+  depthMax: 9,
   /** 坑深 ∝ 质量^γ：γ < 1 让最轻的行星（主星的几百分之一）也压得出一个看得见的浅坑，单调不变 */
   gamma: 0.5,
-  /** 坑的半宽 s = 天体画出来的半径（世界单位）× spread + pad：坑贴着天体，大的天体坑更宽、但不更深 */
-  spread: 1.6,
-  pad: 1.5,
+  /** 坑的半宽 s = 天体画出来的半径（世界单位）× spread + pad：坑口比天体宽一圈——天体压在坑上方，坑太窄会整个藏在天体背后；大的天体坑更宽、但不更深 */
+  spread: 2.6,
+  pad: 3,
   /** 网格铺多大（× FRAME_EXTENT）与线距（世界单位）；每条线的采样点数 */
-  span: 1.35,
-  step: 6,
+  span: 1.2,
+  step: 4.5,
   samples: 64,
 } as const;
 
@@ -124,11 +127,30 @@ function screenOf(p: Vec3, camera: Camera, vp: Viewport): { x: number; y: number
 }
 
 /**
+ * 屏幕上的一点落回轨道平面（z = 0）上的世界坐标：从相机打一条射线，与平面相交。
+ * 星系里的行星、伴星是按「轨道矩阵」的仿射模型画的（合成器只会做矩阵，galaxy.ts 的 orbitFrame），离主星远时与精确透视差几十像素；
+ * 坑的位置从「天体画在哪」反推回平面，坑底就正好在画出来的天体下面。射线与平面平行（俯角 0）时返回 null
+ */
+export function unprojectToPlane(px: number, py: number, camera: Camera, vp: Viewport): { x: number; y: number } | null {
+  const sx = (px - vp.cx) / vp.focal;
+  const sy = (py - vp.cy) / vp.focal;
+  // project：sx = right·r / depth，sy = −up·r / depth ⇒ 方向 = forward + sx·right − sy·up
+  const dx = camera.forward.x + sx * camera.right.x - sy * camera.up.x;
+  const dy = camera.forward.y + sx * camera.right.y - sy * camera.up.y;
+  const dz = camera.forward.z + sx * camera.right.z - sy * camera.up.z;
+  if (Math.abs(dz) < 1e-9) return null;
+  const t = -camera.position.z / dz;
+  if (!(t > 0)) return null;
+  return { x: camera.position.x + t * dx, y: camera.position.y + t * dy };
+}
+
+/**
  * 整张网格画成一条 path（一次 DOM 写入）：横线、纵线，各按 SCAN.samples 采样，高度取 sheetZ。
  * 网格以主星为中心（origin：主星在世界坐标里的位置，联星时主星绕质心走）。
  */
-export function scanPath(camera: Camera, vp: Viewport, wells: readonly Well[], origin: { x: number; y: number } = { x: 0, y: 0 }): string {
-  const half = FRAME_EXTENT * SCAN.span;
+export function scanPath(camera: Camera, vp: Viewport, wells: readonly Well[], origin: { x: number; y: number } = { x: 0, y: 0 }, reach = 0): string {
+  // 网格至少铺到画框的 SCAN.span 倍；有更远的天体（联星的伴星）就铺到它外面一圈
+  const half = Math.max(FRAME_EXTENT * SCAN.span, reach);
   const lines = Math.floor(half / SCAN.step);
   let d = "";
   const line = (along: "x" | "y", fixed: number): void => {
@@ -143,6 +165,21 @@ export function scanPath(camera: Camera, vp: Viewport, wells: readonly Well[], o
   for (let k = -lines; k <= lines; k++) {
     line("x", k * SCAN.step);
     line("y", k * SCAN.step);
+  }
+  return d;
+}
+
+/**
+ * 「测深线」：每个天体从中心（轨道平面上）垂直落到它压出的坑底，底下一道短横——线越长坑越深、引力越强。
+ * 天体比自己的坑宽时，坑会整个藏在天体背后（小红矮星旁的气态巨行星就是这样），这条线画在天体上面，把深度直接量出来。
+ */
+export function probePath(camera: Camera, vp: Viewport, wells: readonly Well[]): string {
+  let d = "";
+  for (const well of wells) {
+    const top = screenOf({ x: well.x, y: well.y, z: 0 }, camera, vp);
+    const bottom = screenOf({ x: well.x, y: well.y, z: sheetZ(well.x, well.y, wells) }, camera, vp);
+    d += `M${top.x.toFixed(1)} ${top.y.toFixed(1)}L${bottom.x.toFixed(1)} ${bottom.y.toFixed(1)}`;
+    d += `M${(bottom.x - 5).toFixed(1)} ${bottom.y.toFixed(1)}H${(bottom.x + 5).toFixed(1)}`;
   }
   return d;
 }

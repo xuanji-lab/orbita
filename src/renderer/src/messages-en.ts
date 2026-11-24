@@ -4121,7 +4121,6 @@ export const en = {
     density: "Density",
     ratio: "vs main star",
     ratioSelf: "the heaviest here",
-    ratioCompanion: (r: string) => `${r} of this star`,
     pit: "Pit depth",
     pitOf: (pct: string) => `${pct} of the main star's`,
     lookNote: "Looks bigger than the main star, but it is lighter: its pit is shallower.",

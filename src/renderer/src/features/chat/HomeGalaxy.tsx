@@ -85,10 +85,10 @@ import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, VIEW_DEF
 import { boxesOverlap, planOverlay } from "./overlay-plan.ts";
 import { beltSplit, liveProjection, type FrozenScene, type LiveProjection } from "./turntable.ts";
 import { USER_VIEW_DEFAULT, zoomAt, type UserView } from "./galaxy.ts";
-import { DENSITY, STAR_DENSITY, eccentricAnomaly, farWindow, orbitFrame, orbitPoint, project, starRadius, type OrbitFrame } from "./galaxy.ts";
+import { DENSITY, STAR_DENSITY, eccentricAnomaly, farWindow, framePoint, orbitFrame, orbitPoint, project, starRadius, type OrbitFrame } from "./galaxy.ts";
 import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { binaryGeometry, binaryPhase, binaryPositions, type BinaryGeometry } from "./binary.ts";
-import { pitDepth, pitSoftening, type Well } from "./gravity.ts";
+import { pitDepth, pitSoftening, unprojectToPlane, type Well } from "./gravity.ts";
 import { MassCard, ScanGrid, ScanToggle, useScanOn, type CardBody, type ScanFrame } from "./GalaxyScan.tsx";
 
 /** 伴星在 movers 里的 id 前缀（后面接伴星工作区 id）：它不是这座星系的行星，名字 / 命中 / 远近另算 */
@@ -1153,9 +1153,11 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   // 引力扫描的网格跟着转台 / 缩放重画：拖动中 replan 每 LIVE_FRAME_MS 一次，顺带叫它
   const scanOn = useScanOn();
   const scanRedraw = useRef<(() => void) | null>(null);
+  const probeRedraw = useRef<(() => void) | null>(null);
   const replanAll = useCallback(() => {
     replan();
     scanRedraw.current?.();
+    probeRedraw.current?.();
   }, [replan]);
   // 质量卡：点了哪颗（"star" / 行星 id / 伴星 id）
   const [selected, setSelected] = useState<string | null>(null);
@@ -1171,22 +1173,33 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       const camera = liveRef.current?.camera ?? scene.camera;
       const viewport = liveRef.current?.viewport ?? scene.viewport;
       const ppu = viewport.focal / project({ x: 0, y: 0, z: 0 }, camera).depth;
+      // 网格与测深线画在「跟着本星走」那一层里（与行星同一个仿射模型），所以这里一律以本星为原点；
+      // 伴星在本星的 sep 处（= 质心坐标里的 companion − self）。按质心坐标算再精确投影，行星的坑会与画出来的行星差几十像素
+      // （本星离质心 r₁ 远，透视比例与按主星算的轨道矩阵不同）
       const pos = geo === null ? null : binaryPositions(geo, binaryPhase0, tSec);
-      const o = pos?.self ?? { x: 0, y: 0 };
+      const o = { x: 0, y: 0 };
       const wells: Well[] = [{ id: "star", x: o.x, y: o.y, depth: pitDepth(starMassUi), soft: pitSoftening(layout.starRadius) }];
       const moverById = new Map(baseMovers.map((mover) => [mover.id, mover]));
+      // 坑落在天体「画出来」的位置下面：按轨道矩阵算出屏幕点，再落回平面（gravity.unprojectToPlane）；落不回去（俯角 0）用精确位置
+      const planted = (frame: OrbitFrame, E: number, fallback: { x: number; y: number }): { x: number; y: number } => {
+        const s = framePoint(frame, E);
+        return unprojectToPlane(s.x, s.y, camera, viewport) ?? fallback;
+      };
       for (const planet of layout.planets) {
         const E = eccentricAnomaly(planet.phase + planet.omega * tSec, layout.ecc);
         const p = orbitPoint(planet.orbitRadius, planet.inclination, planet.node, E, layout.ecc);
+        const at = planted(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, viewport, layout.ecc), E, { x: o.x + p.x, y: o.y + p.y });
         const mover = moverById.get(planet.id);
         const drawn = mover === undefined ? planet.radius : mover.r / ppu;
-        wells.push({ id: planet.id, x: o.x + p.x, y: o.y + p.y, depth: pitDepth(planetSpecById.get(planet.id)?.mass ?? 0), soft: pitSoftening(drawn) });
+        wells.push({ id: planet.id, x: at.x, y: at.y, depth: pitDepth(planetSpecById.get(planet.id)?.mass ?? 0), soft: pitSoftening(drawn) });
       }
-      if (pos !== null && companionStar !== null && companionId !== null) {
-        wells.push({ id: companionId, x: pos.companion.x, y: pos.companion.y, depth: pitDepth(companionStar.mass), soft: pitSoftening(companionR) });
+      if (pos !== null && geo !== null && companionStar !== null && companionId !== null) {
+        const at = planted(binaryFrame(geo.sep, camera, viewport, false), binaryPhase0 + geo.omega * tSec, { x: pos.companion.x - pos.self.x, y: pos.companion.y - pos.self.y });
+        wells.push({ id: companionId, x: at.x, y: at.y, depth: pitDepth(companionStar.mass), soft: pitSoftening(companionR) });
       }
       const q = project({ x: o.x, y: o.y, z: 0 }, camera);
-      return { camera, viewport, wells, origin: { x: 0, y: 0 }, star: { x: viewport.cx + viewport.focal * q.sx, y: viewport.cy + viewport.focal * q.sy } };
+      const reach = geo === null ? 0 : geo.sep + pitSoftening(companionR) * 2;
+      return { camera, viewport, wells, origin: { x: 0, y: 0 }, star: { x: viewport.cx + viewport.focal * q.sx, y: viewport.cy + viewport.focal * q.sy }, reach };
     },
     [scene, starless, geo, binaryPhase0, starMassUi, layout, baseMovers, planetSpecById, companionStar, companionId, companionR],
   );
@@ -1463,13 +1476,13 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       data-dust={layout.belt?.particles.length ?? 0}
       data-belt={layout.belt === null ? undefined : `${layout.belt.inner.toFixed(1)}-${layout.belt.outer.toFixed(1)}`}
     >
-      {scene !== null && scanOn && !starless && (
-        <ScanGrid width={width} height={height} running={motion.running} clock={motion.clock} frameAt={scanFrameAt} redraw={scanRedraw} />
-      )}
       {scene !== null && geo !== null && starItem !== undefined && plane(binaryRings(geo, scene.camera, scene.viewport, starItem))}
       {scene !== null &&
         wrapBinary(
         <>
+          {scanOn && !starless && (
+            <ScanGrid layer="grid" width={width} height={height} running={motion.running} clock={motion.clock} frameAt={scanFrameAt} redraw={scanRedraw} />
+          )}
           {plane(arcPaths("back"))}
           <div className="gx-layer">
             {beltHalf("far")}
@@ -1529,6 +1542,9 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
             "gx-plane gx-top",
           )}
           {!starless && <div className="gx-layer gx-top">{movers.map(overlay)}</div>}
+          {scanOn && !starless && (
+            <ScanGrid layer="probe" width={width} height={height} running={motion.running} clock={motion.clock} frameAt={scanFrameAt} redraw={probeRedraw} />
+          )}
         </>,
         )}
       {scene !== null && handlers !== null && !starless && <ScanToggle />}

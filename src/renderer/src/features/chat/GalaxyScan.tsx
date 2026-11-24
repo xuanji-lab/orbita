@@ -1,11 +1,11 @@
 import "./galaxy-scan.css";
-import { useEffect, useRef, useSyncExternalStore, type CSSProperties, type MutableRefObject } from "react";
+import { useEffect, useRef, useSyncExternalStore, type MutableRefObject } from "react";
 import { Icon } from "../../shell/Icon";
 import { IconButton } from "../../shell/IconButton";
 import { useT } from "../../locale.ts";
 import type { Camera, Viewport } from "./galaxy.ts";
 import type { GalaxyClock } from "./HomeGalaxy.tsx";
-import { bodyPhysics, massRatio, pitDepth, ratioText, scanPath, sci, shortNumber, type Well } from "./gravity.ts";
+import { bodyPhysics, massRatio, pitDepth, probePath, ratioText, scanPath, sci, shortNumber, type Well } from "./gravity.ts";
 
 /**
  * 星系上的「引力扫描」与「质量卡」（HomeGalaxy 挂上的一层，规则与数值在 gravity.ts）：
@@ -51,9 +51,13 @@ export interface ScanFrame {
   origin: { x: number; y: number };
   /** 主星此刻在屏幕上的位置（网格四周淡出的中心） */
   star: { x: number; y: number };
+  /** 网格至少铺多远（世界单位，联星时盖住伴星）；0 = 默认 */
+  reach: number;
 }
 
 export function ScanGrid(props: {
+  /** grid = 网格（画在一切之下）；probe = 测深线（画在天体之上，gravity.probePath） */
+  layer: "grid" | "probe";
   width: number;
   height: number;
   running: boolean;
@@ -65,17 +69,25 @@ export function ScanGrid(props: {
   const pathRef = useRef<SVGPathElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const frameAt = useRef(props.frameAt);
+  const box = useRef({ width: props.width, height: props.height });
+  box.current = { width: props.width, height: props.height };
   frameAt.current = props.frameAt;
-  const { clock, running, redraw } = props;
+  const { clock, running, redraw, layer } = props;
+  // 画布四周各多铺 pad：联星时这一层跟着本星平移，网格的淡出遮罩（mask）只作用在元素盒子里，盒子不够大会露出一道直边
+  const pad = Math.round(Math.max(props.width, props.height) / 2);
   useEffect(() => {
     const draw = (): void => {
       const path = pathRef.current;
       const svg = svgRef.current;
       const frame = frameAt.current(clock.now() / 1000);
       if (path === null || svg === null || frame === null) return;
-      path.setAttribute("d", scanPath(frame.camera, frame.viewport, frame.wells, frame.origin));
-      svg.style.setProperty("--scan-x", `${frame.star.x.toFixed(0)}px`);
-      svg.style.setProperty("--scan-y", `${frame.star.y.toFixed(0)}px`);
+      path.setAttribute("d", layer === "grid" ? scanPath(frame.camera, frame.viewport, frame.wells, frame.origin, frame.reach) : probePath(frame.camera, frame.viewport, frame.wells));
+      svg.style.setProperty("--scan-x", `${(frame.star.x + pad).toFixed(0)}px`);
+      svg.style.setProperty("--scan-y", `${(frame.star.y + pad).toFixed(0)}px`);
+      // 淡出圈的半径按画布（不按加了 pad 的盒子）：联星时放大一档，把伴星圈进来
+      const wide = frame.reach > 0;
+      svg.style.setProperty("--scan-rx", `${Math.round(box.current.width * (wide ? 0.85 : 0.56))}px`);
+      svg.style.setProperty("--scan-ry", `${Math.round(box.current.height * (wide ? 0.9 : 0.62))}px`);
     };
     redraw.current = draw;
     draw();
@@ -92,10 +104,19 @@ export function ScanGrid(props: {
       if (redraw.current === draw) redraw.current = null;
     };
     // frameAt 变了（布局 / 视角换了）也重画一次：它在依赖里
-  }, [clock, running, redraw, props.frameAt]);
+  }, [clock, running, redraw, props.frameAt, layer, pad]);
   return (
-    <svg ref={svgRef} className="gx-plane galaxy-scan" width={props.width} height={props.height} viewBox={`0 0 ${Math.max(props.width, 1)} ${Math.max(props.height, 1)}`} aria-hidden="true" data-scan="on">
-      <path ref={pathRef} className="galaxy-scan-grid" />
+    <svg
+      ref={svgRef}
+      className={layer === "grid" ? "gx-plane galaxy-scan" : "gx-plane galaxy-scan-probes"}
+      style={{ left: -pad, top: -pad }}
+      width={props.width + pad * 2}
+      height={props.height + pad * 2}
+      viewBox={`${-pad} ${-pad} ${Math.max(props.width, 1) + pad * 2} ${Math.max(props.height, 1) + pad * 2}`}
+      aria-hidden="true"
+      data-scan={layer}
+    >
+      <path ref={pathRef} className={layer === "grid" ? "galaxy-scan-grid" : "galaxy-scan-probe"} />
     </svg>
   );
 }
@@ -144,15 +165,13 @@ export function MassCard(props: { body: CardBody; starMassUi: number; onDesign: 
   const pit = pitDepth(body.massUi) / Math.max(pitDepth(props.starMassUi), 1e-9);
   const kind = body.kind === "star" ? tg.kindStar : body.kind === "planet" ? tg.kindPlanet : tg.kindCompanion;
   const ratioLine =
-    body.kind === "star" ? tg.ratioSelf : body.kind === "companion" ? tg.ratioCompanion(ratioText(ratio)) : `${ratioText(ratio)} · ${shortNumber(ratio * 100)}%`;
-  const style: CSSProperties = {};
+    body.kind === "star" ? tg.ratioSelf : `${ratioText(ratio)} · ${shortNumber(ratio * 100)}%`;
   return (
     <section
       className="galaxy-mass-card"
       aria-label={tg.cardLabel(body.name)}
       data-kind={body.kind}
       data-body={body.id}
-      style={style}
       onPointerDown={(event) => event.stopPropagation()}
       onDoubleClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {

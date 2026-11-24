@@ -3883,7 +3883,6 @@ export const zh: Messages = {
     density: "密度",
     ratio: "相对主星",
     ratioSelf: "星系里最重",
-    ratioCompanion: (r) => `是本星的 ${r}`,
     pit: "坑深",
     pitOf: (pct) => `主星的 ${pct}`,
     lookNote: "看起来比主星大，但质量更小：坑更浅。",

@@ -13,7 +13,7 @@ import { FRAME_EXTENT, angularSpeed } from "./galaxy.ts";
  */
 
 /** 间距 = 这座星系外缘（碎石带外沿）× 这个倍数 + 伴星半径：伴星整颗在外缘之外，不压碎石带 */
-export const SEP_OVER_EXTENT = 1.25;
+export const SEP_OVER_EXTENT = 1.5;
 /** 联星时画面自动缩小的下限：再小行星的眼睛就读不出来了，剩下的交给用户缩放 */
 export const BINARY_ZOOM_MIN = 0.55;
 

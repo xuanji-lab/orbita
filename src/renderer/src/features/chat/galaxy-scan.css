@@ -5,8 +5,8 @@
 /* 网格：比轨道线淡一档，四周以主星为中心淡出（看不到网格的边） */
 .home-galaxy .galaxy-scan {
   pointer-events: none;
-  -webkit-mask-image: radial-gradient(ellipse 62% 70% at var(--scan-x, 50%) var(--scan-y, 50%), currentColor 35%, transparent 100%);
-  mask-image: radial-gradient(ellipse 62% 70% at var(--scan-x, 50%) var(--scan-y, 50%), currentColor 35%, transparent 100%);
+  -webkit-mask-image: radial-gradient(var(--scan-rx, 400px) var(--scan-ry, 300px) at var(--scan-x, 50%) var(--scan-y, 50%), currentColor 35%, transparent 100%);
+  mask-image: radial-gradient(var(--scan-rx, 400px) var(--scan-ry, 300px) at var(--scan-x, 50%) var(--scan-y, 50%), currentColor 35%, transparent 100%);
 }
 .galaxy-scan-grid {
   fill: none;
@@ -17,6 +17,18 @@
 }
 :root:is([data-theme="graphite"], [data-theme="black"]) .galaxy-scan-grid {
   stroke: var(--color-border-strong);
+}
+
+/* 测深线：天体中心垂直落到坑底，底下一道短横（画在天体之上，细、次级墨、虚线） */
+.home-galaxy .galaxy-scan-probes {
+  pointer-events: none;
+}
+.galaxy-scan-probe {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
 }
 
 /* 开关：右下角，图标 + 文字；开着时按 quiet-control 的 aria-pressed 配方显一层面 */
