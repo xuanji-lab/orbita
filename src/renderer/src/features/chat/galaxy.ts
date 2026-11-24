@@ -83,8 +83,13 @@ export interface GalaxySpec {
   dust?: readonly DustSeed[];
   /** 在做事的会话（单独画成碎石块，带锁定框）；它们也计在 sessions 里 */
   rocks?: readonly RockSpec[];
-  /** 碎石带内沿的下限（世界单位）：屏幕安全布局按屏幕间距算出来的；缺席 = 只按世界间距 */
+  /** 碎石带内沿的下限（世界单位）：屏幕安全布局按屏幕间距算出来的；缺席 = 只按世界间距。只在 growth 时用 */
   beltInner?: number;
+  /**
+   * 碎石带随会话数长大（编排页：New Task 页与右栏星系图，HomeGalaxy 的 fill 传 true）：每条会话一颗、按 id 定方位、
+   * 越老越靠外、带宽按对数长。缺席 = 单智能体首页的原型带子（d12f2e2a 原样，用户定「单智能体原样保留」）
+   */
+  growth?: boolean;
 }
 
 /** 主星与行星的质量区间互不重叠，且行星上限远低于主星下限 */
@@ -164,6 +169,10 @@ export interface DustParticle {
   r: number;
   /** t = 0 时的方位角：按 id 取，同一条会话永远在同一处 */
   theta0: number;
+  /** 偏离盘面的高度：单智能体首页的原型带子随机给一点（classic）；长大的碎石带平躺在盘面上（0） */
+  z: number;
+  /** 这一颗的角速度：原型带子按开普勒各转各的（classic）；长大的碎石带整条一起转（belt.omega） */
+  omega: number;
 }
 
 export interface Belt {
@@ -216,6 +225,18 @@ function hashText(text: string): number {
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
+}
+
+/** 确定性的伪随机（mulberry32）：同一个会话数每次排出同一条原型碎石带，截图可复现 */
+function seeded(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let x = state;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 /**
@@ -326,9 +347,21 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   // 根会话拎成的碎石块是 spec.sessions 里的；子会话的不是（见 RockSpec.child）
   const rootRocks = rockSpecs.filter((rock) => rock.child !== true).length;
   const sessions = Math.max(0, Math.floor(spec.sessions), rootRocks);
-  if (sessions > 0 || rockSpecs.length > 0) {
+  if ((sessions > 0 || rockSpecs.length > 0) && spec.growth !== true) {
+    // 单智能体首页的原型带子（d12f2e2a 原样）：画框外沿那一圈、确定性随机撒 DUST_CAP 颗，不随会话数变宽
+    const inner = lastEdge + MIN_CLEARANCE * 2;
+    const outer = Math.max(FRAME_EXTENT, inner + 6);
+    const rand = seeded(9173);
+    const particles: DustParticle[] = [];
+    const n = Math.min(sessions - rootRocks, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
+    for (let i = 0; i < n; i++) {
+      const r = inner + rand() * (outer - inner);
+      particles.push({ id: `dust-${i}`, title: null, r, theta0: rand() * Math.PI * 2, z: (rand() - 0.5) * (outer - inner) * 0.14, omega: angularSpeed(r) });
+    }
+    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA };
+  } else if (sessions > 0 || rockSpecs.length > 0) {
     const inner = Math.max(lastEdge + MIN_CLEARANCE * 2, spec.beltInner ?? 0);
-    // 碎石带随会话数长大：宽度按对数从 BELT_GROWTH_MIN 长到整个画框外沿，几条和几千条都装得下
+    // 碎石带随会话数长大：宽度按对数长（beltGrowthOf），几条和几千条都装得下
     const outer = beltOuterOf(inner, sessions);
     const n = Math.min(sessions - rootRocks, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
     const seeds = spec.dust ?? [];
@@ -341,7 +374,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
       const rank = n <= 1 ? 0 : i / (n - 1);
       const jitter = ((hash >>> 8) & 1023) / 1023 - 0.5;
       const u = clamp(0.06 + 0.86 * rank + 0.12 * jitter, 0.02, 0.98);
-      particles.push({ id, title: seed?.title ?? null, r: inner + (outer - inner) * u, theta0: ((hash % 3600) / 3600) * Math.PI * 2 });
+      particles.push({ id, title: seed?.title ?? null, r: inner + (outer - inner) * u, theta0: ((hash % 3600) / 3600) * Math.PI * 2, z: 0, omega: BELT_OMEGA });
     }
     belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA };
   }

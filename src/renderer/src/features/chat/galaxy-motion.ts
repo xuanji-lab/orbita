@@ -92,11 +92,9 @@ export interface Mover {
   /** 屏幕半径（px），公转中不变 */
   r: number;
   waiting: boolean;
-  /** 单智能体首页：等你的行星永远画在主星前面（不按左右两点换层） */
-  alwaysNear: boolean;
 }
 
-export function moversOf(layout: GalaxyLayout, camera: Camera, vp: Viewport, minPlanetPx: number, waitingInFront: boolean, rockPx: number): Mover[] {
+export function moversOf(layout: GalaxyLayout, camera: Camera, vp: Viewport, minPlanetPx: number, rockPx: number): Mover[] {
   const movers: Mover[] = layout.planets.map((planet) => ({
     id: planet.id,
     kind: "planet",
@@ -105,13 +103,12 @@ export function moversOf(layout: GalaxyLayout, camera: Camera, vp: Viewport, min
     omega: planet.omega,
     r: planetPx(planet.radius, planet.state === "waiting", camera, vp, minPlanetPx),
     waiting: planet.state === "waiting",
-    alwaysNear: waitingInFront && planet.state === "waiting",
   }));
   if (layout.rockOrbit !== null) {
     const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp);
     const omega = angularSpeed(layout.rockOrbit);
     for (const rock of layout.rocks) {
-      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, omega, r: rockPx, waiting: rock.state === "waiting", alwaysNear: false });
+      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, omega, r: rockPx, waiting: rock.state === "waiting" });
     }
   }
   return movers;
@@ -131,7 +128,6 @@ function wrap(theta: number): number {
 
 /** 此刻在不在远半圈那一层（主星背后）：θ ∈ (FAR_MARGIN, π − FAR_MARGIN) */
 export function moverFar(mover: Mover, tSec: number): boolean {
-  if (mover.alwaysNear) return false;
   const theta = wrap(mover.phase + mover.omega * tSec);
   return theta > FAR_MARGIN && theta < Math.PI - FAR_MARGIN;
 }

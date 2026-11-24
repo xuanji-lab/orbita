@@ -97,7 +97,7 @@ const AGENT_SPECS: [string, GalaxySpec][] = [
 function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
   // 与 HomeGalaxy 的工作区页一样：每条会话都是一颗碎石（不封顶）
-  const scene = fitScreenSafe({ ...spec, dustCap: Number.POSITIVE_INFINITY }, w, h, box, elevationFor(box), readableMax);
+  const scene = fitScreenSafe({ ...spec, dustCap: Number.POSITIVE_INFINITY, growth: true }, w, h, box, elevationFor(box), readableMax);
   const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
   const extent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass);
   const problems: string[] = [];

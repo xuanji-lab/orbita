@@ -370,11 +370,11 @@ describe("等你的行星：前置、放大；名字、碎石与「+N」", () =>
   });
 
   test("碎石：工作区页每条会话一颗（不封顶）；单智能体原型带子缺省仍封顶 DUST_CAP", () => {
-    const all = layoutGalaxy(spec(["running"], { sessions: 2000, dustCap: Number.POSITIVE_INFINITY }));
+    const all = layoutGalaxy(spec(["running"], { sessions: 2000, dustCap: Number.POSITIVE_INFINITY, growth: true }));
     assert.equal(all.belt?.particles.length, 2000);
     assert.equal(all.belt?.count, 2000);
     // 根会话拎成的碎石块不再画成碎石带里的一颗；子会话碎石块不在 sessions 里
-    const lifted = layoutGalaxy({ ...spec([]), sessions: 10, dustCap: Number.POSITIVE_INFINITY, rocks: [{ id: "a", state: "running", label: "A" }, { id: "b", state: "waiting", label: "B", child: true }] });
+    const lifted = layoutGalaxy({ ...spec([]), sessions: 10, dustCap: Number.POSITIVE_INFINITY, growth: true, rocks: [{ id: "a", state: "running", label: "A" }, { id: "b", state: "waiting", label: "B", child: true }] });
     assert.equal(lifted.belt?.particles.length, 9);
     assert.equal(layoutGalaxy(spec([], { sessions: 2000 })).belt?.particles.length, DUST_CAP);
   });
@@ -488,7 +488,7 @@ describe("按深度排序与遮挡", () => {
   });
 
   test("碎石带按主星前后分两半：远半圈（主星背后）的在主星中心之上，近半圈的在之下", () => {
-    const layout = layoutGalaxy({ ...galaxySpecOf("full"), dustCap: Number.POSITIVE_INFINITY });
+    const layout = layoutGalaxy({ ...galaxySpecOf("full"), dustCap: Number.POSITIVE_INFINITY, growth: true });
     const camera = makeCamera(FRAME_EXTENT);
     const vp = frameViewport(camera, 900, 240);
     assert.ok(layout.belt !== null);
@@ -506,6 +506,7 @@ describe("星系随会话长大（2026-11-24 用户：「这个星系它一直�
     planets: [planet("a", 19), planet("b", 31), planet("c", 43)],
     sessions,
     dustCap: Number.POSITIVE_INFINITY,
+    growth: true,
   });
   const counts = [0, 1, 2, 3, 5, 10, 40, 100, 450, 1000, 2000, BELT_FULL_AT, 10_000, 1_000_000];
 

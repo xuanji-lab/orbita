@@ -3,14 +3,12 @@ import {
   drawFrame,
   frameViewport,
   FRAME_EXTENT,
-  CAMERA_ELEVATION_DEG,
   CAPTURE_MS,
   DUST_CLICK_MAX,
   elevationFor,
   galaxyBox,
   galaxySpecOf,
   galaxyFixtureOf,
-  GALAXY_MAX,
   GALAXY_MAX_FILL,
   LIVE_FRAME_MS,
   layoutGalaxy,
@@ -66,6 +64,7 @@ import {
   type CalloutTarget,
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
+import { ClassicGalaxy } from "./ClassicGalaxy.tsx";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -232,7 +231,7 @@ function useSides(target: RefObject<HTMLDivElement | null>, movers: readonly Mov
         const show = (node.dataset.layer === "far") === far;
         node.style.visibility = show ? "" : "hidden";
       }
-      if (running && !mover.alwaysNear) timers.set(mover.id, setTimeout(() => apply(mover), msToNextSide(mover, t) + 20));
+      if (running) timers.set(mover.id, setTimeout(() => apply(mover), msToNextSide(mover, t) + 20));
     };
     for (const mover of movers) apply(mover);
     return () => {
@@ -481,6 +480,8 @@ export function HomeGalaxy(props: HomeGalaxyProps) {
   const key = JSON.stringify(props.spec);
   const cache = useRef<{ key: string; spec: GalaxySpec } | null>(null);
   if (cache.current === null || cache.current.key !== key) cache.current = { key, spec: props.spec };
+  // 单智能体首页（不是 fill）：d12f2e2a 的画法原样保留（用户定「单智能体原样保留」），不走合成器
+  if (props.fill !== true) return <ClassicGalaxy spec={cache.current.spec} label={props.label} {...(props.starDesign === undefined ? {} : { starDesign: props.starDesign })} />;
   return <GalaxyScene {...props} spec={cache.current.spec} />;
 }
 
@@ -490,33 +491,25 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const uid = useId().replace(/:/g, "");
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useBoxSize(rootRef);
-  const fill = props.fill === true;
   const starless = props.starless === true;
-  // 工作区页：每条会话都是一颗碎石（不封顶）；单智能体首页的原型带子仍封顶 DUST_CAP
-  const spec = useMemo(() => (fill ? { ...props.spec, dustCap: Number.POSITIVE_INFINITY } : props.spec), [props.spec, fill]);
+  // 编排页：每条会话都是一颗碎石（不封顶），碎石带随会话数长大
+  const spec = useMemo(() => ({ ...props.spec, dustCap: Number.POSITIVE_INFINITY, growth: true }), [props.spec]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
-    // 默认（全局首页那条带子）20° + 460 封顶，与原型一致
-    if (!fill) {
-      const box = galaxyBox(size.width, size.height, GALAXY_MAX);
-      const camera = makeCamera(FRAME_EXTENT, CAMERA_ELEVATION_DEG);
-      const viewport = frameViewport(camera, size.width, size.height, box);
-      return { camera, viewport, layout: baseLayout, minPlanetPx: 0 };
-    }
     // 工作区页 / 右栏：屏幕安全布局（screen-safe.ts）——在屏幕坐标里排轨道，任何相位上天体都不在画面上相撞
     const box = galaxyBox(size.width, size.height, GALAXY_MAX_FILL);
     const readableMax = props.agents !== undefined && props.agents.size > 0 ? AGENT_READABLE_MAX : PLANET_READABLE_MAX;
     const safe = fitScreenSafe(spec, size.width, size.height, box, elevationFor(box), readableMax);
     return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx };
-  }, [baseLayout, size, fill, spec, props.agents]);
+  }, [size, spec, props.agents]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
   // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）
-  const snapshot = useMemo(() => (scene === null ? [] : drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx, !fill)), [scene, layout, fill]);
+  const snapshot = useMemo(() => (scene === null ? [] : drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx, false)), [scene, layout]);
   const starItem = snapshot.find((item) => item.kind === "star");
   const rockPx = snapshot.find((item): item is RockItem => item.kind === "rock")?.r ?? ROCK_PX;
-  const movers = useMemo(() => (scene === null ? [] : moversOf(layout, scene.camera, scene.viewport, scene.minPlanetPx, !fill, rockPx)), [scene, layout, fill, rockPx]);
+  const movers = useMemo(() => (scene === null ? [] : moversOf(layout, scene.camera, scene.viewport, scene.minPlanetPx, rockPx)), [scene, layout, rockPx]);
   const look = layout.belt === null ? null : dustLookOf(layout.belt.count, starless);
   const ids = useMemo(() => [...layout.rocks.map((rock) => rock.id), ...(layout.belt?.particles.map((particle) => particle.id) ?? [])], [layout]);
   const signature = useMemo(
@@ -546,14 +539,14 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const agents = props.agents;
   const workspaceId = props.workspaceId ?? null;
   // 能点的星系：只有编排的工作区星系（有 App 给的去处、有工作区 id、不是星际空间）
-  const live: { actions: GalaxyActions; workspaceId: string } | null = fill && !starless && actions !== null && workspaceId !== null ? { actions, workspaceId } : null;
+  const live: { actions: GalaxyActions; workspaceId: string } | null = !starless && actions !== null && workspaceId !== null ? { actions, workspaceId } : null;
   const rankOf = useMemo(() => new Map(layout.planets.map((planet, index) => [planet.id, index])), [layout]);
   const previousCallouts = useRef(new Map<string, { dir: CalloutDir; lift: number }>());
   // 排布：此刻每颗天体在哪（drawFrame 不带碎石带），谁被主星挡住、谁有引线、名字写哪边
   const compute = useCallback(
     (tSec: number): OverlayPlan => {
       if (scene === null) return EMPTY_PLAN;
-      const items = drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], tSec, scene.minPlanetPx, !fill);
+      const items = drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], tSec, scene.minPlanetPx, false);
       const star = items.find((item) => item.kind === "star");
       const starDisc = star === undefined ? null : { x: star.x, y: star.y, r: star.r * starExtent };
       const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
@@ -567,7 +560,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       const visibleRocks = rocks.filter((rock) => !hidden.has(rock.planetId));
       const names = new Map<string, { dx: number; dy: number; anchor: "start" | "middle" | "end" }>();
       const tags =
-        agents === undefined || !fill
+        agents === undefined
           ? []
           : placeNameTags({
               planets: visiblePlanets.map((planet) => ({ id: planet.planetId, x: planet.x, y: planet.y, r: planet.r, name: agents.get(planet.planetId)?.name ?? "" })),
@@ -582,7 +575,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
         if (planet !== undefined) names.set(tag.id, { dx: Math.round((tag.x - planet.x) * 10) / 10, dy: Math.round((tag.y - planet.y) * 10) / 10, anchor: tag.anchor });
       }
       const callouts = new Map<string, { dir: CalloutDir; lift: number }>();
-      if (fill && !starless) {
+      if (!starless) {
         const bodies = agents === undefined ? visiblePlanets : [...visiblePlanets.map((planet) => ({ ...planet, label: null })), ...visibleRocks];
         const targets: CalloutTarget[] = [];
         for (const body of bodies) {
@@ -608,7 +601,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       const key = JSON.stringify([[...hidden].sort(), [...callouts].map(([id, c]) => `${id}:${c.dir}${c.lift}`), [...names].map(([id, n]) => `${id}:${n.anchor}`), glyphPx]);
       return { key, hidden, callouts, names };
     },
-    [scene, layout, fill, starless, starExtent, agents, glyphPx, rankOf, t],
+    [scene, layout, starless, starExtent, agents, glyphPx, rankOf, t],
   );
   const plan = usePlan(scene === null ? null : compute, motion.clock, motion.running, signature);
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
@@ -626,32 +619,14 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     const planet = planetById.get(mover.id);
     if (planet === undefined) return null;
     const copyUid = `${uid}-${layer}-${mover.id}`;
-    if (fill) {
-      // 工作区页：每颗行星都是一个带两只竖胶囊眼的小天体（与设计面板同一个 BodyFigure）；子智能体行星按它的设计稿画
-      const agent = agents?.get(mover.id);
-      return (
-        <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
-          <Local box={square(mover.r * 1.6 + 2)}>
-            <g className="gd-figure galaxy-planet-figure" data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} data-r={mover.r.toFixed(1)}>
-              <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null), "planet", mover.r)} uid={`${copyUid}-f`} />
-            </g>
-          </Local>
-        </OrbitChain>
-      );
-    }
+    // 每颗行星都是一个带两只竖胶囊眼的小天体（与设计面板同一个 BodyFigure）；子智能体行星按它的设计稿画
+    const agent = agents?.get(mover.id);
     return (
       <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
-        <Local box={square(mover.r + 4)}>
-          <defs>
-            <radialGradient id={`${copyUid}-l`} cx="50%" cy="50%" r="50%" fx="38%" fy="34%">
-              <stop offset="0%" className="galaxy-light" stopOpacity={0.5} />
-              <stop offset="100%" className="galaxy-light" stopOpacity={0} />
-            </radialGradient>
-          </defs>
-          {/* 等你的细环只留给单智能体首页的 fixture 星系；工作区页改由锁定框说 */}
-          {planet.state === "waiting" && <circle className="galaxy-planet-waiting" r={mover.r + 3} />}
-          <circle className="galaxy-planet" data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} r={mover.r} />
-          <circle r={mover.r} fill={`url(#${copyUid}-l)`} />
+        <Local box={square(mover.r * 1.6 + 2)}>
+          <g className="gd-figure galaxy-planet-figure" data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} data-r={mover.r.toFixed(1)}>
+            <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null), "planet", mover.r)} uid={`${copyUid}-f`} />
+          </g>
         </Local>
       </OrbitChain>
     );
@@ -662,7 +637,6 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const overlayContent = (mover: Mover): { box: Box; content: ReactNode } | null => {
     if (plan.hidden.has(mover.id)) return null;
     if (mover.kind === "planet") {
-      if (!fill) return null;
       const name = agents?.get(mover.id)?.name;
       const tag = plan.names.get(mover.id);
       const target = live !== null && agents !== undefined;
@@ -692,7 +666,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     const rock = rockById.get(mover.id);
     if (rock === undefined) return null;
     const shape = <path className="galaxy-rock" data-rock={mover.id} data-state={rock.state} d={rockPath(0, 0, mover.r, mover.id)} />;
-    if (rock.label === "" || !fill) return { box: square(mover.r + 2), content: shape };
+    if (rock.label === "") return { box: square(mover.r + 2), content: shape };
     const callout = plan.callouts.get(mover.id);
     const title = truncateLabel(rock.label);
     const text = rock.state === "waiting" ? `${t.agents.status.waiting} · ${title}` : title;
@@ -759,8 +733,6 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     };
   };
   const overlay = (mover: Mover) => {
-    // 单智能体首页的行星没有最上层的东西：不挂空串
-    if (mover.kind === "planet" && !fill) return null;
     const inner = overlayContent(mover);
     return (
       <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top">
@@ -793,7 +765,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   return (
     <div
       ref={rootRef}
-      className="home-galaxy"
+      className="home-galaxy gx-root"
       role={live === null ? "img" : "group"}
       aria-label={props.label}
       data-planets={starless ? 0 : layout.planets.length}

@@ -52,7 +52,7 @@ describe("合成器的那串 transform 正好把星体送到 framePoint（行星
   });
 
   test("碎石带：M · R(−ω·t) · 静止的碎石 = dustPoints（测试里检查碰撞的就是屏幕上真实的位置）", () => {
-    const spec: GalaxySpec = { starMass: 620, planets: [], sessions: 450, dustCap: Number.POSITIVE_INFINITY };
+    const spec: GalaxySpec = { starMass: 620, planets: [], sessions: 450, dustCap: Number.POSITIVE_INFINITY, growth: true };
     const belt = layoutGalaxy(spec).belt;
     assert.ok(belt !== null);
     const frame = beltFrame(belt, camera, vp);
@@ -73,7 +73,7 @@ describe("合成器的那串 transform 正好把星体送到 framePoint（行星
 describe("换层：过了左右两点（再往远侧收 FAR_MARGIN）才从主星背后挪到前面", () => {
   const planet = { id: "x", mass: 4, composition: "rock" as const, orbitRadius: 25, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 0 };
   const spec: GalaxySpec = { starMass: 620, planets: [planet], sessions: 0 };
-  const first = moversOf(layoutGalaxy(spec), camera, vp, 0, false, 4)[0];
+  const first = moversOf(layoutGalaxy(spec), camera, vp, 0, 4)[0];
   if (first === undefined) throw new Error("没有行星");
   const mover: Mover = first;
 
@@ -90,11 +90,6 @@ describe("换层：过了左右两点（再往远侧收 FAR_MARGIN）才从主�
     assert.equal(moverFar(mover, thetaAt(-Math.PI / 2)), false);
   });
 
-  test("单智能体首页：等你的行星永远在前层", () => {
-    const waiting = moversOf(layoutGalaxy({ ...spec, planets: [{ ...planet, state: "waiting" }] }), camera, vp, 0, true, 4)[0];
-    assert.ok(waiting !== undefined && waiting.alwaysNear);
-    assert.equal(moverFar(waiting, (Math.PI / 2 - waiting.phase) / waiting.omega), false);
-  });
 });
 
 describe("捕获的螺线", () => {

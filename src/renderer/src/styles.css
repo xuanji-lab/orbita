@@ -2686,13 +2686,19 @@ button.ws-fold {
   /* 明主题的主星用浅一档的墨：深灰实心球在白纸上太重，会和输入框抢；暗档用次级墨，最亮的就是它 */
   --galaxy-star: color-mix(in srgb, var(--color-text-tertiary) 50%, var(--color-bg-panel));
   display: block;
-  position: relative;
   width: 100%;
   height: 100%;
-  /* clip 不是 hidden：不成滚动容器。转动层里那张碎石 SVG 比画布大得多（变换前的盘面坐标），
-     不裁的话它把外层撑出一条横向滚动条（2026-11-24 实测） */
-  overflow: clip;
+  overflow: visible;
   pointer-events: none;
+}
+/*
+ * 编排页的星系根节点（HomeGalaxy 的 GalaxyScene；单智能体首页的 ClassicGalaxy 仍是上面那张 svg，一个像素不动）。
+ * clip 不是 hidden：不成滚动容器。转动层里那张碎石 SVG 比画布大得多（变换前的盘面坐标），
+ * 不裁的话它把外层撑出一条横向滚动条（2026-11-24 实测）
+ */
+.home-galaxy.gx-root {
+  position: relative;
+  overflow: clip;
 }
 /*
  * 星系的分层（HomeGalaxy 的画家顺序）：几张铺满的静止 SVG（轨道弧、主星）与几层零尺寸的 div（在轨道上走的东西）。

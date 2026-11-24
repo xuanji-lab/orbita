@@ -400,7 +400,7 @@ describe("每条根会话都是一颗碎石，与右栏树主卡同源：碎石 
   ] as const) {
     test(`${name}（${w}×${h}）：碎石带颗粒 + 根会话碎石块 = 总数；子会话碎石块不在里面`, () => {
       const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-      const scene = fitScreenSafe({ ...galaxy.spec, dustCap: Number.POSITIVE_INFINITY }, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
+      const scene = fitScreenSafe({ ...galaxy.spec, dustCap: Number.POSITIVE_INFINITY, growth: true }, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
       const layout = scene.layout;
       const dust = layout.belt?.particles ?? [];
       const rootRocks = layout.rocks.filter((rock) => rock.child !== true);
