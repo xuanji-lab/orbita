@@ -95,23 +95,11 @@ function bodyPx(body: Body, camera: Camera, vp: Viewport, minPx: number): number
 const NEAR = -Math.PI / 2;
 const FAR = Math.PI / 2;
 
-/**
- * 两圈轨道（仿射模型 framePoint，与合成器转出来的同一个）在屏幕上最近的距离：沿一圈取 GAP_SAMPLES 个角，
- * 每个角上量到另一圈相邻几个角的点的距离，取最小。不只量短轴两端——两圈椭圆的圆心按透视上下错开，
- * 最窄处不一定在短轴上（2026-11-24 换成合成器模型后，只量短轴的版本在斜向上量出过 19.4px < 20px 的相交）。
- */
-const GAP_SAMPLES = 72;
-function ellipseGap(a: OrbitFrame, aScale: number, b: OrbitFrame, bScale: number): number {
-  const step = (Math.PI * 2) / GAP_SAMPLES;
-  let best = Infinity;
-  for (let i = 0; i < GAP_SAMPLES; i++) {
-    const p = framePoint(a, i * step, aScale);
-    for (let j = -3; j <= 3; j++) {
-      const q = framePoint(b, (i + j * 0.5) * step, bScale);
-      best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
-    }
-  }
-  return best;
+/** 两圈轨道（仿射模型 framePoint，与合成器转出来的同一个）在远 / 近两个短轴端点上的竖向间距，取小的那个 */
+function shortAxisGap(a: OrbitFrame, aScale: number, b: OrbitFrame, bScale: number): number {
+  const near = Math.abs(framePoint(a, NEAR, aScale).y - framePoint(b, NEAR, bScale).y);
+  const far = Math.abs(framePoint(a, FAR, aScale).y - framePoint(b, FAR, bScale).y);
+  return Math.min(near, far);
 }
 
 /**
@@ -147,7 +135,7 @@ function placeOrbits(
       if (inside && !orbitInside(camera, vp, a, Math.max(rNear, rFar))) return null;
       let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + rNear + gap;
       if (ok && prevA !== undefined && prevBody !== undefined) {
-        ok = ellipseGap(orbitFrame(prevA, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= Math.max(rNear, rFar) + bodyPx(prevBody, camera, vp, minPx) + gap;
+        ok = shortAxisGap(orbitFrame(prevA, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= Math.max(rNear, rFar) + bodyPx(prevBody, camera, vp, minPx) + gap;
       }
       if (ok) break;
       a += ORBIT_NUDGE;
@@ -194,7 +182,7 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
     const far = screenOf(camera, vp, a, FAR);
     let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + ROCK_CLEAR_PX + SCREEN_GAP;
     if (ok && last !== undefined && lastBody !== null) {
-      ok = ellipseGap(orbitFrame(last.orbitRadius, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= ROCK_CLEAR_PX + bodyPx(lastBody, camera, vp, minPx) + SCREEN_GAP;
+      ok = shortAxisGap(orbitFrame(last.orbitRadius, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= ROCK_CLEAR_PX + bodyPx(lastBody, camera, vp, minPx) + SCREEN_GAP;
     }
     if (ok) break;
   }
@@ -217,7 +205,7 @@ function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, last
   let inner = belt.inner;
   for (let i = 0; i < 400; i++) {
     const mid = (inner + beltOuterOf(inner, belt.count)) / 2;
-    if (ellipseGap(planetFrame, 1, orbitFrame(mid, 0, 0, camera, vp), inner / mid) >= lastPx + dustPx + gap) break;
+    if (shortAxisGap(planetFrame, 1, orbitFrame(mid, 0, 0, camera, vp), inner / mid) >= lastPx + dustPx + gap) break;
     inner += ORBIT_NUDGE;
   }
   return inner;
