@@ -3857,6 +3857,11 @@ export const en = {
     /** 「空闲」之后接最近一件事时的前缀 */
     recent: "Last",
     unread: "Finished, not seen yet",
+    /** 侧栏「谁在干活」原型（sidebar-activity.ts）：子智能体小头像与会话插入符的读屏 / 悬停说明 */
+    subAgentUnnamed: "Unnamed sub-agent",
+    subAgentWorking: (name: string) => `${name} is working (demo data)`,
+    subAgentWaiting: (name: string) => `${name} is waiting for you (demo data)`,
+    sessionsRunning: (n: number) => (n === 1 ? "1 session running" : `${n} sessions running`),
     rowOpenTip: (name: string) => `Open ${name}'s home`,
     statusWaitingTip: "Open the task that is waiting for you",
     sessionsMenu: "Sessions",

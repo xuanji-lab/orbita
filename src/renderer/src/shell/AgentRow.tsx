@@ -10,6 +10,9 @@ import { useProtoVariants } from "../features/chat/proto-variants-store.ts";
 import { rowLabelOf } from "../features/chat/proto-variants.ts";
 import { agentLineOf, type AgentLine } from "../features/chat/agent-status.ts";
 import type { ScopeSummary } from "../features/chat/galaxy-data.ts";
+import { ActivityAvatar, SessionCaret, SubAgentFaces } from "./AgentActivity.tsx";
+import type { RowActivity } from "./sidebar-activity.ts";
+import { useSidebarActivity } from "./sidebar-activity-store.ts";
 import { useT } from "../locale.ts";
 import "./agent-row.css";
 
@@ -26,6 +29,8 @@ export function AgentRow(props: {
   /** null = 「主目录」（不属于任何工作区的会话）：没有路径，不能改名 / 移除 / 看文件 */
   workspace: Workspace | null;
   summary: ScopeSummary;
+  /** 「谁在干活」（原型 sidebarActivity 开着时 Sidebar 才算；缺席 = 现状） */
+  activity?: RowActivity;
   /** 这一行就是眼下打开的那座星系（页面或其中一条会话） */
   active: boolean;
   /** 星系设计面板正开着这个工作区 */
@@ -47,6 +52,20 @@ export function AgentRow(props: {
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const line = agentLineOf(summary);
+  // 「谁在干活」候选（window.orbitaProto.set({ sidebarActivity })，默认 off = 现状）；子智能体只来自演示数据
+  const proto = useSidebarActivity();
+  const activity = props.activity;
+  const variant = activity === undefined ? "off" : proto.variant;
+  const agents = workspace === null ? [] : (proto.subAgents[workspace.name] ?? []);
+  const busy = activity !== undefined && (activity.main !== "idle" || activity.sessionsRunning + activity.sessionsWaiting > 0 || agents.length > 0);
+  const avatarLabel = workspace === null ? t.agents.homeAvatar : t.agents.avatar(name);
+  const figure =
+    workspace === null ? (
+      <DustFigure size={28} label={avatarLabel} />
+    ) : (
+      // 固定直径（设计审查 R10：按质量缩放的 3px 差别读不出「谁更重」，只剩左缘参差）
+      <StarFigure bySize={false} design={design} size={26} label={avatarLabel} />
+    );
   const commit = (): void => {
     if (editing !== null) props.onRename(editing);
     setEditing(null);
@@ -58,6 +77,7 @@ export function AgentRow(props: {
       data-waiting={line.status === "waiting" || undefined}
       data-designing={props.designing || undefined}
       data-armed={armed || undefined}
+      data-activity={variant === "off" ? undefined : variant}
       onMouseLeave={() => setArmed(false)}
     >
       <button
@@ -67,14 +87,11 @@ export function AgentRow(props: {
         title={t.agents.rowOpenTip(name)}
         onClick={props.onOpen}
       >
-        <span className="agent-avatar">
-          {workspace === null ? (
-            <DustFigure size={28} label={t.agents.homeAvatar} />
-          ) : (
-            // 固定直径（设计审查 R10：按质量缩放的 3px 差别读不出「谁更重」，只剩左缘参差）
-            <StarFigure bySize={false} design={design} size={26} label={t.agents.avatar(name)} />
-          )}
-        </span>
+        {variant === "off" || activity === undefined ? (
+          <span className="agent-avatar">{figure}</span>
+        ) : (
+          <ActivityAvatar variant={variant} activity={activity} design={design} size={26} label={avatarLabel} figure={figure} />
+        )}
         <span className="agent-body">
           <span className="agent-line">
             {editing === null ? (
@@ -102,12 +119,21 @@ export function AgentRow(props: {
                 }}
               />
             )}
-            {summary.lastActive !== null && (
+            {variant === "c" && busy && activity !== undefined ? (
+              // C：行尾这一列说「此刻谁在干活」，顶替时间（在跑 / 等你的行带时间没有意义，同首页记录的规矩）
+              <span className="aa-trailing row-trailing">
+                <SubAgentFaces design={design} agents={agents} size={14} place="trailing" />
+                <SessionCaret count={activity.sessionsRunning} />
+              </span>
+            ) : summary.lastActive !== null && (
               <span className="agent-time row-trailing">{sessionAgeLabel(summary.lastActive, props.now, t)}</span>
             )}
           </span>
           <span className="agent-line agent-status">
+            {variant === "a" && <SubAgentFaces design={design} agents={agents} size={14} place="lead" />}
             <StatusLine line={line} home={workspace === null} />
+            {variant === "b" && <SubAgentFaces design={design} agents={agents} size={14} place="inline" />}
+            {(variant === "a" || variant === "b") && activity !== undefined && <SessionCaret count={activity.sessionsRunning} />}
             {props.summary.attention > 0 && (
               <span className="agent-dot row-trailing" data-kind={props.summary.waiting > 0 ? "waiting" : "unread"} role="img" aria-label={props.summary.waiting > 0 ? t.agents.status.waiting : t.agents.unread} />
             )}
