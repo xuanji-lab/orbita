@@ -519,6 +519,8 @@ export const ipcChannels = {
   boardWeek: "board:week",
   /** 按快照画卡：模板哈希 → 一次性 iframe 地址（入参 BoardFrameRequest，回 BoardFrameResult；哈希不合规 / 仓库里没有回 null） */
   boardFrame: "board:frame",
+  /** 截宿主窗口里的一块看板（入参 BoardShotRequest，回 BoardShotResponse；只截 event.sender 自己的页面） */
+  boardShot: "board:shot",
   /**
    * 对话里「装上插件」那一行的「安装」（入参 PluginRowInstallRequest，回 PluginRowInstallResult）。
    * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区 / manual 档）：主进程重新校验会话、

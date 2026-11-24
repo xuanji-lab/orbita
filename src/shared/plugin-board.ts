@@ -259,6 +259,45 @@ export interface BoardFrameRequest {
 /** 一次性 iframe 地址（`orbita-panel://doc/<token>`，同面板）；哈希不合规 / 仓库里没有为 null */
 export type BoardFrameResult = { frameUrl: string } | null;
 
+// ---------- 切回会话时的看板位图（`board:shot`） ----------
+
+/** 宿主窗口里看板外框的矩形（CSS 像素；主进程按这个区域截自己这一页，不截别的窗口） */
+export interface BoardShotRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BoardShotRequest {
+  rect: BoardShotRect;
+}
+
+/** PNG 位图与它的物理像素尺寸；截不到回 null（优化失败不影响真 iframe 挂上） */
+export interface BoardShotResult {
+  base64: string;
+  width: number;
+  height: number;
+}
+
+export type BoardShotResponse = BoardShotResult | null;
+
+/** 入参不可信：只接受有限、非负、面积有上限的矩形；小数按 capturePage 的要求取整。 */
+export function boardShotRect(raw: unknown): BoardShotRect | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const value = (raw as Record<string, unknown>)["rect"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const rect = value as Record<string, unknown>;
+  const numbers = [rect["x"], rect["y"], rect["width"], rect["height"]];
+  if (!numbers.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+  const x = Math.round(rect["x"] as number);
+  const y = Math.round(rect["y"] as number);
+  const width = Math.round(rect["width"] as number);
+  const height = Math.round(rect["height"] as number);
+  if (x < 0 || y < 0 || width < 1 || height < 1 || width > 4096 || height > 4096 || width * height > 16_777_216) return null;
+  return { x, y, width, height };
+}
+
 // ---------- 全局周看板（`board:week`） ----------
 
 /** 入参：当地周一 00:00（毫秒）。主进程会规整到它所在那一周的周一 00:00，不信任调用方算的边界。 */
