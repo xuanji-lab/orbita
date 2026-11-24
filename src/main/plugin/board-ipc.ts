@@ -10,6 +10,7 @@ import type { BoardShotResponse, BoardWeekResponse } from "../../shared/plugin-b
 import { boardShotRect } from "../../shared/plugin-board.ts";
 import { assembleBoardWeek, type BoardWeekDeps } from "./board-week.ts";
 import { captureFrame } from "../browser/frame-capture.ts";
+import { boardImagePainted } from "./board-shot-image.ts";
 import { boardFrameOf, type BoardTemplateStore } from "./board-snapshot.ts";
 import type { PanelFrames } from "./panel-frame.ts";
 
@@ -33,7 +34,7 @@ function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<ty
       const ratio = await contents.executeJavaScript("window.devicePixelRatio || 1");
       if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 1 || ratio > 3) return null;
       const image = page.crop({ x: Math.round(rect.x * ratio), y: Math.round(rect.y * ratio), width: Math.round(rect.width * ratio), height: Math.round(rect.height * ratio) });
-      if (image.isEmpty()) return null;
+      if (image.isEmpty() || !boardImagePainted(image)) return null;
       const size = image.getSize();
       return { base64: image.toPNG().toString("base64"), width: size.width, height: size.height };
     } catch {
