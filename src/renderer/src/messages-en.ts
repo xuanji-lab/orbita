@@ -675,6 +675,7 @@ export const en = {
     attachFileAction: "Add files…",
     attachFolderAction: "Add folders…",
     removeImage: "Remove image",
+    imageRefLabel: (n: number) => `Image ${n}`,
     materialBox: "Materials",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
     imageTooLarge: (name: string, mb: number) =>

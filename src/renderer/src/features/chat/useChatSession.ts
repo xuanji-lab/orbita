@@ -45,6 +45,7 @@ import {
 import { appendWithdrawn } from "./withdraw-draft.ts";
 import { admitImages, promptImagesBytes, readAsPromptImage, rejectionText, type ComposerImage } from "../../shell/composer-images.ts";
 import { PROMPT_IMAGE_MIME_TYPES, PROMPT_IMAGE_MAX_COUNT, type PromptImage } from "../../../../shared/prompt-images.ts";
+import { insertImageRefs, removeImageRef } from "../../../../shared/prompt-image-refs.ts";
 import {
   admitFileRefs,
   fileRefRejectionText,
@@ -208,7 +209,7 @@ export interface ChatSession {
   /** 当前查看会话输入框里的附图——与草稿同一把键隔离，发送 / 排队时一起带走 */
   attachments: readonly ComposerImage[];
   /** 挑选 / 粘贴 / 拖进来的文件：图片读成 base64、其余按路径引用；被拒的点名报在 error 上 */
-  attachIncoming: (files: readonly File[]) => void;
+  attachIncoming: (files: readonly File[], caret?: number) => Promise<{ text: string; caret: number } | null>;
   removeAttachment: (id: string) => void;
   /** 回形针「添加文件夹」：主进程目录选择器，选中目录按拖入同一套分拣入列 */
   attachFolderRefs: () => Promise<void>;
@@ -1549,6 +1550,12 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   const draft = drafts.get(draftKey)?.text ?? "";
   const setDraft = (value: string) => writeDraft(draftKey, value);
   const attachments = attachmentMap.get(draftKey) ?? NO_ATTACHMENTS;
+  // 读图是异步的：回调里要的是「此刻」的附图与草稿，不是发起那一刻闭包里的。
+  // 渲染时跟，写入后在回调里立刻补一笔（同一帧里连着两批图不会用同一个旧数）
+  const attachmentMapRef = useRef(attachmentMap);
+  attachmentMapRef.current = attachmentMap;
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
   const files = fileMap.get(draftKey) ?? NO_FILES;
   const pasted = drafts.get(draftKey)?.pasted ?? NO_PASTED;
   const quotes = quoteMap.get(draftKey) ?? NO_QUOTES;
@@ -1581,8 +1588,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 留在 file，发送侧的纠正仍兑底。
    */
   const attachIncoming = useCallback(
-    (incoming: readonly File[]) => {
-      if (incoming.length === 0) return;
+    (incoming: readonly File[], caret?: number): Promise<{ text: string; caret: number } | null> => {
+      if (incoming.length === 0) return Promise.resolve(null);
       const key = draftKey;
       const t = engine.messagesRef.current;
       const imageCandidates = incoming.filter((file) => PROMPT_IMAGE_MIME_TYPES.includes(file.type));
@@ -1633,9 +1640,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
             console.error("[chat] 附件类型没问到，按文件入列", cause);
           });
       }
-      if (acceptedImages.length === 0) return;
+      if (acceptedImages.length === 0) return Promise.resolve(null);
       // 图的名额在追加时再截一次：两批并发拖进来，各自分拣时都以为还有位子（文件不设名额）
-      void Promise.allSettled(acceptedImages.map((file) => readAsPromptImage(file))).then((results) => {
+      return Promise.allSettled(acceptedImages.map((file) => readAsPromptImage(file))).then((results) => {
         const read: ComposerImage[] = [];
         const failures: string[] = [];
         results.forEach((result, index) => {
@@ -1644,15 +1651,39 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           else failures.push(t.composer.imageReadFailed(name));
         });
         if (failures.length > 0) engine.setError([notice, ...failures].filter((line) => line !== null).join(" "));
-        writeAttachments(key, (current) => [...current, ...read].slice(0, PROMPT_IMAGE_MAX_COUNT));
+        // 附图的编号 = 附上的顺序（1 起）；小签「[图 N]」插在附图那一刻的光标处（没给光标 = 正文末尾），
+        // 与缩略图同号。发送时小签是正文里的字面文本，agent 再补一行顺序说明（shared/prompt-image-refs.ts）
+        const existing = attachmentMapRef.current.get(key) ?? [];
+        const added = read.slice(0, Math.max(0, PROMPT_IMAGE_MAX_COUNT - existing.length));
+        if (added.length === 0) return null;
+        writeAttachments(key, (current) => [...current, ...added].slice(0, PROMPT_IMAGE_MAX_COUNT));
+        attachmentMapRef.current = new Map(attachmentMapRef.current).set(key, [...existing, ...added]);
+        const before = draftsRef.current.get(key)?.text ?? "";
+        const inserted = insertImageRefs(
+          before,
+          caret ?? before.length,
+          added.map((_, index) => existing.length + index + 1),
+        );
+        writeDraft(key, inserted.text);
+        draftsRef.current = new Map(draftsRef.current).set(key, {
+          text: inserted.text,
+          pasted: draftsRef.current.get(key)?.pasted ?? NO_PASTED,
+        });
+        return inserted;
       });
     },
-    [engine, draftKey, attachmentMap, fileMap, writeAttachments, writeFiles],
+    [engine, draftKey, attachmentMap, fileMap, writeAttachments, writeFiles, writeDraft],
   );
 
+  /** 撤一张图：缩略图与正文里它的小签一起走，后面的图编号各减一（缩略图的角标与小签文字同步变） */
   const removeAttachment = useCallback(
-    (id: string) => writeAttachments(draftKey, (current) => current.filter((item) => item.id !== id)),
-    [draftKey, writeAttachments],
+    (id: string) => {
+      const index = (attachmentMapRef.current.get(draftKey) ?? []).findIndex((item) => item.id === id);
+      if (index < 0) return;
+      writeAttachments(draftKey, (current) => current.filter((item) => item.id !== id));
+      writeDraft(draftKey, removeImageRef(draftsRef.current.get(draftKey)?.text ?? "", index + 1));
+    },
+    [draftKey, writeAttachments, writeDraft],
   );
 
   /**

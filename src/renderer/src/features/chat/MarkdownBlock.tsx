@@ -11,7 +11,7 @@ import remarkBreaks from "remark-breaks";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { Component, memo, useMemo, useContext, useState } from "react";
+import { Component, createContext, memo, useMemo, useContext, useState } from "react";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import { MdPre } from "./CodeBlock";
@@ -438,6 +438,26 @@ function PluginChipName(props: { target: string }) {
   return <>{pluginChipName(usePluginNames(), props.target)}</>;
 }
 
+/**
+ * 这条用户消息附了几张图（气泡正文里「[图 N]」认到 N ≤ 这个数）。默认 0 = 不画：
+ * 没带图的消息里用户自己写的「[图 1]」（粘贴来的论文段落之类）是普通文字。
+ */
+export const ImageRefCountContext = createContext(0);
+
+/** 气泡里的图小签：图标 + 「图 N」，与技能 chip 同一个长相（中性色）；N 超过附图数退回原文 */
+function ImageRefChip(props: { token: string; classes: string[] }) {
+  const t = useT();
+  const count = useContext(ImageRefCountContext);
+  const n = Number(/\d+/.exec(props.token)?.[0]);
+  if (!(n >= 1 && n <= count)) return <>{props.token}</>;
+  return (
+    <span className={props.classes.join(" ")} title={props.token}>
+      <Icon name="image" size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <span className="bubble-chip-target">{t.composer.imageRefLabel(n)}</span>
+    </span>
+  );
+}
+
 function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) {
   const { className, children, node: _node, ...rest } = props;
   const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
@@ -451,6 +471,7 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
     );
   }
   const token = String(children);
+  if (classes.includes("bubble-chip-image")) return <ImageRefChip token={token} classes={classes} />;
   const kind: ChipKind = token.startsWith("/mcp:") ? "mcp" : token.startsWith("/plugin:") ? "plugin" : "skill";
   const target = token.replace(/^\/(?:skill|mcp|plugin):/, "");
   return (

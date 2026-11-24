@@ -177,7 +177,7 @@ import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { InlineName } from "../../shell/InlineName";
 import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
-import { MarkdownBlock } from "./MarkdownBlock";
+import { ImageRefCountContext, MarkdownBlock } from "./MarkdownBlock";
 import { sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
@@ -236,7 +236,7 @@ import { modelCardFooter, modelChipParts, ModelPickerMenu, selectedModelAcceptsI
 import { filesOf, imageSrc } from "../../shell/composer-images.ts";
 import { ImageLightbox } from "../../shell/ImageLightbox";
 import { PaperclipMark } from "../../shell/PaperclipMark";
-import { ImageThumb } from "../../shell/ImageThumb";
+import { ImageIndexBadge, ImageThumb } from "../../shell/ImageThumb";
 import { QuoteChip } from "../../shell/QuoteChip";
 import { parseQuotedMessage, type TextQuote } from "@shared/quote";
 import { pastedTextSize, splitUserTextBlocks } from "@shared/prompt-attachments";
@@ -437,7 +437,7 @@ export function ChatView(props: ChatViewProps) {
         setDropActive(false);
         if (!carriesFiles(event)) return;
         event.preventDefault();
-        session.attachIncoming(filesOf(event.dataTransfer));
+        void session.attachIncoming(filesOf(event.dataTransfer));
       }}
     >
       <QuoteJumpContext.Provider value={jumpToQuote}>
@@ -4059,7 +4059,9 @@ function UserBubble(props: {
               的上半截正好落进可见带——「最后一行被裁一半」的根因，详见
               user-bubble-clamp.ts */}
           <div ref={clampRef} style={bubbleClampStyle(expanded)}>
-            <MarkdownBlock text={text} variant="bubble" />
+            <ImageRefCountContext.Provider value={images.length}>
+              <MarkdownBlock text={text} variant="bubble" />
+            </ImageRefCountContext.Provider>
           </div>
           {!expanded && overflowing && (
             <div
@@ -4328,6 +4330,7 @@ function UserImages(props: { images: readonly PromptImage[] }) {
           style={{ ...ZOOM_BUTTON_STYLE, position: "relative" }}
         >
           <PaperclipMark size={22} />
+          <ImageIndexBadge n={index + 1} />
           <img
             src={imageSrc(image)}
             alt=""

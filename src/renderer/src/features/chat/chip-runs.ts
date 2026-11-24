@@ -22,12 +22,30 @@
  */
 
 import { findInvocationTokens } from "../../../../shared/invocation.ts";
+import { parseImageRefs } from "../../../../shared/prompt-image-refs.ts";
 import type { ChipKind } from "../../shell/composer-chips.ts";
 
 /** 一个文本节点切出来的段：散文，或一个待画成 chip 的 token */
 export type ChipRun =
   | { kind: "text"; text: string }
-  | { kind: "chip"; chipKind: ChipKind; text: string; target: string };
+  | { kind: "chip"; chipKind: ChipKind; text: string; target: string }
+  /** 「[图 N]」：第 N 张附图的引用。认不认（有没有第 N 张图）由渲染侧按本条消息的附图数定 */
+  | { kind: "imageRef"; n: number; text: string };
+
+/** 把散文段里的「[图 N]」再切出来（技能 token 之间的空隙、整个节点都走这里） */
+function splitImageRefs(value: string): ChipRun[] {
+  const refs = parseImageRefs(value);
+  if (refs.length === 0) return [{ kind: "text", text: value }];
+  const runs: ChipRun[] = [];
+  let cursor = 0;
+  for (const ref of refs) {
+    if (ref.start > cursor) runs.push({ kind: "text", text: value.slice(cursor, ref.start) });
+    runs.push({ kind: "imageRef", n: ref.n, text: value.slice(ref.start, ref.end) });
+    cursor = ref.end;
+  }
+  if (cursor < value.length) runs.push({ kind: "text", text: value.slice(cursor) });
+  return runs;
+}
 
 /**
  * 切一个文本节点。`boundaryAtStart`：节点第一个字符之前（源文本里）是不是
@@ -39,12 +57,12 @@ export function splitChipRuns(value: string, boundaryAtStart: boolean): ChipRun[
   let cursor = 0;
   for (const token of tokens) {
     if (token.start === 0 && !boundaryAtStart) continue;
-    if (token.start > cursor) runs.push({ kind: "text", text: value.slice(cursor, token.start) });
+    if (token.start > cursor) runs.push(...splitImageRefs(value.slice(cursor, token.start)));
     runs.push({ kind: "chip", chipKind: token.kind, text: value.slice(token.start, token.end), target: token.target });
     cursor = token.end;
   }
-  if (runs.length === 0) return [{ kind: "text", text: value }];
-  if (cursor < value.length) runs.push({ kind: "text", text: value.slice(cursor) });
+  if (runs.length === 0) return splitImageRefs(value);
+  if (cursor < value.length) runs.push(...splitImageRefs(value.slice(cursor)));
   return runs;
 }
 
@@ -72,7 +90,7 @@ function boundaryBeforeSibling(siblings: HastNode[], index: number): boolean {
   return false;
 }
 
-function chipElement(kind: ChipKind, text: string): HastNode {
+function chipElement(kind: ChipKind | "image", text: string): HastNode {
   return {
     type: "element",
     tagName: "span",
@@ -93,7 +111,11 @@ function transformChips(node: HastNode, insideCode: boolean): void {
       const runs = splitChipRuns(value, boundaryBeforeSibling(children, i));
       if (runs.length === 1 && runs[0]?.kind === "text") continue;
       const replacement = runs.map((run) =>
-        run.kind === "chip" ? chipElement(run.chipKind, run.text) : { type: "text", value: run.text },
+        run.kind === "chip"
+          ? chipElement(run.chipKind, run.text)
+          : run.kind === "imageRef"
+            ? chipElement("image", run.text)
+            : { type: "text", value: run.text },
       );
       // splice 后 i 要跳过全部新节点：否则下一轮会踏进 chip 元素内部，把它的文本再包一层
       children.splice(i, 1, ...replacement);
