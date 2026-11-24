@@ -25,6 +25,36 @@ import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
 export type AutomationMessages = Messages["automation"];
 
+/* ---------- 对话里的唤醒卡 ---------- */
+
+/** 真实回显会把抬头与指令拆成多个 text 块；拼回去再认抬头，非文本块不进指令。 */
+export function joinWakeText(blocks: readonly { type: string; text?: unknown }[]): string {
+  return blocks.flatMap((block) => (block.type === "text" && typeof block.text === "string" ? [block.text] : [])).join("\n\n");
+}
+
+/** 卡片第二行只放指令的第一条非空行；全文仍在展开区原样保留。 */
+export function firstLineOfWake(body: string): string {
+  return body.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
+}
+
+/**
+ * 唤醒抬头里没有 automationId：先在绑到这条会话、同标题的任务里找；同名时用指令全文消歧。
+ * 仍有多个就不返回 id——打开列表比跳进一条猜错的自动化好。
+ */
+export function wakeAutomationId(
+  automations: readonly Automation[],
+  wake: { sessionId: string; title: string; body: string },
+): string | undefined {
+  const bound = automations.filter(
+    (automation) =>
+      automation.target.kind === "this_session" && automation.target.sessionId === wake.sessionId && automation.title === wake.title,
+  );
+  const exact = bound.filter((automation) => automation.prompt.trim() === wake.body.trim());
+  if (exact.length === 1) return exact[0]?.id;
+  if (exact.length > 1 || bound.length !== 1) return undefined;
+  return bound[0]?.id;
+}
+
 /* ---------- 状态 ---------- */
 
 /** 行首状态图标的状态：有运行在跑就是 running（转圈），其余照任务状态 */
