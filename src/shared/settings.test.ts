@@ -1,6 +1,6 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { GALAXY_TILT, galaxyTiltOf,
+import { GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
   APP_MODE_DEFAULT,
   ORCHESTRA_VIEW_DEFAULT,
   BOARD_DAYS_DEFAULT,
@@ -819,8 +819,20 @@ describe("parseSettings 的 galaxyTilt（设置 › 外观 › 星系倾角）",
     deepStrictEqual(parseSettings({}).galaxyTilt, undefined);
     deepStrictEqual(galaxyTiltOf(parseSettings({})), GALAXY_TILT.default);
     deepStrictEqual(GALAXY_TILT.default, 40);
-    for (const ok of [10, 15, 40, 60]) deepStrictEqual(parseSettings({ galaxyTilt: ok }).galaxyTilt, ok);
-    for (const bad of [5, 12, 37, 65, "40", null, Number.NaN, 40.5]) deepStrictEqual(parseSettings({ galaxyTilt: bad }).galaxyTilt, undefined, String(bad));
+    // 1° 精度（拖动是无极的，松手按整数度存）
+    for (const ok of [10, 12, 15, 37, 40, 60]) deepStrictEqual(parseSettings({ galaxyTilt: ok }).galaxyTilt, ok);
+    for (const bad of [5, 9, 65, "40", null, Number.NaN, 40.5]) deepStrictEqual(parseSettings({ galaxyTilt: bad }).galaxyTilt, undefined, String(bad));
     deepStrictEqual(galaxyTiltOf(parseSettings({ galaxyTilt: 25 })), 25);
+  });
+});
+
+describe("parseSettings 的 galaxyAzimuth / galaxyTurntable（星系转台）", () => {
+  it("方位角只认 0–359 的整数；缺席 = 0；转台开关只认布尔，缺席 = 开", () => {
+    deepStrictEqual(galaxyAzimuthOf(parseSettings({})), 0);
+    for (const ok of [0, 1, 120, 359]) deepStrictEqual(parseSettings({ galaxyAzimuth: ok }).galaxyAzimuth, ok);
+    for (const bad of [-1, 360, 12.5, "90", null]) deepStrictEqual(parseSettings({ galaxyAzimuth: bad }).galaxyAzimuth, undefined, String(bad));
+    deepStrictEqual(galaxyTurntableOf(parseSettings({})), true);
+    deepStrictEqual(galaxyTurntableOf(parseSettings({ galaxyTurntable: false })), false);
+    deepStrictEqual(parseSettings({ galaxyTurntable: "no" }).galaxyTurntable, undefined);
   });
 });

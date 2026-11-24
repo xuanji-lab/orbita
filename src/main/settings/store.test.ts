@@ -137,9 +137,14 @@ describe("SettingsStore", () => {
     assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
     await store.write({ sidebarWidth: 300 });
     assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
-    await store.write({ galaxyTilt: 37 });
+    await store.write({ galaxyTilt: 37, galaxyAzimuth: 123, galaxyTurntable: false });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 37, "1° 精度");
+    assert.equal((await new SettingsStore(dir).read()).galaxyAzimuth, 123);
+    assert.equal((await new SettingsStore(dir).read()).galaxyTurntable, false);
+    await store.write({ galaxyTilt: 37.5, galaxyAzimuth: 400 });
     const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
-    assert.equal("galaxyTilt" in raw, false, "不在 5° 网格上的值丢掉，回到默认");
+    assert.equal("galaxyTilt" in raw, false, "不是整数度的值丢掉，回到默认");
+    assert.equal("galaxyAzimuth" in raw, false, "越界的方位角丢掉");
   });
 
   test("lastUsed 的部分更新按键合并——切档不抹已记的模型", async () => {

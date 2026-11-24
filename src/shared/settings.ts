@@ -219,6 +219,13 @@ export interface AppSettings {
    * 只认 GALAXY_TILT 区间内、步长整数倍的值，别的丢掉；缺席 = GALAXY_TILT.default
    */
   galaxyTilt?: number;
+  /**
+   * 星系的方位角（度，0–359 整数，转台：绕竖直的 z 轴转）：星系空白处左右拖动 / 左右方向键改，四处星系同一个值。
+   * 全局存、不按工作区存：它与倾角是同一个「从哪个方向看星系」，用户要的是四处一致（2026-11-24）。缺席 = 0
+   */
+  galaxyAzimuth?: number;
+  /** 左右拖动旋转星系（转台）：缺席 = 开；关掉后左右拖动与左右方向键不改方位角，只能上下改倾角 */
+  galaxyTurntable?: boolean;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -607,20 +614,30 @@ function parseProvidersPage(raw: unknown, legacyCardSize: unknown): ProvidersPag
  * 星系倾角的区间与默认（度）：10° 几乎贴着盘面看，60° 接近俯视；默认 40° 是编排页改成可调之前在常用窗口下实际画出来的俯角
  * （New Task 页 39–41°，屏幕安全布局按画框抬过的值）
  */
-export const GALAXY_TILT = { min: 10, max: 60, step: 5, default: 40 } as const;
+export const GALAXY_TILT = { min: 10, max: 60, step: 1, default: 40 } as const;
 
+/** 存盘的倾角：区间内的整数度（拖动时是无极的，松手按 1° 存——与设置页滑块同一个精度） */
 export function isGalaxyTilt(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= GALAXY_TILT.min &&
-    value <= GALAXY_TILT.max &&
-    (value - GALAXY_TILT.min) % GALAXY_TILT.step === 0
-  );
+  return typeof value === "number" && Number.isInteger(value) && value >= GALAXY_TILT.min && value <= GALAXY_TILT.max;
 }
 
 export function galaxyTiltOf(settings: Pick<AppSettings, "galaxyTilt">): number {
   return settings.galaxyTilt ?? GALAXY_TILT.default;
+}
+
+/** 方位角：0–359 的整数度；默认 0 = 原来的朝向（近日点在画面右侧） */
+export const GALAXY_AZIMUTH_DEFAULT = 0;
+
+export function isGalaxyAzimuth(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < 360;
+}
+
+export function galaxyAzimuthOf(settings: Pick<AppSettings, "galaxyAzimuth">): number {
+  return settings.galaxyAzimuth ?? GALAXY_AZIMUTH_DEFAULT;
+}
+
+export function galaxyTurntableOf(settings: Pick<AppSettings, "galaxyTurntable">): boolean {
+  return settings.galaxyTurntable ?? true;
 }
 
 /**
@@ -640,6 +657,8 @@ export function parseSettings(raw: unknown): AppSettings {
     docPanelWidth?: unknown;
     sidebarWidth?: unknown;
     galaxyTilt?: unknown;
+    galaxyAzimuth?: unknown;
+    galaxyTurntable?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     chatImageSize?: unknown;
@@ -718,6 +737,8 @@ export function parseSettings(raw: unknown): AppSettings {
       ? { sidebarWidth: Math.round(sidebar) }
       : {}),
     ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
+    ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
+    ...(typeof record.galaxyTurntable === "boolean" ? { galaxyTurntable: record.galaxyTurntable } : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),
