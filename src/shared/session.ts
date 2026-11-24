@@ -328,6 +328,13 @@ export interface SessionMeta {
    */
   intentEnabled?: boolean;
   /**
+   * 这条会话自己的自动压缩开关（2026-11-24）：false = 不自动压缩，只认手动 `/compact`——编排入口页
+   * 「新开专门的会话」开出来的会话，要的是一条上下文干净、只装这件事的会话，宁可满了提醒换一条，
+   * 也不悄悄把前面的话折成摘要。缺席 = 跟随设置里的全局压缩偏好（sessionCompaction 合并）。
+   * 首轮由 submit 载荷的 autoCompact 落盘，之后经 session:set-auto-compact 改。
+   */
+  autoCompact?: boolean;
+  /**
    * 这一单跑在哪儿。**与 workspaceId 同进同出**：迁移到别的工作区时连同 cwd 一起换成
    * 目标工作区的目录（session/move.ts）。换得动的理由：每轮都重开 pi 本子并显式传 cwd
    * （`SessionManager.open(file, dir, cwd)` 覆盖本子头里记的旧 cwd），pi 不在本子上锁目录。
@@ -712,6 +719,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
       ? { intentEnabled: value["intentEnabled"] }
       : {}),
+    // 会话级自动压缩开关：只认布尔，缺席 = 跟随全局
+    ...(value["autoCompact"] === true || value["autoCompact"] === false ? { autoCompact: value["autoCompact"] } : {}),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };

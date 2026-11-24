@@ -190,6 +190,11 @@ export const ipcChannels = {
    */
   sessionSetIntentEnabled: "session:set-intent-enabled",
   /**
+   * 会话级自动压缩开关：载荷 (sessionId, boolean)，回 void。只落 meta（autoCompact），下一轮开轮时主进程现读现装配；
+   * 用量环菜单里「为这条会话打开 / 关闭自动压缩」用。
+   */
+  sessionSetAutoCompact: "session:set-auto-compact",
+  /**
    * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
    * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
    * 是否标未读由 renderer 判（没在看才标，planNotice）。
@@ -711,6 +716,12 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
+  /**
+   * 只在**开新会话的那一轮**有意义：false = 这条会话不自动压缩（编排入口页「新开专门的会话」）。
+   * 主进程这一轮就按它装配压缩参数，并在建 meta 时把它落成 meta.autoCompact；之后的轮次读 meta，不再看它。
+   * 缺席 = 跟随全局设置。
+   */
+  autoCompact?: false;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
