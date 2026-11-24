@@ -24,6 +24,8 @@ export interface PlanetSpec {
   /** 质量，夹进 PLANET_MASS 区间 */
   mass: number;
   composition: Composition;
+  /** 密度（g/cm³）：星系设计面板按元素构成推出来的；缺席按成分类别（DENSITY） */
+  density?: number;
   /** 轨道半径：用户独立指定（与天体半径同一单位）。违反间距规则时向外推，记进 adjusted */
   orbitRadius: number;
   /** 轨道面相对主星赤道面的小倾角（度）：让轨道不是一叠共面的同心椭圆 */
@@ -171,8 +173,9 @@ export function starRadius(mass: number): number {
   return bodyRadius(clamp(mass, STAR_MASS.min, STAR_MASS.max), STAR_DENSITY);
 }
 
-export function planetRadius(planet: Pick<PlanetSpec, "mass" | "composition">): number {
-  return bodyRadius(clamp(planet.mass, PLANET_MASS.min, PLANET_MASS.max), DENSITY[planet.composition]);
+export function planetRadius(planet: Pick<PlanetSpec, "mass" | "composition" | "density">): number {
+  const density = planet.density !== undefined && planet.density > 0 ? planet.density : DENSITY[planet.composition];
+  return bodyRadius(clamp(planet.mass, PLANET_MASS.min, PLANET_MASS.max), density);
 }
 
 /** 开普勒：ω ∝ a^(-3/2)。内圈快、外圈慢；整体很慢（最内圈一圈半分钟以上） */

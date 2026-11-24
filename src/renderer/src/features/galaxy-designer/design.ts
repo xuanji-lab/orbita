@@ -10,7 +10,8 @@ import {
   type Composition,
 } from "../chat/galaxy.ts";
 import type { RightPanelKind } from "../../shell/RightRail.tsx";
-import type { EyeStyle, PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
+import type { EyeStyle, PlanetMix, PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
+import { classOfDensity, legacyMix, mixPhysics, planetDensity, seedOf } from "./mix.ts";
 // 值 import 走相对路径：node --test 解析不了 @shared 别名
 import { EYE_STYLE_DEFAULT } from "../../../../shared/planet-design.ts";
 
@@ -81,7 +82,10 @@ export interface BodyDesign {
 }
 
 export interface PlanetDesign extends BodyDesign {
+  /** 成分类别（纹理与只认三类的读者用）：有元素构成时由构成推出的密度归类（withMix），不再单独选 */
   composition: Composition;
+  /** 元素构成（面板「成分」一节）；缺席 = 旧稿，按 composition 映射成一组默认元素（mixOf） */
+  mix?: PlanetMix;
   orbitRadius: number;
   /** 子智能体的 id（伴随文件 planet/galaxy.json 里的）；面板里新加、还没落盘的没有 */
   id?: string;
@@ -126,10 +130,27 @@ export function densityOf(kind: BodyKind, composition: Composition): number {
   return kind === "star" ? STAR_DENSITY : DENSITY[composition];
 }
 
+/** 一颗行星的元素构成：有就用；旧稿（只有成分类别）映射成一组默认元素，种子按 id 起 */
+export function mixOf(planet: PlanetDesign): PlanetMix {
+  return planet.mix ?? legacyMix(planet.composition, seedOf(planet.id ?? planet.name));
+}
+
+/** 改了构成：成分类别跟着推出来的密度走（构成里没有整体·质量这一组时类别不动） */
+export function withMix(planet: PlanetDesign, mix: PlanetMix): PlanetDesign {
+  const physics = mixPhysics(mix);
+  return { ...planet, mix, composition: physics === null ? planet.composition : classOfDensity(physics.density) };
+}
+
+/** 天体的密度（g/cm³）：主星固定；行星按元素构成推（旧稿按成分类别） */
+export function bodyDensity(design: GalaxyDesign, kind: BodyKind): number {
+  if (kind === "star") return STAR_DENSITY;
+  return design.planet === null ? Number.NaN : planetDensity(design.planet);
+}
+
 /** 天体半径（与轨道同一单位）：galaxy.ts 的同一条公式，(质量 / 密度)^(1/3)，质量先夹进区间。这颗天体不存在时是 NaN */
 export function radiusOf(design: GalaxyDesign, kind: BodyKind): number {
   if (kind === "star") return design.star === null ? Number.NaN : starRadius(design.star.mass);
-  return design.planet === null ? Number.NaN : planetRadius(design.planet);
+  return design.planet === null ? Number.NaN : planetRadius({ ...design.planet, density: planetDensity(design.planet) });
 }
 
 /** 行星轨道的合法下限：两颗天体的半径和 + 间距——再近就相撞 */
@@ -597,11 +618,13 @@ export function commitPlanet(design: GalaxyDesign): GalaxyDesign {
 }
 
 /** 星系数据层要的子智能体行星（galaxy-data 的 AgentPlanetInput）：没有 id 的按次序起一个 */
-export function agentInputsOf(planets: readonly PlanetDesign[]): { id: string; mass: number; composition: Composition; orbitRadius: number }[] {
+export function agentInputsOf(planets: readonly PlanetDesign[]): { id: string; mass: number; composition: Composition; density?: number; orbitRadius: number }[] {
   return planets.map((planet, index) => ({
     id: planet.id ?? `planet-${index + 1}`,
     mass: Number.isFinite(planet.mass) ? planet.mass : 6,
     composition: planet.composition,
+    // 只有面板里改过构成的才带密度；旧稿照旧按成分类别（推出来的差 < 0.5%，不让老星系的轨道因此挪一下）
+    ...(planet.mix === undefined ? {} : { density: planetDensity(planet) }),
     orbitRadius: Number.isFinite(planet.orbitRadius) ? planet.orbitRadius : defaultAgentOrbit(index),
   }));
 }
@@ -647,6 +670,7 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
     name: body.name,
     mass: body.massEarth === null ? 6 : body.massEarth * MASS_UNIT_PER_EARTH,
     composition: body.composition ?? "rock",
+    ...(body.mix === null ? {} : { mix: body.mix }),
     orbitRadius: body.orbit ?? defaultAgentOrbit(index),
     elements: { ...ALL_OFF, eyes: true, ...(body.elements ?? {}) },
     zoom: ZOOM_DEFAULT.planet,
@@ -657,8 +681,9 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
   return { editing: "star", star, planet: planets[0] ?? null, planets, planetIndex: 0, backdrop: fallback.backdrop };
 }
 
-function writeBody(id: string, body: BodyDesign, composition: Composition | null, orbit: number | null): PlanetWriteBody {
+function writeBody(id: string, body: BodyDesign, composition: Composition | null, orbit: number | null, mix?: PlanetMix): PlanetWriteBody {
   return {
+    ...(mix === undefined ? {} : { mix }),
     id,
     name: body.name,
     massEarth: Math.round((body.mass / MASS_UNIT_PER_EARTH) * 1000) / 1000,
@@ -682,7 +707,7 @@ export function planetsWriteOf(workspaceId: string, design: GalaxyDesign): Plane
   return {
     workspaceId,
     main: design.star === null ? null : writeBody("main", design.star, null, null),
-    planets: list.map((planet, index) => writeBody(planet.id ?? `planet-${index + 1}`, planet, planet.composition, planet.orbitRadius)),
+    planets: list.map((planet, index) => writeBody(planet.id ?? `planet-${index + 1}`, planet, planet.composition, planet.orbitRadius, planet.mix)),
   };
 }
 
