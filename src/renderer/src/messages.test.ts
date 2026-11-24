@@ -11,6 +11,8 @@ import { zh } from "./messages-zh.ts";
  * 新增文案撞到这里时：先想能不能说成中文；确实是专名，再加进白名单并写明它属于哪一类。
  */
 const ALLOWED_LATIN = new Set([
+  // 国际单位符号：星系设计面板的密度写 g/cm³（2026-11-24，galaxyDesigner.mix；中文科普里也照写符号）
+  "g",
   // 文件格式 / 产品专名：演示文稿导出菜单「PowerPoint」（2026-11-07，slides.* 文案）
   "PowerPoint",
   // 新手引导「文档与演示」一章：文档的写法跟 Obsidian 一致（笔记应用的产品名）

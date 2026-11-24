@@ -1,7 +1,6 @@
 import "./galaxy-designer.css";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { Workspace } from "@shared/workspace";
-import type { Composition } from "../chat/galaxy.ts";
 import { Icon } from "../../shell/Icon";
 import { PanelButton, PanelGroupHead, PanelHelp, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { PanelEmpty } from "../../shell/PanelEmpty";
@@ -14,8 +13,11 @@ import { MASS_UNIT_PER_EARTH,
   BACKDROPS,
   bodyArt,
   clampValue,
+  bodyDensity,
   createStar,
-  densityOf,
+  mixOf,
+  starMixOf,
+  withMix,
   displayRadius,
   ELEMENTS_OF,
   errorsAt,
@@ -47,6 +49,9 @@ import { nameOrderOf } from "../chat/proto-variants.ts";
 import { eyeStyleOf, storyLineOf } from "./design.ts";
 import { EYE_STYLES, type EyeStyle } from "@shared/planet-design";
 import { BodyFigure } from "./StarFigure.tsx";
+import { MixSection } from "./MixSection.tsx";
+import type { PlanetMix } from "@shared/planet-design";
+import { cssColorOf, mixColor } from "./mix.ts";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
 import { DETAIL_GAP, detailScale, externalTangents, LOUPE_DEFAULT_WIDTH, LOUPE_VIEW, loupeFrame, MARK_GAP, type LoupeFrame } from "./loupe.ts";
 
@@ -167,7 +172,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 {tg.readout.radius}<b data-radius={radius.toFixed(4)}>{formatNumber(radius)}</b>
               </span>
               <span>
-                {tg.readout.density}<b>{formatNumber(densityOf(kind, design.planet?.composition ?? "rock"))}</b>
+                {tg.readout.density}<b>{formatNumber(Math.round(bodyDensity(design, kind) * 100) / 100)}</b>
               </span>
               <span>
                 {tg.readout.mass}<b>{`${formatNumber(earth(body.mass))} M⊕`}</b>
@@ -277,22 +282,25 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
               />
             </Row>
             {kind === "planet" && design.planet !== null ? (
-              <Row name={tg.composition} desc={tg.compositionDesc}>
-                <Segmented<Composition>
-                  label={tg.composition}
-                  value={design.planet.composition}
-                  options={[
-                    { value: "rock", label: tg.rock },
-                    { value: "ice", label: tg.ice },
-                    { value: "gas", label: tg.gas },
-                  ]}
-                  onChange={(composition) => patchBody({ composition })}
+              // 成分 = 元素构成（周期表），替掉原来的岩石 / 冰质 / 气态三选一；类别由构成推出的密度归（withMix）
+              <Row name={tg.composition} desc={tg.mix.desc} wide>
+                <MixSection
+                  mix={mixOf(design.planet)}
+                  cls={design.planet.composition}
+                  onChange={(mix) => {
+                    if (design.planet === null) return;
+                    const next = withMix(design.planet, mix);
+                    patchBody({ mix: next.mix, composition: next.composition });
+                  }}
                 />
               </Row>
             ) : (
-              <Row name={tg.composition} desc={tg.starComposition}>
-                <span className="gd-fixed">{tg.plasma}</span>
-              </Row>
+              // 主星：构成只影响颜色提示与科普，密度照旧固定（规则：主星是等离子，只能调质量定大小）
+              design.star !== null && (
+                <Row name={tg.composition} desc={tg.starComposition} wide>
+                  <MixSection mix={starMixOf(design.star, id)} cls="star" onChange={(mix) => patchBody({ mix })} />
+                </Row>
+              )
             )}
             {kind === "planet" && design.planet !== null && (
               <Row
@@ -539,7 +547,11 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
           data-star-cy={stage.star.y.toFixed(2)}
         >
           <GridLayer lines={stage.grid} box={box} id={`${uid}-fade`} depth={stage.depth} />
-          <g transform={`translate(${stage.star.x.toFixed(2)} ${stage.star.y.toFixed(2)}) scale(${s})`}>
+          <g
+            className={star.mix === undefined ? undefined : "gd-tinted"}
+            style={tintOf(star.mix)}
+            transform={`translate(${stage.star.x.toFixed(2)} ${stage.star.y.toFixed(2)}) scale(${s})`}
+          >
             <BodyFigure art={art} uid={uid} />
           </g>
         </svg>
@@ -559,6 +571,15 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
       <OrbitScene design={design} uid={`${uid}-o`} label={tg.orbitFigure(props.workspaceName)} />
     </figure>
   );
+}
+
+/**
+ * 颜色提示：只给面板里改过构成的天体上色（没改过的照旧墨色，与页面星系、侧栏头像一致）；
+ * 有地表图时图盖在上面，提示只在代码画的球上看得到。
+ */
+function tintOf(mix: PlanetMix | undefined): React.CSSProperties | undefined {
+  const hint = mix === undefined ? null : mixColor(mix);
+  return hint === null ? undefined : ({ "--gd-tint": cssColorOf(hint) } as React.CSSProperties);
 }
 
 function frameBox(frame: { halfW: number; halfH: number }): WellBox {
@@ -693,6 +714,9 @@ function PlanetLoupe(props: {
   const leaders = mark === null ? null : externalTangents(mark, { ...big, r: art.r * k + DETAIL_GAP });
   const clip = `${uid}-scene`;
   const fixed = (value: number): string => value.toFixed(1);
+  const tintHint = planet.mix === undefined ? null : mixColor(planet.mix);
+  const tint = tintOf(planet.mix);
+  const tintClass = tint === undefined ? "" : " gd-tinted";
   return (
     <figure ref={figureRef} className="gd-stage gd-loupe-stage" data-body="planet" data-layout={frame.layout} {...props.common}>
       <svg
@@ -742,7 +766,7 @@ function PlanetLoupe(props: {
             {p !== null && <path className="gd-orbit-nearest" d={p.nearest.front} />}
             {p !== null && <path className="gd-orbit-path" data-collide={p.collide || undefined} d={p.orbit.front} />}
             {p !== null && planetArt !== null && (
-              <g className="gd-orbit-planet" data-collide={p.collide || undefined} transform={`translate(${fixed(p.x)} ${fixed(p.y)})`}>
+              <g className={`gd-orbit-planet${tintClass}`} style={tint} data-collide={p.collide || undefined} transform={`translate(${fixed(p.x)} ${fixed(p.y)})`}>
                 <BodyFigure art={planetArt} uid={`${uid}-p`} />
               </g>
             )}
@@ -763,7 +787,7 @@ function PlanetLoupe(props: {
               y2={fixed(line.y2)}
             />
           ))}
-        <g className="gd-loupe-detail" transform={`translate(${fixed(big.x)} ${fixed(big.y)}) scale(${k.toFixed(4)})`}>
+        <g className={`gd-loupe-detail${tintClass}`} style={tint} data-tint={tintHint === null ? undefined : cssColorOf(tintHint)} transform={`translate(${fixed(big.x)} ${fixed(big.y)}) scale(${k.toFixed(4)})`}>
           <BodyFigure art={art} uid={uid} />
         </g>
       </svg>

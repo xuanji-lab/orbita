@@ -521,3 +521,308 @@
     transform: scaleY(0.12);
   }
 }
+
+/*
+ * ── 成分：元素周期表（MixSection.tsx）──
+ * 每格同尺寸的方块，只用底色不描边：常见元素铺衬底、主墨字；冷门的铺更淡的底、三级墨字（弱化，但表的形状完整）。
+ * 选中：选中底 + 半粗 + 底边一道元素自己的颜色（--gd-el，数据色，只在选中时出现，与组头小环里那一块同色）。
+ * 不用 accent：选中是中性的。
+ */
+.gd-mix {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.gd-mix-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.gd-mix-count {
+  flex: 1 1 auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.gd-seed-value {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.gd-ptable {
+  display: grid;
+  grid-template-columns: repeat(18, minmax(0, 1fr));
+  gap: var(--space-0-5);
+}
+.gd-pcell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  /* 冷门元素也铺一层更淡的底：表的形状完整、读得出是一张表，而不是一串散字 */
+  background: color-mix(in srgb, var(--color-bg-muted) 45%, transparent);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-pcell[data-common] {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.gd-pcell:hover:enabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.gd-pcell[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: inset 0 -3px 0 var(--gd-el, var(--color-text-secondary));
+}
+.gd-pcell:disabled {
+  cursor: not-allowed;
+}
+.gd-pcell-fold {
+  grid-column: 3;
+  cursor: default;
+}
+/* 元素卡：第 1–3 周期中间的空白里，左对齐，两行科普截断 */
+.gd-pcard {
+  display: grid;
+  align-content: center;
+  gap: var(--space-0-5);
+  min-width: 0;
+  padding: 0 var(--space-1-5);
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-pcard-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.gd-pcard-head b {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.gd-pcard-meta {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.gd-pcard-note {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.gd-fold {
+  justify-self: start;
+  margin-top: calc(-1 * var(--space-1));
+  color: var(--color-text-tertiary);
+}
+.gd-text-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-text-btn:hover:enabled,
+.gd-icon-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.gd-text-btn:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+.gd-icon-btn {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-shuffle {
+  color: var(--color-text-secondary);
+}
+.gd-mix-empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 一组构成项：组头 = 小环 + 层与口径 + 合计 */
+.gd-mix-group {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.gd-mix-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+.gd-mix-group-name {
+  flex: 1 1 auto;
+}
+.gd-mix-group-total {
+  font-family: var(--font-family-mono);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.gd-pie {
+  display: block;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+.gd-pie-track {
+  fill: none;
+  stroke: var(--color-border-subtle);
+  stroke-width: 8;
+}
+.gd-pie-part {
+  fill: none;
+  stroke-width: 8;
+}
+/* 留空、按种子分到的那几块半透明；「随机一版」给的是定数，照常画 */
+.gd-pie-part[data-source="random"] {
+  stroke-opacity: 0.85;
+}
+/* 一条两行：名字 | 层 | 拿掉；滑块 | 百分数 | 来源 | 留空 */
+.gd-mix-row {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-1) 0;
+}
+.gd-mix-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.gd-mix-line .gd-mix-name,
+.gd-mix-line .gd-mix-range {
+  flex: 1 1 auto;
+}
+.gd-mix-place {
+  font-size: var(--font-size-xs);
+}
+.gd-mix-place[data-default] {
+  color: var(--color-text-tertiary);
+}
+.gd-mix-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.gd-mix-symbol {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.gd-mix-placing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* 留空：拇指与填充都退到三级墨——数是种子给的，不是你定的 */
+.gd-mix-range[data-blank] {
+  accent-color: var(--color-text-tertiary);
+  opacity: 0.6;
+}
+.gd-mix-value {
+  min-width: 48px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--color-text-primary);
+}
+.gd-mix-value[data-blank] {
+  color: var(--color-text-tertiary);
+}
+.gd-mix-source {
+  min-width: 3em;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.gd-mix-source[data-source="user"] {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+.gd-mix-clear {
+  font-size: var(--font-size-xs);
+}
+/* 推算：两列，名在左、值在右 */
+.gd-derived {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.gd-derived dt {
+  color: var(--color-text-tertiary);
+}
+.gd-derived dd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+.gd-swatch-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* 颜色提示上到代码画的球上：与墨色底混一半，不压过眼睛与纹理（有地表图时图盖在上面） */
+.gd-tinted .gd-body[data-surface] {
+  --gd-surface: color-mix(in oklch, var(--color-text-tertiary) 40%, var(--gd-tint));
+}

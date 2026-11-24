@@ -228,6 +228,16 @@ describe("随机一版（shuffle）", () => {
     assert.ok(!all.items.some((item) => item.id === "Xe"));
   });
 
+  test("连点十次：上一版随机来的不累积，每一版都仍是这类天体的样子", () => {
+    let mix = legacyMix("rock", 3);
+    for (let i = 0; i < 10; i++) {
+      mix = shuffleMix(mix, "rock");
+      const fresh = templateMix("rock", mix.seed);
+      assert.deepEqual(mix.items.map((item) => [item.id, item.scope, item.basis]), fresh.map((item) => [item.id, item.scope, item.basis]), `第 ${i + 1} 次就是这个种子的模板`);
+      mix.items.forEach((item, k) => assert.ok(near(item.share ?? 0, fresh[k]?.share ?? 0, 2e-4)));
+    }
+  });
+
   test("主星默认构成以 H、He 为主", () => {
     const top = [...bulkOf(starDefaultMix(1)).entries()].sort((x, y) => y[1] - x[1]).slice(0, 2).map(([id]) => id);
     assert.deepEqual(top, ["H", "He"]);

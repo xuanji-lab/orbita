@@ -33,9 +33,12 @@ export const GROUP_ORDER: readonly MixGroupKey[] = [
  * 新加一个元素时放哪一层、按什么口径（界面上标「默认」）：
  * - 惰性气体只待在气体里 → 大气 · 体积；
  * - 气态行星上的氢、碳、氮、氧（气体与挥发物）→ 大气 · 体积（需求清单：气态默认「大气 · 体积」）；
- * - 其余 → 整体 · 质量（岩质默认「整体 · 质量」，它定密度）。
+ * - 其余 → 整体 · 质量（岩质默认「整体 · 质量」，它定密度）；
+ * - 主星一律整体 · 质量。
  */
-export function defaultPlacement(symbol: string, cls: Composition): { scope: MixScope; basis: MixBasis } {
+export function defaultPlacement(symbol: string, cls: BodyClass): { scope: MixScope; basis: MixBasis } {
+  // 主星是一团等离子：什么元素都算在整体 · 质量里（太阳丰度就是这么报的）
+  if (cls === "star") return { scope: "bulk", basis: "mass_fraction" };
   const info = ELEMENT_BY_SYMBOL.get(symbol);
   if (info?.reservoir === "noble") return { scope: "atmosphere", basis: "volume_fraction" };
   if (cls === "gas" && (symbol === "H" || info?.reservoir === "volatile" || info?.reservoir === "oxygen")) {
@@ -172,7 +175,7 @@ export function clearShare(mix: PlanetMix, index: number): PlanetMix {
 }
 
 /** 周期表上点一下：没有就按默认放法加一条（留空），有就把这个元素的条目都拿掉 */
-export function toggleElement(mix: PlanetMix, symbol: string, cls: Composition, max: number): PlanetMix {
+export function toggleElement(mix: PlanetMix, symbol: string, cls: BodyClass, max: number): PlanetMix {
   if (mix.items.some((item) => item.id === symbol)) return { ...mix, items: mix.items.filter((item) => item.id !== symbol) };
   if (mix.items.length >= max || !ELEMENT_BY_SYMBOL.has(symbol)) return mix;
   const place = defaultPlacement(symbol, cls);
@@ -443,7 +446,7 @@ export function templateMix(cls: BodyClass, seed: number): PlanetMixItem[] {
 /**
  * 「随机一版」：换一个种子，按天体类型的模板给一组构成，值的来源都标「随机」。
  * - keep（默认）：你定的值（origin = user，连同它的层与口径）原样保留；模板里同组同元素的跳过；
- *   你加了但没定数的元素留着、按种子给一个小比例；每组里随机的那些按比例缩到「100% − 你定的合计」。
+ *   你加了但还留空的元素留着、按种子给一个小比例；上一版随机的、默认的都换掉；每组里随机的那些按比例缩到「100% − 你定的合计」。
  * - all（按住 ⌥ / Alt）：全部重来，只留模板。
  * 同一份构成 + 同一个种子 → 同一个结果（种子由上一个种子推出来，显示在面板上）。
  */
@@ -454,8 +457,10 @@ export function shuffleMix(mix: PlanetMix, cls: BodyClass, mode: "keep" | "all" 
   const kept = mix.items.filter((item) => item.origin === "user" && item.share !== null);
   const has = (list: readonly PlanetMixItem[], it: PlanetMixItem): boolean => list.some((x) => x.id === it.id && x.scope === it.scope && x.basis === it.basis);
   const draw = rng(seed ^ 0x5bd1e995);
+  // 你加了还没定数（留空）的元素留着、给个小比例；上一版随机来的、默认映射来的都换掉（不然连点几次，
+  // 上一版的微量元素会越积越多、把这一版的主成分挤小——实例里连点三次，大气里的氩被挤到 36%）
   const extra = mix.items
-    .filter((item) => !has(kept, item) && !has(template, item))
+    .filter((item) => item.share === null && !has(kept, item) && !has(template, item))
     .map((item): PlanetMixItem => ({ ...item, share: 0.01 + 0.07 * draw(), origin: "random" }));
   const randoms = [...template.filter((item) => !has(kept, item)), ...extra];
   const items: PlanetMixItem[] = [...kept];

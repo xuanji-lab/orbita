@@ -136,6 +136,7 @@ import orbit from "../../../../design-system/assets/icons/lucide/orbit.svg?raw";
 import paintbrush from "../../../../design-system/assets/icons/lucide/paintbrush.svg?raw";
 import plus from "../../../../design-system/assets/icons/lucide/plus.svg?raw";
 import refreshCw from "../../../../design-system/assets/icons/lucide/refresh-cw.svg?raw";
+import shuffle from "../../../../design-system/assets/icons/lucide/shuffle.svg?raw";
 import rotateCcw from "../../../../design-system/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../design-system/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../design-system/assets/icons/lucide/square.svg?raw";
@@ -292,6 +293,7 @@ const ICONS = {
   quote,
   plus,
   "refresh-cw": refreshCw,
+  shuffle,
   "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,

@@ -11,7 +11,7 @@ import {
 } from "../chat/galaxy.ts";
 import type { RightPanelKind } from "../../shell/RightRail.tsx";
 import type { EyeStyle, PlanetMix, PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
-import { classOfDensity, legacyMix, mixPhysics, planetDensity, seedOf } from "./mix.ts";
+import { classOfDensity, legacyMix, mixPhysics, planetDensity, seedOf, starDefaultMix } from "./mix.ts";
 // 值 import 走相对路径：node --test 解析不了 @shared 别名
 import { EYE_STYLE_DEFAULT } from "../../../../shared/planet-design.ts";
 
@@ -79,13 +79,13 @@ export interface BodyDesign {
   note?: string | null;
   /** 眼睛样式（面板里 DIY，存进 planet/galaxy.json）；缺席 = 没设过，画成 EYE_STYLE_DEFAULT（大） */
   eyeStyle?: EyeStyle;
+  /** 元素构成（面板「成分」一节）；缺席 = 没改过：行星按 composition 映射一组默认元素，主星取太阳的量级（mixOf / starMixOf） */
+  mix?: PlanetMix;
 }
 
 export interface PlanetDesign extends BodyDesign {
   /** 成分类别（纹理与只认三类的读者用）：有元素构成时由构成推出的密度归类（withMix），不再单独选 */
   composition: Composition;
-  /** 元素构成（面板「成分」一节）；缺席 = 旧稿，按 composition 映射成一组默认元素（mixOf） */
-  mix?: PlanetMix;
   orbitRadius: number;
   /** 子智能体的 id（伴随文件 planet/galaxy.json 里的）；面板里新加、还没落盘的没有 */
   id?: string;
@@ -133,6 +133,11 @@ export function densityOf(kind: BodyKind, composition: Composition): number {
 /** 一颗行星的元素构成：有就用；旧稿（只有成分类别）映射成一组默认元素，种子按 id 起 */
 export function mixOf(planet: PlanetDesign): PlanetMix {
   return planet.mix ?? legacyMix(planet.composition, seedOf(planet.id ?? planet.name));
+}
+
+/** 主星的元素构成：有就用，没有取太阳的量级（只影响颜色提示，主星密度固定） */
+export function starMixOf(star: BodyDesign, seedKey: string): PlanetMix {
+  return star.mix ?? starDefaultMix(seedOf(seedKey));
 }
 
 /** 改了构成：成分类别跟着推出来的密度走（构成里没有整体·质量这一组时类别不动） */
@@ -663,6 +668,7 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
           surface: main.surface === null ? null : { src: main.surface, flip: main.flip },
           note: main.note,
           ...(main.eyeStyle === null ? {} : { eyeStyle: main.eyeStyle }),
+          ...(main.mix === null ? {} : { mix: main.mix }),
         };
   if (star === null) return fallback;
   const planets: PlanetDesign[] = data.planets.map((body, index) => ({
@@ -706,7 +712,7 @@ export function planetsWriteOf(workspaceId: string, design: GalaxyDesign): Plane
   const list = design.star === null ? [] : (design.planets ?? []);
   return {
     workspaceId,
-    main: design.star === null ? null : writeBody("main", design.star, null, null),
+    main: design.star === null ? null : writeBody("main", design.star, null, null, design.star.mix),
     planets: list.map((planet, index) => writeBody(planet.id ?? `planet-${index + 1}`, planet, planet.composition, planet.orbitRadius, planet.mix)),
   };
 }
