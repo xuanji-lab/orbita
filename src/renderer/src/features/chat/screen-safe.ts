@@ -187,7 +187,7 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
     if (ok) break;
   }
   const placed = Math.min(a, FRAME_EXTENT);
-  // 放大过的窄画面：碎石块那一圈出画就整圈不画——它们归进角上那一行「另有 N 条会话」（HomeGalaxy）
+  // 放大过的窄画面：碎石块那一圈出画就整圈不画（它们仍是碎石带里的碎石，键盘从「全部 N 条会话」去树状图）
   if (inside && !orbitInside(camera, vp, placed, ROCK_CLEAR_PX)) return null;
   return placed;
 }

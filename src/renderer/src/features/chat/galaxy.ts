@@ -52,7 +52,7 @@ export interface RockSpec {
   label: string;
   /**
    * 子会话拎成的碎石块：它不在 spec.sessions（= 这座星系的根会话数，与右栏树主卡同源）里，
-   * 所以不从星屑带的颗粒数里扣，也不算进「另有 N 条会话」
+   * 所以不从碎石带的颗粒数里扣
    */
   child?: boolean;
 }
