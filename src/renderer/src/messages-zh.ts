@@ -1311,7 +1311,7 @@ export const zh: Messages = {
     planFirstAria: "先给我看计划",
     planFirstInfo: "智能体写下一个任务的第一张计划后先停下，等你在聊天框里回一句再动手（不会弹按钮）· 默认关；计划档与智能体提出问题时无论如何都会先停",
     attributionAria: "提交与 PR 署名",
-    attributionInfo: "给智能体代写的提交加尾注、PR 描述加一行 · 不设 Co-Authored-By，也不改作者",
+    attributionInfo: "给智能体代写的提交加一行 Co-authored-by 尾注、PR 描述加一行 · 署名指向 Orbita 的机器人账号，不改作者与提交者",
     pastedCollapse: "粘贴文本折叠",
     pastedCollapseAria: "粘贴文本折叠显示",
     pastedCollapseInfo: "大段粘贴在光标处收成句中胶囊，点开就地展开可编辑 · 关掉后大段粘贴作为普通文字直接进输入框",

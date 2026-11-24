@@ -128,6 +128,9 @@
   display: grid;
   gap: 1px;
   justify-items: end;
+  /* 2026-11-15 起第一行是完整的 `Co-authored-by: Orbita <…[bot]@users.noreply.github.com>`
+   * （近 90 字），控件列放不下：宽度锁在列内、按词折行，不把名字列顶到 150px 以下。 */
+  max-width: 100%;
   font-family: var(--font-family-business);
   font-size: var(--font-size-xs);
   line-height: var(--line-height-ui);
@@ -138,6 +141,14 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.set-trailer-text {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: break-word;
 }
 
 .set-trailer-line .orbita-icon {

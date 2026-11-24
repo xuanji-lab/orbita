@@ -1,23 +1,30 @@
 import { describe, it } from "node:test";
-import { equal, match, ok } from "node:assert/strict";
+import { doesNotMatch, equal, match, ok } from "node:assert/strict";
 import { gitAttributionGuideline } from "./git-attribution.ts";
+import { COMMIT_TRAILER, LEGACY_COMMIT_TRAILER } from "../shared/attribution.ts";
+
+const BOT_ADDRESS = "356826154+xuanji-orbita[bot]@users.noreply.github.com";
 
 describe("gitAttributionGuideline", () => {
-  it("开：讲清 trailer 长什么样，以及 PR 描述里的链接", () => {
+  it("开：讲清 trailer 全文（Co-authored-by + bot 地址）与 PR 描述里的链接", () => {
     const text = gitAttributionGuideline(true);
-    match(text, /Made-with: Orbita/);
+    equal(COMMIT_TRAILER, `Co-authored-by: Orbita <${BOT_ADDRESS}>`);
+    ok(text.includes(COMMIT_TRAILER));
     match(text, /\[Orbita\]\(https:\/\/github\.com\/XIAOZF99\/orbita\)/);
   });
 
-  it("开：明说不要 Co-Authored-By、不要改 author——那会污染贡献统计", () => {
+  it("开：只加一行共作者、不改 author/committer；不再把 Co-Authored-By 当禁区", () => {
     const text = gitAttributionGuideline(true);
-    match(text, /Co-Authored-By/);
-    match(text, /do not change the author/i);
+    match(text, /second co-author line/i);
+    match(text, /do not change the author or committer/i);
+    doesNotMatch(text, /do not use `Co-Authored-By`/i);
   });
 
-  it("开：强调唯一性，且用户当次拒绝优先", () => {
+  it("开：强调唯一性，老写法也算已署名，且用户当次拒绝优先", () => {
     const text = gitAttributionGuideline(true);
     match(text, /already carries the line/i);
+    ok(text.includes(LEGACY_COMMIT_TRAILER));
+    match(text, /counts as already signed/i);
     match(text, /if the user says not to add it/i);
   });
 
@@ -31,11 +38,11 @@ describe("gitAttributionGuideline", () => {
     ok(text.endsWith("</orbita-git-attribution>"));
   });
 
-  it("中文界面：PR 那一行写中文；commit trailer 仍是 git 认得的英文键", () => {
+  it("中文界面：PR 那一行写中文；commit trailer 仍是一字不改的英文", () => {
     const text = gitAttributionGuideline(true, "zh");
     match(text, /append a single `使用 \[Orbita\]\(https:\/\/github\.com\/XIAOZF99\/orbita\) 制作` line/);
-    match(text, /`Made-with: Orbita` trailer/);
-    match(text, /git only parses ASCII trailer keys/);
+    ok(text.includes(`\`${COMMIT_TRAILER}\` trailer`));
+    match(text, /read by GitHub, not by humans/);
   });
 
   it("去重认两种写法：中英切换过的仓库里不会一英一中各一行", () => {
