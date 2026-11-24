@@ -11,7 +11,7 @@ import "./agent-activity.css";
  * - 主智能体在干活 = 头像外一圈细日冕慢慢呼吸（设计系统已有的「呼吸」一类）；主智能体在等你时不演，等你要比任何「在干活」都醒目；
  * - 会话在跑 = 状态词后一根闪烁的插入符（不画头像：会话是碎石，没有脸）；
  * - 子智能体 = 第二行最前面一串它那颗行星的小头像，在主头像右边、不压主星的脸；有几个画几个、不折成「+N」，
- *   放不下的整张不画（不留半张）。目前只来自演示数据（?fixture=sub-agents），等你的那颗描一圈 warning。
+ *   放不下的整张不画（不留半张）。真数据来自有归属的子会话，演示数据（?fixture=sub-agents）叠在后面；等你的那颗描一圈 warning。
  * 动效只用 opacity / transform（交给合成器），带 .anim-continuous：窗口失焦 / 隐藏时由 styles.css 统一暂停；减少动效时不演。
  */
 
@@ -51,7 +51,8 @@ export function SubAgentFaces(props: { design: GalaxyDesign; agents: readonly Su
       {agents.map((agent, index) => {
         const { planet, designed } = planetAt(props.design, agent.planet);
         const name = (designed ? planet.name.trim() : "") || t.agents.subAgentUnnamed;
-        const label = agent.state === "waiting" ? t.agents.subAgentWaiting(name) : t.agents.subAgentWorking(name);
+        const demo = agent.demo !== false;
+        const label = agent.state === "waiting" ? t.agents.subAgentWaiting(name, demo) : t.agents.subAgentWorking(name, demo);
         return (
           <span key={`${agent.planet}:${index}`} className="aa-face" data-state={agent.state} title={label} style={{ width: props.size, height: props.size }}>
             <PlanetFace design={props.design} planet={planet} size={props.size} label={label} />

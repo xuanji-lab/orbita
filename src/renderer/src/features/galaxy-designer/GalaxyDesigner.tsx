@@ -9,7 +9,6 @@ import { Segmented, Switch } from "../settings/SettingControls";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { MASS_UNIT_PER_EARTH,
-  addPlanet,
   commitPlanet,
   BACKDROPS,
   bodyArt,
@@ -47,6 +46,8 @@ import { nameOrderOf } from "../chat/proto-variants.ts";
 import { eyeStyleOf, storyLineOf } from "./design.ts";
 import { EYE_STYLES, type EyeStyle } from "@shared/planet-design";
 import { BodyFigure } from "./StarFigure.tsx";
+import { NewSubAgentForm, RoleSection } from "./SubAgentRole.tsx";
+import { PLANET_AGENTS_MAX } from "@shared/planet-design";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
 
 /**
@@ -56,7 +57,8 @@ import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine
  *
  * 预览：主星页是主星压在一张弯曲的网格布上（引力的示意画法，质量越大坑越深，well.ts）；
  * 行星页是行星自己的大头像 + 一块小场景（同一张网格布上的主星与这颗行星的轨道）。
- * 行星依赖主星：没有主星时行星页是「先创建主星」的空态，加行星走 design.ts 的 addPlanet（数据层拒绝）。
+ * 行星依赖主星：没有主星时行星页是「先创建主星」的空态。加行星 = 新建子智能体（名字 + 职能，SubAgentRole.tsx 的表单，
+ * 主进程放到默认空轨道）——每颗行星都有档案；不再加一颗没有职能的示例行星。
  *
  * 设计稿的真源是工作区文件夹里的 planet/（与插件 planet-forge 同一份）：面板里的修改去抖后写回（persistDesign），
  * 插件稿只改名字与质量，元素、轨道、子智能体名单进伴随文件 planet/galaxy.json。
@@ -92,6 +94,17 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
     persistDesign(id);
   };
   const planets = design.planets ?? [];
+  // 仓库里的这一份被别处换了（聊天里建 / 改了子智能体，App 重读了盘）：跟上，不留着旧名单
+  useEffect(
+    () =>
+      store.subscribe(() => {
+        const next = store.get(id);
+        setDesignState((current) => (current === next ? current : next));
+      }),
+    [id],
+  );
+  // 正在新建子智能体（表单替换下面的参数区）；建好或取消就收起，新行星那一页由 App 收到广播后落过去
+  const [creating, setCreating] = useState(false);
   // 星系上点了主星 / 行星：落到那一页（nonce 变了才落，挂上时也落一次）。只改「正在编辑哪颗」，不动参数
   const focus = props.focus;
   useEffect(() => {
@@ -103,7 +116,10 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
     }
     const list = current.planets ?? [];
     const index = list.findIndex((planet, i) => (planet.id ?? `planet-${i + 1}`) === focus.id);
-    if (index >= 0) setDesign(selectPlanet(current, index));
+    if (index >= 0) {
+      setCreating(false);
+      setDesign(selectPlanet(current, index));
+    }
     // eslint 不在本仓；依赖只认 nonce：同一颗连点两次也要重新落位
   }, [focus?.nonce]);
   // 名字：工作区名为主、智能体名为副（候选 agentName=on 时反过来），与页头同一个顺序
@@ -126,11 +142,6 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
   const radius = radiusOf(design, kind);
   const range = massRange(kind);
   const nameFallback = kind === "star" ? props.workspace.name : tg.unnamedPlanet;
-  const onAddPlanet = (): void => {
-    const result = addPlanet(design, id);
-    // 没有主星时数据层拒绝：留在原页（面板上的出口本来就是「创建主星」，走不到这里）
-    if (result.ok) setDesign(result.design);
-  };
 
   return (
     <RightPanelFrame
@@ -216,10 +227,22 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
               if (value === "star") setDesign({ ...design, editing: "star" });
               else if (value === "planet") setDesign({ ...design, editing: "planet" });
               else setDesign(selectPlanet(design, Number(value.slice(1))));
+              setCreating(false);
             }}
           />
         </Row>
-        {body === null ? (
+        {/* 新建子智能体（与聊天里的 create_sub_agent 写同一份档案）：有主星、名单没满才给 */}
+        {design.star !== null && !creating && planets.length > 0 && planets.length < PLANET_AGENTS_MAX && (
+          <span className="gd-new-entry">
+            <button type="button" className="gd-link" data-action="new-subagent" onClick={() => setCreating(true)}>
+              <Icon name="plus" size={12} strokeWidth={1.8} />
+              <span>{tg.newAgent}</span>
+            </button>
+          </span>
+        )}
+        {creating && design.star !== null ? (
+          <NewSubAgentForm workspaceId={id} count={planets.length} onDone={() => setCreating(false)} />
+        ) : body === null ? (
           // 空页：没主星（主星页、行星页都是先创建主星），或有主星还没行星（行星页：添加行星）
           <div className="gd-empty" data-empty={design.star === null ? "no-star" : "no-planet"}>
             {design.star === null ? (
@@ -231,13 +254,14 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 {kind === "planet" ? tg.planetNeedsStar : tg.noStar}
               </PanelEmpty>
             ) : (
-              <PanelEmpty icon="orbit" hint={tg.noPlanetHint} exit={{ label: tg.addPlanet, onClick: onAddPlanet }}>
+              <PanelEmpty icon="orbit" hint={tg.newAgentHint} exit={{ label: tg.newAgent, onClick: () => setCreating(true) }}>
                 {tg.noPlanet}
               </PanelEmpty>
             )}
           </div>
         ) : (
           <>
+            {kind === "planet" && <PanelGroupHead label={tg.roleGroup} />}
             <Row name={tg.name} errors={errorsAt(errors, kind, "name")} t={t} wide>
               <input
                 className="text-field gd-name"
@@ -248,6 +272,13 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 onChange={(event) => patchBody({ name: event.target.value })}
               />
             </Row>
+            {/* 行星页的「职能」：职能提示词、来源、待出图、删除（档案 planet/agents/<id>/agent.json） */}
+            {kind === "planet" && design.planet !== null && (
+              <>
+                <RoleSection workspaceId={id} planet={design.planet} />
+                <PanelGroupHead label={tg.bodyParamsGroup} />
+              </>
+            )}
             <Row
               name={tg.mass}
               desc={kind === "star" ? tg.starMassDesc(formatNumber(earth(range.min)), formatNumber(earth(range.max))) : tg.massDesc(formatNumber(earth(range.min)), formatNumber(earth(range.max)))}

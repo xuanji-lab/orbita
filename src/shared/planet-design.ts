@@ -13,6 +13,8 @@
  * 质量单位：盘上一律是 M⊕（插件的单位）；界面星系的质量单位 = M⊕ × 10（galaxy.ts 的 STAR_MASS 300–1000 ↔ 30–100 M⊕），换算在 renderer。
  */
 
+import type { SubAgentProfile } from "./sub-agent.ts";
+
 export const PLANET_DIR = "planet";
 export const PLANET_DESIGN_FILE = "design.json";
 export const PLANET_GALAXY_FILE = "galaxy.json";
@@ -56,6 +58,11 @@ export interface PlanetBody {
   elements: PlanetElements | null;
   /** 眼睛样式；没设过为 null（界面取 EYE_STYLE_DEFAULT） */
   eyeStyle: EyeStyle | null;
+  /**
+   * 子智能体档案（planet/agents/<id>/agent.json，shared/sub-agent.ts）：行星才有；没有 / 读坏了为 null——
+   * 星系照画，只是没有职能、不能被指名派活。主星恒为 null。
+   */
+  profile?: SubAgentProfile | null;
 }
 
 export interface WorkspacePlanets {
@@ -280,7 +287,11 @@ export function patchPluginDesign(raw: unknown, patch: { name: string; massEarth
 /**
  * 界面写回时的伴随文件：保留原文件里界面不管的字段（地表路径、翻转、设计稿路径、note），
  * 用写回请求覆盖界面拥有的字段（元素、轨道、成分）。名字 / 质量：有插件稿的不记在伴随文件里（以插件稿为准），
- * 没有的记在这里。请求里没有的行星从名单里拿掉（面板删了它）。
+ * 没有的记在这里。
+ *
+ * **请求里没有的行星原样留着**（2026-11-24 改：以前是「拿掉」）。删子智能体另走 subagent:delete（要确认），
+ * 不再由面板的整份写回隐式完成——否则聊天里刚建的行星会被面板里一份还没刷新的名单去抖写回时抹掉。
+ * 名单次序：盘上原有的保持原位，请求里新出现的接在后面。
  */
 export function mergeCompanion(
   current: GalaxyCompanion,
@@ -300,14 +311,20 @@ export function mergeCompanion(
     return next;
   };
   const main = request.main === null ? null : writeBody(current.main, request.main, hasDesign.main);
-  const planets = request.planets.slice(0, PLANET_AGENTS_MAX).map((body): CompanionPlanet => {
-    const old = current.planets.find((planet) => planet.id === body.id) ?? null;
+  const merged = (old: CompanionPlanet | null, body: PlanetWriteBody): CompanionPlanet => {
     const next: CompanionPlanet = { ...(old ?? { id: body.id }), ...writeBody(old, body, hasDesign.planets.has(body.id)), id: body.id };
     if (body.composition !== null) next.composition = body.composition;
     if (body.orbit !== null) next.orbit = body.orbit;
     return next;
+  };
+  const byId = new Map(request.planets.map((body) => [body.id, body]));
+  const kept = current.planets.map((old) => {
+    const body = byId.get(old.id);
+    return body === undefined ? old : merged(old, body);
   });
-  return { version: PLANET_GALAXY_VERSION, main, planets };
+  const known = new Set(current.planets.map((planet) => planet.id));
+  const added = request.planets.filter((body) => !known.has(body.id)).map((body) => merged(null, body));
+  return { version: PLANET_GALAXY_VERSION, main, planets: [...kept, ...added].slice(0, PLANET_AGENTS_MAX) };
 }
 
 export function isPlanetWriteBody(raw: unknown): raw is PlanetWriteBody {

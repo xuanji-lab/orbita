@@ -264,6 +264,13 @@ export const PLUGIN_BOARD_TOOL = "show_plugin_board";
  */
 export const USER_ACTION_TOOL = "request_user_action";
 
+/**
+ * 子智能体名单（list_sub_agents，编排形态的主智能体才注册）：只读工作区 planet/ 里的档案，三档一律放行
+ * （同 model_costs：派活前看一眼「有谁」，问了没有意义）。create_sub_agent / update_sub_agent 会写工作区文件，
+ * **不在这里**——走默认的写操作闸门（plan 拒、manual 问、skip 放）。
+ */
+export const SUB_AGENT_READ_TOOL = "list_sub_agents";
+
 export type PermissionDecision =
   | { behavior: "allow" }
   /** 需要问用户；调用方负责把问题送到 UI 并等回答 */
@@ -286,6 +293,8 @@ export function decidePermission(mode: PermissionMode, toolName: string): Permis
   if (isBrowserReadTool(toolName) || toolName === USER_ACTION_TOOL) return { behavior: "allow" };
   // 写计划：三档一律放行，理由见 PLAN_TOOL 的注释
   if (toolName === PLAN_TOOL || toolName === GOAL_TOOL) return { behavior: "allow" };
+  // 子智能体名单：三档一律放行（理由见 SUB_AGENT_READ_TOOL）
+  if (toolName === SUB_AGENT_READ_TOOL) return { behavior: "allow" };
   // 草稿预览：三档一律放行（理由见 PLUGIN_DRAFT_TOOL）
   if (toolName === PLUGIN_DRAFT_TOOL) return { behavior: "allow" };
   // 看板结果：三档一律放行（理由见 PLUGIN_BOARD_TOOL）

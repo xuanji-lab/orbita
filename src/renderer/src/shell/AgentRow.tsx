@@ -11,7 +11,7 @@ import { rowLabelOf } from "../features/chat/proto-variants.ts";
 import { agentLineOf, type AgentLine } from "../features/chat/agent-status.ts";
 import type { ScopeSummary } from "../features/chat/galaxy-data.ts";
 import { ActivityAvatar, SessionCaret, SubAgentFaces } from "./AgentActivity.tsx";
-import type { RowActivity } from "./sidebar-activity.ts";
+import { realSubAgentFaces, type RowActivity } from "./sidebar-activity.ts";
 import { useSubAgentFixtures } from "./sidebar-activity-store.ts";
 import { useT } from "../locale.ts";
 import "./agent-row.css";
@@ -52,10 +52,15 @@ export function AgentRow(props: {
   const [armed, setArmed] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const line = agentLineOf(summary);
-  // 「谁在干活」：主智能体日冕 + 会话插入符来自真数据；子智能体只来自演示数据（?fixture=sub-agents），真实实例里是空的
+  // 「谁在干活」：主智能体日冕、会话插入符、子智能体小头像都来自真数据（子智能体 = 有归属的子会话，attributionOf）；
+  // 演示数据（?fixture=sub-agents）照旧能叠在后面，只用来拍满载
   const fixtures = useSubAgentFixtures();
   const activity = props.activity;
-  const agents = workspace === null || activity === undefined ? [] : (fixtures[workspace.name] ?? []);
+  const real =
+    workspace === null || activity === undefined
+      ? { faces: [], leftoverRunning: 0, leftoverWaiting: 0 }
+      : realSubAgentFaces(activity.subAgents, (design.planets ?? []).map((planet) => planet.id));
+  const agents = workspace === null || activity === undefined ? [] : [...real.faces, ...(fixtures[workspace.name] ?? [])];
   const avatarLabel = workspace === null ? t.agents.homeAvatar : t.agents.avatar(name);
   const figure =
     workspace === null ? (
@@ -120,7 +125,7 @@ export function AgentRow(props: {
           <span className="agent-line agent-status">
             <SubAgentFaces design={design} agents={agents} size={14} />
             <StatusLine line={line} home={workspace === null} />
-            {activity !== undefined && <SessionCaret count={activity.sessionsRunning} />}
+            {activity !== undefined && <SessionCaret count={activity.sessionsRunning + real.leftoverRunning} />}
             {props.summary.attention > 0 && (
               <span className="agent-dot row-trailing" data-kind={props.summary.waiting > 0 ? "waiting" : "unread"} role="img" aria-label={props.summary.waiting > 0 ? t.agents.status.waiting : t.agents.unread} />
             )}

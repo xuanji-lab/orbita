@@ -4,6 +4,7 @@
  *
  * 只做三件事：懒启动进程、把命令发进去、把事件广播给窗口。业务判断全在两端，不在这里。
  */
+import type { SubAgentToolOutcome } from "../../shared/sub-agent.ts";
 import type {
   AgentCommand,
   AgentEvent,
@@ -634,6 +635,22 @@ export class AgentHostCore {
             ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
             // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
             ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
+          }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 子智能体：subAgentRequest 的回执（automation 同款）：不 ensure、发完即回。 */
+  answerSubAgent(requestId: string, outcome: SubAgentToolOutcome): void {
+    this.child?.postMessage({
+      type: "subAgentResult",
+      requestId,
+      ...(outcome.ok
+        ? {
+            ok: true as const,
+            text: outcome.text,
+            ...(outcome.id === undefined ? {} : { id: outcome.id }),
+            ...(outcome.agents === undefined ? {} : { agents: outcome.agents }),
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);

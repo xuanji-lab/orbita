@@ -3,9 +3,11 @@ import { stat } from "node:fs/promises";
 import { ipcMain, nativeImage } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import { isPlanetWriteRequest, type PlanetReadResult, type PlanetWriteResult } from "../../shared/planet-design.ts";
+import type { SubAgentMutationResult, SubAgentsChanged } from "../../shared/sub-agent.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { sphereCrop } from "./sphere.ts";
 import { PlanetStore } from "./store.ts";
+import type { SubAgentStore } from "./sub-agents.ts";
 
 /** 地表贴图的边长（px）：最大的用处是设计面板预览（约 160px 的球）与 New Task 页主星，256 在 2× 屏上也够 */
 export const SURFACE_PX = 256;
@@ -34,7 +36,11 @@ export async function loadSurface(path: string): Promise<string | null> {
   return src;
 }
 
-export function registerPlanetIpc(workspaces: WorkspaceStore): void {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function registerPlanetIpc(workspaces: WorkspaceStore, subAgents: SubAgentStore, broadcast: (event: SubAgentsChanged) => void): void {
   const store = new PlanetStore(loadSurface);
   const pathOf = async (workspaceId: unknown): Promise<string | null> => {
     if (typeof workspaceId !== "string") return null;
@@ -51,6 +57,34 @@ export function registerPlanetIpc(workspaces: WorkspaceStore): void {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
   });
+  // 子智能体：面板里新建 / 改 / 删（与聊天里的工具同一个 SubAgentStore、同一份档案）。入参的形状与校验在 store 里做
+  const mutate = async (
+    workspaceId: unknown,
+    action: SubAgentsChanged["action"],
+    run: (path: string) => Promise<{ ok: true; value: { id: string } } | { ok: false; error: string }>,
+  ): Promise<SubAgentMutationResult> => {
+    const path = await pathOf(workspaceId);
+    if (path === null || typeof workspaceId !== "string") return { ok: false, error: "没有这个工作区" };
+    try {
+      const result = await run(path);
+      if (!result.ok) return result;
+      broadcast({ workspaceId, subAgentId: result.value.id, action, source: "panel" });
+      return { ok: true, id: result.value.id };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  ipcMain.handle(ipcChannels.subAgentCreate, (_event, request: unknown): Promise<SubAgentMutationResult> =>
+    isRecord(request) ? mutate(request["workspaceId"], "created", (path) => subAgents.create(path, request["input"], "panel")) : Promise.resolve({ ok: false, error: "请求的形状不对" }),
+  );
+  ipcMain.handle(ipcChannels.subAgentUpdate, (_event, request: unknown): Promise<SubAgentMutationResult> =>
+    isRecord(request) ? mutate(request["workspaceId"], "updated", (path) => subAgents.update(path, request["input"], "panel")) : Promise.resolve({ ok: false, error: "请求的形状不对" }),
+  );
+  ipcMain.handle(ipcChannels.subAgentDelete, (_event, request: unknown): Promise<SubAgentMutationResult> =>
+    isRecord(request) && typeof request["id"] === "string"
+      ? mutate(request["workspaceId"], "deleted", (path) => subAgents.delete(path, request["id"] as string))
+      : Promise.resolve({ ok: false, error: "请求的形状不对" }),
+  );
   ipcMain.handle(ipcChannels.planetWrite, async (_event, request: unknown): Promise<PlanetWriteResult> => {
     if (!isPlanetWriteRequest(request)) return { ok: false, error: "写回请求的形状不对" };
     const path = await pathOf(request.workspaceId);
