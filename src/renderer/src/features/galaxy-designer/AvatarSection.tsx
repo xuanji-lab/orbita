@@ -84,6 +84,9 @@ export function AvatarSection(props: {
   const ended = job !== null && !live;
   const noneOut = ended && job.state === "pending";
   const usable = slots.filter((slot) => slot.state === "done");
+  // 每一位都因同一个原因没出来（停下、超时、会话断了）：原因只写一次，不在每张下面重复
+  const failedReasons = slots.map((slot) => (slot.state === "failed" ? slot.reason : null));
+  const sharedReason = slots.length > 1 && failedReasons.every((reason) => reason !== null && reason === failedReasons[0]) ? failedReasons[0] ?? null : null;
 
   return (
     <div className="gd-avatar" data-avatar-state={job?.state ?? "none"} data-body-id={bodyId ?? undefined}>
@@ -105,6 +108,7 @@ export function AvatarSection(props: {
                   picked={chosen !== null && chosen === slot.candidateId}
                   inUse={job?.state === "selected" && job.selected !== null && job.selected === slot.candidateId}
                   onPick={() => setPicked(slot.candidateId)}
+                  hideReason={sharedReason !== null}
                   t={t}
                 />
               ))}
@@ -116,8 +120,14 @@ export function AvatarSection(props: {
                 <Icon name="image" size={12} strokeWidth={1.8} />
                 <span>{ta.pendingTitle}</span>
               </p>
+              {sharedReason !== null && <p className="gd-role-line" data-reason="shared">{sharedReason}</p>}
               <p className="gd-role-line">{ta.pendingHint}</p>
             </div>
+          )}
+          {sharedReason !== null && !(noneOut && !props.hasSurface) && (
+            <p className="gd-role-line" data-reason="shared">
+              {sharedReason}
+            </p>
           )}
           {job?.state === "ready" && usable.length > 0 && <p className="gd-role-line">{ta.readyHint}</p>}
           {job?.state === "selected" && <p className="gd-role-line" data-note="selected">{ta.selectedNote}</p>}
@@ -172,6 +182,8 @@ function CandidateTile(props: {
   picked: boolean;
   inUse: boolean;
   onPick: () => void;
+  /** 原因由上层统一写一次（每一位同一个原因时） */
+  hideReason: boolean;
   t: Messages;
 }) {
   const ta = props.t.galaxyDesigner.avatar;
@@ -193,7 +205,14 @@ function CandidateTile(props: {
           : tries > 0
             ? `${ta.working} · ${ta.retry(tries + 1)}`
             : ta.working;
-  const reason = slot.state === "failed" ? slot.reason : degraded ? ta.degraded(backendName(slot.wanted), backendName(slot.backend)) : null;
+  // 降级的缘由：原先那个后端试过却没出来（写插件原话），还是手边压根没有它（plan 时就改了）
+  const wantedTry = [...slot.attempts].reverse().find((attempt) => attempt.backend === slot.wanted && !attempt.ok);
+  const degradedWhy = !degraded
+    ? null
+    : wantedTry === undefined
+      ? ta.unavailable(backendName(slot.wanted), backendName(slot.backend))
+      : ta.degraded(backendName(slot.wanted), backendName(slot.backend), wantedTry.reasons.join("；"));
+  const reason = slot.state === "failed" ? slot.reason : degradedWhy;
   const selectable = slot.state === "done" && slot.candidateId !== null;
   const r = 30;
   return (
@@ -223,7 +242,7 @@ function CandidateTile(props: {
           <span>{status}</span>
         </span>
       </button>
-      {reason !== null && (
+      {reason !== null && !(props.hideReason && slot.state === "failed") && (
         <p className="gd-avatar-reason" data-kind={slot.state === "failed" ? "failed" : "degraded"}>
           {reason}
         </p>

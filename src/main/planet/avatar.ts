@@ -481,8 +481,7 @@ export class AvatarJobs {
   async cancel(ref: AvatarBodyRef): Promise<AvatarJobResult> {
     const live = this.live.get(keyOf(ref));
     if (live === undefined || !isAvatarJobLive(live.job)) return { ok: true, job: live?.job ?? null };
-    if (live.job.sessionId !== null) await Promise.resolve(this.deps.abort(live.job.sessionId)).catch(() => undefined);
-    await this.end(keyOf(ref), "取消了，这一位没交图");
+    await this.end(keyOf(ref), "你停下了，这一位没交图", true);
     return { ok: true, job: this.live.get(keyOf(ref))?.job ?? null };
   }
 
@@ -519,17 +518,17 @@ export class AvatarJobs {
     }
   }
 
-  private async snapshot(live: Live, ended: string | null): Promise<AvatarJob> {
+  private async snapshot(live: Live, ended: string | null, cancelled = false): Promise<AvatarJob> {
     const rounds = parseManifest(await readJson(join(live.place.dir, "manifest.json")));
     const round = rounds.length > live.roundsBefore ? rounds[rounds.length - 1] : undefined;
     if (round === undefined) {
       if (ended === null) return live.job;
-      // 智能体没跑到 plan 就停了：候选位按原则占着的都记失败
+      // 智能体没跑到 plan 就停了：候选位按原则占着的都记失败。用户自己停的不算出错，只是这一组没出（待出图）
       return {
         ...live.job,
-        state: "failed",
+        state: cancelled ? "pending" : "failed",
         slots: live.job.slots.map((slot) => ({ ...slot, state: "failed", reason: ended })),
-        error: "智能体没有跑插件的 plan，这一组没有开始出图",
+        error: cancelled ? null : "智能体没有跑插件的 plan，这一组没有开始出图",
         finishedAt: this.deps.now(),
       };
     }
@@ -556,24 +555,22 @@ export class AvatarJobs {
   }
 
   /** 收尾：停计时、按最后一次账本定结局；一张都没出来且原来没有地表，插件稿标「待出图」 */
-  private async end(key: string, reason: string): Promise<void> {
+  private async end(key: string, reason: string, cancelled = false): Promise<void> {
     const live = this.live.get(key);
     if (live === undefined || !isAvatarJobLive(live.job)) return;
     if (live.timer !== null) clearInterval(live.timer);
     if (live.deadline !== null) clearTimeout(live.deadline);
     live.timer = null;
     live.deadline = null;
-    const next = await this.snapshot(live, reason);
+    const next = await this.snapshot(live, reason, cancelled);
     const final: AvatarJob = { ...next, state: isAvatarJobLive(next) ? "pending" : next.state, finishedAt: next.finishedAt ?? this.deps.now() };
     live.job = final;
     if (final.state === "pending" && final.round !== null && live.place.surface === null && live.place.design !== null) {
       const root = await this.deps.pluginRoot();
       if (root !== null) await this.deps.runScript(root, ["select", "--dir", live.place.dir, "--pending", "--design", live.place.design]);
     }
-    if (final.state === "ready" || final.state === "pending") {
-      // 超时 / 取消时会话可能还在跑：停掉，别让它在用户挑完之后又交一张
-      if (final.sessionId !== null) await Promise.resolve(this.deps.abort(final.sessionId)).catch(() => undefined);
-    }
+    // 超时 / 取消 / 每一位都出完时会话可能还在跑：停掉，别让它在用户挑完之后又交一张（已停的会话 abort 是空操作）
+    if (final.sessionId !== null) await Promise.resolve(this.deps.abort(final.sessionId)).catch(() => undefined);
     this.deps.emit(final);
   }
 

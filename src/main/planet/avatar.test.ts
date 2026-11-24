@@ -210,6 +210,19 @@ describe("AvatarJobs：进度与收尾", () => {
   });
 });
 
+describe("AvatarJobs：停下", () => {
+  it("用户在 plan 之前停下：不算出错（pending、没有 error），停掉幕后会话", async () => {
+    const { ws, root } = await fixture();
+    const h = harness(ws, root);
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    const result = (await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" })) as { ok: true; job: AvatarJob };
+    assert.equal(result.job.state, "pending");
+    assert.equal(result.job.error, null);
+    assert.match(result.job.slots[0]?.reason ?? "", /停下/);
+    assert.deepEqual(h.aborted, ["s1"]);
+  });
+});
+
 describe("AvatarJobs：挑选与重建", () => {
   it("挑一张：galaxy.json 的 surface 指向候选（相对 planet/）、不翻转；有插件稿时跑插件 select", async () => {
     const { ws, root } = await fixture();
