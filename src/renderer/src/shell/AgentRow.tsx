@@ -160,6 +160,7 @@ function StatusLine(props: { line: AgentLine; home: boolean }) {
     <>
       {line.status === "running" && <StatusPie state="running" />}
       {line.status === "waiting" && <StatusPie state="waiting" />}
+      {line.status === "failed" && <StatusPie state="failed" />}
       <span className="agent-status-word">{line.count === null ? word : `${word} · ${line.count}`}</span>
       {line.recent !== null && <span className="agent-status-recent">{`${t.agents.recent}：${line.recent}`}</span>}
     </>

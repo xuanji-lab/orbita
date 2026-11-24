@@ -1,21 +1,24 @@
 import type { ScopeSummary } from "./galaxy-data.ts";
 
 /**
- * 编排里「一个智能体此刻在干什么」只有三个词（状态词表，侧栏行与页头胶囊共用，文案在 messages 的 agents.status）：
- * 等你（有活停在你这儿）> 在跑（有活在外面干）> 空闲。同一件事在两处永远是同一个词。
+ * 编排里「一个智能体此刻在干什么」只有四个词（状态词表，侧栏行与页头胶囊共用，文案在 messages 的 agents.status）：
+ * 等你（有活停在你这儿）> 在跑（有活在外面干）> 出错（最近一轮失败了，如模型返回 401）> 空闲。同一件事在两处永远是同一个词。
  */
-export type AgentStatusKind = "waiting" | "running" | "idle";
+export type AgentStatusKind = "waiting" | "running" | "failed" | "idle";
 
-export function agentStatusOf(summary: Pick<ScopeSummary, "waiting" | "running">): AgentStatusKind {
+type StatusCounts = Pick<ScopeSummary, "waiting" | "running"> & Partial<Pick<ScopeSummary, "failed">>;
+
+export function agentStatusOf(summary: StatusCounts): AgentStatusKind {
   if (summary.waiting > 0) return "waiting";
   if (summary.running > 0) return "running";
+  if ((summary.failed ?? 0) > 0) return "failed";
   return "idle";
 }
 
-/** 状态后面的件数：等你 / 在跑才带；空闲没有 */
-export function agentStatusCount(summary: Pick<ScopeSummary, "waiting" | "running">): number | null {
+/** 状态后面的件数：等你 / 在跑 / 出错才带；空闲没有 */
+export function agentStatusCount(summary: StatusCounts): number | null {
   const kind = agentStatusOf(summary);
-  return kind === "waiting" ? summary.waiting : kind === "running" ? summary.running : null;
+  return kind === "waiting" ? summary.waiting : kind === "running" ? summary.running : kind === "failed" ? (summary.failed ?? 0) : null;
 }
 
 /**
@@ -29,7 +32,7 @@ export interface AgentLine {
   recent: string | null;
 }
 
-export function agentLineOf(summary: Pick<ScopeSummary, "waiting" | "running" | "lastTitle">): AgentLine {
+export function agentLineOf(summary: StatusCounts & Pick<ScopeSummary, "lastTitle">): AgentLine {
   const status = agentStatusOf(summary);
   return { status, count: agentStatusCount(summary), recent: status === "idle" ? summary.lastTitle : null };
 }
@@ -41,7 +44,7 @@ export interface HeaderStatus {
   sessionId: string | null;
 }
 
-export function headerStatusOf(summary: Pick<ScopeSummary, "waiting" | "running" | "waitingId">): HeaderStatus {
+export function headerStatusOf(summary: StatusCounts & Pick<ScopeSummary, "waitingId">): HeaderStatus {
   const status = agentStatusOf(summary);
   return { status, count: agentStatusCount(summary), sessionId: status === "waiting" ? summary.waitingId : null };
 }

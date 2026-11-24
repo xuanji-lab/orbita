@@ -13,6 +13,16 @@ describe("状态词表：侧栏行与页头胶囊共用同一个判定", () => {
     assert.equal(agentStatusCount({ waiting: 0, running: 3 }), 3);
     assert.equal(agentStatusCount({ waiting: 0, running: 0 }), null);
   });
+  test("出错（最近一轮失败，如模型 401）排在在跑之后、空闲之前，带件数；侧栏行与页头一致", () => {
+    assert.equal(agentStatusOf({ waiting: 0, running: 0, failed: 1 }), "failed");
+    assert.equal(agentStatusOf({ waiting: 0, running: 2, failed: 1 }), "running");
+    assert.equal(agentStatusOf({ waiting: 1, running: 0, failed: 1 }), "waiting");
+    assert.equal(agentStatusCount({ waiting: 0, running: 0, failed: 2 }), 2);
+    const summary = { ...base, failed: 1, lastTitle: "x" };
+    assert.equal(agentLineOf(summary).status, "failed");
+    assert.equal(agentLineOf(summary).recent, null, "出错时不补「最近」");
+    assert.equal(headerStatusOf(summary).status, "failed");
+  });
   test("同一份数据：侧栏行与页头胶囊的状态与件数一致", () => {
     for (const summary of [{ ...base, waiting: 1 }, { ...base, running: 4 }, base, { ...base, waiting: 2, running: 9, lastTitle: "x" }]) {
       const line = agentLineOf(summary);

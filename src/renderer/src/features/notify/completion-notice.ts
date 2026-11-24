@@ -257,6 +257,8 @@ export interface RunStateSource {
   approvalsOf(id: string): readonly unknown[];
   /** 停在「计划等你确认」上（缺席 = 不认这个来源） */
   planAwaitingOf?(id: string): boolean;
+  /** 这条会话最近一轮失败的错误（如模型返回 401）；null = 没失败。缺席 = 不认这个来源 */
+  turnErrorOf?(id: string): string | null;
 }
 
 /**

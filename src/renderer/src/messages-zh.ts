@@ -3626,7 +3626,7 @@ export const zh: Messages = {
     homeEmpty: "这里还没有会话，在下面写一件事",
     homePlaceholder: "新任务（不属于任何工作区）",
     /** 状态词表：侧栏智能体行与工作区页页头胶囊共用这三个词 */
-    status: { running: "在跑", waiting: "等你", idle: "空闲" },
+    status: { running: "在跑", waiting: "等你", failed: "出错", idle: "空闲" },
     /** 「空闲」之后接最近一件事时的前缀 */
     recent: "最近",
     unread: "跑完了，还没看",

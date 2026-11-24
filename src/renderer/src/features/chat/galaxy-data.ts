@@ -36,6 +36,11 @@ export interface StateIndex {
   state: (meta: SessionMeta) => SessionRunState;
   /** 只看这条会话自己的槽（不含子会话）：判断「根会话自己在不在干活」，免得母会话与它在跑的孩子重复上轨道 */
   own: (meta: SessionMeta) => SessionRunState;
+  /**
+   * 这条会话最近一轮失败了、现在没在跑：智能体状态写「出错」。不看未读——你正看着那条会话时未读标记已清，
+   * 但那一轮仍是失败的（2026-11-24 Windows 验收：模型返回 401 之后页头仍写「空闲」）
+   */
+  failed: (meta: SessionMeta) => boolean;
 }
 
 export function stateIndexOf(source: RunStateSource): StateIndex {
@@ -59,6 +64,7 @@ export function stateIndexOf(source: RunStateSource): StateIndex {
         unread: meta.unread ?? null,
       }),
     own: (meta) => sessionRunState({ slot: slot(meta.id), children: [], unread: meta.unread ?? null }),
+    failed: (meta) => source.phaseOf(meta.id) === "idle" && (source.turnErrorOf?.(meta.id) ?? null) !== null,
   };
 }
 
@@ -290,6 +296,8 @@ export interface ScopeSummary {
   waiting: number;
   /** 在跑的件数（同上） */
   running: number;
+  /** 出错的根会话数：最近一轮失败、现在没在跑（失败未读，或运行态里那一轮的错误还在） */
+  failed: number;
   /** 根会话总数（不含归档） */
   total: number;
   /** 最近一次活动（根会话 updatedAt 的最大值）；没有会话为 null */
@@ -308,7 +316,7 @@ export interface ScopeSummary {
 /**
  * 状态来源：StateIndex（state 含子会话的汇总态、own 只看自己的槽）；只给一个函数时两者同一个（测试里逐条写死状态时用）。
  */
-export type SummaryStates = Pick<StateIndex, "state" | "own"> | ((meta: SessionMeta) => SessionRunState);
+export type SummaryStates = (Pick<StateIndex, "state" | "own"> & Partial<Pick<StateIndex, "failed">>) | ((meta: SessionMeta) => SessionRunState);
 
 /** 没有运行态可读时（单智能体侧栏不算编排状态）：一律空闲 */
 export const NO_STATES: SummaryStates = () => null;
@@ -322,6 +330,8 @@ export function scopeSummary(
   const { roots, children } = scopeMembers(sessions, workspaceId);
   const stateOf = typeof states === "function" ? states : states.state;
   const ownOf = typeof states === "function" ? states : states.own;
+  const failedOf = typeof states === "function" ? null : (states.failed ?? null);
+  let failed = 0;
   let attention = 0;
   let waiting = 0;
   let running = 0;
@@ -338,7 +348,9 @@ export function scopeSummary(
     // 小圆点（要你看一眼）仍按根会话的汇总态：它说的是「侧栏这一行有没有要点开的」
     const state = stateOf(meta);
     if (state !== null && state !== "running" && meta.id !== viewedId) attention += 1;
-    count(meta, ownOf(meta));
+    const own = ownOf(meta);
+    count(meta, own);
+    if (own === "failed" || (own !== "running" && own !== "waiting" && failedOf?.(meta) === true)) failed += 1;
     if (last === null || meta.updatedAt > last.updatedAt) last = meta;
   }
   // 子会话各算一件（与星系碎石同口径：子会话读 state，孙会话的事记在它头上）
@@ -346,6 +358,7 @@ export function scopeSummary(
   return {
     waiting,
     running,
+    failed,
     total: roots.length,
     lastActive: last?.updatedAt ?? null,
     lastTitle: last === null ? null : last.title.trim() || null,

@@ -3859,7 +3859,7 @@ export const en = {
     homeEmpty: "No sessions out here yet. Write one below.",
     homePlaceholder: "New task (not in any workspace)",
     /** 状态词表：侧栏智能体行与工作区页页头胶囊共用这三个词 */
-    status: { running: "Running", waiting: "Waiting", idle: "Idle" },
+    status: { running: "Running", waiting: "Waiting", failed: "Failed", idle: "Idle" },
     /** 「空闲」之后接最近一件事时的前缀 */
     recent: "Last",
     unread: "Finished, not seen yet",

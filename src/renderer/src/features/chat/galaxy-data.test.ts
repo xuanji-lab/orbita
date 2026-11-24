@@ -197,11 +197,11 @@ describe("scopeSummary / scopeTone —— 侧栏行与页头说的那句状态",
       meta({ id: "b-kid", updatedAt: 99, parentId: "b" }),
     ];
     const summary = scopeSummary(sessions, "ws", states({ a: "running", b: "waiting", "b-kid": "running" }));
-    assert.deepEqual(summary, { waiting: 1, running: 2, total: 2, lastActive: 30, lastTitle: "最新的", waitingId: "b", attention: 1 });
+    assert.deepEqual(summary, { waiting: 1, running: 2, failed: 0, total: 2, lastActive: 30, lastTitle: "最新的", waitingId: "b", attention: 1 });
     assert.equal(scopeTone(summary), "waiting");
     assert.equal(scopeTone({ waiting: 0, running: 2 }), "running");
     const empty = scopeSummary([], "ws", states({}));
-    assert.deepEqual(empty, { waiting: 0, running: 0, total: 0, lastActive: null, lastTitle: null, waitingId: null, attention: 0 });
+    assert.deepEqual(empty, { waiting: 0, running: 0, failed: 0, total: 0, lastActive: null, lastTitle: null, waitingId: null, attention: 0 });
     assert.equal(scopeTone(empty), "idle");
   });
 });
@@ -471,5 +471,25 @@ describe("首页星系：作用域 → 星系（单智能体首页与编排页�
     assert.equal(single.layout.ecc, orch.layout.ecc);
     assert.equal(single.elevationDeg, TILT);
     assert.equal(orch.elevationDeg, TILT);
+  });
+});
+
+describe("智能体状态「出错」：最近一轮失败、现在没在跑（2026-11-24 Windows 验收：模型 401 之后页头仍写空闲）", () => {
+  const sessions = [meta({ id: "a", updatedAt: 3 }), meta({ id: "b", updatedAt: 2 }), meta({ id: "c", updatedAt: 1 })];
+  const source = (errors: Record<string, string | null>, phases: Record<string, "idle" | "turn"> = {}) => ({
+    sessions,
+    phaseOf: (id: string) => phases[id] ?? ("idle" as const),
+    approvalsOf: () => [],
+    turnErrorOf: (id: string) => errors[id] ?? null,
+  });
+  test("那一轮的错误还在、没在跑 → 计一件出错（不看未读：你正看着它也算）", () => {
+    assert.equal(scopeSummary(sessions, "ws", stateIndexOf(source({ a: "401 Unauthorized" }))).failed, 1);
+    assert.equal(scopeSummary(sessions, "ws", stateIndexOf(source({ a: "401 Unauthorized" })), "a").failed, 1);
+  });
+  test("又开始跑了就不算出错；没错误不算；失败未读（重启后）照旧算", () => {
+    assert.equal(scopeSummary(sessions, "ws", stateIndexOf(source({ a: "401" }, { a: "turn" }))).failed, 0);
+    assert.equal(scopeSummary(sessions, "ws", stateIndexOf(source({}))).failed, 0);
+    const unread = [meta({ id: "x", updatedAt: 1, unread: { at: 1, failed: true } })];
+    assert.equal(scopeSummary(unread, "ws", stateIndexOf({ sessions: unread, phaseOf: () => "idle" as const, approvalsOf: () => [] })).failed, 1);
   });
 });

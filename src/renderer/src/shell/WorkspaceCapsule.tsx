@@ -49,7 +49,7 @@ export function WorkspaceCapsule(props: {
       {status.status === "idle" ? (
         <span className="cap-status-dot" aria-hidden="true" />
       ) : (
-        <StatusPie state={status.status === "waiting" ? "waiting" : "running"} />
+        <StatusPie state={status.status} />
       )}
       <span>{statusText}</span>
     </>
