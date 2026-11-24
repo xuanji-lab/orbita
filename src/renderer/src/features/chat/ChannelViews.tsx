@@ -27,6 +27,7 @@ import { questionAnswered, type ChannelMarkTone } from "./tool-results";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { SessionEntry } from "./session-states";
+import type { SessionRunState } from "../notify/completion-notice.ts";
 import type { Messages } from "../../messages-en.ts";
 import { useT } from "../../locale.ts";
 
@@ -53,6 +54,11 @@ export interface ChannelViewContext {
   channelSummaries: ReadonlyMap<string, ChannelSummary>;
   /** 派出卡状态的兜底——channelSummaries 没有终态时看子会话是否还在跑 */
   childPhaseOf: (id: string) => SessionEntry["phase"];
+  /**
+   * 编排形态才给：子会话 id → 运行态（含「停下来问你」的等你，与侧栏 / 树同一份）。给了的话派出卡的
+   * 在跑 / 等你 / 空闲用编排那一套词（agents.status），不用单智能体的「运行中」。null = 单智能体，照旧
+   */
+  childRunState?: ((id: string) => SessionRunState) | null;
   /**
    * 点主流里的派出卡 / 子会话消息胶囊 → 打开右栏 Sub-sessions 面板并直接进入该子
    * 会话的会话层。null = 不可点（辅助对话抽屉不传；子会话自己没有子会话入口）。
@@ -268,6 +274,8 @@ export function DelegateCardView(props: {
   lit?: boolean;
   /** 子会话用的型号显示名：写在标题后面的灰色小字（「GLM-5.3」），同型号的子会话靠标题分开；缺 = 不写 */
   modelName?: string;
+  /** 编排形态：在跑 / 等你 / 空闲用 agents.status 那一套词（侧栏、页头、树同一套） */
+  agentWords?: boolean;
 }) {
   const t = useT();
   if (props.card === null) {
@@ -320,7 +328,11 @@ export function DelegateCardView(props: {
       icon={FEATURE_ICON.subsessions}
       title={card.title}
       {...(props.modelName !== undefined ? { titleSuffix: <ModelNameLabel name={props.modelName} /> } : {})}
-      status={{ text: t.channel.delegateStatus[status], color: delegateStatusColor(status), active: status === "running" }}
+      status={{
+        text: props.agentWords === true && (status === "running" || status === "waiting" || status === "idle") ? t.agents.status[status] : t.channel.delegateStatus[status],
+        color: delegateStatusColor(status),
+        active: status === "running",
+      }}
       preview={props.taskPreview}
       meta={`${card.modelId} · ${thinkingLevelLabel(card.thinkingLevel, card.modelId)}`}
       {...(props.onClick !== undefined ? { onClick: props.onClick, clickTitle: t.chat.openTaskCard(card.title) } : {})}

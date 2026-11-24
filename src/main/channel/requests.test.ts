@@ -1,3 +1,4 @@
+import type { SubAgentProfile } from "../../shared/sub-agent.ts";
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -72,6 +73,8 @@ function fakeDeps(overrides: {
   settings?: AppSettings;
   submitTurn?: (input: SubmitAgentInput) => Promise<void>;
   phases?: Map<string, SessionPhase>;
+  /** 指名派活用的档案：键 = 工作区 id / 子智能体 id */
+  subAgents?: Record<string, SubAgentProfile>;
 } = {}): {
   deps: ChannelDeps;
   submitCalls: SubmitAgentInput[];
@@ -108,6 +111,7 @@ function fakeDeps(overrides: {
     broadcast: (event) => {
       broadcastCalls.push(event);
     },
+    subAgents: { profile: async (workspaceId, id) => overrides.subAgents?.[`${workspaceId}/${id}`] ?? null },
   };
   return { deps, submitCalls, steerCalls, abortCalls, handoffCancels, broadcastCalls };
 }
@@ -372,6 +376,43 @@ describe("applyDelegate", () => {
     });
     const withEvent = await applyDelegate(depsWithEvent, delegateEvent({ thinkingLevel: "max" }));
     assert.equal(withEvent.ok && withEvent.card.thinkingLevel, "max");
+  });
+
+  test("指名派活（subAgentId）：子 meta 记下归属、卡上带 id、档案里的默认模型排在 delegate 参数之后", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT, workspaceId: "ws1" }));
+    const profile = { id: "agent-1", name: "衡璨", role: "评测", modelId: "glm-5.3-flash", createdAt: 0, updatedAt: 0, source: "chat" as const };
+    const { deps, submitCalls } = fakeDeps({ providers: [provider("zai", ["glm-5.3", "glm-5.3-flash"])], subAgents: { "ws1/agent-1": profile } });
+    const outcome = await applyDelegate(deps, delegateEvent({ subAgentId: "agent-1" }));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    const child = await sessions.load(outcome.childId);
+    assert.deepEqual(child?.meta.attribution, { subAgentId: "agent-1", source: "assigned" });
+    assert.equal(outcome.card.subAgentId, "agent-1");
+    // 档案的默认模型生效（delegate 没给 modelId）
+    assert.equal(outcome.card.modelId, "glm-5.3-flash");
+    assert.equal(submitCalls[0]?.modelId, "glm-5.3-flash");
+    // 重开 meta 读回来还在（parseSessionMeta 认它）
+    const reread = await sessions.readMeta(outcome.childId);
+    assert.deepEqual(reread?.attribution, { subAgentId: "agent-1", source: "assigned" });
+    // delegate 给了 modelId 就听 delegate 的
+    const explicit = await applyDelegate(deps, delegateEvent({ subAgentId: "agent-1", modelId: "glm-5.3" }));
+    assert.equal(explicit.ok && explicit.card.modelId, "glm-5.3");
+  });
+
+  test("指名一个不存在的子智能体 / 父会话不在工作区：拒，不退化成临时子会话", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT, workspaceId: "ws1" }));
+    const { deps, submitCalls } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+    const missing = await applyDelegate(deps, delegateEvent({ subAgentId: "agent-9" }));
+    assert.equal(missing.ok, false);
+    if (!missing.ok) assert.match(missing.error, /list_sub_agents/);
+    await sessions.ensureSession(baseMeta({ id: OTHER, workspaceId: null }));
+    const homeless = await applyDelegate(deps, delegateEvent({ sessionId: OTHER, subAgentId: "agent-1" }));
+    assert.equal(homeless.ok, false);
+    assert.equal(submitCalls.length, 0);
+    // 不指名照旧是临时子会话，没有归属
+    const plain = await applyDelegate(deps, delegateEvent());
+    assert.equal(plain.ok, true);
+    if (plain.ok) assert.equal((await sessions.readMeta(plain.childId))?.attribution, undefined);
   });
 
   test("子会话再派出被拒——契约允许多层，今天不开这个口", async () => {

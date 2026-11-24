@@ -21,7 +21,8 @@ import type {
   BrowserImportSummary,
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
-import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import type { DoubaoVoiceConfig, ElevenlabsVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import { playSpeech } from "../voice/speech-playback.ts";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
@@ -51,7 +52,20 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, LANGUAGES, type Language, type ModelPair } from "@shared/settings";
+import { effectiveLanguage, galaxyBatterySaverOf, GALAXY_DUST_DENSITIES, galaxyDustDensityOf, type GalaxyDustDensity, GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, LANGUAGES, type Language, type ModelPair } from "@shared/settings";
+import { HomeGalaxy } from "../chat/HomeGalaxy.tsx";
+import type { GalaxySpec } from "../chat/galaxy.ts";
+
+/** 星系倾角的小预览：一颗主星、三颗行星、三十来颗碎石（演示形状，不是哪个工作区的真数据） */
+const TILT_PREVIEW_SPEC: GalaxySpec = {
+  starMass: 620,
+  sessions: 36,
+  planets: [
+    { id: "p1", mass: 4, composition: "rock", orbitRadius: 19, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 200 },
+    { id: "p2", mass: 6, composition: "gas", orbitRadius: 31, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 320 },
+    { id: "p3", mass: 3, composition: "ice", orbitRadius: 43, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 70 },
+  ],
+};
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
@@ -386,6 +400,55 @@ function General(props: {
             value={shownLanguage}
             options={LANGUAGES.map((language) => ({ value: language, label: LANGUAGE_NAMES[language] }))}
             onChange={(language) => props.onChange({ language })}
+          />
+        </SettingRow>
+        <SettingRow
+          name={t.settings.galaxyTilt}
+          info={t.settings.galaxyTiltInfo}
+          below={
+            // 小预览：同一个星系组件、同一个俯角（App 发下来的设置值），拖滑块时跟着变
+            <div className="set-galaxy-preview">
+              <HomeGalaxy spec={TILT_PREVIEW_SPEC} label={t.settings.galaxyTiltPreview} surface={null} />
+            </div>
+          }
+        >
+          <span className="set-galaxy-tilt">
+            <input
+              type="range"
+              className="gd-range"
+              min={GALAXY_TILT.min}
+              max={GALAXY_TILT.max}
+              step={GALAXY_TILT.step}
+              value={galaxyTiltOf(props.settings)}
+              aria-label={t.settings.galaxyTilt}
+              onChange={(event) => props.onChange({ galaxyTilt: Number(event.target.value) })}
+            />
+            <span className="set-galaxy-tilt-value">{t.settings.galaxyTiltValue(galaxyTiltOf(props.settings))}</span>
+          </span>
+        </SettingRow>
+        {/* 碎石密度：碎石带里普通会话画多少（在跑 / 等你 / 最近的会话永远画）；计数照旧按全部会话 */}
+        <SettingRow name={t.settings.galaxyDust} info={t.settings.galaxyDustInfo}>
+          <Segmented<GalaxyDustDensity>
+            label={t.settings.galaxyDust}
+            value={galaxyDustDensityOf(props.settings)}
+            options={GALAXY_DUST_DENSITIES.map((value) => ({ value, label: t.settings.galaxyDustOptions[value] }))}
+            onChange={(galaxyDustDensity) => props.onChange({ galaxyDustDensity })}
+          />
+        </SettingRow>
+        {/* 离电时省电：用电池时星系停转、碎石带隐藏、眼睛不跟；缺席 = 开 */}
+        <SettingRow name={t.settings.galaxyBatterySaver} info={t.settings.galaxyBatterySaverInfo}>
+          <Switch
+            label={t.settings.galaxyBatterySaver}
+            checked={galaxyBatterySaverOf(props.settings)}
+            onChange={(next) => props.onChange({ galaxyBatterySaver: next })}
+          />
+        </SettingRow>
+        {/* 转台：星系空白处左右拖动绕竖直轴转（方位角）。关掉后左右拖动与左右方向键不改方位角，只剩上下改倾角 */}
+        <SettingRow name={t.settings.galaxyTurntable} info={t.settings.galaxyTurntableInfo(galaxyAzimuthOf(props.settings))}>
+          <Switch
+            label={t.settings.galaxyTurntable}
+            checked={galaxyTurntableOf(props.settings)}
+            onChange={(next) => props.onChange({ galaxyTurntable: next })}
           />
         </SettingRow>
       </SettingGroup>
@@ -865,6 +928,7 @@ function VoiceSettings() {
       <DictationEngineGroup />
       <DoubaoVoiceGroup />
       <StepfunVoiceGroup />
+      <ElevenlabsVoiceGroup />
     </div>
   );
 }
@@ -1154,6 +1218,138 @@ function StepfunVoiceGroup() {
         <span className="set-inline">
           <PanelButton onClick={test} disabled={busy || config === null}>
             {t.voice.test}
+          </PanelButton>
+          <PanelButton onClick={save} disabled={busy || !dirty}>
+            {t.voice.save}
+          </PanelButton>
+        </span>
+      </SettingRow>
+    </SettingGroup>
+  );
+}
+
+/**
+ * ElevenLabs 语音合成（通话里「它说」的那一半）：API Key、音色 ID、模型三样。规矩同阶跃组——
+ * key 只进不出，输入框永远空、占位写已存掩码，留空保存 = 保留；「试听」用草稿合成一句短话并
+ * 播出来，不落盘，key 没填拿已存的。
+ */
+function ElevenlabsVoiceGroup() {
+  const t = useT();
+  const [config, setConfig] = useState<ElevenlabsVoiceConfig | null>(null);
+  const [key, setKey] = useState("");
+  const [voiceId, setVoiceId] = useState("");
+  const [modelId, setModelId] = useState("");
+  const [status, setStatus] = useState<VoiceStatus>({ kind: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.voice
+      .elevenlabsGet()
+      .then((loaded) => {
+        if (cancelled) return;
+        setConfig(loaded);
+        setVoiceId(loaded.voiceId);
+        setModelId(loaded.modelId);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const draft = { voiceId, modelId, ...(key.trim() === "" ? {} : { apiKey: key }) };
+  const dirty = config !== null && (key.trim() !== "" || voiceId !== config.voiceId || modelId !== config.modelId);
+  const busy = status.kind === "busy";
+  const edit = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    if (status.kind !== "busy") setStatus({ kind: "idle" });
+  };
+
+  const preview = () => {
+    setStatus({ kind: "busy", what: "test" });
+    void api.voice
+      .elevenlabsTest(draft)
+      .then(async (result) => {
+        if (!result.ok) {
+          setStatus({ kind: "failed", failure: result });
+          return;
+        }
+        await playSpeech(result.audio).done;
+        setStatus({ kind: "tested" });
+      })
+      .catch(() => setStatus({ kind: "failed", failure: { reason: "network" } }));
+  };
+  const save = () => {
+    setStatus({ kind: "busy", what: "save" });
+    void api.voice
+      .elevenlabsSave(draft)
+      .then((saved) => {
+        setConfig(saved);
+        setVoiceId(saved.voiceId);
+        setModelId(saved.modelId);
+        setKey("");
+        setStatus({ kind: "saved" });
+      })
+      .catch(() => setStatus({ kind: "save-failed" }));
+  };
+
+  const note =
+    status.kind === "busy" ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {status.what === "test" ? t.voice.previewing : t.voice.saving}
+      </span>
+    ) : status.kind === "tested" || status.kind === "saved" ? (
+      <span role="status" className="set-row-note">
+        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.previewOk : t.voice.saved}
+      </span>
+    ) : status.kind === "failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.speechFailures[status.failure.reason]}
+        {status.failure.detail !== undefined && <code className="voice-failure-detail"> {status.failure.detail}</code>}
+      </span>
+    ) : status.kind === "save-failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.saveFailed}
+      </span>
+    ) : undefined;
+
+  return (
+    <SettingGroup label={t.voice.elevenlabsGroup}>
+      <SettingRow name={t.voice.elevenlabsApiKey} info={t.voice.elevenlabsApiKeyInfo}>
+        <input
+          className="text-field voice-field"
+          type="password"
+          aria-label={t.voice.elevenlabsApiKey}
+          autoComplete="off"
+          placeholder={
+            config !== null && config.apiKeyMasked !== null ? t.voice.tokenSaved(config.apiKeyMasked) : t.voice.keyPaste
+          }
+          value={key}
+          onChange={(event) => edit(setKey)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.elevenlabsVoiceId} info={t.voice.elevenlabsVoiceIdInfo}>
+        <input
+          className="text-field voice-field"
+          aria-label={t.voice.elevenlabsVoiceId}
+          spellCheck={false}
+          value={voiceId}
+          onChange={(event) => edit(setVoiceId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.elevenlabsModelId} info={t.voice.elevenlabsModelIdInfo}>
+        <input
+          className="text-field voice-field"
+          aria-label={t.voice.elevenlabsModelId}
+          spellCheck={false}
+          value={modelId}
+          onChange={(event) => edit(setModelId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.connection} note={note}>
+        <span className="set-inline">
+          <PanelButton onClick={preview} disabled={busy || config === null}>
+            {t.voice.preview}
           </PanelButton>
           <PanelButton onClick={save} disabled={busy || !dirty}>
             {t.voice.save}

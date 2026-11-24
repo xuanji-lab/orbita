@@ -2,6 +2,12 @@
  * 主进程入口。职责边界（AGENTS.md「架构边界」）：只负责窗口、IPC 与持久化。
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
+import { OutboxStore } from "./session/outbox.ts";
+import { registerOutboxIpc } from "./session/outbox-ipc.ts";
+import { broadcastAvatarJob, loadSurface, registerAvatarIpc, registerPlanetIpc } from "./planet/ipc.ts";
+import { AVATAR_PLUGIN, AVATAR_SKILL, AvatarJobs, execPluginScript } from "./planet/avatar.ts";
+import { SubAgentStore } from "./planet/sub-agents.ts";
+import { applySubAgentRequest } from "./planet/sub-agent-requests.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
@@ -54,7 +60,7 @@ import { effectiveIntentSettings } from "../shared/settings.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
 import { KeepAwake } from "./automation/keep-awake.ts";
-import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
+import { deliverAutomationRun, launchAutomationRun, resolveAutomationModel, type LaunchDeps } from "./automation/launch.ts";
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { AutomationStore } from "./automation/store.ts";
@@ -110,6 +116,7 @@ import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
+import { registerPowerIpc } from "./power/ipc.ts";
 import { ChimeLog } from "./notify/chime-log.ts";
 import { registerNotifyIpc } from "./notify/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
@@ -161,6 +168,21 @@ const devDirs = devDataDirs({
 });
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
+
+/*
+ * 假麦克风（只给开发版的无人验收用）：夜里没人点系统的麦克风授权框，也不许替用户改系统设置，
+ * 于是让 Chromium 用一段 wav 当麦克风、免掉页内授权。**只在开发版 + 显式环境变量下生效**：
+ * ORBITA_FAKE_MIC_WAV=<wav 绝对路径>（播完即静音，不循环）。打包版不认这个变量。
+ */
+const fakeMicWav = app.isPackaged ? undefined : process.env["ORBITA_FAKE_MIC_WAV"];
+if (fakeMicWav !== undefined && fakeMicWav !== "") {
+  app.commandLine.appendSwitch("use-fake-ui-for-media-stream");
+  app.commandLine.appendSwitch("use-fake-device-for-media-stream");
+  app.commandLine.appendSwitch("use-file-for-fake-audio-capture", `${fakeMicWav}%noloop`);
+  // 音频服务默认在沙箱里的独立进程，读不到这个文件（实测报 Failed to read … Try disabling the sandbox）：
+  // 假麦克风开着时让它跑在主进程里、不进沙箱——只影响这种开发验收实例
+  app.commandLine.appendSwitch("disable-features", "AudioServiceOutOfProcess,AudioServiceSandbox");
+}
 
 /*
  * 单实例锁。「关窗 = 收进托盘」之后，双击桌面图标必须回到原进程——否则两个进程
@@ -404,10 +426,6 @@ void app.whenReady().then(async () => {
   // 一个 secrets.json 一个实例：provider 的 API key 与语音厂商的密钥共用，读改写不互相踩
   const secrets = new SafeStorageSecrets(configDir);
   const providers = new ProviderStore(configDir, secrets);
-  registerVoiceIpc(
-    new VoiceStore(configDir, secrets),
-    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
-  );
   // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
   /*
@@ -419,6 +437,8 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
+  // 子智能体档案（工作区 planet/agents/<id>/agent.json）：面板 IPC、agent 工具、指名派活共用一个
+  const subAgentStore = new SubAgentStore();
   // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
   // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
   // 不再随设置开关拉起 / 停
@@ -434,6 +454,12 @@ void app.whenReady().then(async () => {
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
   const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
+  // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
+  registerVoiceIpc(
+    new VoiceStore(configDir, secrets),
+    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
+    { workbenchPath: (sessionId) => sessions.workbenchPath(sessionId) },
+  );
   // 任务账本（侧栏用量格 usage:week / usage:event 与价格 · 能力图共用）：assistant 记录落盘的同一条
   // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
   // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
@@ -517,6 +543,8 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+  // 「生成形象」的任务表：在 agentIpc 之后才建（要它的 submitTurn），agent 事件先到的话这里是 null、不旁听
+  let avatarJobs: AvatarJobs | null = null;
   // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
   const searchBins = bundledBinDir({
@@ -623,6 +651,29 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 子智能体：agent 的 create_sub_agent / update_sub_agent / list_sub_agents——写工作区 planet/ 在主进程，任何路径都回执
+    if (event.type === "subAgentRequest") {
+      void applySubAgentRequest(
+        {
+          sessions,
+          workspaces,
+          settings,
+          store: subAgentStore,
+          broadcast: (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }),
+          // 聊天里建的子智能体没带地表图：走面板同一套出图（候选进同一个挑选面板）
+          startAvatar: async (workspaceId, bodyId) => (avatarJobs === null ? { ok: false, error: "出图还没就绪" } : avatarJobs.generate({ workspaceId, bodyId })),
+        },
+        event,
+      )
+        .then((outcome) => agentHost.answerSubAgent(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerSubAgent(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "channelSendRequest") {
       void applyChannelSend(deps, event)
         .then((outcome) => agentHost.answerChannelSend(event.requestId, outcome))
@@ -638,6 +689,8 @@ void app.whenReady().then(async () => {
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
     if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    // 「生成形象」的幕后会话停了：收尾这一组候选（只旁听，不 return）
+    avatarJobs?.onAgentEvent(event);
     // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
     // 只旁听，不 return：事件照常往下 record + broadcast
     automationScheduler.onAgentEvent(event);
@@ -1041,6 +1094,10 @@ void app.whenReady().then(async () => {
       },
     },
   });
+  // 发件箱：点了发送的话先落盘再开跑，下次启动核对没落账的（session/outbox.ts）
+  registerOutboxIpc(new OutboxStore(configDir));
+  // 星系设计稿：工作区 planet/ 里的插件稿与伴随文件（planet/store.ts）
+  registerPlanetIpc(workspaces, subAgentStore, (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }));
   registerSessionIpc(
     sessions,
     (id) => {
@@ -1199,6 +1256,8 @@ void app.whenReady().then(async () => {
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，
   // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型（摘抄也是素材）
   registerFocusIpc(workspaces, sessions, providers, settings, agentHost, excerpts);
+  // 电源状态（power:state / power:changed）：离电时 renderer 进省电档（星系停转、碎石带隐藏、眼睛不跟）
+  registerPowerIpc();
   // 提示音记账（notify:chime-log）：每真响一声记一行，事后对证「那一声是谁」
   registerNotifyIpc(new ChimeLog(join(configDir, "chime-log.jsonl")));
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
@@ -1242,6 +1301,27 @@ void app.whenReady().then(async () => {
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
   // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）；
   // abort 同源（agent:abort）；cancelBrowserHandoff 是 BrowserSandbox 的幂等取消。
+  // 「生成形象」：幕后会话跑插件「行星造物」的 planet-render 技能出候选，主进程读插件账本推进度（planet/avatar.ts）
+  avatarJobs = new AvatarJobs({
+    workspaces,
+    pluginRoot: async () => {
+      const record = (await plugins.records()).find((each) => each.name === AVATAR_PLUGIN);
+      if (record === undefined) return null;
+      const root = plugins.rootOf(record);
+      return existsSync(join(root, AVATAR_SKILL)) ? root : null;
+    },
+    sessions,
+    // 模型：子会话默认模型 → 上次用的模型（同自动化的解析）；不用杂务模型——画 SVG、按退出码重画是正经的多步活
+    resolveModel: async () => resolveAutomationModel({ automation: {}, settings: await settings.read(), providers: await providers.list() }),
+    submitTurn: (input) => agentIpc.submitTurn(input),
+    abort: (sessionId) => agentHost.abort(sessionId),
+    runScript: execPluginScript,
+    loadImage: loadSurface,
+    emit: broadcastAvatarJob,
+    now: Date.now,
+    newId: randomUUID,
+  });
+  registerAvatarIpc(avatarJobs);
   const deps: ChannelDeps = {
     sessions,
     channels,
@@ -1253,6 +1333,12 @@ void app.whenReady().then(async () => {
     cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
     phases,
     broadcast: broadcastChannelEvent,
+    subAgents: {
+      profile: async (workspaceId, id) => {
+        const workspace = (await workspaces.list()).find((each) => each.id === workspaceId);
+        return workspace === undefined ? null : subAgentStore.profile(workspace.path, id);
+      },
+    },
   };
   registerChannelIpc(deps);
 

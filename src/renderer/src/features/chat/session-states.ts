@@ -755,7 +755,8 @@ export function markAllIdle(states: SessionStates): SessionStates {
     const busy =
       entry.phase !== "idle" ||
       entry.retry !== null ||
-      entry.queued.length > 0;
+      entry.queued.length > 0 ||
+      entry.pendingEcho !== null;
     if (busy) {
       next.set(sessionId, {
         ...entry,
@@ -763,6 +764,9 @@ export function markAllIdle(states: SessionStates): SessionStates {
         retry: null,
         // runtime 进程没了 = 这一轮彻底断了，排队的消息没人会发，槽里不留尸体
         queued: [],
+        // 乐观回显同理：真回显再也不会来了。那句话已由发送方放回输入框（useChatSession 的快照），
+        // 对话里再留一个气泡就成了「既在对话里又在输入框里」（2026-11-24 CDP 取证抓到）
+        pendingEcho: null,
       });
       changed = true;
     } else {

@@ -2,6 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import { RIGHT_PANEL_MEMORY_MAX_ENTRIES } from "../../../shared/right-panel-memory.ts";
 import {
+  panelForMode,
   automationSubOf,
   composeEntry,
   contextSubOf,
@@ -16,6 +17,7 @@ import {
   parseEntry,
   parseIntentSub,
   parseMemoryFile,
+  parsePath,
   parsePluginsSub,
   parseReviewSub,
   parseSubSessionsSub,
@@ -367,6 +369,19 @@ describe("pathOf / withPanelRoot / subOf", () => {
     strictEqual(subOf(undefined, "intent"), undefined);
   });
 
+  it("pathOf：不进按会话记忆的面板（星系设计、编排）读成关着——活路径里不出现它们，记忆里也不记它们", () => {
+    for (const panel of ["galaxy", "orchestra"] as const) {
+      deepStrictEqual(pathOf(entry, panel), { panel: null });
+      // 开着它时写穿：面板记成关着，其余面板停在哪一层原样留着（切回来接着看）
+      deepStrictEqual(composeEntry({ openedDraft: null, subSessionId: null, taskTab: "progress", rightPanel: panel, path: { panel: null } }, entry), {
+        panel: null,
+        subs: entry.subs,
+      });
+      // 记忆文件里手写出这两种面板：不认，整条丢（不把它们当成可恢复的面板）
+      strictEqual(parsePath({ panel }), null);
+    }
+  });
+
   it("withPanelRoot：换成目标面板并让它从根开（清它自己的 sub），其余 sub 与页签保留", () => {
     deepStrictEqual(withPanelRoot(entry, "plugins"), { panel: "plugins", subs: { intent: { round: 2 } }, taskTab: "context" });
     deepStrictEqual(withPanelRoot(entry, "slides"), { panel: "slides", subs: entry.subs, taskTab: "context" });
@@ -406,5 +421,19 @@ describe("docs / slides 是普通面板：按会话记、落盘往返都不丢",
   it("落盘往返：docs 条目读回来仍是 docs", () => {
     const memory = rememberEntry(new Map(), "a", { panel: "docs" });
     deepStrictEqual(recallEntry(parseMemoryFile(toMemoryFile(memory)), "a"), { panel: "docs" });
+  });
+});
+
+describe("panelForMode：这个形态里还能开着哪块面板", () => {
+  it("单智能体下「编排」面板收起（它没有内容可画，开着就是一块空白框）；编排下照旧", () => {
+    strictEqual(panelForMode("orchestra", false), null);
+    strictEqual(panelForMode("orchestra", true), "orchestra");
+  });
+  it("别的面板两种形态都不动，关着的仍是关着", () => {
+    for (const panel of ["files", "galaxy", "subsessions", "docs"] as const) {
+      strictEqual(panelForMode(panel, false), panel);
+      strictEqual(panelForMode(panel, true), panel);
+    }
+    strictEqual(panelForMode(null, false), null);
   });
 });

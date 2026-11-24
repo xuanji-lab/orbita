@@ -10,6 +10,11 @@ import { UsageMeter } from "./UsageMeter";
 import { WorkspaceFilterBar, useScrolledEdge, useWorkspaceFilter } from "./WorkspaceFilterBar.tsx";
 import { bucketCounts, buildOptions, defaultFilter, groupByWorkspace, type WsAllow, type WsFilter } from "./workspace-filter.ts";
 import { WorkspaceFiles } from "./focus/WorkspaceFiles.tsx";
+import { AgentRow } from "./AgentRow.tsx";
+import { useScrollEdges } from "./scroll-inset.ts";
+import { orderAgentRows } from "../features/chat/agent-status.ts";
+import { NO_STATES, scopeSummary, stateIndexOf } from "../features/chat/galaxy-data.ts";
+import { rowActivityOf } from "./sidebar-activity.ts";
 import {
   EMPTY_SELECTION,
   nextSelection,
@@ -24,6 +29,7 @@ import { childSessions, rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import { TASK_REF_MIME, taskRefPayload } from "@shared/task-ref";
 import {
+  type AppMode,
   SIDEBAR_AGE_CHOICES,
   SIDEBAR_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_MAX,
@@ -149,12 +155,19 @@ export function Sidebar(props: {
   filesView: { mode: "browse" | "focus"; workspaceId: string } | null;
   /** 工作区行悬停的「查看工作区文件」 */
   onBrowseWorkspace: (id: string) => void;
+  /** 工作区行悬停的画笔键：打开 / 收起这个工作区的星系设计面板（原型） */
+  onDesignGalaxy: (id: string) => void;
+  /** 星系设计面板正开着哪个工作区；null = 没开。那一行的画笔键常显、点亮 */
+  designingWorkspaceId: string | null;
   /** 浏览态的「返回会话列表」 */
   onExitBrowse: () => void;
   /** 浏览态的「以此开始专注」：开专注浮层并预选这个工作区 */
   onStartFocusHere: (workspaceId: string) => void;
   /** 双击 / Enter 打开左栏文件预览（绝对路径 → App → 右栏文件面板） */
   onOpenFile: (absPath: string) => void;
+  /** 侧栏停在哪一形态：单智能体（工作区 → 会话树）/ 编排（工作区 = 一行智能体，点进它自己的 New Task 页） */
+  appMode: AppMode;
+  onAppMode: (next: AppMode) => void;
   /** 星云的常驻小气泡（专注：正在整理 / 要不要总结）；null = 无 */
   usageSay: React.ReactNode | null;
   /** 星云头顶的卡片（专注时间到）；null = 无 */
@@ -164,6 +177,8 @@ export function Sidebar(props: {
   const { session } = props;
   // 每分钟重渲染一次：行尾「刚刚 / N 分钟」与时间范围都在渲染时按 Date.now() 现算（理由见 use-minute-tick.ts）
   useMinuteTick();
+  // 编排列表：滚动条不占行宽（内容右缘不随滚动条左移）、没滚到底时底部渐隐；单智能体的列表原样
+  const listEdges = useScrollEdges(props.appMode === "orchestrate");
   const asideRef = useRef<HTMLElement | null>(null);
   /** 拖宽中禁掉 width 过渡——实时跟手（同右侧面板的 .dragging 纪律） */
   const [resizing, setResizing] = useState(false);
@@ -311,6 +326,15 @@ export function Sidebar(props: {
     session.openSession(id);
   };
 
+  /** 切形态：只翻 settings.appMode；切进编排后落在哪座星系由 App 的落点 effect 定（启动时已是编排也走它） */
+  const switchMode = (next: AppMode): void => {
+    if (next !== props.appMode) props.onAppMode(next);
+  };
+  // 编排侧栏每行的运行态：子会话表建一遍，整趟 O(n)（单智能体侧不算）
+  const agentStates = props.appMode === "orchestrate" ? stateIndexOf(session) : null;
+  /** 编排侧栏里亮着哪一行：正在看的会话所在的工作区，否则是首页选中的工作区；盖着设置 / 周看板时都不亮 */
+  const activeAgentId: string | null | undefined = props.overlay !== null ? undefined : (openWorkspaceId ?? session.workspaceId);
+
   /**
    * 主列表从上到下**可见**的任务行（Shift 区间按它算）：展开着的工作区组各自的可见行，
    * 再接 TASKS 的可见行——与下面的渲染顺序一致，折起的组、Show more 后藏着的不算。
@@ -330,6 +354,27 @@ export function Sidebar(props: {
     setStarredOnly(false);
     if (ageDays !== null) props.onAgeDaysChange(null);
   };
+  /** 「+」菜单（单智能体的「工作区」节与编排的「智能体」节共用） */
+  const addWorkspaceMenu: MenuItem[] = [
+    // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
+    // 两种添法在菜单里各占一个符号
+    {
+      id: "new-workspace",
+      label: t.sidebar.newWorkspace,
+      icon: "plus",
+      onSelect: () => {
+        // 节收着时先展开：就地命名的那一行长在节里，收着就看不见了
+        setGroups((current) => unfoldGroup(current, WORKSPACES_FOLD_KEY));
+        setCreatingWorkspace(true);
+      },
+    },
+    {
+      id: "add-folder",
+      label: t.sidebar.addFolder,
+      icon: "folder-plus",
+      onSelect: session.addWorkspace,
+    },
+  ];
   /**
    * 「工作区」节的标题行。筛选键挂在这一行（2026-11-23 用户定：原来单独一整行的「全部 / 星标 / 时间」
    * 收成标题旁的一个小图标）：筛选管的是整张列表（工作区 + 任务），所以挂在列表最上面那个标题上，
@@ -340,26 +385,7 @@ export function Sidebar(props: {
       label={t.sidebar.workspaces}
       addLabel={t.sidebar.addWorkspace}
       addIcon="folder-plus"
-      addMenu={[
-        // 命名新建：icon 用 plus——folder-plus 留给「选一个已有文件夹」，
-        // 两种添法在菜单里各占一个符号
-        {
-          id: "new-workspace",
-          label: t.sidebar.newWorkspace,
-          icon: "plus",
-          onSelect: () => {
-            // 节收着时先展开：就地命名的那一行长在节里，收着就看不见了
-            setGroups((current) => unfoldGroup(current, WORKSPACES_FOLD_KEY));
-            setCreatingWorkspace(true);
-          },
-        },
-        {
-          id: "add-folder",
-          label: t.sidebar.addFolder,
-          icon: "folder-plus",
-          onSelect: session.addWorkspace,
-        },
-      ]}
+      addMenu={addWorkspaceMenu}
       folded={workspacesFolded}
       onToggleFold={() => setGroups((current) => toggleGroupFold(current, WORKSPACES_FOLD_KEY))}
       extra={
@@ -540,10 +566,15 @@ export function Sidebar(props: {
       ) : (
       <>
       <div role="tablist" style={{ display: "flex", gap: 4 }}>
-        <ModeChip icon="bot" active>
+        <ModeChip icon="bot" active={props.appMode === "agent"} title={t.sidebar.agentModeTip} onClick={() => switchMode("agent")}>
           {t.sidebar.agentMode}
         </ModeChip>
-        <ModeChip icon="workflow" disabled title={t.sidebar.orchestratePlanned}>
+        <ModeChip
+          icon="workflow"
+          active={props.appMode === "orchestrate"}
+          title={t.sidebar.orchestrateTip}
+          onClick={() => switchMode("orchestrate")}
+        >
           {t.sidebar.orchestrate}
         </ModeChip>
       </div>
@@ -624,13 +655,18 @@ export function Sidebar(props: {
 
       <div
         className="scroll"
+        ref={listEdges.ref}
+        data-fade={props.appMode === "orchestrate" && listEdges.edges.fade ? "true" : undefined}
         style={{
           flex: 1,
           minHeight: 0,
           marginRight: "calc(-1 * var(--space-3))",
-          paddingRight: "var(--space-3)",
+          paddingRight: `calc(var(--space-3) - ${props.appMode === "orchestrate" ? listEdges.edges.gap : 0}px)`,
         }}
-        onScroll={subviewEdge.onScroll}
+        onScroll={(event) => {
+          subviewEdge.onScroll(event);
+          listEdges.onScroll();
+        }}
       >
         {props.showArchived && !overlayOpen ? (
           <>
@@ -672,6 +708,68 @@ export function Sidebar(props: {
                 onClick={() => props.onSettingsTab(tab.id)}
               />
             ))}
+          </>
+        ) : props.appMode === "orchestrate" ? (
+          <>
+            <NodeHeader
+              label={t.agents.header}
+              inset
+              addLabel={t.sidebar.addWorkspace}
+              addIcon="folder-plus"
+              addMenu={addWorkspaceMenu}
+            />
+            {creatingWorkspace && (
+              <div style={{ padding: "var(--space-1)" }}>
+                <InlineName
+                  editing
+                  value=""
+                  placeholder={t.sidebar.workspaceName}
+                  onCommit={(name) => {
+                    setCreatingWorkspace(false);
+                    const trimmed = name.trim();
+                    if (trimmed !== "") session.createWorkspace(trimmed);
+                  }}
+                  onCancel={() => setCreatingWorkspace(false)}
+                />
+              </div>
+            )}
+            {workspaceList.error !== null && <ListError message={workspaceList.error} onRetry={session.reloadWorkspaces} />}
+            {workspaceList.body === "loading" ? (
+              <Empty busy>{t.sidebar.loadingWorkspaces}</Empty>
+            ) : workspaceList.body === "empty" ? (
+              <Empty icon="folder" exit={{ label: t.sidebar.noWorkspaceExit, onClick: session.addWorkspace }}>
+                {t.sidebar.noWorkspace}
+              </Empty>
+            ) : workspaceList.body === "list" ? (
+              orderAgentRows(
+                [null, ...session.workspaces].map((workspace) => {
+                  const summary = scopeSummary(session.sessions, workspace?.id ?? null, agentStates ?? NO_STATES, openId);
+                  const activity = agentStates === null ? undefined : rowActivityOf(session.sessions, workspace?.id ?? null, agentStates);
+                  return { workspace, summary, activity };
+                }),
+                (row) => ({ pinned: row.workspace === null, waiting: row.summary.waiting, lastActive: row.summary.lastActive }),
+              ).map(({ workspace, summary, activity }) => (
+                <AgentRow
+                  key={workspace?.id ?? "home"}
+                  workspace={workspace}
+                  summary={summary}
+                  activity={activity}
+                  active={activeAgentId === (workspace?.id ?? null)}
+                  designing={props.designingWorkspaceId === (workspace?.id ?? null) && workspace !== null}
+                  now={now}
+                  onOpen={() => {
+                    // 盖着设置 / 周看板时先退掉，再落到这座星系自己的 New Task 页
+                    props.onOverlay(null);
+                    if (workspace === null) session.newTask();
+                    else session.newTaskIn(workspace);
+                  }}
+                  onRename={(name) => workspace !== null && session.renameWorkspace(workspace.id, name)}
+                  onRemove={() => workspace !== null && session.removeWorkspace(workspace.id)}
+                  onBrowse={() => workspace !== null && props.onBrowseWorkspace(workspace.id)}
+                  onDesign={() => workspace !== null && props.onDesignGalaxy(workspace.id)}
+                />
+              ))
+            ) : null}
           </>
         ) : filtered && scoped.length === 0 ? (
           /*
@@ -775,6 +873,8 @@ export function Sidebar(props: {
                       onRename={(name) => session.renameWorkspace(workspace.id, name)}
                       onRemove={() => session.removeWorkspace(workspace.id)}
                       onBrowse={() => props.onBrowseWorkspace(workspace.id)}
+                      onDesign={() => props.onDesignGalaxy(workspace.id)}
+                      designing={props.designingWorkspaceId === workspace.id}
                       checking={checkFor === workspace.id}
                       onStartChecking={() => startChecking(workspace.id)}
                       onDoneChecking={clearSelection}
@@ -915,6 +1015,10 @@ function WorkspaceGroup(props: {
   onRemove: () => void;
   /** 悬停的「查看工作区文件」 */
   onBrowse: () => void;
+  /** 悬停的画笔键：星系设计面板（原型）；整行点击只管开合，不碰它 */
+  onDesign: () => void;
+  /** 星系设计面板正开着这个工作区 */
+  designing: boolean;
   /** 这一组正处在勾选态（悬停的「迁移任务…」进入；不弹窗，行首出勾选框） */
   checking: boolean;
   onStartChecking: () => void;
@@ -1060,7 +1164,18 @@ function WorkspaceGroup(props: {
               {t.sidebar.checkDone}
             </button>
           )}
-          <span className="ws-head-acts" data-armed={armed || undefined}>
+          <span className="ws-head-acts" data-armed={armed || undefined} data-designing={props.designing || undefined}>
+            <IconButton
+              label={props.designing ? t.galaxyDesigner.diyOpen : t.galaxyDesigner.diy}
+              title={props.designing ? t.galaxyDesigner.diyOpen : t.galaxyDesigner.diy}
+              size={20}
+              active={props.designing}
+              className="ws-diy"
+              onClick={props.onDesign}
+              style={{ borderRadius: "var(--radius-xs)", color: props.designing ? "var(--color-text-primary)" : "var(--color-text-tertiary)" }}
+            >
+              <Icon name="paintbrush" size={14} strokeWidth={1.8} />
+            </IconButton>
             {!props.checking && props.sessions.length > 0 && (
               <IconButton
                 label={t.sidebar.moveTasks}
@@ -1195,6 +1310,8 @@ function NodeHeader(props: {
   count?: number | undefined;
   /** 「+」左边的额外控件（「工作区」节的筛选键） */
   extra?: React.ReactNode;
+  /** 标题字缩进一格（--space-1），落在行首图标 / 头像的左缘那条线上（编排的「智能体」节：头像 28px 在 4px 内边距之后） */
+  inset?: boolean;
 }) {
   // 「+」静止时不露也不占位、悬停标题行 / 键盘聚焦 / 菜单开着才出现（styles.css 的 .node-header）：
   // 两节标题静止时只剩一个词，和 Kimi 的「项目 ⌄ / 任务 ⌄」一样干净（2026-11-23）
@@ -1230,6 +1347,10 @@ function NodeHeader(props: {
           folded={props.folded === true}
           onToggle={props.onToggleFold}
         />
+      ) : props.inset === true ? (
+        <span style={{ paddingInline: "var(--space-1)" }}>
+          <NodeLabel>{props.label}</NodeLabel>
+        </span>
       ) : (
         <NodeLabel>{props.label}</NodeLabel>
       )}
@@ -1967,6 +2088,7 @@ function ModeChip(props: {
   active?: boolean;
   disabled?: boolean;
   title?: string;
+  onClick?: () => void;
   children: React.ReactNode;
 }) {
   const disabled = props.disabled === true;
@@ -1978,6 +2100,7 @@ function ModeChip(props: {
       aria-selected={active}
       disabled={disabled}
       title={props.title}
+      onClick={props.onClick}
       className="quiet-control mode-tab"
       style={{
         display: "inline-flex",

@@ -6,6 +6,8 @@ import { QuoteToolbar, type QuoteCandidate } from "../../shell/QuoteToolbar";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import { ApprovalBar } from "./ApprovalBar";
 import { QueueStrip } from "./QueueStrip";
+import { CallBar } from "../voice/CallBar.tsx";
+import { useVoiceCall } from "../voice/useVoiceCall.ts";
 import { compactionBoundaryStatus, mergeSideRecords } from "./session-states";
 import {
   ChannelFromChildCard,
@@ -70,7 +72,10 @@ import { builtinCommand, type DetailRow, docEditLabel, docEditPath, docEditSecti
 import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
 import { ProcessViewContext } from "./process-view-context";
-import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
+import { runStateOf, sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
+import { homeGalaxyOf, RECENT_ROCKS, stateIndexOf } from "./galaxy-data.ts";
+import type { Box as GalaxyBox } from "./callouts.ts";
+import { useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
@@ -201,7 +206,9 @@ import {
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
+import { HomeGalaxy } from "./HomeGalaxy";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
+import { useProtoVariants } from "./proto-variants-store.ts";
 import { useExperimentalFeature } from "../../experimental.ts";
 import { FileTurnCard, RevertMarkView } from "./FileTurnCard";
 import type { MemorySessionTurnView, MemorySessionView } from "@shared/memory";
@@ -277,7 +284,8 @@ import {
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { RetryStatus } from "@shared/agent-ipc";
 import type { ChatSession } from "./useChatSession";
-import type { ModelPair } from "@shared/settings";
+import type { ModelPair, OrchestraEntry } from "@shared/settings";
+import { Segmented } from "../settings/SettingControls";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { scopeChipAction } from "./scope-chip.ts";
@@ -735,6 +743,26 @@ function ChatViewBody(props: {
    * 新任务用它——欢迎界面是主会话的仪式，辅助对话要的是直接开写（wafo 2026-09-12）。
    */
   homeBare?: boolean;
+  /**
+   * 编排形态（settings.appMode）：首页变成「工作区自己的 New Task 页」——输入框钉底、上方整块是这座星系（真实数据）。
+   * 缺席 / false = 单智能体，首页与此前逐项一致。
+   */
+  orchestrate?: boolean;
+  /**
+   * 编排入口页（工作区的 New Task 页）发送前的二选一（2026-11-24 用户）：「新会话」= 新开一条专门处理这件事的会话
+   * （不自动压缩，上下文干净）；「常驻对话」= 接着和这个工作区主智能体的那条持久化会话聊。缺席 = 没有二选一（单智能体、星际空间）。
+   */
+  entry?: {
+    /** 这个工作区上次选的（settings.orchestraEntry，缺席按默认 new） */
+    choice: OrchestraEntry;
+    onChoice: (choice: OrchestraEntry) => void;
+    /** 常驻对话指针（settings.orchestraMain 里这个工作区的那一项，未校验）；null = 还没有 */
+    pointer: string | null;
+    /** 指针指向的会话在列表里、但已不算数（归档 / 移出工作区 / 变成子会话）：当作丢了 */
+    pointerStale: boolean;
+    /** 新建了常驻对话（首次或重建）：调用方把指针记进设置 */
+    onMainCreated: (id: string) => void;
+  };
   /** 星标（收藏）的模型。**不是会话元数据**——它跟着用户走，存在设置里 */
   starredModels?: readonly ModelPair[];
   onToggleStarModel?: (pair: ModelPair) => void;
@@ -743,6 +771,8 @@ function ChatViewBody(props: {
    * 点了只是把卡片关上——比给一个点了没反应的东西好。
    */
   onOpenProviders?: () => void;
+  /** 通话缺配置时「去语音设置」的去处（设置 › 语音）。不传就不给这个出口 */
+  onOpenVoiceSettings?: () => void;
   /**
    * 点主流里的派出卡 / 子会话问询胶囊 → 打开右栏 Sub-sessions 面板并直接进入这条
    * 子会话的会话层（子会话 PR4c）。只有主槽的 ChatView 拿到它——辅助对话抽屉与
@@ -1228,7 +1258,8 @@ function ChatViewBody(props: {
       chattedRef.current = true;
       return;
     }
-    if (!chattedRef.current) return;
+    // 编排的 New Task 页没有回场位移：输入框一直在底部（同上，发送也不滑）
+    if (!chattedRef.current || props.orchestrate === true) return;
     setTravel("prep");
     const raf = requestAnimationFrame(() => {
       measureTravel();
@@ -1413,6 +1444,16 @@ function ChatViewBody(props: {
   // 加载 / 错误态跟各自的那仨定：只有气泡（子侧）用得到，父流胶囊没有正文也退化为只报名字
   const channelLoading = ownSide === "child" ? taskChannel.loading : false;
   const channelError = ownSide === "child" ? taskChannel.error : null;
+  // 编排形态：派出卡的状态与侧栏 / 树同一份运行态、同一套词（在跑 / 等你 / 空闲，设计审查 R6）。
+  // 读最新的会话表走 ref，函数本身稳定——不让通道上下文每帧换一个，派出卡的 memo 照旧生效
+  const runStateSourceRef = useRef(session);
+  runStateSourceRef.current = session;
+  const orchestrateCards = props.orchestrate === true;
+  const childRunState = useCallback((id: string): SessionRunState => {
+    const source = runStateSourceRef.current;
+    const meta = source.sessions.find((item) => item.id === id);
+    return meta === undefined ? null : runStateOf(source, meta);
+  }, []);
   const channel = useMemo<ChannelViewContext>(
     () => ({
       ownSide,
@@ -1423,6 +1464,7 @@ function ChatViewBody(props: {
       ownModelName: session.model === null ? null : modelDisplayNameOf(session.model.modelId),
       channelSummaries,
       childPhaseOf: session.phaseOf,
+      childRunState: orchestrateCards ? childRunState : null,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1438,6 +1480,8 @@ function ChatViewBody(props: {
       session.model,
       channelSummaries,
       session.phaseOf,
+      orchestrateCards,
+      childRunState,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1459,6 +1503,160 @@ function ChatViewBody(props: {
     () => session.sessions.map((meta) => ({ id: meta.id, title: meta.title })),
     [session.sessions],
   );
+
+  // 星系首页（原型 proto/home-galaxy）：主槽首页把工作区名拉到门面上，输入框里不再出现
+  // 工作区芯片；右抽屉里的极简首页没有门面，芯片照旧（不然就没地方选新任务放在哪）。
+  // 纸面两档主题已删，门面不再分「脸」，哪个应用主题都出星系门面
+  const galaxyHome = homeActive && homeBare !== true;
+  /**
+   * 编排形态下的工作区自己的 New Task 页（侧栏点智能体行 / 工具栏新任务 / 星系名菜单选了某个工作区）：同一个首页，
+   * 作用域落在这个工作区——输入框钉在底部（与聊天页同位同形），上方整块给这座星系，星系用真实数据。
+   * 单智能体形态的版式不动（「标题与输入框在上、星系在下」），星系与编排同一套、同一份真实数据（galaxyFigure）。
+   */
+  const scopedHome = galaxyHome && props.orchestrate === true;
+  // 工作区 New Task 页：量星空那一块留出的滚动条位，写进 --transcript-scrollbar（与聊天页 Pane 同一个量法），
+  // 页脚右内边距补同样多——输入卡与对话页的逐像素对齐，发出第一句时不横跳（2026-11-24 实测横跳 5.5px）
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    const sky = stage?.querySelector<HTMLElement>(".ws-home-sky");
+    if (!scopedHome || stage === null || stage === undefined || sky === null || sky === undefined) return;
+    const sync = (): void => {
+      stage.style.setProperty("--transcript-scrollbar", `${Math.max(0, sky.offsetWidth - sky.clientWidth)}px`);
+    };
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(sky);
+    return () => observer.disconnect();
+  }, [scopedHome]);
+  const protoVariants = useProtoVariants();
+  /**
+   * 单智能体首页「星系铺满作背景」（homeSky = backdrop）：标题、slogan 与输入框（及记录）那一块是禁区，
+   * 量出它相对星系那一层的矩形交给星系（主星让开、天体走进去淡出、名字不写进去）。别的版式不量
+   */
+  const [skyAvoid, setSkyAvoid] = useState<GalaxyBox | null>(null);
+  const backdropSky = galaxyHome && props.orchestrate !== true && protoVariants.homeSky === "backdrop";
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!backdropSky || stage === null || stage === undefined) {
+      setSkyAvoid(null);
+      return;
+    }
+    const sky = stage.querySelector<HTMLElement>(".home-fade-galaxy");
+    const parts = [...stage.querySelectorAll<HTMLElement>(".home-fade-head, .home-travel, .home-fade-log")];
+    if (sky === null || parts.length === 0) return;
+    const measure = (): void => {
+      const base = sky.getBoundingClientRect();
+      let box: GalaxyBox | null = null;
+      for (const part of parts) {
+        const r = part.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        const next = { x0: r.left - base.left, y0: r.top - base.top, x1: r.right - base.left, y1: r.bottom - base.top };
+        box = box === null ? next : { x0: Math.min(box.x0, next.x0), y0: Math.min(box.y0, next.y0), x1: Math.max(box.x1, next.x1), y1: Math.max(box.y1, next.y1) };
+      }
+      // 四周再留一点空：天体与名字贴着字也算压进去
+      const pad = 12;
+      const padded = box === null ? null : { x0: Math.round(box.x0 - pad), y0: Math.round(box.y0 - pad), x1: Math.round(box.x1 + pad), y1: Math.round(box.y1 + pad) };
+      setSkyAvoid((prev) => (prev !== null && padded !== null && JSON.stringify(prev) === JSON.stringify(padded) ? prev : padded));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(sky);
+    for (const part of parts) observer.observe(part);
+    return () => observer.disconnect();
+  }, [backdropSky, homeActive]);
+  // 语音通话（编排形态的对话页）：绑定当前打开的这条对话；首页、单智能体、只读会话都没有通话
+  const callable = props.orchestrate === true && !homeActive && !session.readOnly && hideComposer !== true && openId !== "";
+  const call = useVoiceCall({
+    sessionId: callable ? openId : null,
+    transcript: session.transcript,
+    turnPhase: session.phase,
+    sendText: session.sendText,
+  });
+  // 编排的新任务固定放行（用户 2026-11-16 定「只留放行」，不再向用户暴露档位）：首页槽的档位钉成 skip，
+  // 但不写 settings.lastUsed——单智能体记住的那一档不被顺手改掉。已落盘的老会话保持它自己的档（本刀不动）
+  const orchestrateHome = props.orchestrate === true && homeActive;
+  useEffect(() => {
+    if (orchestrateHome && session.mode !== "skip") session.pinMode("skip");
+  }, [orchestrateHome, session.mode, session.pinMode]);
+  // 这座星系的主星设计稿（没选工作区时用「主目录」那一份）：面板里一改，页面星系同一帧跟着变
+  const galaxyDesign = useGalaxyDesign(session.workspaceId ?? "");
+  // 不缓存：运行态每个事件都可能变；stateIndexOf 先建子会话表，整趟 O(n)（2000 条也只是一遍）
+  // 两种形态的首页都画当前作用域的真实星系（homeGalaxyOf：作用域 → 星系，测试钉住）
+  const galaxyStates = galaxyHome ? stateIndexOf(session) : null;
+  const galaxyData =
+    galaxyStates === null
+      ? null
+      : homeGalaxyOf({
+          sessions: session.sessions,
+          workspaceId: session.workspaceId,
+          stateOf: galaxyStates.state,
+          ownStateOf: galaxyStates.own,
+          now: Date.now(),
+          design: galaxyDesign.design,
+          // 编排入口页：在做事的之外再框出最近几条（虚线框 + 引线写名字），常驻对话写「常驻对话」
+          ...(props.orchestrate === true ? { recent: RECENT_ROCKS } : {}),
+          ...(props.orchestrate === true && props.entry !== undefined && props.entry.pointer !== null && !props.entry.pointerStale
+            ? { labels: new Map([[props.entry.pointer, t.orchestra.mainSession]]) }
+            : {}),
+        });
+
+  /**
+   * 当前作用域的星系（编排 New Task 页与单智能体首页同一个）：选了工作区就是那座星系（主星形象、子智能体行星、会话碎石），
+   * 没选就是星际空间（无主星，只有碎石）。fill = 编排页那种占满输入框上方的大画框
+   */
+  const galaxyFigure = (fill: boolean, home?: { avoid: GalaxyBox | null }): ReactNode => {
+    if (galaxyData === null) return null;
+    const name = scopeNameOf(session, fill ? t.agents.home : t.chat.home);
+    // 单智能体首页拉高后（homeSky）星系不再是一条矮带子：高度封顶放宽到与编排页同档（fill），画布仍报 home
+    const tall = home !== undefined;
+    const avoid = home?.avoid ?? null;
+    return galaxyData.starless ? (
+      <HomeGalaxy spec={galaxyData.spec} label={t.agents.homeGalaxy} fill={fill || tall} {...(tall ? { surface: "home" as const, avoid } : {})} starless emptyHint={t.agents.homeEmpty} />
+    ) : (
+      <HomeGalaxy
+        spec={galaxyData.spec}
+        label={t.chat.galaxyFigure(name)}
+        starDesign={galaxyDesign.design}
+        agents={galaxyData.agents}
+        fill={fill || tall}
+        {...(tall ? { surface: "home" as const, avoid } : {})}
+        emptyHint={t.agents.emptyHint}
+        workspaceId={session.workspaceId}
+        starName={name}
+      />
+    );
+  };
+
+  // 编排入口页的二选一：只在这个工作区自己的 New Task 页（星际空间没有主智能体，也就没有常驻对话）
+  const entry = scopedHome && session.workspaceId !== null ? props.entry : undefined;
+  // 常驻对话丢了、这次发送重建了一条：提示一句（下次发送清掉）
+  const [mainRebuilt, setMainRebuilt] = useState(false);
+  const submitEntry = (choice: OrchestraEntry): void => {
+    if (entry === undefined) return;
+    if (choice === "new") {
+      session.sendInto({ id: null, autoCompact: false });
+      return;
+    }
+    const rebuild = (): void => setMainRebuilt(true);
+    // 指针在、列表里也没说它不算数：交给磁盘判（openSession 读不到 = 被删）；列表里已经不算数（归档 / 移走）直接重建
+    const target = entry.pointer !== null && !entry.pointerStale ? entry.pointer : null;
+    if (entry.pointer !== null && target === null) rebuild();
+    session.sendInto({ id: target, onCreated: entry.onMainCreated, onMissing: rebuild });
+  };
+  const entryControl =
+    entry === undefined ? undefined : (
+      <Segmented
+        className="entry-choice"
+        label={t.agents.entryLabel}
+        value={entry.choice}
+        options={[
+          { value: "new", label: t.agents.entryNew, title: t.agents.entryNewTip },
+          { value: "main", label: t.agents.entryMain, title: t.agents.entryMainTip(scopeNameOf(session, t.agents.home)) },
+        ]}
+        onChange={entry.onChoice}
+      />
+    );
+
   const composer = (
     <Composer
       value={session.draft}
@@ -1467,8 +1665,12 @@ function ChatViewBody(props: {
       // 首页发送时同步起离场动画（R8-01 ③：首条消息提交才 createAgent）
       onSubmit={() => {
         forceFollowLatest(followTrackerRef.current);
-        if (homeActive) startLeave();
-        session.send();
+        // 编排的 New Task 页：输入框本来就贴底，发出去它原地变成对话页的输入框——不走旧首页「滑到底部」的位移
+        // （那段位移量的是旧首页的版式，在这里会让输入框在不该出现的位置闪一下，2026-11-24 用户报）
+        if (homeActive && props.orchestrate !== true) startLeave();
+        setMainRebuilt(false);
+        if (entry !== undefined) submitEntry(entry.choice);
+        else session.send();
       }}
       onStop={session.stop}
       // 按「是不是首页」分，不按 sessionId：从侧栏打开的历史会话 sessionId 还是 null
@@ -1478,7 +1680,14 @@ function ChatViewBody(props: {
         session.quotes.length > 0
           ? t.quote.replyPlaceholder(session.quotes.length)
           : homeActive
-            ? t.chat.placeholderNew
+            ? scopedHome
+              ? // 星际空间没有主智能体：不说「给 星际空间 发消息」（那是在给谁发？设计审查 R15）
+                session.workspaceId === null
+                ? t.agents.homePlaceholder
+                : entry?.choice === "main"
+                  ? t.agents.placeholderMain(scopeNameOf(session, t.agents.home))
+                  : t.chat.placeholderTo(scopeNameOf(session, t.agents.home))
+              : t.chat.placeholderNew
             : t.chat.placeholderReply
       }
       disabled={session.usable.length === 0 || session.readOnly}
@@ -1486,10 +1695,13 @@ function ChatViewBody(props: {
       bottomSlot={
         <ComposerBar
           session={session}
+          scopeChip={!galaxyHome && props.orchestrate !== true}
+          modeChip={props.orchestrate !== true}
           starredModels={props.starredModels ?? []}
           onToggleStarModel={props.onToggleStarModel ?? (() => {})}
           onOpenProviders={props.onOpenProviders ?? (() => {})}
           onOpenContext={props.onOpenContextPanel ?? null}
+          leading={entryControl}
           intentToggle={
             intentToggleVisible
               ? { on: intentToggleOn, onToggle: session.setIntentEnabled }
@@ -1514,6 +1726,20 @@ function ChatViewBody(props: {
       onCollapsePaste={session.collapsePaste}
       imageUnsupported={!selectedModelAcceptsImage(session.usable, session.catalog, session.model)}
       onSlashSpace={props.onSlashSpace}
+      callSlot={
+        callable ? (
+          <IconButton
+            label={call.phase === null ? t.voice.call.start : t.voice.call.hangUp}
+            title={call.phase === null ? t.voice.call.startTitle : t.voice.call.hangUp}
+            size={28}
+            active={call.phase !== null}
+            disabled={session.usable.length === 0}
+            onClick={call.phase === null ? call.start : call.hangUp}
+          >
+            <Icon name="phone" size={15} strokeWidth={1.8} />
+          </IconButton>
+        ) : undefined
+      }
     />
   );
 
@@ -1533,6 +1759,11 @@ function ChatViewBody(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {mainRebuilt && !homeActive && <Notice icon="info">{t.agents.mainRebuilt}</Notice>}
+      {/* 不自动压缩的会话快满了：输入框上方说一句（用量环菜单里有同一句与开关） */}
+      {!homeActive && autoCompactOf(session) === false && contextRing(session.stats, t).tone === "danger" && (
+        <Notice icon="info">{t.chat.autoCompactOffFull}</Notice>
+      )}
       {/*
         只能读不能续：pi 没有这条会话的本子。**说清楚，别让输入框看起来能打字**
         （guideline §四把这条代价写明了）。
@@ -1574,6 +1805,65 @@ function ChatViewBody(props: {
         </div>
       );
     }
+
+    // 工作区自己的 New Task 页：骨架照聊天页（上面一块 1fr、下面页脚），输入框落在聊天页输入框的同一位置、同一形态——
+    // 发出第一句后它不用滑，原地变成聊天页的输入框；上方整块是这座星系，门面（星系名 + slogan）浮在星系左上。
+    // 首页记录（等你 / 进行中）不在这里列：要你动手的事由页头胶囊（点了直达）、侧栏这一行与等你的行星外圈来说，
+    // 星系不被一张列表挤小。
+    if (scopedHome && galaxyData !== null) {
+      const scopeName = scopeNameOf(session, t.agents.home);
+      return (
+        <div
+          ref={stageRef}
+          className="home-stage ws-home"
+          data-galaxy="true"
+          data-leaving={travel === "leaving" ? "true" : undefined}
+          data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
+          data-workspace={session.workspaceId ?? undefined}
+        >
+          <div className="home-fade ws-home-sky">
+            {protoVariants.title === "both" && (
+              <div className="ws-home-face">
+                <div className="ws-home-face-col">
+                  <HomeHero
+                    galaxy={
+                      <ScopeMenu
+                        session={session}
+                        namingWidth={240}
+                        placement="below"
+                        trigger={({ open, toggle, scope, title }) => (
+                          <button
+                            type="button"
+                            className="home-galaxy-name"
+                            aria-expanded={open}
+                            title={title}
+                            onClick={toggle}
+                          >
+                            <span className="home-galaxy-title">{scope}</span>
+                            <span className="home-galaxy-suffix">{t.chat.galaxySuffix}</span>
+                            <Icon name="chevron-down" size={16} />
+                          </button>
+                        )}
+                      />
+                    }
+                  />
+                </div>
+              </div>
+            )}
+            <div className="ws-home-galaxy">
+              {galaxyFigure(true)}
+            </div>
+          </div>
+          <div ref={travelRef} className="chat-footer home-travel ws-home-foot">
+            <div className="chat-foot-col" style={{ display: "grid", gap: "var(--space-2)" }}>
+              {notices}
+              {composer}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // 首页记录（选行与那一句的推导在 home-cards.ts 纯函数，测试覆盖；这里只接线）：只列等你 / 进行中，
     // 行上说「此刻在干什么」：运行态 + 槽里这一轮的过程 + 计划现算，不另存。不用 useMemo——运行态
     // 每个事件都可能变，而这里只在首页这一支跑、O(n)（子会话表先建好，不按会话各扫一遍全表）。
@@ -1658,6 +1948,7 @@ function ChatViewBody(props: {
     return (
       <div
         className="home-stage"
+        data-galaxy={galaxyHome ? "true" : undefined}
         data-leaving={travel === "leaving" ? "true" : undefined}
         data-travel={travel === "prep" || travel === "entering" ? travel : undefined}
         style={{
@@ -1670,10 +1961,41 @@ function ChatViewBody(props: {
           overflow: "hidden",
         }}
       >
-        <div ref={stageRef} className="home-col" data-mode="log">
+        <div
+          ref={stageRef}
+          className="home-col"
+          data-mode="log"
+          data-galaxy={galaxyHome ? "true" : undefined}
+          data-sky={galaxyHome ? protoVariants.homeSky : undefined}
+        >
           {/* 淡出组：slogan 与首页记录一起向上走（--transition-layer，220ms） */}
           <div className="home-fade home-fade-head">
-            <HomeHero />
+            {/* 门面：品牌衬线 slogan，样子与理由在 HomeHero.tsx。
+                星系首页：工作区名作为星系名站在最上面，点它选新任务放在哪（与对话里的芯片同一个菜单） */}
+            <HomeHero
+              galaxy={
+                galaxyHome ? (
+                  <ScopeMenu
+                    session={session}
+                    namingWidth={240}
+                    placement="below"
+                    trigger={({ open, toggle, scope, title }) => (
+                      <button
+                        type="button"
+                        className="home-galaxy-name"
+                        aria-expanded={open}
+                        title={title}
+                        onClick={toggle}
+                      >
+                        <span className="home-galaxy-title">{scope}</span>
+                        <span className="home-galaxy-suffix">{t.chat.galaxySuffix}</span>
+                        <Icon name="chevron-down" size={16} />
+                      </button>
+                    )}
+                  />
+                ) : undefined
+              }
+            />
           </div>
           {/* 滑落组：notices 与 composer 一起滑向窗口底部（--transition-composer-exit，240ms） */}
           <div
@@ -1689,6 +2011,13 @@ function ChatViewBody(props: {
           {logGroups.length > 0 && (
             <div className="home-fade home-fade-log">
               <HomeLog groups={logGroups} onOpen={openFromHome} />
+            </div>
+          )}
+          {/* 星系：占输入框（与等你 / 进行中的记录）下面剩下的全部空间，随 slogan 一起淡出（原型 proto/home-galaxy）。
+              记录在星系之上：要你动手的活比星系要紧；有记录时星系的画布变小，主星随画布一起缩，不随内容多少缩 */}
+          {galaxyHome && (
+            <div className="home-fade home-fade-galaxy">
+              {galaxyFigure(false, { avoid: backdropSky ? skyAvoid : null })}
             </div>
           )}
         </div>
@@ -1769,6 +2098,8 @@ function ChatViewBody(props: {
             */}
             {hideComposer !== true && (
               <>
+                {/* 通话条：输入框正上方，与排队条同一配方；不在通话也没问题要说时不占位 */}
+                {callable && <CallBar call={call} onOpenSettings={props.onOpenVoiceSettings ?? null} />}
                 {/* 排队卡片：比 composer 高一层（等待发出的事），比审批低一层（审批要求回答才继续） */}
                 <QueueStrip
                   items={session.queued}
@@ -3088,46 +3419,38 @@ function SubSessionsChip(props: { chip: { count: number; waiting: number }; onCl
 }
 
 /**
- * 输入卡底栏：作用域 / 权限档 / 模型——都是「这一句会以什么身份发出去」的事实。
- *
- * 三个都是菜单而不是并排的芯片：权限档摊开是三个、模型摊开是所有 provider 的所有模型，
- * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
- * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
+ * 这一槽眼下的工作区名。名字**原样**显示（「名字 == 路径」的老数据在 store 读时已治愈，wafo 裁决——
+ * 显示层不截尾，用户起的 `PhD/Year1` 不会再被截成 `Year1`）；没选工作区时落在 cwd，那才是真路径，
+ * 显示目录尾段。
  */
-function ComposerBar(props: {
+function scopeNameOf(session: ChatSession, homeLabel: string): string {
+  const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
+  if (workspace !== undefined) return workspace.name;
+  if (session.cwd === null) return homeLabel;
+  return deriveWorkspaceName(session.cwd) || homeLabel;
+}
+
+/**
+ * 工作区（星系）菜单：选一项 = 首页新任务放在哪 / 对话里把这条移到哪（scopeChipAction）。
+ * 两个消费者：对话里输入框底栏的工作区芯片；首页门面里的星系名（原型 proto/home-galaxy：
+ * 首页的输入框里不再出现工作区，「新任务放在哪」跟着名字搬到星系名上）。
+ * 给新工作区起名时触发器**原位**换成输入框（InlineName），视线不跳去侧栏。
+ */
+function ScopeMenu(props: {
   session: ChatSession;
-  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
-  starredModels: readonly ModelPair[];
-  onToggleStarModel: (pair: ModelPair) => void;
-  /** 卡片底部「配置模型」→ 设置面的服务商页 */
-  onOpenProviders: () => void;
-  /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
-  intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
-  /** 用量环浮层里的「查看上下文」；null = 不给（非主槽） */
-  onOpenContext: (() => void) | null;
+  /** 起名输入框的宽：触发器的锚 span 是 shrink-to-fit，width:100% 会塌 */
+  namingWidth: number;
+  /** 底栏芯片朝上开（2026-10-03 用户定）；首页门面在窗口上部，朝下开 */
+  placement: "above" | "below";
+  trigger: (args: { open: boolean; toggle: () => void; scope: string; title: string }) => ReactNode;
 }) {
   const t = useT();
   const { session } = props;
-  const workspace = session.workspaces.find((w) => w.id === session.workspaceId);
-  // 工作区名**原样**显示（「名字 == 路径」的老数据在 store 读时已治愈，wafo 裁决——
-  // 显示层不截尾，用户起的 `PhD/Year1` 不会再被截成 `Year1`）；没选工作区时落在
-  // cwd，那才是真路径，显示目录尾段
-  const scope =
-    workspace !== undefined
-      ? workspace.name
-      : session.cwd === null
-        ? t.chat.home
-        : deriveWorkspaceName(session.cwd) || t.chat.home;
-  // 命名新建工作区：scope 芯片**原位**换成输入框（InlineName）——就在用户点开的
-  // 地方接着打字，视线不跳去侧栏；窄窗侧栏折成图标条时这里照样能用
+  const scope = scopeNameOf(session, t.chat.home);
   const [namingWorkspace, setNamingWorkspace] = useState(false);
 
-  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
-  // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
-  const catalog = session.catalog;
-
   /**
-   * 芯片的两种语义（2026-10-31 用户认可）：首页 = 「新任务放在哪」；对话里 = 「把这条移到哪」
+   * 两种语义（2026-10-31 用户认可）：首页 = 「新任务放在哪」；对话里 = 「把这条移到哪」
    * ——以前对话里选别的工作区会清掉对话、去那边开空白新任务，这条会话本身不动，
    * 聊着发现该换地方时毫无办法。移动连工作目录一起换（session:move），在跑的不能移：
    * 项灰掉并说明原因，不弹窗。
@@ -3171,6 +3494,101 @@ function ComposerBar(props: {
       ...scopeEntry(item.id, () => session.newTaskIn(item)),
     })),
   ];
+
+  return (
+    <Menu
+      items={scopeItems}
+      placement={props.placement}
+      // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
+      // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
+      panelMaxHeight={520}
+      panelMaxWidth={640}
+      // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
+      footer={(close) => (
+        <>
+          <button
+            type="button"
+            className="option-row"
+            style={menuFooterRowStyle}
+            onClick={() => {
+              close();
+              setNamingWorkspace(true);
+            }}
+          >
+            <Icon name="plus" size={13} strokeWidth={1.8} />
+            <span>{t.sidebar.newWorkspace}</span>
+          </button>
+          <button
+            type="button"
+            className="option-row"
+            style={menuFooterRowStyle}
+            onClick={() => {
+              close();
+              // 对话里：加进来的文件夹直接成为这条会话的新家（在跑时只加不移，主进程会跳过）
+              session.addWorkspace({ moveCurrent: moving });
+            }}
+          >
+            <Icon name="folder-plus" size={13} strokeWidth={1.8} />
+            <span>{t.sidebar.addFolder}</span>
+          </button>
+        </>
+      )}
+      trigger={({ open, toggle }) =>
+        namingWorkspace ? (
+          <InlineName
+            editing
+            value=""
+            placeholder={t.sidebar.workspaceName}
+            onCommit={(name) => {
+              setNamingWorkspace(false);
+              const trimmed = name.trim();
+              if (trimmed !== "") session.createWorkspace(trimmed, { moveCurrent: moving });
+            }}
+            onCancel={() => setNamingWorkspace(false)}
+            style={{ width: props.namingWidth }}
+          />
+        ) : (
+          props.trigger({ open, toggle, scope, title: t.chat.scopeTip(session.cwd ?? session.defaultCwd) })
+        )
+      }
+    />
+  );
+}
+
+/**
+ * 输入卡底栏：作用域 / 权限档 / 模型——都是「这一句会以什么身份发出去」的事实。
+ *
+ * 三个都是菜单而不是并排的芯片：权限档摊开是三个、模型摊开是所有 provider 的所有模型，
+ * 288px 之外的这条底栏放不下，摊开也把「当前是什么」淹没在选项里。
+ * 菜单里当前项用 check 标出来——**状态优先图标与文字**。
+ */
+function ComposerBar(props: {
+  session: ChatSession;
+  /**
+   * 工作区芯片画不画。原型 proto/home-galaxy：首页把工作区名拉到星系门面上（同一个
+   * ScopeMenu），输入框里不再出现；对话里保留——在那里它是「把这条会话移到哪」的真实操作。
+   */
+  scopeChip: boolean;
+  /** 权限档芯片画不画：编排形态固定放行、不向用户暴露档位 */
+  modeChip: boolean;
+  /** 星标过的模型（设置里那份）：行的星与左栏第一格都看它 */
+  starredModels: readonly ModelPair[];
+  onToggleStarModel: (pair: ModelPair) => void;
+  /** 卡片底部「配置模型」→ 设置面的服务商页 */
+  onOpenProviders: () => void;
+  /** 意图召回的会话级开关（实验功能）：null = 不渲染（实验关 / 子会话 / 新任务） */
+  intentToggle: { on: boolean; onToggle: (next: boolean) => void } | null;
+  /** 用量环浮层里的「查看上下文」；null = 不给（非主槽） */
+  onOpenContext: (() => void) | null;
+  /** 底栏最左的一格（编排入口页的「发到」二选一）；缺席 = 没有 */
+  leading?: ReactNode;
+}) {
+  const t = useT();
+  const { session } = props;
+
+  // pi 内建目录：模型项的 ctx 徽标要从这里查官方参数（与设置页同一套口径）。
+  // 一个 app 一次 fetch——引擎已经拉过一份，这里不再自己起第二次
+  const catalog = session.catalog;
 
   // 菜单卡片只有词，不带描述——与思考档菜单同一口径（描述是悬停在芯片上的事，
   // 展开卡片里一行行小字只会让它显得吵；宽度也因此能固定）
@@ -3227,64 +3645,18 @@ function ComposerBar(props: {
         「哪边空往哪开」会往下方弹（还会同一排芯片朝向不一）；聊天页钉底又全朝上。
         点名朝上，两边同一朝向（2026-10-03 用户定）
       */}
-      <Menu
-        items={scopeItems}
-        placement="above"
-        // 卡片：高不超过 520（视口不够时 placeMenu 会再封一道），宽随最长的那条路径自适应，
-        // 上限夹进视口——以前是固定 320 的菜单，长路径被截成光秃秃一节
-        panelMaxHeight={520}
-        panelMaxWidth={640}
-        // 「去哪」与「往清单里加东西」是两件事：动作收进底栏，发卡线分隔（同模型卡片的「配置模型」）
-        footer={(close) => (
-          <>
-            <button
-              type="button"
-              className="option-row"
-              style={menuFooterRowStyle}
-              onClick={() => {
-                close();
-                setNamingWorkspace(true);
-              }}
-            >
-              <Icon name="plus" size={13} strokeWidth={1.8} />
-              <span>{t.sidebar.newWorkspace}</span>
-            </button>
-            <button
-              type="button"
-              className="option-row"
-              style={menuFooterRowStyle}
-              onClick={() => {
-                close();
-                // 对话里：加进来的文件夹直接成为这条会话的新家（在跑时只加不移，主进程会跳过）
-                session.addWorkspace({ moveCurrent: moving });
-              }}
-            >
-              <Icon name="folder-plus" size={13} strokeWidth={1.8} />
-              <span>{t.sidebar.addFolder}</span>
-            </button>
-          </>
-        )}
-        trigger={({ open, toggle }) =>
-          namingWorkspace ? (
-            // 定宽：trigger 的锚 span 是 shrink-to-fit，width:100% 会塌——
-            // 与相邻芯片同一量级（scope 芯片 icon + 名字 + chevron ≈ 140px）
-            <InlineName
-              editing
-              value=""
-              placeholder={t.sidebar.workspaceName}
-              onCommit={(name) => {
-                setNamingWorkspace(false);
-                const trimmed = name.trim();
-                if (trimmed !== "") session.createWorkspace(trimmed, { moveCurrent: moving });
-              }}
-              onCancel={() => setNamingWorkspace(false)}
-              style={{ width: 140 }}
-            />
-          ) : (
+      {props.leading}
+      {props.scopeChip && (
+        <ScopeMenu
+          session={session}
+          // 与相邻芯片同一量级（scope 芯片 icon + 名字 + chevron ≈ 140px）
+          namingWidth={140}
+          placement="above"
+          trigger={({ open, toggle, scope, title }) => (
             <Chip
               icon="folder"
               active={open}
-              title={t.chat.scopeTip(session.cwd ?? session.defaultCwd)}
+              title={title}
               onClick={toggle}
               chevron
               // 窄槽下只留图标（styles.css 的 .composer-bottom-bar 容器查询）
@@ -3292,28 +3664,30 @@ function ComposerBar(props: {
             >
               {scope}
             </Chip>
-          )
-        }
-      />
-      <Menu
-        items={modeItems}
-        placement="above"
-        panelMinWidth={112}
-        trigger={({ open, toggle }) => (
-          <Chip
-            icon="shield-check"
-            active={open}
-            fixedWidth={84}
-            title={t.permissionModes[session.mode].hint}
-            onClick={toggle}
-            chevron
-            // 窄槽下只留图标，fixedWidth 也在同一断点被覆盖掉（见 styles.css）
-            className="chip-mode"
-          >
-            {t.permissionModes[session.mode].label}
-          </Chip>
-        )}
-      />
+          )}
+        />
+      )}
+      {props.modeChip && (
+        <Menu
+          items={modeItems}
+          placement="above"
+          panelMinWidth={112}
+          trigger={({ open, toggle }) => (
+            <Chip
+              icon="shield-check"
+              active={open}
+              fixedWidth={84}
+              title={t.permissionModes[session.mode].hint}
+              onClick={toggle}
+              chevron
+              // 窄槽下只留图标，fixedWidth 也在同一断点被覆盖掉（见 styles.css）
+              className="chip-mode"
+            >
+              {t.permissionModes[session.mode].label}
+            </Chip>
+          )}
+        />
+      )}
       {props.intentToggle !== null && (
         <Chip
           icon={FEATURE_ICON.intent}
@@ -3394,6 +3768,17 @@ function ComposerBar(props: {
 }
 
 /**
+ * 眼下这条会话的自动压缩开关：opened（本地镜像，开关立即回弹）优先，再看列表里的 meta；
+ * undefined = 跟随全局（没关过）。没有会话为 undefined。
+ */
+function autoCompactOf(session: ChatSession): boolean | undefined {
+  const id = session.sessionId ?? session.opened?.id ?? null;
+  if (id === null) return undefined;
+  if (session.opened?.id === id) return session.opened.autoCompact;
+  return session.sessions.find((meta) => meta.id === id)?.autoCompact;
+}
+
+/**
  * 底栏最右侧的用量环（A-1）。它顶替了 `18.2k / 200k · $0.06` 那行字——
  * 文字每次都要读，环扫一眼就够，省下的宽度留给别的芯片。
  *
@@ -3445,6 +3830,8 @@ function UsageRing(props: {
   const freshTokens =
     usageTokens === null ? null : lastCompactedTo === null ? usageTokens : Math.max(0, usageTokens - lastCompactedTo);
   const worthIt = freshTokens !== null && freshTokens > 20_000;
+  // 会话级自动压缩开关（编排入口页「新开专门的会话」开出来的是关的）：本地镜像（opened）先于列表刷新
+  const autoCompact = autoCompactOf(session);
   const items: MenuItem[] = [
     ...usageBreakdown(stats, t, billing).map((row): MenuItem => ({
       id: row.label,
@@ -3474,6 +3861,30 @@ function UsageRing(props: {
             onSelect: props.onOpenContext,
           } satisfies MenuItem,
         ]),
+    // 这条会话不自动压缩：说清满了会怎样；快满时换成更直接的一句
+    ...(autoCompact === false && !confirming
+      ? [
+          {
+            id: "auto-compact-note",
+            label: ring.tone === "danger" ? t.chat.autoCompactOffFull : t.chat.autoCompactOffNote,
+            icon: "info" as const,
+            fact: true,
+          } satisfies MenuItem,
+        ]
+      : []),
+    // 有会话才给开关（新任务还没有会话可记）
+    ...(session.sessionId !== null || session.opened !== null
+      ? [
+          {
+            id: "auto-compact",
+            label: t.chat.autoCompactOwn,
+            checked: autoCompact !== false,
+            keepOpen: true,
+            disabled: session.readOnly,
+            onSelect: () => session.setAutoCompact(autoCompact === false),
+          } satisfies MenuItem,
+        ]
+      : []),
     // 压过两次就建议换会话：第三次压缩时摘要已是摘要的摘要
     ...(compactions >= WRAP_UP_AFTER_COMPACTIONS && !confirming
       ? [
@@ -6228,15 +6639,20 @@ function DelegateToolLine(props: {
   // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
   // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
   // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
+  // 编排形态多一层：通道摘要没说终态时，读子会话的运行态（与树、侧栏同一份）——[ask] 停下来问你的子会话
+  // 在树里是「等你」，卡上不能还写「空闲」（设计审查 R6 B）
+  const runState = props.channel.childRunState?.(card.childId) ?? null;
   const status: DelegateCardStatus =
     summary?.status === "done" ||
     summary?.status === "failed" ||
     summary?.status === "waiting" ||
     summary?.status === "stopped"
       ? summary.status
-      : props.channel.childPhaseOf(card.childId) !== "idle"
-        ? "running"
-        : "idle";
+      : runState === "waiting"
+        ? "waiting"
+        : runState === "running" || props.channel.childPhaseOf(card.childId) !== "idle"
+          ? "running"
+          : "idle";
   const openSubSession = props.channel.openSubSession;
   return (
     <DelegateCardView
@@ -6246,6 +6662,7 @@ function DelegateToolLine(props: {
       onClick={openSubSession === null ? undefined : () => openSubSession(card.childId)}
       lit={props.channel.litSubSessionId === card.childId}
       modelName={props.channel.modelNameOf(card.modelId)}
+      agentWords={props.channel.childRunState != null}
     />
   );
 }

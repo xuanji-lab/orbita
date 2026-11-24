@@ -328,6 +328,13 @@ export interface SessionMeta {
    */
   intentEnabled?: boolean;
   /**
+   * 这条会话自己的自动压缩开关（2026-11-24）：false = 不自动压缩，只认手动 `/compact`——编排入口页
+   * 「新开专门的会话」开出来的会话，要的是一条上下文干净、只装这件事的会话，宁可满了提醒换一条，
+   * 也不悄悄把前面的话折成摘要。缺席 = 跟随设置里的全局压缩偏好（sessionCompaction 合并）。
+   * 首轮由 submit 载荷的 autoCompact 落盘，之后经 session:set-auto-compact 改。
+   */
+  autoCompact?: boolean;
+  /**
    * 这一单跑在哪儿。**与 workspaceId 同进同出**：迁移到别的工作区时连同 cwd 一起换成
    * 目标工作区的目录（session/move.ts）。换得动的理由：每轮都重开 pi 本子并显式传 cwd
    * （`SessionManager.open(file, dir, cwd)` 覆盖本子头里记的旧 cwd），pi 不在本子上锁目录。
@@ -417,6 +424,17 @@ export interface SessionMeta {
    */
   parentId?: string;
   /**
+   * 这条会话归哪个持久子智能体（工作区 planet/agents/<id>/，shared/sub-agent.ts）。**这是编排线第一个归属字段**
+   * （AGENTS.md：归属 id 等真开编排时再加——子智能体有了档案、能被指名，就是这时候）。
+   * 两种来源，同一个字段（SessionAttribution）：
+   * - assigned：主智能体用 delegate 指名派活时主进程记下，确定的（本轮只实现这一种）；
+   * - inferred：以后记忆系统总结会话时判定各段问答和哪个子智能体的职能最相关，给出比例 share；
+   *   比例够高（≥ ATTRIBUTION_CAPTURE_SHARE）这条会话（碎石）就被它「引力捕获」。用户可以改，改过即 assigned。
+   * **读归属一律经 attributionOf(meta)**（侧栏小头像、以后的卫星 / 光环同一个函数），不直接读这个字段——
+   * 「推断的比例不够不算」这条规矩只写在那里。缺席 = 不属于任何子智能体。档案被删了也不清它：读的一方查不到就当没有。
+   */
+  attribution?: SessionAttribution;
+  /**
    * 这条会话是哪条自动化**新开**出来的（target = new_session）；
    * **缺席 = 用户自己开的会话**。this_session 的任务是叫醒一条普通会话，不在这条会话上留任何标记。
    *
@@ -435,6 +453,12 @@ export interface SessionMeta {
    * 缺席即否；只对带 automationId 的会话有意义。
    */
   promoted?: boolean;
+  /**
+   * 幕后会话：界面替用户派的一轮活（这一版只有 "avatar" = 星系设计面板的「生成形象」，shared/planet-avatar.ts）。
+   * 不进左栏、首页、编排图，不响完成提示、不写记忆、不起标题、不注册子智能体 / 自动化工具；
+   * 结果由发起它的界面自己读（出图读插件账本），会话只留作排查。缺席 = 普通会话。
+   */
+  backstage?: "avatar";
   /**
    * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
    * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
@@ -668,6 +692,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const parentId = str(value["parentId"]);
   const automationId = str(value["automationId"]);
   const automationRun = parseAutomationRunLabel(value["automationRun"]);
+  const attribution = parseAttribution(value["attribution"]);
 
   return {
     id,
@@ -704,14 +729,19 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 母会话 id：非字符串 / 空串一律当根会话——一条指向乌有的 parentId 会让会话
     // 从左栏消失又无处可达，比多列一条根会话糟得多
     ...(parentId === null ? null : { parentId }),
+    // 子智能体归属：形状不对整份当没有（parseAttribution）
+    ...(attribution === null ? null : { attribution }),
     ...(automationId === null ? null : { automationId }),
     ...(automationId === null || automationRun === null ? null : { automationRun }),
     ...(automationId !== null && value["promoted"] === true ? { promoted: true } : null),
+    ...(value["backstage"] === "avatar" ? { backstage: "avatar" as const } : null),
     // 意图召回的会话级开关（实验功能 intent-system）：缺席 = 跟随设置里的
     // 新会话默认。只认布尔，坏值丢掉
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
       ? { intentEnabled: value["intentEnabled"] }
       : {}),
+    // 会话级自动压缩开关：只认布尔，缺席 = 跟随全局
+    ...(value["autoCompact"] === true || value["autoCompact"] === false ? { autoCompact: value["autoCompact"] } : {}),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };
@@ -739,7 +769,7 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
  */
 export function rootSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
   return sessions.filter(
-    (meta) => meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true),
+    (meta) => meta.parentId === undefined && meta.backstage === undefined && (meta.automationId === undefined || meta.promoted === true),
   );
 }
 
@@ -878,4 +908,44 @@ export function transcriptToMarkdown(
   }
 
   return `${parts.join("\n\n")}\n`;
+}
+
+// ── 会话归属（编排：这条会话归哪个子智能体）──────────────────────────────
+
+/** 归属从哪来：指名派活（确定）/ 记忆系统推断（带比例，以后做） */
+export type AttributionSource = "assigned" | "inferred";
+
+export interface SessionAttribution {
+  subAgentId: string;
+  source: AttributionSource;
+  /** 推断时：这条会话里和该子智能体职能相关的问答占多大比例（0–1）。assigned 不带 */
+  share?: number;
+}
+
+/** 推断的归属要占到多大比例才算被这个子智能体「引力捕获」（以后记忆系统接上时按真实数据再调） */
+export const ATTRIBUTION_CAPTURE_SHARE = 0.5;
+
+export function parseAttribution(raw: unknown): SessionAttribution | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const subAgentId: unknown = Reflect.get(raw, "subAgentId");
+  const source: unknown = Reflect.get(raw, "source");
+  const share: unknown = Reflect.get(raw, "share");
+  if (typeof subAgentId !== "string" || !/^[\w-]{1,64}$/.test(subAgentId)) return null;
+  if (source === "assigned") return { subAgentId, source };
+  if (source === "inferred" && typeof share === "number" && Number.isFinite(share) && share >= 0 && share <= 1) {
+    return { subAgentId, source, share };
+  }
+  return null;
+}
+
+/**
+ * 读一条会话归哪个子智能体——侧栏「谁在干活」、以后星系里的卫星 / 光环都只经这一个函数：
+ * 指名的一律算；推断的比例够高（≥ ATTRIBUTION_CAPTURE_SHARE）才算被捕获，不够的照旧是主智能体那条碎石带里的一颗。
+ * 返回 null = 不归任何子智能体。
+ */
+export function attributionOf(meta: Pick<SessionMeta, "attribution">): SessionAttribution | null {
+  const attribution = meta.attribution;
+  if (attribution === undefined) return null;
+  if (attribution.source === "assigned") return attribution;
+  return (attribution.share ?? 0) >= ATTRIBUTION_CAPTURE_SHARE ? attribution : null;
 }

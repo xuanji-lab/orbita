@@ -745,6 +745,11 @@ export class SessionStore {
     return this.update(id, { intentEnabled: enabled });
   }
 
+  /** 会话级自动压缩开关：只落 meta，下一轮开轮现读（sessionCompaction 与全局偏好合并） */
+  setAutoCompact(id: string, enabled: boolean): Promise<void> {
+    return this.update(id, { autoCompact: enabled });
+  }
+
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
   setArchived(id: string, archived: boolean): Promise<void> {
     return this.update(id, { archived });

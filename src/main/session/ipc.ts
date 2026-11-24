@@ -24,6 +24,7 @@ import {
 import type { AgentHost } from "../agent/host.ts";
 import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
+import { artifactSummaries } from "./artifact-summary.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
@@ -127,6 +128,10 @@ export function registerSessionIpc(
   ipcMain.handle(
     ipcChannels.sessionSetIntentEnabled,
     (_event, id: string, enabled: boolean) => store.setIntentEnabled(id, enabled),
+  );
+  ipcMain.handle(ipcChannels.sessionSetAutoCompact, (_event, id: string, enabled: unknown) =>
+    // 载荷在入口就洗：只认布尔，坏形状拒绝（不裸存进 meta）
+    typeof enabled === "boolean" ? store.setAutoCompact(id, enabled) : Promise.reject(new Error("autoCompact 只认布尔")),
   );
   ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
     // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
@@ -246,6 +251,8 @@ export function registerSessionIpc(
   );
   // 第二个出口是「打开文件所在位置」而不是「默认浏览器」（用户 2026-10-01 裁决）：
   // 默认浏览器与内置浏览器是同一件事的两个版本，定位文件才是另一种需要（拷走、拖进别的应用）
+  // 编排面板协作图：一批会话的产物摘要（只读文件账，不碰文件本身）
+  ipcMain.handle(ipcChannels.sessionArtifactSummary, (_event, ids: unknown) => artifactSummaries(store, ids));
   ipcMain.handle(ipcChannels.sessionRevealArtifact, async (_event, id: string, path: string) => {
     await knownArtifact(id, path);
     shell.showItemInFolder(path);
