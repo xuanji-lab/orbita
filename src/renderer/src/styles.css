@@ -7591,6 +7591,11 @@ button.turn-output-from.link:hover {
 .home-galaxy[data-tilt-dragging] * {
   cursor: grabbing;
 }
+/* 鼠标按下会让根节点 / 天体拿到焦点：只在键盘聚焦（:focus-visible）时画焦点环，鼠标点的不画（Chromium 对 svg 的 g 会画一圈橙色 auto 环） */
+.home-galaxy[data-tilt-drag]:focus:not(:focus-visible),
+.home-galaxy .galaxy-target:focus:not(:focus-visible) {
+  outline: none;
+}
 /* 角落的角度提示：拖动中 / 刚按过方向键才出现，不吃指针；数字等宽，抬高说明是次级墨 */
 .galaxy-tilt-badge {
   position: absolute;

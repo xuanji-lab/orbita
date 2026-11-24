@@ -462,16 +462,17 @@
 /* 眼睛大小：五档分段控件占满一行（和成分那组同一个控件），白眼后面一枚「规则外」小字 */
 .gd-eye-style {
   display: flex;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .gd-eye-style .seg-control {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* 按内容取宽、多出的平分：「白眼 规则外」比单字档宽，不挤 */
 .gd-eye-style .seg-control > button {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   justify-content: center;
-  min-width: 0;
 }
 .gd-off-rule {
   color: var(--color-text-tertiary);

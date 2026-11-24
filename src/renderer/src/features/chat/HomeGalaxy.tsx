@@ -188,6 +188,8 @@ function useTiltDrag(tilt: number, commit: ((deg: number) => void) | null) {
           },
           onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => finish(event, true),
           onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => finish(event, false),
+          // 指针被别处抢走（窗口失焦、系统手势）：按松手处理，不留一个卡在「拖动中」的星系
+          onLostPointerCapture: (event: ReactPointerEvent<HTMLDivElement>) => finish(event, true),
           // 拖过之后的那一下 click 不给天体（捕获阶段拦下）
           onClickCapture: (event: ReactMouseEvent<HTMLDivElement>) => {
             if (!swallowClick.current) return;
