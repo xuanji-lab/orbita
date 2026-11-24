@@ -5,11 +5,11 @@ import {
   FRAME_EXTENT,
   CAPTURE_MS,
   DUST_CLICK_MAX,
-  elevationFor,
   galaxyBox,
-  galaxySpecOf,
-  galaxyFixtureOf,
+  GALAXY_MAX,
   GALAXY_MAX_FILL,
+  CAMERA_ELEVATION_DEG,
+  ORCH_TILT_DEG,
   LIVE_FRAME_MS,
   layoutGalaxy,
   makeCamera,
@@ -64,7 +64,6 @@ import {
   type CalloutTarget,
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
-import { ClassicGalaxy } from "./ClassicGalaxy.tsx";
 import { useProtoVariants } from "./proto-variants-store.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
@@ -450,7 +449,8 @@ function BeltHalf(props: {
  * 画家顺序拆成几层（从下到上）：远半圈轨道弧 → 远半圈的碎石与天体 → 主星 → 近半圈轨道弧 → 近半圈的碎石与天体 →
  * 锁定框 / 引线 / 名字 / 命中圈。天体过了左右两点在两层之间换（useSides）。
  *
- * 编排星系（fill）：每条根会话都是碎石带里的一颗碎石，带子随会话数长大（beltGrowthOf）；新会话从外缘被吸进来（useCaptures）。
+ * 单智能体首页与编排页同一套（2026-11-24 用户要两边 consistent）：每条根会话都是碎石带里的一颗碎石，带子随会话数长大
+ * （beltGrowthOf）；新会话从外缘被吸进来（useCaptures）。fill 只决定画框的高度封顶（编排 New Task 页占满输入框上方）。
  */
 type HomeGalaxyProps = {
   spec: GalaxySpec;
@@ -485,8 +485,6 @@ export function HomeGalaxy(props: HomeGalaxyProps) {
   const key = JSON.stringify(props.spec);
   const cache = useRef<{ key: string; spec: GalaxySpec } | null>(null);
   if (cache.current === null || cache.current.key !== key) cache.current = { key, spec: props.spec };
-  // 单智能体首页（不是 fill）：d12f2e2a 的画法原样保留（用户定「单智能体原样保留」），不走合成器
-  if (props.fill !== true) return <ClassicGalaxy spec={cache.current.spec} label={props.label} {...(props.starDesign === undefined ? {} : { starDesign: props.starDesign })} />;
   return <GalaxyScene {...props} spec={cache.current.spec} />;
 }
 
@@ -497,22 +495,25 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useBoxSize(rootRef);
   const starless = props.starless === true;
-  // 编排页：每条会话都是一颗碎石（不封顶），碎石带随会话数长大；轨道是开普勒椭圆（偏心率候选见 proto-variants）
-  const orbitE = Number(useProtoVariants().orbitE);
-  const spec = useMemo(() => ({ ...props.spec, dustCap: Number.POSITIVE_INFINITY, growth: true, eccentricity: orbitE }), [props.spec, orbitE]);
+  // 轨道是开普勒椭圆，偏心率与俯角两个候选见 proto-variants（单智能体首页与编排页同一套）
+  const variants = useProtoVariants();
+  const orbitE = Number(variants.orbitE);
+  const tilt = variants.tilt === "classic" ? CAMERA_ELEVATION_DEG : ORCH_TILT_DEG;
+  const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE }), [props.spec, orbitE]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
     // 工作区页 / 右栏：屏幕安全布局（screen-safe.ts）——在屏幕坐标里排轨道，任何相位上天体都不在画面上相撞
-    const box = galaxyBox(size.width, size.height, GALAXY_MAX_FILL);
+    // fill：编排 New Task 页（星系占输入框上方整块，高度封顶放宽）；不是 fill：单智能体首页输入框下面那条带子
+    const box = galaxyBox(size.width, size.height, props.fill === true ? GALAXY_MAX_FILL : GALAXY_MAX);
     const readableMax = props.agents !== undefined && props.agents.size > 0 ? AGENT_READABLE_MAX : PLANET_READABLE_MAX;
-    const safe = fitScreenSafe(spec, size.width, size.height, box, elevationFor(box), readableMax);
-    return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx };
-  }, [size, spec, props.agents]);
+    const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax);
+    return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg };
+  }, [size, spec, props.agents, props.fill, tilt]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
   // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）
-  const snapshot = useMemo(() => (scene === null ? [] : drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx, false)), [scene, layout]);
+  const snapshot = useMemo(() => (scene === null ? [] : drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx)), [scene, layout]);
   const starItem = snapshot.find((item) => item.kind === "star");
   const rockPx = snapshot.find((item): item is RockItem => item.kind === "rock")?.r ?? ROCK_PX;
   const movers = useMemo(() => (scene === null ? [] : moversOf(layout, scene.camera, scene.viewport, scene.minPlanetPx, rockPx)), [scene, layout, rockPx]);
@@ -552,7 +553,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const compute = useCallback(
     (tSec: number): OverlayPlan => {
       if (scene === null) return EMPTY_PLAN;
-      const items = drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], tSec, scene.minPlanetPx, false);
+      const items = drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], tSec, scene.minPlanetPx);
       const star = items.find((item) => item.kind === "star");
       const starDisc = star === undefined ? null : { x: star.x, y: star.y, r: star.r * starExtent };
       const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
@@ -777,6 +778,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       data-planets={starless ? 0 : layout.planets.length}
       data-rocks={starless || layout.rockOrbit === null ? 0 : layout.rocks.length}
       data-starless={starless || undefined}
+      data-elevation={scene === null ? undefined : scene.elevation.toFixed(1)}
+      data-ecc={layout.ecc}
       data-min-planet={scene !== null && scene.minPlanetPx > 0 ? scene.minPlanetPx.toFixed(1) : undefined}
       data-hidden={layout.hidden}
       data-sessions={total}
@@ -855,12 +858,6 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   );
 });
 
-/**
- * 单智能体首页的星系数据（原型）：`?galaxy=empty|typical|full` 切三档，不带参数时是 typical。
- * 单智能体侧原样保留写死的 fixture；编排侧的工作区页用真实数据（galaxy-data.ts）。
- * 页面地址在一次加载里不变，所以模块加载时算一次。
- */
-export const PROTO_GALAXY_SPEC: GalaxySpec = galaxySpecOf(galaxyFixtureOf(window.location.search) ?? "typical");
 
 /**
  * 星系上一颗能点的天体（主星 / 子智能体行星）：透明命中圈 + 悬停 / 聚焦时的一圈细环。

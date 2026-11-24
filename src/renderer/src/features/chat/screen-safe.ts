@@ -282,7 +282,34 @@ function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, last
   return inner;
 }
 
+/**
+ * 屏幕安全布局（对外入口）：先按 spec 给的偏心率排；偏心让近日点一侧要多留 1/(1 − e) 倍的空，小画布（窄窗 + 右栏、
+ * 右栏星系图）会因此少画行星或丢掉碎石块那一圈。比正圆排得差时，偏心率按三分之二、三分之一往下退，取第一档不比正圆差的
+ * ——宁可椭圆扁得少一点，也不为了椭圆少画一颗子智能体（星系规则：行星表情可读、天体不相撞优先）。
+ */
 export function fitScreenSafe(
+  spec: GalaxySpec,
+  width: number,
+  height: number,
+  box: { width: number; height: number },
+  baseElevationDeg: number = CAMERA_ELEVATION_DEG,
+  readableMax: number = PLANET_READABLE_MAX,
+): SafeScene {
+  const ecc = eccOf(spec.eccentricity);
+  const first = fitAt(spec, width, height, box, baseElevationDeg, readableMax);
+  if (ecc === 0) return first;
+  const cost = (scene: SafeScene) => scene.dropped * 2 + (scene.layout.rocks.length > 0 && scene.layout.rockOrbit === null ? 1 : 0);
+  if (cost(first) === 0) return first;
+  const round = fitAt({ ...spec, eccentricity: 0 }, width, height, box, baseElevationDeg, readableMax);
+  if (cost(first) <= cost(round)) return first;
+  for (const k of [2 / 3, 1 / 3]) {
+    const softer = fitAt({ ...spec, eccentricity: ecc * k }, width, height, box, baseElevationDeg, readableMax);
+    if (cost(softer) <= cost(round)) return softer;
+  }
+  return round;
+}
+
+function fitAt(
   spec: GalaxySpec,
   width: number,
   height: number,

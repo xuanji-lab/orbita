@@ -3,7 +3,6 @@ import { describe, test } from "node:test";
 import {
   angularSpeed,
   CAMERA_ELEVATION_DEG,
-  ELEVATION_MAX,
   DENSITY,
   drawFrame,
   beltFrame,
@@ -22,14 +21,11 @@ import {
   truncateLabel,
   WAITING_SCALE,
   type PlanetItem,
-  DUST_CAP,
   EXPECTED_ID,
   FRAME_EXTENT,
   frameViewport,
   GALAXY_MARGIN,
   GALAXY_MAX,
-  galaxyFixtureOf,
-  galaxySpecOf,
   layoutGalaxy,
   makeCamera,
   MIN_CLEARANCE,
@@ -51,10 +47,35 @@ import {
   PLANET_READABLE_MIN,
   PLANET_READABLE_GAP,
   galaxyBox,
-  elevationFor,
+  ORCH_TILT_DEG,
   GALAXY_MAX_FILL,
 } from "./galaxy.ts";
 import { ORBIT_STEP } from "./galaxy-data.ts";
+
+/** 测试用的三档星系（原单智能体首页的写死 fixture；产品里已不用，只在测试里当「空 / 平常 / 满载」的形状） */
+type GalaxyFixture = "empty" | "typical" | "full";
+const TYPICAL_PLANETS: PlanetSpec[] = [
+  { id: "p1", mass: 2.4, composition: "rock", orbitRadius: 17, inclinationDeg: 4.5, nodeDeg: 20, phaseDeg: 200 },
+  { id: "p2", mass: 14, composition: "gas", orbitRadius: 27, inclinationDeg: -3, nodeDeg: 140, phaseDeg: 320 },
+  { id: "p3", mass: 4, composition: "ice", orbitRadius: 38, inclinationDeg: 6, nodeDeg: 260, phaseDeg: 70 },
+  { id: "p4", mass: 7, composition: "rock", orbitRadius: 50, inclinationDeg: -4.5, nodeDeg: 80, phaseDeg: 150 },
+];
+function galaxySpecOf(fixture: GalaxyFixture): GalaxySpec {
+  if (fixture === "empty") return { starMass: 620, planets: [], sessions: 0 };
+  if (fixture === "full") {
+    const planets: PlanetSpec[] = Array.from({ length: 12 }, (_, i) => ({
+      id: `p${i + 1}`,
+      mass: [2, 9, 3.5, 22, 5, 1.6, 30, 6, 12, 2.8, 18, 4][i] ?? 3,
+      composition: (["rock", "gas", "ice"] as const)[(i * 7) % 3] ?? "rock",
+      orbitRadius: 15 + i * 9.5 + i * i * 0.35,
+      inclinationDeg: (((i * 37) % 13) - 6) * 0.9,
+      nodeDeg: (i * 83) % 360,
+      phaseDeg: (i * 137) % 360,
+    }));
+    return { starMass: 620, planets, sessions: 2000 };
+  }
+  return { starMass: 620, planets: TYPICAL_PLANETS, sessions: 14 };
+}
 
 function planet(id: string, orbitRadius: number, extra: Partial<PlanetSpec> = {}): PlanetSpec {
   return { id, mass: 4, composition: "rock", orbitRadius, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 0, ...extra };
@@ -111,16 +132,15 @@ describe("轨道：半径独立指定、不相撞、开普勒角速度", () => {
 });
 
 describe("量：行星封顶、星屑聚合", () => {
-  test("可见轨道最多 6 圈：超出的行星计进 hidden、不画；星屑颗粒封顶 60", () => {
+  test("可见轨道最多 6 圈：超出的行星计进 hidden、不画；每条会话一颗碎石", () => {
     assert.equal(VISIBLE_ORBIT_CAP, 6);
-    assert.equal(DUST_CAP, 60);
     const many: PlanetSpec[] = Array.from({ length: 15 }, (_, i) => planet(`p${i}`, 15 + i * 12));
     const layout = layoutGalaxy({ starMass: 800, planets: many, sessions: 2000 });
     assert.equal(layout.planets.length, VISIBLE_ORBIT_CAP);
     assert.equal(layout.hidden, 15 - VISIBLE_ORBIT_CAP);
     // 留下的是最内的 6 颗
     assert.deepEqual(layout.planets.map((p) => p.id), ["p0", "p1", "p2", "p3", "p4", "p5"]);
-    assert.equal(layout.belt?.particles.length, DUST_CAP);
+    assert.equal(layout.belt?.particles.length, 2000);
     assert.equal(layout.belt?.count, 2000);
   });
 
@@ -299,8 +319,8 @@ describe("画面上轨道不交叉", () => {
       planets: [15, 22, 29, 36, 43].map((a, i) => planet(`s${i}`, a, { inclinationDeg: i % 2 === 0 ? 8 : -8, nodeDeg: i * 70 })),
       sessions: 0,
     };
-    // 工作区页的画框更「方」时俯角抬到 ELEVATION_MAX：同样一圈套一圈
-    for (const elevation of [CAMERA_ELEVATION_DEG, ELEVATION_MAX]) {
+    // 两档俯角候选（classic 20° / orch）：同样一圈套一圈
+    for (const elevation of [CAMERA_ELEVATION_DEG, ORCH_TILT_DEG]) {
       for (const spec of [galaxySpecOf("typical"), galaxySpecOf("full"), steep]) {
         const radii = screenRadii(spec, elevation);
         for (let o = 1; o < radii.length; o++) {
@@ -314,17 +334,9 @@ describe("画面上轨道不交叉", () => {
     }
   });
 
-  test("俯角随画框形状：扁带子保持 20°，越方越高，封顶 ELEVATION_MAX；单调", () => {
-    assert.equal(elevationFor({ width: 1200, height: 240 }), CAMERA_ELEVATION_DEG);
-    assert.equal(elevationFor({ width: 800, height: 800 }), ELEVATION_MAX);
-    const mid = elevationFor({ width: 1200, height: 640 });
-    assert.ok(mid > CAMERA_ELEVATION_DEG && mid < ELEVATION_MAX, String(mid));
-    let prev = 0;
-    for (let h = 100; h <= 1200; h += 50) {
-      const e = elevationFor({ width: 1200, height: h });
-      assert.ok(e >= prev);
-      prev = e;
-    }
+  test("俯角两档：orch 是编排页原来在常用窗口下的约 37°，classic 是单智能体原来的 20°；不再随画框形状变", () => {
+    assert.equal(CAMERA_ELEVATION_DEG, 20);
+    assert.ok(ORCH_TILT_DEG > 35 && ORCH_TILT_DEG < 39);
   });
 });
 
@@ -347,13 +359,16 @@ describe("等你的行星：前置、放大；名字、碎石与「+N」", () =>
   });
   const frameAt = (layout: ReturnType<typeof layoutGalaxy>, t: number) => drawFrame(layout, camera, vp, orbitArcs(layout, camera, vp), t);
 
-  test("等你的行星在任何时刻都画在主星之后（盖在主星上），并放大 WAITING_SCALE 倍；别的状态不变", () => {
+  test("等你的行星放大 WAITING_SCALE 倍；转到主星背后时照样排在主星之前（被主星挡住，不画在主星上面）", () => {
     const layout = layoutGalaxy(spec(["waiting", "running", null]));
     for (const t of [0, 40, 95, 180, 400]) {
       const items = frameAt(layout, t);
       const starIndex = items.findIndex((item) => item.kind === "star");
-      const waiting = items.findIndex((item) => item.kind === "planet" && item.state === "waiting");
-      assert.ok(waiting > starIndex, `t=${t}：等你的行星必须在绘制表里排在主星之后`);
+      const star = items[starIndex];
+      const waitingIndex = items.findIndex((item) => item.kind === "planet" && item.state === "waiting");
+      const waiting = items[waitingIndex];
+      assert.ok(star !== undefined && waiting !== undefined);
+      assert.equal(waitingIndex > starIndex, waiting.depth <= star.depth, `t=${t}：画家顺序按深度`);
     }
     const items = frameAt(layout, 0);
     const byState = (state: string | null) => items.find((item): item is PlanetItem => item.kind === "planet" && item.state === state);
@@ -369,14 +384,13 @@ describe("等你的行星：前置、放大；名字、碎石与「+N」", () =>
     assert.deepEqual([...new Set(orbitArcs(empty, camera, vp).map((arc) => arc.planetId))], [EXPECTED_ID]);
   });
 
-  test("碎石：工作区页每条会话一颗（不封顶）；单智能体原型带子缺省仍封顶 DUST_CAP", () => {
-    const all = layoutGalaxy(spec(["running"], { sessions: 2000, dustCap: Number.POSITIVE_INFINITY, growth: true }));
+  test("碎石：每条会话一颗（不封顶）", () => {
+    const all = layoutGalaxy(spec(["running"], { sessions: 2000 }));
     assert.equal(all.belt?.particles.length, 2000);
     assert.equal(all.belt?.count, 2000);
     // 根会话拎成的碎石块不再画成碎石带里的一颗；子会话碎石块不在 sessions 里
-    const lifted = layoutGalaxy({ ...spec([]), sessions: 10, dustCap: Number.POSITIVE_INFINITY, growth: true, rocks: [{ id: "a", state: "running", label: "A" }, { id: "b", state: "waiting", label: "B", child: true }] });
+    const lifted = layoutGalaxy({ ...spec([]), sessions: 10, rocks: [{ id: "a", state: "running", label: "A" }, { id: "b", state: "waiting", label: "B", child: true }] });
     assert.equal(lifted.belt?.particles.length, 9);
-    assert.equal(layoutGalaxy(spec([], { sessions: 2000 })).belt?.particles.length, DUST_CAP);
   });
 
   test("主星带星环 / 日冕时第一圈轨道被推到外缘之外（行星不从星环里穿过）", () => {
@@ -407,7 +421,7 @@ describe("行星表情可读（星系规则：大小差距缩小到行星表情�
   // 与 HomeGalaxy 的工作区页同一套取景：画框按画布形状抬俯角
   const scene = (w: number, h: number) => {
     const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-    const camera = makeCamera(FRAME_EXTENT, elevationFor(box));
+    const camera = makeCamera(FRAME_EXTENT, ORCH_TILT_DEG);
     return { camera, vp: frameViewport(camera, w, h, box) };
   };
   test("最小可读半径夹在 [MIN, MAX]，且不超过相邻轨道间距的 GAP 倍（窄右栏里放大的行星不压隔壁轨道）", () => {
@@ -488,7 +502,7 @@ describe("按深度排序与遮挡", () => {
   });
 
   test("碎石带按主星前后分两半：远半圈（主星背后）的在主星中心之上，近半圈的在之下", () => {
-    const layout = layoutGalaxy({ ...galaxySpecOf("full"), dustCap: Number.POSITIVE_INFINITY, growth: true });
+    const layout = layoutGalaxy({ ...galaxySpecOf("full") });
     const camera = makeCamera(FRAME_EXTENT);
     const vp = frameViewport(camera, 900, 240);
     assert.ok(layout.belt !== null);
@@ -505,8 +519,6 @@ describe("星系随会话长大（2026-11-24 用户：「这个星系它一直�
     starMass: 620,
     planets: [planet("a", 19), planet("b", 31), planet("c", 43)],
     sessions,
-    dustCap: Number.POSITIVE_INFINITY,
-    growth: true,
   });
   const counts = [0, 1, 2, 3, 5, 10, 40, 100, 450, 1000, 2000, BELT_FULL_AT, 10_000, 1_000_000];
 
@@ -598,15 +610,7 @@ describe("动效生命周期", () => {
 
 });
 
-describe("原型 fixture 参数", () => {
-  test("?galaxy= 三档生效，其它值不认", () => {
-    assert.equal(galaxyFixtureOf("?galaxy=full"), "full");
-    assert.equal(galaxyFixtureOf("?a=1&galaxy=empty"), "empty");
-    assert.equal(galaxyFixtureOf("?galaxy=typical"), "typical");
-    assert.equal(galaxyFixtureOf("?galaxy=huge"), null);
-    assert.equal(galaxyFixtureOf(""), null);
-  });
-
+describe("测试用三档星系的形状", () => {
   test("三档：空只有主星 + 预期轨道；平常 4 颗行星 + 少量星屑；满载 12 颗只画 6 圈 + 聚合碎石带", () => {
     const empty = layoutGalaxy(galaxySpecOf("empty"));
     assert.equal(empty.planets.length, 0);
@@ -627,7 +631,7 @@ describe("原型 fixture 参数", () => {
     const full = layoutGalaxy(fullSpec);
     assert.equal(full.planets.length, VISIBLE_ORBIT_CAP);
     assert.equal(full.hidden, 12 - VISIBLE_ORBIT_CAP);
-    assert.equal(full.belt?.particles.length, DUST_CAP);
+    assert.equal(full.belt?.particles.length, 2000);
     assert.equal(full.belt?.count, 2000);
     assert.ok(full.orbitScale < 1);
   });

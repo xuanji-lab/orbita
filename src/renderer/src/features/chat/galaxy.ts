@@ -69,11 +69,6 @@ export interface GalaxySpec {
   planets: readonly PlanetSpec[];
   /** 主星连星环 / 日冕的外缘（世界单位）；缺席 = 主星半径。第一圈轨道不得压进这个外缘 */
   starExtent?: number;
-  /**
-   * 碎石颗粒数上限；缺席 = DUST_CAP（单智能体首页的原型带子）。工作区页传 Infinity：每条根会话都是一颗碎石
-   * （2026-11-24 用户：「这个星系它一直在捕捉新的东西，在长大」），不再折成「另有 N 条会话」
-   */
-  dustCap?: number;
   /** 这座星系里的会话数：决定碎石带的宽窄（beltGrowthOf）、颗粒数与浓淡 */
   sessions: number;
   /**
@@ -83,17 +78,12 @@ export interface GalaxySpec {
   dust?: readonly DustSeed[];
   /** 在做事的会话（单独画成碎石块，带锁定框）；它们也计在 sessions 里 */
   rocks?: readonly RockSpec[];
-  /** 碎石带内沿的下限（世界单位）：屏幕安全布局按屏幕间距算出来的；缺席 = 只按世界间距。只在 growth 时用 */
+  /** 碎石带内沿的下限（世界单位）：屏幕安全布局按屏幕间距算出来的；缺席 = 只按世界间距 */
   beltInner?: number;
-  /**
-   * 碎石带随会话数长大（编排页：New Task 页与右栏星系图，HomeGalaxy 的 fill 传 true）：每条会话一颗、按 id 定方位、
-   * 越老越靠外、带宽按对数长。缺席 = 单智能体首页的原型带子（d12f2e2a 原样，用户定「单智能体原样保留」）
-   */
-  growth?: boolean;
   /**
    * 轨道偏心率（开普勒椭圆，编排页按 proto-variants 的 orbitE 传，默认 0.3）：主星在椭圆的一个焦点上，所有轨道（连碎石带）
    * 共用这个偏心率与同一个近日点方向（+x，画面右侧）——以主星为中心的位似椭圆，天然不相交；行星近主星快、远主星慢。
-   * 缺席 = 0（正圆轨道：单智能体首页的原型星系原样）
+   * 缺席 = 0（正圆轨道）
    */
   eccentricity?: number;
 }
@@ -139,8 +129,6 @@ export const DENSITY: Readonly<Record<Composition, number>> = { rock: 5.5, ice: 
  * 发丝线在 900×240 的带子里会叠成一个靶心（2026-11-23 视觉审查），6 圈还读得出「一圈一颗」。
  */
 export const VISIBLE_ORBIT_CAP = 6;
-/** 星屑颗粒上限：2000 条会话也只画这么多粒，多出来的量只让碎石带更浓（240 粒时与轨道一起成了靶心） */
-export const DUST_CAP = 60;
 /**
  * 统一画框（天体单位）：所有星系都装进这个半径里，相机与视口只按它定，不按某座星系自己的外缘——
  * 这样空 / 平常 / 满载三档的主星同大、同位，满载不会因为外缘变大把主星缩小。
@@ -205,16 +193,12 @@ export interface DustParticle {
   r: number;
   /** t = 0 时的方位角：按 id 取，同一条会话永远在同一处 */
   theta0: number;
-  /** 偏离盘面的高度：单智能体首页的原型带子随机给一点（classic）；长大的碎石带平躺在盘面上（0） */
-  z: number;
-  /** 这一颗的角速度：原型带子按开普勒各转各的（classic）；长大的碎石带整条一起转（belt.omega） */
-  omega: number;
 }
 
 export interface Belt {
   inner: number;
   outer: number;
-  /** 真实会话数（单智能体原型带子封顶 DUST_CAP 颗，可能大于 particles.length；工作区页两者相等） */
+  /** 真实会话数（= particles.length + 根会话拎成的碎石块数） */
   count: number;
   particles: DustParticle[];
   /** 碎石带浓淡：随会话数取对数，有上限 */
@@ -267,17 +251,6 @@ function hashText(text: string): number {
   return hash >>> 0;
 }
 
-/** 确定性的伪随机（mulberry32）：同一个会话数每次排出同一条原型碎石带，截图可复现 */
-function seeded(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let x = state;
-    x = Math.imul(x ^ (x >>> 15), x | 1);
-    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
-    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /**
  * 碎石带长多宽（0..1，乘 BELT_MAX_WIDTH）：随会话数取对数，几条时是窄窄一圈，BELT_FULL_AT 条时到最宽，
@@ -389,24 +362,13 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   // 根会话拎成的碎石块是 spec.sessions 里的；子会话的不是（见 RockSpec.child）
   const rootRocks = rockSpecs.filter((rock) => rock.child !== true).length;
   const sessions = Math.max(0, Math.floor(spec.sessions), rootRocks);
-  if ((sessions > 0 || rockSpecs.length > 0) && spec.growth !== true) {
-    // 单智能体首页的原型带子（d12f2e2a 原样）：画框外沿那一圈、确定性随机撒 DUST_CAP 颗，不随会话数变宽
-    const inner = lastEdge + MIN_CLEARANCE * 2;
-    const outer = Math.max(FRAME_EXTENT, inner + 6);
-    const rand = seeded(9173);
-    const particles: DustParticle[] = [];
-    const n = Math.min(sessions - rootRocks, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
-    for (let i = 0; i < n; i++) {
-      const r = inner + rand() * (outer - inner);
-      particles.push({ id: `dust-${i}`, title: null, r, theta0: rand() * Math.PI * 2, z: (rand() - 0.5) * (outer - inner) * 0.14, omega: angularSpeed(r) });
-    }
-    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA, ecc };
-  } else if (sessions > 0 || rockSpecs.length > 0) {
+  if (sessions > 0 || rockSpecs.length > 0) {
     const beltFloor = ecc === 0 || planets.length === 0 ? lastEdge + MIN_CLEARANCE * 2 : prevOrbit + (prevRadius + MIN_CLEARANCE * 2) / (1 - ecc);
     const inner = Math.max(beltFloor, spec.beltInner ?? 0);
     // 碎石带随会话数长大：宽度按对数长（beltGrowthOf），几条和几千条都装得下
     const outer = beltOuterOf(inner, sessions);
-    const n = Math.min(sessions - rootRocks, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
+    // 每条根会话都是一颗碎石（2026-11-24 用户：「这个星系它一直在捕捉新的东西，在长大」），不封顶
+    const n = Math.max(0, sessions - rootRocks);
     const seeds = spec.dust ?? [];
     const particles: DustParticle[] = [];
     for (let i = 0; i < n; i++) {
@@ -417,7 +379,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
       const rank = n <= 1 ? 0 : i / (n - 1);
       const jitter = ((hash >>> 8) & 1023) / 1023 - 0.5;
       const u = clamp(0.06 + 0.86 * rank + 0.12 * jitter, 0.02, 0.98);
-      particles.push({ id, title: seed?.title ?? null, r: inner + (outer - inner) * u, theta0: ((hash % 3600) / 3600) * Math.PI * 2, z: 0, omega: BELT_OMEGA });
+      particles.push({ id, title: seed?.title ?? null, r: inner + (outer - inner) * u, theta0: ((hash % 3600) / 3600) * Math.PI * 2 });
     }
     belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA, ecc };
   }
@@ -551,18 +513,12 @@ export const GALAXY_MAX = { width: 1280, height: 460 } as const;
 export const GALAXY_MAX_FILL = { width: 1280, height: 720 } as const;
 
 /**
- * 相机俯角随画框形状变（工作区页：星系占输入框上方整块，窗口一高，20° 的扁椭圆上下各留一大块白）：
- * 画框越「方」俯角越大，椭圆越圆、越能填满竖向；扁的画框（全局首页那条带子）保持 20°。
- * 夹在 [CAMERA_ELEVATION_DEG, ELEVATION_MAX]：再高就成了俯视的靶心，读不出「绕着转」。
- * 只抬俯角、不压：limitInclinations 按 20° 收的倾角在更高的俯角下竖向间隔只会更大，轨道照样不交叉。
+ * 星系的相机俯角（单智能体首页与编排页同一个值，2026-11-24 用户：「他的这个倾角和编排模式的倾角不一样。两个要 consistent」）。
+ * 候选（proto-variants 的 tilt）：orch = ORCH_TILT_DEG（编排 New Task 页在常用窗口下原来按画框形状算出的那个值，约 37°），
+ * classic = CAMERA_ELEVATION_DEG（单智能体首页原来的 20°）。不再按画框形状变：同一座星系在两个首页上同一个俯角。
+ * 屏幕安全布局在窄画布里装不下时仍会往上抬（screen-safe.ts），那是「不相撞」的规矩，不是风格。
  */
-export const ELEVATION_MAX = 38;
-
-export function elevationFor(box: { width: number; height: number }): number {
-  const ratio = box.height / Math.max(box.width, 1);
-  const fit = (Math.asin(clamp(ratio * 0.92, 0, 1)) * 180) / Math.PI;
-  return clamp(fit, CAMERA_ELEVATION_DEG, ELEVATION_MAX);
-}
+export const ORCH_TILT_DEG = 37;
 
 export function galaxyBox(
   width: number,
@@ -802,7 +758,7 @@ function normalizeAngle(theta: number): number {
  * 行星在屏幕上的最小可读半径（px）：星系规则「主星与行星的大小差距应缩小到行星表情可读的程度」——
  * 小于这个半径，两只竖胶囊眼睛就糊成一个点。上限 PLANET_READABLE_MAX；但不超过「相邻两圈轨道间距」的 PLANET_READABLE_GAP 倍，
  * 窄画布（右栏）里放大的行星不会压到隔壁轨道上的那颗（轨道等距排，间距是 orbitStep 个世界单位）。
- * 只在工作区页 / 右栏星系图用（drawFrame 的 minPlanetPx）；单智能体首页的 fixture 星系不动。
+ * 只在工作区页 / 右栏星系图用（drawFrame 的 minPlanetPx）。
  */
 export const PLANET_READABLE_MAX = 11;
 /** 星际空间（没有主星，碎石 = 会话）的碎石屏幕半径区间（dustLookOf） */
@@ -834,13 +790,8 @@ export function drawFrame(
   vp: Viewport,
   arcs: readonly OrbitArc[],
   t: number,
-  /** 行星屏幕半径的下限（px）：0 = 照物理半径画（单智能体首页） */
+  /** 行星屏幕半径的下限（px）：0 = 照物理半径画 */
   minPlanetPx = 0,
-  /**
-   * 等你的行星是否强行画在主星前面（单智能体首页的 fixture 星系沿用第二轮的做法）。工作区页 / 右栏传 false：
-   * 星系规则「天体不得相撞」——转到主星背后时就让主星挡住它，不画在主星上面（屏幕安全布局保证它在近侧不碰主星）
-   */
-  waitingInFront = true,
 ): DrawItem[] {
   const starP = project({ x: 0, y: 0, z: 0 }, camera);
   const starS = toScreen(starP, vp);
@@ -854,9 +805,9 @@ export function drawFrame(
     const theta = eccentricAnomaly(planet.phase + planet.omega * t, ecc);
     const p = project(orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta, ecc), camera);
     const s = framePoint(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp, ecc), theta);
-    // 等你的行星：放大一档；单智能体首页固定画在主星前面（再被主星挡住就等于看不见最要紧的那件事）
+    // 等你的行星放大一档；转到主星背后就让主星挡住（星系规则「天体不得相撞」，屏幕安全布局保证它在近侧不碰主星）
     const waiting = planet.state === "waiting";
-    const depth = waiting && waitingInFront ? Math.min(p.depth, starP.depth - 1e-3) : p.depth;
+    const depth = p.depth;
     items.push({
       kind: "planet",
       key: `planet-${planet.id}`,
@@ -928,46 +879,6 @@ export function motionAllowed(inputs: MotionInputs): boolean {
  */
 export const LIVE_FRAME_MS = 33;
 
-/** 原型专用：`?galaxy=empty|typical|full` 切三档 fixture；不带参数时用 typical */
-export type GalaxyFixture = "empty" | "typical" | "full";
-
-export function galaxyFixtureOf(search: string): GalaxyFixture | null {
-  const value = new URLSearchParams(search).get("galaxy");
-  return value === "empty" || value === "typical" || value === "full" ? value : null;
-}
-
-const TYPICAL_PLANETS: PlanetSpec[] = [
-  { id: "p1", mass: 2.4, composition: "rock", orbitRadius: 17, inclinationDeg: 4.5, nodeDeg: 20, phaseDeg: 200 },
-  { id: "p2", mass: 14, composition: "gas", orbitRadius: 27, inclinationDeg: -3, nodeDeg: 140, phaseDeg: 320 },
-  { id: "p3", mass: 4, composition: "ice", orbitRadius: 38, inclinationDeg: 6, nodeDeg: 260, phaseDeg: 70 },
-  { id: "p4", mass: 7, composition: "rock", orbitRadius: 50, inclinationDeg: -4.5, nodeDeg: 80, phaseDeg: 150 },
-];
-
-const COMPOSITIONS: readonly Composition[] = ["rock", "gas", "ice"];
-
-function fullPlanets(): PlanetSpec[] {
-  const planets: PlanetSpec[] = [];
-  for (let i = 0; i < 12; i++) {
-    planets.push({
-      id: `p${i + 1}`,
-      mass: [2, 9, 3.5, 22, 5, 1.6, 30, 6, 12, 2.8, 18, 4][i] ?? 3,
-      composition: COMPOSITIONS[(i * 7) % 3] ?? "rock",
-      orbitRadius: 15 + i * 9.5 + i * i * 0.35,
-      inclinationDeg: (((i * 37) % 13) - 6) * 0.9,
-      nodeDeg: (i * 83) % 360,
-      phaseDeg: (i * 137) % 360,
-    });
-  }
-  return planets;
-}
-
-export function galaxySpecOf(fixture: GalaxyFixture): GalaxySpec {
-  if (fixture === "empty") return { starMass: 620, planets: [], sessions: 0 };
-  // 满载：12 颗行星（只画最内 6 圈，其余计 hidden）、2000 条会话。主星质量与平常档相同——
-  // 主星大小只由质量定，不因为星系热闹就变大或变小
-  if (fixture === "full") return { starMass: 620, planets: fullPlanets(), sessions: 2000 };
-  return { starMass: 620, planets: TYPICAL_PLANETS, sessions: 14 };
-}
 
 export const LABEL_MAX_CHARS = 14;
 

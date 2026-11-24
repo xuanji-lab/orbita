@@ -6,7 +6,7 @@ import { createContext, useContext } from "react";
  * - 行星（子智能体）→ 打开星系设计面板，停在那颗行星；
  * - 主星（主智能体）→ 打开星系设计面板的主星页；
  * - 「全部 N 条会话」（键盘 / 读屏入口，平时视觉隐藏）→ 打开右栏编排面板的树状图（回旧会话的正门）。
- * 没有提供者（单智能体首页那颗 fixture 星系）时星系照旧只是图。
+ * 没有提供者（单智能体形态）时星系照旧只是图。
  */
 export interface GalaxyActions {
   openSession: (sessionId: string) => void;

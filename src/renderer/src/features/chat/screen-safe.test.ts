@@ -4,10 +4,9 @@ import {
   drawFrame,
   dustLookOf,
   dustPoints,
-  elevationFor,
+  ORCH_TILT_DEG,
   galaxyBox,
   GALAXY_MAX_FILL,
-  galaxySpecOf,
   orbitArcs,
   orbitFrame,
   framePoint,
@@ -26,6 +25,31 @@ import { orbitRadiusOf } from "./galaxy-data.ts";
 import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, fitScreenSafe, SAFE_ELEVATION_MAX } from "./screen-safe.ts";
 import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { lockFrame } from "./callouts.ts";
+
+/** 原单智能体首页的三档写死 fixture 的形状（产品里已不用，测试里保留这几种形状） */
+function galaxySpecOf(fixture: "empty" | "typical" | "full"): GalaxySpec {
+  if (fixture === "empty") return { starMass: 620, planets: [], sessions: 0 };
+  const typical = [
+    { id: "p1", mass: 2.4, composition: "rock" as const, orbitRadius: 17, inclinationDeg: 4.5, nodeDeg: 20, phaseDeg: 200 },
+    { id: "p2", mass: 14, composition: "gas" as const, orbitRadius: 27, inclinationDeg: -3, nodeDeg: 140, phaseDeg: 320 },
+    { id: "p3", mass: 4, composition: "ice" as const, orbitRadius: 38, inclinationDeg: 6, nodeDeg: 260, phaseDeg: 70 },
+    { id: "p4", mass: 7, composition: "rock" as const, orbitRadius: 50, inclinationDeg: -4.5, nodeDeg: 80, phaseDeg: 150 },
+  ];
+  if (fixture === "typical") return { starMass: 620, planets: typical, sessions: 14 };
+  return {
+    starMass: 620,
+    sessions: 2000,
+    planets: Array.from({ length: 12 }, (_, i) => ({
+      id: `p${i + 1}`,
+      mass: [2, 9, 3.5, 22, 5, 1.6, 30, 6, 12, 2.8, 18, 4][i] ?? 3,
+      composition: (["rock", "gas", "ice"] as const)[(i * 7) % 3] ?? "rock",
+      orbitRadius: 15 + i * 9.5 + i * i * 0.35,
+      inclinationDeg: (((i * 37) % 13) - 6) * 0.9,
+      nodeDeg: (i * 83) % 360,
+      phaseDeg: (i * 137) % 360,
+    })),
+  };
+}
 
 /** 画布：New Task 页（无右栏 / 开着右栏）、右栏星系图（宽 / 最窄可用） */
 const CANVASES = [
@@ -101,12 +125,12 @@ const AGENT_SPECS: [string, GalaxySpec][] = [
 function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
   // 与 HomeGalaxy 的工作区页一样：每条会话都是一颗碎石（不封顶）
-  const scene = fitScreenSafe({ ...spec, dustCap: Number.POSITIVE_INFINITY, growth: true }, w, h, box, elevationFor(box), readableMax);
+  const scene = fitScreenSafe({ ...spec }, w, h, box, ORCH_TILT_DEG, readableMax);
   const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
   const extent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass);
   const problems: string[] = [];
   for (let t = 0; t <= 600; t += 3.7) {
-    const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx, false);
+    const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx);
     const star = items.find((item): item is StarItem => item.kind === "star");
     const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
     const order = new Map(items.map((item, index) => [item.key, index]));
@@ -175,7 +199,7 @@ describe("屏幕安全布局：任何公转相位上，没有两个天体在屏�
   test("轨道一律放平、只往外推不往里收；俯角不超过上限；装不下就少画最外一圈（计进 hidden）", () => {
     const spec = realistic(9, 3);
     const box = galaxyBox(336, 269, GALAXY_MAX_FILL);
-    const scene = fitScreenSafe(spec, 336, 269, box, elevationFor(box));
+    const scene = fitScreenSafe(spec, 336, 269, box, ORCH_TILT_DEG);
     assert.ok(scene.elevationDeg <= SAFE_ELEVATION_MAX);
     for (const planet of scene.layout.planets) assert.equal(planet.inclination, 0);
     const radii = scene.layout.planets.map((planet) => planet.orbitRadius);
@@ -198,8 +222,8 @@ describe("编排星系（行星 = 子智能体、会话 = 碎石）：屏幕上�
     for (const [, spec] of AGENT_SPECS) {
       for (const [canvasName, w, h] of CANVASES) {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-        const scene = fitScreenSafe(spec, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
-        const items = drawFrame(scene.layout, scene.camera, scene.viewport, orbitArcs(scene.layout, scene.camera, scene.viewport), 0, scene.minPlanetPx, false);
+        const scene = fitScreenSafe(spec, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        const items = drawFrame(scene.layout, scene.camera, scene.viewport, orbitArcs(scene.layout, scene.camera, scene.viewport), 0, scene.minPlanetPx);
         const star = items.find((item): item is StarItem => item.kind === "star");
         const biggest = Math.max(...items.filter((item): item is PlanetItem => item.kind === "planet").map((p) => p.r), 0);
         assert.ok(star !== undefined && star.r >= biggest * STAR_OVER_PLANET * 0.99, `${canvasName}: 主星 ${star?.r.toFixed(1)} 行星 ${biggest.toFixed(1)}`);
@@ -227,11 +251,11 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
     for (const [canvasName, w, h] of NARROW_CANVASES) {
       test(`${specName} × ${canvasName}（${w}×${h}）`, () => {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-        const scene = fitScreenSafe(spec, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
+        const scene = fitScreenSafe(spec, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
         const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
         const problems: string[] = [];
         for (let t = 0; t <= 600; t += 7.3) {
-          const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx, false);
+          const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx);
           const star = items.find((item): item is StarItem => item.kind === "star");
           const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
           const rocks = items.filter((item): item is RockItem => item.kind === "rock");
@@ -266,9 +290,11 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
   test("ann-2 那块画布：至少还画着一颗行星（不是整座星系退成一颗主星）；锁定框让开的距离按框算，不按石头算", () => {
     const [, spec] = AGENT_SPECS[3] as [string, GalaxySpec];
     const box = galaxyBox(196, 214, GALAXY_MAX_FILL);
-    const scene = fitScreenSafe(spec, 196, 214, box, elevationFor(box), AGENT_READABLE_MAX);
-    assert.ok(scene.layout.planets.length >= 1, `只剩 ${scene.layout.planets.length} 颗`);
-    assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR);
+    for (const eccentricity of [0, 0.3]) {
+      const scene = fitScreenSafe({ ...spec, eccentricity }, 196, 214, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+      assert.ok(scene.layout.planets.length >= 1, `e=${eccentricity} 只剩 ${scene.layout.planets.length} 颗`);
+      assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR - 0.01, `e=${eccentricity} 行星 ${scene.minPlanetPx.toFixed(1)}px`);
+    }
     assert.ok(ROCK_CLEAR_PX > 4.5);
   });
 });
@@ -282,11 +308,11 @@ const PHASES = 240;
 
 function sweepProblems(spec: GalaxySpec, w: number, h: number, ecc: number): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-  const scene = fitScreenSafe({ ...spec, eccentricity: ecc, dustCap: Number.POSITIVE_INFINITY, growth: true }, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
+  const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
   const { layout, camera, viewport } = scene;
   const problems: string[] = [];
-  if (layout.ecc !== ecc) problems.push(`偏心率没传进来：${layout.ecc}`);
-  const star = drawFrame({ ...layout, belt: null }, camera, viewport, [], 0, scene.minPlanetPx, false).find((item): item is StarItem => item.kind === "star");
+  if (layout.ecc > ecc || layout.ecc < 0) problems.push(`偏心率不对：${layout.ecc}`);
+  const star = drawFrame({ ...layout, belt: null }, camera, viewport, [], 0, scene.minPlanetPx).find((item): item is StarItem => item.kind === "star");
   if (star === undefined) return ["没有主星"];
   const starReach = star.r * (Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass));
   // 每条轨道（行星 + 碎石块那一圈）在一圈相位上的屏幕位置与半径
@@ -345,10 +371,23 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
     }
   }
 
+  test("宽画布上偏心率原样生效；小画布排不下时偏心率往下退，不为椭圆少画行星、不丢碎石块那一圈", () => {
+    for (const [, spec] of AGENT_SPECS) {
+      for (const [canvasName, w, h] of [...CANVASES, ...NARROW_CANVASES]) {
+        const box = galaxyBox(w, h, GALAXY_MAX_FILL);
+        const round = fitScreenSafe(spec, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        const kepler = fitScreenSafe({ ...spec, eccentricity: 0.3 }, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        assert.ok(kepler.layout.planets.length >= round.layout.planets.length, `${canvasName}: 椭圆 ${kepler.layout.planets.length} 颗 < 正圆 ${round.layout.planets.length} 颗`);
+        if (round.layout.rockOrbit !== null) assert.ok(kepler.layout.rockOrbit !== null, `${canvasName}: 椭圆丢了碎石块`);
+        if (canvasName === "页面" && spec !== AGENT_SPECS[4]?.[1]) assert.equal(kepler.layout.ecc, 0.3, "宽画布上偏心率被退了");
+      }
+    }
+  });
+
   test("近日点那一侧确实是最挤的：相邻两圈的最近距离出现在近日点附近（|相位| < 90°），且比正圆时的同一对更近", () => {
     const [, spec] = AGENT_SPECS[3] as [string, GalaxySpec];
     const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
-    const scene = fitScreenSafe({ ...spec, eccentricity: 0.45, dustCap: Number.POSITIVE_INFINITY, growth: true }, 1088, 726, box, elevationFor(box), AGENT_READABLE_MAX);
+    const scene = fitScreenSafe({ ...spec, eccentricity: 0.45 }, 1088, 726, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
     const [inner, outer] = scene.layout.planets;
     assert.ok(inner !== undefined && outer !== undefined);
     const fa = orbitFrame(inner.orbitRadius, 0, 0, scene.camera, scene.viewport, 0.45);
@@ -376,13 +415,15 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
       const scenes = [AGENT_SPECS[2], AGENT_SPECS[0], AGENT_SPECS[3]].map((entry) => {
         const [, spec] = entry as [string, GalaxySpec];
         const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
-        const scene = fitScreenSafe({ ...spec, eccentricity: ecc, growth: true }, 1088, 726, box, elevationFor(box), AGENT_READABLE_MAX);
-        const star = drawFrame({ ...scene.layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx, false).find((item): item is StarItem => item.kind === "star");
+        const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, 1088, 726, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        const star = drawFrame({ ...scene.layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx).find((item): item is StarItem => item.kind === "star");
         return star?.x ?? 0;
       });
       return scenes;
     });
     for (const row of xs) assert.ok((row[0] ?? 0) > 1088 / 2 + 5, `主星 x=${row[0]?.toFixed(1)}`);
-    assert.ok((xs[0]?.[0] ?? 0) < (xs[1]?.[0] ?? 0) && (xs[1]?.[0] ?? 0) < (xs[2]?.[0] ?? 0));
+    // 0.15 → 0.3 主星往近日点一侧挪；0.45 在满的星系里会退回 0.3（见上一条），所以只要求不往回
+    assert.ok((xs[0]?.[0] ?? 0) < (xs[1]?.[0] ?? 0) && (xs[1]?.[0] ?? 0) <= (xs[2]?.[0] ?? 0));
+    for (const row of xs.slice(0, 2)) assert.ok(Math.max(...row) - Math.min(...row) < 0.5, `空 / 平常 / 满载主星不同位：${row.map((x) => x.toFixed(1)).join(" ")}`);
   });
 });

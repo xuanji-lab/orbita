@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { beltFrame, dustPoints, eccentricAnomaly, orbitPoint, elevationFor, framePoint, frameViewport, FRAME_EXTENT, galaxyBox, GALAXY_MAX_FILL, layoutGalaxy, makeCamera, orbitFrame, type GalaxySpec } from "./galaxy.ts";
+import { beltFrame, dustPoints, eccentricAnomaly, orbitPoint, ORCH_TILT_DEG, framePoint, frameViewport, FRAME_EXTENT, galaxyBox, GALAXY_MAX_FILL, layoutGalaxy, makeCamera, orbitFrame, type GalaxySpec } from "./galaxy.ts";
 import {
   FAR_MARGIN,
   R0,
@@ -32,7 +32,7 @@ function angleAt(frames: { from: number; to: number }, omega: number, tSec: numb
   return frames.from + (frames.to - frames.from) * progress;
 }
 
-const camera = makeCamera(FRAME_EXTENT, elevationFor(galaxyBox(1400, 760, GALAXY_MAX_FILL)));
+const camera = makeCamera(FRAME_EXTENT, ORCH_TILT_DEG);
 const vp = frameViewport(camera, 1400, 760, galaxyBox(1400, 760, GALAXY_MAX_FILL));
 
 describe("合成器的那串 transform 正好把星体送到 framePoint（行星永远压在 orbitArcs 画的线上）", () => {
@@ -55,7 +55,7 @@ describe("合成器的那串 transform 正好把星体送到 framePoint（行星
   });
 
   test("碎石带：M · R(−ω·t) · 静止的碎石 = dustPoints（测试里检查碰撞的就是屏幕上真实的位置）", () => {
-    const spec: GalaxySpec = { starMass: 620, planets: [], sessions: 450, dustCap: Number.POSITIVE_INFINITY, growth: true };
+    const spec: GalaxySpec = { starMass: 620, planets: [], sessions: 450 };
     const belt = layoutGalaxy(spec).belt;
     assert.ok(belt !== null);
     const frame = beltFrame(belt, camera, vp);

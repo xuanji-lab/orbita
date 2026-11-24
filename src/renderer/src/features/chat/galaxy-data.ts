@@ -1,10 +1,11 @@
 import type { SessionMeta } from "@shared/session";
 import { sessionRunState, type RunStateSource, type SessionRunState } from "../notify/completion-notice.ts";
-import { workspaceHash } from "../galaxy-designer/design.ts";
+import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf, workspaceHash, type DesignOrigin, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
 import {
   PLANET_MASS,
   PLANET_ZONE,
   VISIBLE_ORBIT_CAP,
+  starRadius,
   type Composition,
   type DustSeed,
   type GalaxySpec,
@@ -403,4 +404,47 @@ export function latestWorkspaceId(
     if (best === null || meta.updatedAt > best.updatedAt) best = meta;
   }
   return best?.workspaceId ?? workspaces[0]?.id ?? null;
+}
+
+/**
+ * 首页星系（单智能体首页与编排 New Task 页同一个入口，2026-11-24 用户：单智能体「不会随着我在任务 or 某个工作区选择新建，
+ * 而去更换星系」）：当前作用域 → 这座星系。选了工作区 = 它的主星设计稿、子智能体行星、它的会话碎石；
+ * 没选（workspaceId = null）= 星际空间：没有主星与行星，会话全当碎石。两种形态不传任何「是哪个首页」的参数——同一个作用域永远同一座星系。
+ */
+export interface HomeGalaxy {
+  spec: GalaxySpec;
+  starless: boolean;
+  /** 子智能体行星的设计稿（id → 设计稿）；星际空间为空 */
+  agents: ReadonlyMap<string, PlanetDesign>;
+}
+
+export function homeGalaxyOf(input: {
+  sessions: readonly SessionMeta[];
+  workspaceId: string | null;
+  stateOf: (meta: SessionMeta) => SessionRunState;
+  ownStateOf?: (meta: SessionMeta) => SessionRunState;
+  now: number;
+  /** 这个作用域的主星设计稿与来历（useGalaxyDesign） */
+  design: GalaxyDesign;
+  origin: DesignOrigin;
+}): HomeGalaxy {
+  const star = starOf(input.design);
+  const planets = input.workspaceId === null ? [] : agentPlanetsOf(input.design, input.origin);
+  const data = scopeGalaxy({
+    sessions: input.sessions,
+    workspaceId: input.workspaceId,
+    stateOf: input.stateOf,
+    ...(input.ownStateOf === undefined ? {} : { ownStateOf: input.ownStateOf }),
+    now: input.now,
+    starMass: star.mass,
+    starExtent: starRadius(star.mass) * starExtentRatio(input.design),
+    designedPlanet: null,
+    // 星际空间（没有工作区）照旧规矩：会话当碎石画，没有子智能体
+    ...(input.workspaceId === null ? {} : { agents: agentInputsOf(planets) }),
+  });
+  if (input.workspaceId === null) {
+    // 星际空间：没有主智能体就没有主星与行星，原来算成行星的那几条也是碎石
+    return { spec: { ...data.spec, planets: [], sessions: data.spec.sessions + data.spec.planets.length }, starless: true, agents: new Map() };
+  }
+  return { spec: data.spec, starless: false, agents: agentMapOf(planets) };
 }

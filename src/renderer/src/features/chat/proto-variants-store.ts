@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { agentNameVariantOf, avatarVariantOf, eyesVariantOf, mergeVariants, orbitEVariantOf, wsTitleVariantOf, type ProtoVariants } from "./proto-variants.ts";
+import { agentNameVariantOf, avatarVariantOf, eyesVariantOf, mergeVariants, orbitEVariantOf, tiltVariantOf, wsTitleVariantOf, type ProtoVariants } from "./proto-variants.ts";
 
 /** 候选版式的运行时状态（见 proto-variants.ts）：初值读地址，之后用 window.orbitaProto.set 切 */
 let current: ProtoVariants = {
@@ -8,6 +8,7 @@ let current: ProtoVariants = {
   agentName: agentNameVariantOf(window.location.search),
   orbitE: orbitEVariantOf(window.location.search),
   eyes: eyesVariantOf(window.location.search),
+  tilt: tiltVariantOf(window.location.search),
 };
 const listeners = new Set<() => void>();
 

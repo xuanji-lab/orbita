@@ -73,10 +73,8 @@ import { getOpenDocumentText } from "../doc-panel/open-document.ts";
 import { ExitCard } from "./ExitCard";
 import { ProcessViewContext } from "./process-view-context";
 import { runStateOf, sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
-import { scopeGalaxy, stateIndexOf } from "./galaxy-data.ts";
+import { homeGalaxyOf, stateIndexOf } from "./galaxy-data.ts";
 import { useGalaxyDesign } from "../galaxy-designer/useGalaxyDesign.ts";
-import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf } from "../galaxy-designer/design.ts";
-import { starRadius } from "./galaxy.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
 import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
@@ -207,7 +205,7 @@ import {
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
-import { HomeGalaxy, PROTO_GALAXY_SPEC } from "./HomeGalaxy";
+import { HomeGalaxy } from "./HomeGalaxy";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
@@ -1482,7 +1480,7 @@ function ChatViewBody(props: {
   /**
    * 编排形态下的工作区自己的 New Task 页（侧栏点智能体行 / 工具栏新任务 / 星系名菜单选了某个工作区）：同一个首页，
    * 作用域落在这个工作区——输入框钉在底部（与聊天页同位同形），上方整块给这座星系，星系用真实数据。
-   * 单智能体形态原样不动：版式仍是「标题与输入框在上、星系在下」，星系仍是写死的 fixture（PROTO_GALAXY_SPEC）。
+   * 单智能体形态的版式不动（「标题与输入框在上、星系在下」），星系与编排同一套、同一份真实数据（galaxyFigure）。
    */
   const scopedHome = galaxyHome && props.orchestrate === true;
   // 工作区 New Task 页：量星空那一块留出的滚动条位，写进 --transcript-scrollbar（与聊天页 Pane 同一个量法），
@@ -1516,26 +1514,44 @@ function ChatViewBody(props: {
   }, [orchestrateHome, session.mode, session.pinMode]);
   // 这座星系的主星设计稿（没选工作区时用「主目录」那一份）：面板里一改，页面星系同一帧跟着变
   const galaxyDesign = useGalaxyDesign(session.workspaceId ?? "");
-  // 子智能体行星（编排星系：行星 = 子智能体、会话 = 碎石）：工作区 planet/ 里读来的或面板里改过的名单
-  const galaxyAgents = useMemo(() => agentPlanetsOf(galaxyDesign.design, galaxyDesign.origin), [galaxyDesign.design, galaxyDesign.origin]);
-  const galaxyAgentMap = useMemo(() => agentMapOf(galaxyAgents), [galaxyAgents]);
   // 不缓存：运行态每个事件都可能变；stateIndexOf 先建子会话表，整趟 O(n)（2000 条也只是一遍）
-  const galaxyStates = scopedHome ? stateIndexOf(session) : null;
+  // 两种形态的首页都画当前作用域的真实星系（homeGalaxyOf：作用域 → 星系，测试钉住）
+  const galaxyStates = galaxyHome ? stateIndexOf(session) : null;
   const galaxyData =
-    scopedHome && galaxyStates !== null
-      ? scopeGalaxy({
+    galaxyStates === null
+      ? null
+      : homeGalaxyOf({
           sessions: session.sessions,
           workspaceId: session.workspaceId,
           stateOf: galaxyStates.state,
           ownStateOf: galaxyStates.own,
           now: Date.now(),
-          starMass: starOf(galaxyDesign.design).mass,
-          starExtent: starRadius(starOf(galaxyDesign.design).mass) * starExtentRatio(galaxyDesign.design),
-          designedPlanet: null,
-          // 星际空间（没有工作区）照旧规矩：会话当碎石画，没有子智能体
-          ...(session.workspaceId === null ? {} : { agents: agentInputsOf(galaxyAgents) }),
-        })
-      : null;
+          design: galaxyDesign.design,
+          origin: galaxyDesign.origin,
+        });
+
+  /**
+   * 当前作用域的星系（编排 New Task 页与单智能体首页同一个）：选了工作区就是那座星系（主星形象、子智能体行星、会话碎石），
+   * 没选就是星际空间（无主星，只有碎石）。fill = 编排页那种占满输入框上方的大画框
+   */
+  const galaxyFigure = (fill: boolean): ReactNode => {
+    if (galaxyData === null) return null;
+    const name = scopeNameOf(session, fill ? t.agents.home : t.chat.home);
+    return galaxyData.starless ? (
+      <HomeGalaxy spec={galaxyData.spec} label={t.agents.homeGalaxy} fill={fill} starless emptyHint={t.agents.homeEmpty} />
+    ) : (
+      <HomeGalaxy
+        spec={galaxyData.spec}
+        label={t.chat.galaxyFigure(name)}
+        starDesign={galaxyDesign.design}
+        agents={galaxyData.agents}
+        fill={fill}
+        emptyHint={t.agents.emptyHint}
+        workspaceId={session.workspaceId}
+        starName={name}
+      />
+    );
+  };
 
   const composer = (
     <Composer
@@ -1720,27 +1736,7 @@ function ChatViewBody(props: {
               </div>
             )}
             <div className="ws-home-galaxy">
-              {session.workspaceId === null ? (
-                // 星际空间：没有工作区就没有主智能体与主星，只画漂移的碎石（每颗一条会话）
-                <HomeGalaxy
-                  spec={{ ...galaxyData.spec, planets: [], sessions: galaxyData.spec.sessions + galaxyData.spec.planets.length }}
-                  label={t.agents.homeGalaxy}
-                  fill
-                  starless
-                  emptyHint={t.agents.homeEmpty}
-                />
-              ) : (
-                <HomeGalaxy
-                  spec={galaxyData.spec}
-                  label={t.chat.galaxyFigure(scopeName)}
-                  starDesign={galaxyDesign.design}
-                  agents={galaxyAgentMap}
-                  fill
-                  emptyHint={t.agents.emptyHint}
-                  workspaceId={session.workspaceId}
-                  starName={scopeName}
-                />
-              )}
+              {galaxyFigure(true)}
             </div>
           </div>
           <div ref={travelRef} className="chat-footer home-travel ws-home-foot">
@@ -1910,7 +1906,7 @@ function ChatViewBody(props: {
               记录在星系之上：要你动手的活比星系要紧；有记录时星系的画布变小，主星随画布一起缩，不随内容多少缩 */}
           {galaxyHome && (
             <div className="home-fade home-fade-galaxy">
-              <HomeGalaxy spec={PROTO_GALAXY_SPEC} label={t.chat.galaxyFigure(scopeNameOf(session, t.chat.home))} />
+              {galaxyFigure(false)}
             </div>
           )}
         </div>

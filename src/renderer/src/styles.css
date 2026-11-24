@@ -2692,7 +2692,7 @@ button.ws-fold {
   pointer-events: none;
 }
 /*
- * 编排页的星系根节点（HomeGalaxy 的 GalaxyScene；单智能体首页的 ClassicGalaxy 仍是上面那张 svg，一个像素不动）。
+ * 编排页的星系根节点（HomeGalaxy 的 GalaxyScene，单智能体首页与编排页同一个）。
  * clip 不是 hidden：不成滚动容器。转动层里那张碎石 SVG 比画布大得多（变换前的盘面坐标），
  * 不裁的话它把外层撑出一条横向滚动条（2026-11-24 实测）
  */
@@ -7550,8 +7550,8 @@ button.turn-output-from.link:hover {
   background: var(--color-bg-panel);
 }
 
-/* 玄 / 黛下工作区页的轨道线提一档（border-default → border-strong）：量得 1.35:1 → 1.61:1（对页面底）。只动工作区页，单智能体首页的星系不变 */
-:root:is([data-theme="graphite"], [data-theme="black"]) .ws-home .galaxy-orbit {
+/* 玄 / 黛下星系的轨道线提一档（border-default → border-strong）：量得 1.35:1 → 1.61:1（对页面底）。单智能体首页与编排页同一套 */
+:root:is([data-theme="graphite"], [data-theme="black"]) .home-galaxy .galaxy-orbit {
   stroke: var(--color-border-strong);
 }
 

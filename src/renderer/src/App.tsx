@@ -1468,7 +1468,7 @@ export function App() {
       />
     );
 
-  // 星系上能点的东西各去哪（New Task 页的大星系与右栏星系图共用；单智能体首页那颗 fixture 星系拿不到它）
+  // 星系上能点的东西各去哪（New Task 页的大星系与右栏星系图共用；单智能体形态不提供，首页星系只是图）
   const galaxyActions: GalaxyActions | null = orchestrate
     ? {
         openSession: (id) => {

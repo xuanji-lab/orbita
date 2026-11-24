@@ -13,10 +13,20 @@
  */
 /*
  * - orbitE（缺省 "0.3"，2026-11-24 用户「这个轨道不够椭圆」）：编排页星系的开普勒偏心率三档 0.15 / 0.3 / 0.45。
- *   window.orbitaProto.set({ orbitE: "0.45" })；单智能体首页的原型星系不受影响（正圆原样）
+ *   window.orbitaProto.set({ orbitE: "0.45" })；单智能体首页与编排页一起换
  * - eyes（缺省 "s" = 现在的尺寸，等用户和肖志锋挑）：形象的眼睛四档 s / m / l / xl，外加 xl-white
  *   （规则外的白眼，供讨论）。侧栏头像、页头、星系、设计面板一起换。window.orbitaProto.set({ eyes: "l" })
  */
+/*
+ * - tilt（缺省 "orch"，2026-11-24 用户「倾角和编排模式的倾角不一样。两个要 consistent」）：单智能体首页与编排页同一个俯角，
+ *   orch = 编排页原来的约 37°，classic = 单智能体首页原来的 20°。window.orbitaProto.set({ tilt: "classic" })
+ */
+export type TiltVariant = "orch" | "classic";
+
+export function tiltVariantOf(search: string): TiltVariant {
+  return new URLSearchParams(search).get("tilt") === "classic" ? "classic" : "orch";
+}
+
 export type OrbitEVariant = "0.15" | "0.3" | "0.45";
 export type EyesVariant = "s" | "m" | "l" | "xl" | "xl-white";
 export const ORBIT_E_VARIANTS: readonly OrbitEVariant[] = ["0.15", "0.3", "0.45"];
@@ -50,6 +60,7 @@ export interface ProtoVariants {
   agentName: AgentNameVariant;
   orbitE: OrbitEVariant;
   eyes: EyesVariant;
+  tilt: TiltVariant;
 }
 
 export function agentNameVariantOf(search: string): AgentNameVariant {
@@ -88,5 +99,6 @@ export function mergeVariants(current: ProtoVariants, patch: Partial<Record<keyo
     agentName: patch.agentName === "on" || patch.agentName === "off" ? patch.agentName : current.agentName,
     orbitE: isOrbitE(patch.orbitE) ? patch.orbitE : current.orbitE,
     eyes: isEyes(patch.eyes) ? patch.eyes : current.eyes,
+    tilt: patch.tilt === "orch" || patch.tilt === "classic" ? patch.tilt : current.tilt,
   };
 }
