@@ -109,7 +109,7 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
       let candidate = { rect: host.getBoundingClientRect(), scrollTop: root?.scrollTop ?? 0 };
       let settled: typeof candidate | null = null;
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 120));
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
         if (!host.isConnected) return;
         const next = { rect: host.getBoundingClientRect(), scrollTop: root?.scrollTop ?? 0 };
         const stable =
@@ -161,10 +161,10 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   }, []);
 
   // 真 iframe 就绪后留位图；已经画着的看板改宽 / 展开 / 换主题也重新留一张。
-  // 800ms 等模板的数据、图片与字体完成首绘：过早截到空白再贴回去，比没有缓存更糟。
+  // 2 秒等模板的数据、图片、字体与会话 / 右栏过渡结束：过早截到空白再贴回去，比没有缓存更糟。
   useEffect(() => {
     if (!live || !liveReady) return undefined;
-    const timer = window.setTimeout(capture, 800);
+    const timer = window.setTimeout(capture, 2000);
     return () => window.clearTimeout(timer);
   }, [width, expanded, theme, live, liveReady, capture]);
 
