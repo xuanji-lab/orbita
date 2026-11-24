@@ -155,9 +155,16 @@
 /* ===== Theme 预览卡（ThemeCard.tsx） ===== */
 
 .theme-grid {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, 100px);
   gap: var(--space-3);
-  flex-wrap: wrap;
+}
+
+/* 四档主题在窄控件列里排 2×2，够宽才排 4×1：不用 flex 挤出 3+1 的残行。 */
+@container setpage (min-width: 620px) {
+  .theme-grid {
+    grid-template-columns: repeat(4, 100px);
+  }
 }
 
 .theme-card {
