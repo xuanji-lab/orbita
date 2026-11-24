@@ -160,10 +160,11 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
     setLiveReady(true);
   }, []);
 
-  // 真 iframe 就绪后留位图；已经画着的看板改宽 / 展开 / 换主题也重新留一张，下一宏任务再截，避开合成器回调
+  // 真 iframe 就绪后留位图；已经画着的看板改宽 / 展开 / 换主题也重新留一张。
+  // 800ms 等模板的数据、图片与字体完成首绘：过早截到空白再贴回去，比没有缓存更糟。
   useEffect(() => {
     if (!live || !liveReady) return undefined;
-    const timer = window.setTimeout(capture, 200);
+    const timer = window.setTimeout(capture, 800);
     return () => window.clearTimeout(timer);
   }, [width, expanded, theme, live, liveReady, capture]);
 
