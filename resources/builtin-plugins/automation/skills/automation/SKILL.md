@@ -1,6 +1,6 @@
 ---
 name: automation
-description: Full guide to Orbita's automation tools (automation_create / list / cancel / update): schedule format and examples, this_session vs new_session, writing the instruction, watching a long-running job, maxRuns / until, write access, the plugin parameter. Read it BEFORE the first automation_create in a conversation. Use when the user wants something scheduled, recurring, reminded or checked later (every Friday…, remind me tomorrow at 9, tell me when the build is done; 定时 / 提醒 / 每周 / 过一会儿回来看 / 跑完告诉我). Not for waits of a few seconds.
+description: "Full guide to Orbita's automation tools (automation_create / list / cancel / update): schedule format and examples, this_session vs new_session, writing the instruction, watching a long-running job, maxRuns / until, write access, the plugin parameter. Read it BEFORE the first automation_create in a conversation. Use when the user wants something scheduled, recurring, reminded or checked later (every Friday…, remind me tomorrow at 9, tell me when the build is done; 定时 / 提醒 / 每周 / 过一会儿回来看 / 跑完告诉我). Not for waits of a few seconds."
 ---
 
 # Automation — scheduling work to come back later
