@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HEAD_BYTES, headStringField, scanJsonlLines } from "./jsonl-scan.ts";
+import { HEAD_BYTES, forEachBufferLine, headStringField, scanJsonlLines } from "./jsonl-scan.ts";
 import { SessionStore } from "./session/store.ts";
 import { readPiThinkingTimeline } from "./usage/task-ledger.ts";
 import { piThinkingTimeline } from "./usage/task-cost.ts";
@@ -139,5 +139,40 @@ describe("回填的两个流式读者与整份读结果一致", () => {
     assert.deepEqual(await readPiThinkingTimeline(file), piThinkingTimeline(text));
     assert.equal((await readPiThinkingTimeline(file)).length, 2);
     assert.deepEqual(await readPiThinkingTimeline(join(dir, "nope.jsonl")), []);
+  });
+});
+
+describe("forEachBufferLine", () => {
+  /** 收集切出的行，与 split("\n") 后去零长段逐项对照 */
+  function collect(text: string): string[] {
+    const lines: string[] = [];
+    forEachBufferLine(Buffer.from(text, "utf8"), (line) => lines.push(line));
+    return lines;
+  }
+
+  const SAMPLES: ReadonlyArray<{ name: string; text: string }> = [
+    { name: "常规多行", text: '{"a":1}\n{"b":2}\n{"c":3}\n' },
+    { name: "末尾无换行", text: '{"a":1}\n{"b":2}' },
+    { name: "CRLF 换行", text: '{"a":1}\r\n{"b":2}\r\n' },
+    { name: "连续空行", text: '{"a":1}\n\n\n{"b":2}\n\n' },
+    { name: "多字节中文与 emoji 紧贴换行", text: '{"t":"中文🎉"}\n{"t":"東京é"}\n' },
+    { name: "BOM 开头", text: '\uFEFF{"a":1}\n{"b":2}\n' },
+    { name: "空文件", text: "" },
+    { name: "只有一个换行", text: "\n" },
+    { name: "单行无换行", text: '{"a":1}' },
+  ];
+
+  for (const { name, text } of SAMPLES) {
+    test(`${name}：与 split("\\n") 去零长段逐行一致`, () => {
+      assert.deepEqual(collect(text), text.split("\n").filter((line) => line.length > 0));
+    });
+  }
+
+  test("空段不回调：空 Buffer 一次也不调", () => {
+    let calls = 0;
+    forEachBufferLine(Buffer.alloc(0), () => {
+      calls += 1;
+    });
+    assert.equal(calls, 0);
   });
 });
