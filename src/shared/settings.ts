@@ -231,6 +231,11 @@ export interface AppSettings {
    * 平移（以指针为中心缩放带出来的）不存：它按像素算，换一块画布就没意义；重开回到主星居中
    */
   galaxyZoom?: number;
+  /**
+   * 碎石密度（设置 › 外观）：星系碎石带里普通会话画多少——全部 / 一半 / 十分之一 / 不显示。显示越多越耗电
+   * （2026-11-24 用户：「session 太多了，有太多粒子要计算……这个可能得是可以调的」）。缺席 = 一半
+   */
+  galaxyDustDensity?: GalaxyDustDensity;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -693,6 +698,20 @@ export function galaxyAzimuthOf(settings: Pick<AppSettings, "galaxyAzimuth">): n
   return settings.galaxyAzimuth ?? GALAXY_AZIMUTH_DEFAULT;
 }
 
+export type GalaxyDustDensity = "all" | "half" | "tenth" | "none";
+export const GALAXY_DUST_DENSITIES: readonly GalaxyDustDensity[] = ["all", "half", "tenth", "none"];
+export const GALAXY_DUST_DEFAULT: GalaxyDustDensity = "half";
+/** 每档实际画出的比例 */
+export const GALAXY_DUST_KEEP: Readonly<Record<GalaxyDustDensity, number>> = { all: 1, half: 0.5, tenth: 0.1, none: 0 };
+
+export function isGalaxyDustDensity(value: unknown): value is GalaxyDustDensity {
+  return typeof value === "string" && (GALAXY_DUST_DENSITIES as readonly string[]).includes(value);
+}
+
+export function galaxyDustDensityOf(settings: Pick<AppSettings, "galaxyDustDensity">): GalaxyDustDensity {
+  return settings.galaxyDustDensity ?? GALAXY_DUST_DEFAULT;
+}
+
 export const GALAXY_ZOOM = { min: 0.5, max: 3, default: 1 } as const;
 
 export function isGalaxyZoom(value: unknown): value is number {
@@ -727,6 +746,7 @@ export function parseSettings(raw: unknown): AppSettings {
     galaxyAzimuth?: unknown;
     galaxyTurntable?: unknown;
     galaxyZoom?: unknown;
+    galaxyDustDensity?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     chatImageSize?: unknown;
@@ -812,6 +832,7 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
     ...(typeof record.galaxyTurntable === "boolean" ? { galaxyTurntable: record.galaxyTurntable } : {}),
     ...(isGalaxyZoom(record.galaxyZoom) ? { galaxyZoom: record.galaxyZoom } : {}),
+    ...(isGalaxyDustDensity(record.galaxyDustDensity) ? { galaxyDustDensity: record.galaxyDustDensity } : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),
