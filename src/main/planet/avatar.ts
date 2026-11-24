@@ -325,6 +325,21 @@ async function resolvePromptBase(place: BodyPlace, candidateId: string, rounds: 
   return { ok: false, error: `没有基础候选 ${candidateId}` };
 }
 
+/** 聊天说「把现在的形象再暖一点」：优先用账本里当前候选（带原提示词）；老地表不在账本里也能直接以它为图生图 / SVG 修改基础 */
+async function resolveCurrentSurfaceBase(place: BodyPlace, rounds: ManifestRound[]): Promise<{ ok: true; base: AvatarPromptBase | null } | { ok: false; error: string }> {
+  if (place.surface === null) return { ok: true, base: null };
+  const selected = selectedCandidate(place, rounds);
+  if (selected !== null) return resolvePromptBase(place, selected.id, rounds);
+  const path = insidePlanetDir(place.workspace.path, place.surface);
+  if (path === null) return { ok: false, error: "当前地表不在 planet/ 里，不能拿它改图" };
+  let prompt: string | null = null;
+  if (place.design !== null) {
+    const design = await readJson(place.design);
+    if (isRecord(design) && isRecord(design["surfaceLog"]) && typeof design["surfaceLog"]["prompt"] === "string") prompt = design["surfaceLog"]["prompt"];
+  }
+  return { ok: true, base: { candidateId: place.surface, path, backend: path.toLowerCase().endsWith(".svg") ? "model_svg" : "image_model", prompt } };
+}
+
 // ── 提示词 ────────────────────────────────────────────────────────────
 
 export function avatarPrompt(input: { root: string; input: string; dir: string; name: string; instruction?: string; base?: AvatarPromptBase }): string {
@@ -469,9 +484,15 @@ export class AvatarJobs {
     if (request.baseCandidateId !== undefined) {
       const resolved = await resolvePromptBase(place, request.baseCandidateId, rounds);
       if (!resolved.ok) return resolved;
-      const exists = await stat(resolved.base.path).then((info) => info.isFile(), () => false);
-      if (!exists) return { ok: false, error: `基础候选图不见了：${request.baseCandidateId}` };
       base = resolved.base;
+    } else if (request.useCurrentSurface === true) {
+      const resolved = await resolveCurrentSurfaceBase(place, rounds);
+      if (!resolved.ok) return resolved;
+      if (resolved.base !== null) base = resolved.base;
+    }
+    if (base !== undefined) {
+      const exists = await stat(base.path).then((info) => info.isFile(), () => false);
+      if (!exists) return { ok: false, error: `基础候选图不见了：${base.candidateId}` };
     }
     const mix = request.mix === undefined ? place.mix : (parseMix(request.mix) ?? place.mix);
     const name = request.name !== undefined && request.name.trim() !== "" ? request.name.trim() : place.name;

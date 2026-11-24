@@ -658,7 +658,7 @@ void app.whenReady().then(async () => {
           broadcast: (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }),
           // 聊天里建的子智能体没带地表图：走面板同一套出图（候选进同一个挑选面板）
           startAvatar: async (workspaceId, bodyId, instruction) =>
-            avatarJobs === null ? { ok: false, error: "出图还没就绪" } : avatarJobs.generate({ workspaceId, bodyId, ...(instruction === undefined ? {} : { instruction }) }),
+            avatarJobs === null ? { ok: false, error: "出图还没就绪" } : avatarJobs.generate({ workspaceId, bodyId, ...(instruction === undefined ? {} : { instruction, useCurrentSurface: true }) }),
         },
         event,
       )

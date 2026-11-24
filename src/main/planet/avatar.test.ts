@@ -165,6 +165,33 @@ describe("AvatarJobs：生成", () => {
     await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
   });
 
+  it("聊天修改自动以当前地表为基础：账本候选带原提示词，老地表直接读文件与插件 surfaceLog", async () => {
+    const { ws, root } = await fixture();
+    const h = harness(ws, root);
+    const dir = join(ws.path, "planet", "surfaces");
+    await writeManifest(dir, [slot(1, "image_model", "image_model", "done")], [{ id: "r1-s1", slot: 1, backend: "image_model", file: "candidates/r1-s1-a1.png", prompt: "selected candidate prompt" }]);
+    await writeFile(join(dir, "candidates", "r1-s1-a1.png"), "png");
+    const galaxyPath = join(ws.path, "planet", "galaxy.json");
+    const galaxy = await readJsonFile(galaxyPath);
+    galaxy["main"] = { surface: "surfaces/candidates/r1-s1-a1.png", flip: false };
+    await writeFile(galaxyPath, JSON.stringify(galaxy));
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main", instruction: "再暖一点", useCurrentSurface: true });
+    assert.match(h.submitted[0]?.text ?? "", /selected candidate prompt/);
+    assert.ok((h.submitted[0]?.text ?? "").includes(join(dir, "candidates", "r1-s1-a1.png")));
+    await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+
+    galaxy["main"] = { surface: "legacy.svg", flip: false };
+    await writeFile(galaxyPath, JSON.stringify(galaxy));
+    await writeFile(join(ws.path, "planet", "legacy.svg"), "<svg/>");
+    await writeFile(join(ws.path, "planet", "design.json"), JSON.stringify({ name: "烛霓", mass: { value: 60, unit: "M⊕" }, surfaceLog: { prompt: "legacy surface prompt" } }));
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main", instruction: "加一圈云", useCurrentSurface: true });
+    const legacy = h.submitted[1]?.text ?? "";
+    assert.ok(legacy.includes(join(ws.path, "planet", "legacy.svg")));
+    assert.match(legacy, /legacy surface prompt/);
+    assert.match(legacy, /后端 model_svg/);
+    await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+  });
+
   it("没装插件、没有可用模型：不开会话，直接说原因", async () => {
     const { ws } = await fixture();
     const none = harness(ws, null);

@@ -14,6 +14,8 @@ describe("planet-avatar 契约", () => {
     assert.equal(isAvatarGenerateRequest({ workspaceId: "w", bodyId: "agent-1", instruction: "  " }), false);
     assert.equal(isAvatarGenerateRequest({ workspaceId: "w", bodyId: "agent-1", instruction: "x".repeat(1001) }), false);
     assert.equal(isAvatarGenerateRequest({ workspaceId: "w", bodyId: "agent-1", instruction: "加一圈云", baseCandidateId: "../x" }), false);
+    assert.equal(isAvatarGenerateRequest({ workspaceId: "w", bodyId: "agent-1", instruction: "再暖一点", useCurrentSurface: true }), true);
+    assert.equal(isAvatarGenerateRequest({ workspaceId: "w", bodyId: "agent-1", useCurrentSurface: "yes" }), false);
   });
 
   it("挑选请求：候选 id 只认插件的 r<轮>-s<位>", () => {

@@ -114,6 +114,8 @@ export interface AvatarGenerateRequest extends AvatarBodyRef {
   instruction?: string;
   /** 以哪张旧候选为基础改（插件的 r<轮>-s<位>）；缺席 = 不以某张为基础 */
   baseCandidateId?: string;
+  /** 聊天修改用：以 galaxy.json 当前在用的 surface 为基础；候选在账本里就带原提示词，否则直接读当前图 */
+  useCurrentSurface?: boolean;
 }
 
 export interface AvatarSelectRequest extends AvatarBodyRef {
@@ -171,7 +173,7 @@ export function isAvatarGenerateRequest(raw: unknown): raw is AvatarGenerateRequ
     (name === undefined || (typeof name === "string" && name.length <= 200)) &&
     (instruction === undefined || (typeof instruction === "string" && instruction.trim() !== "" && instruction.length <= AVATAR_INSTRUCTION_MAX)) &&
     (base === undefined || (typeof base === "string" && CANDIDATE_ID.test(base)))
-  );
+  ) && (raw["useCurrentSurface"] === undefined || typeof raw["useCurrentSurface"] === "boolean");
 }
 
 export function isAvatarSelectRequest(raw: unknown): raw is AvatarSelectRequest {
