@@ -28,12 +28,25 @@ import { modelThinkingLevels, resolveModelDefaults } from "../shared/model-defau
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 import { registerAndResolveModel, toBuiltinProvider } from "./model-registration.ts";
 
-/** 真 pi 运行时，但不读用户的 ~/.pi/agent（凭据文件放临时目录，models.json 跳过，不联网） */
+/**
+ * 真 pi 运行时，但不读用户的 ~/.pi/agent（凭据文件放临时目录，models.json 跳过，不联网）
+ *
+ * **临时目录一个进程只建一个，每次运行时只换 auth 文件名。** 2026-11-15 查出「全量测试跑到这个文件
+ * 就卡住」的根因就在这里：以前每次调用都 mkdtemp 一个新目录，这个文件一次全量跑 4000+ 次，
+ * %TEMP% 里堆到 140 万个 orbita-whitelist-* 目录；目录一大，`mkdtempSync` 从 4ms 涨到 770ms
+ * （同一句 `ModelRuntime.create` 换到空目录里仍是 4ms——慢的不是 pi，是往一个 140 万条目的
+ * 目录里新建目录），整个文件从「几十秒」变成 55 分钟，且每跑一次更慢。
+ */
+let authSandbox: string | null = null;
+let authSeq = 0;
+function authPathFor(): string {
+  authSandbox ??= mkdtempSync(join(tmpdir(), "orbita-whitelist-"));
+  authSeq += 1;
+  return join(authSandbox, `auth-${authSeq}.json`);
+}
+
 async function freshRuntime(): Promise<ModelRuntime> {
-  return ModelRuntime.create({
-    modelsPath: null,
-    authPath: join(mkdtempSync(join(tmpdir(), "orbita-whitelist-")), "auth.json"),
-  });
+  return ModelRuntime.create({ modelsPath: null, authPath: authPathFor() });
 }
 
 const ordered = (levels: readonly ThinkingLevel[]) =>

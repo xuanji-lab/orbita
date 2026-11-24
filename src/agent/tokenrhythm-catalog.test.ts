@@ -293,12 +293,23 @@ describe("官方美元单价 —— 复用 officialRates，日期后缀去掉再
   });
 });
 
-/** 真 pi 运行时（不读 ~/.pi/agent、不联网），whitelist-consistency.test 同款 */
+/**
+ * 真 pi 运行时（不读 ~/.pi/agent、不联网）。
+ *
+ * 临时目录**一个进程只建一个**，每次运行时只换 auth 文件名：每次 mkdtemp 的写法会让
+ * %TEMP% 里的 orbita-tokenrhythm-* 越堆越多，目录一大 mkdtempSync 本身就变慢
+ * （whitelist-consistency.test.ts 里同样的写法把单个文件拖到 55 分钟，2026-11-15）。
+ */
+let authSandbox: string | null = null;
+let authSeq = 0;
+function authPathFor(): string {
+  authSandbox ??= mkdtempSync(join(tmpdir(), "orbita-tokenrhythm-"));
+  authSeq += 1;
+  return join(authSandbox, `auth-${authSeq}.json`);
+}
+
 async function freshRuntime(): Promise<ModelRuntime> {
-  return ModelRuntime.create({
-    modelsPath: null,
-    authPath: join(mkdtempSync(join(tmpdir(), "orbita-tokenrhythm-")), "auth.json"),
-  });
+  return ModelRuntime.create({ modelsPath: null, authPath: authPathFor() });
 }
 
 describe("注册进 pi 运行时 —— 下游当普通目录条目用", () => {
