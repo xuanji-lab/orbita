@@ -337,6 +337,21 @@ function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, last
   return inner;
 }
 
+/** 碎石带内沿让开每一颗行星：行星都在内沿里面，且屏幕上内沿与行星轨道之间留够行星半径 + 碎石半径 + 间距 */
+function beltClearsPlanets(camera: Camera, vp: Viewport, layout: GalaxyLayout, minPx: number, gap: number): boolean {
+  const belt = layout.belt;
+  if (belt === null) return true;
+  const dustPx = dustLookOf(belt.count).px;
+  const mid = (belt.inner + belt.outer) / 2;
+  const midFrame = orbitFrame(mid, 0, 0, camera, vp, layout.ecc);
+  for (const planet of layout.planets) {
+    if (planet.orbitRadius + planet.radius >= belt.inner) return false;
+    const px = bodyPx({ radius: planet.radius, waiting: planet.state === "waiting" }, camera, vp, minPx);
+    if (orbitGap(layout.ecc, orbitFrame(planet.orbitRadius, 0, 0, camera, vp, layout.ecc), 1, midFrame, belt.inner / mid) < px + dustPx + gap - 0.5) return false;
+  }
+  return true;
+}
+
 /**
  * 屏幕安全布局（对外入口）。子智能体行星是有名字、有身份的持久智能体，**永远全部画出**（2026-11-24 用户定）；
  * 装不下时按这个顺序退：
@@ -426,9 +441,9 @@ type ScaleFrame =
 function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, tilt: number, readableMax: number, azimuthDeg: number, frame: ScaleFrame): SafeScene {
   const flat: GalaxySpec = { ...spec, planets: spec.planets.map((planet) => ({ ...planet, inclinationDeg: 0 })) };
   const base = layoutGalaxy(flat);
-  const tryAt = (e: number, overflow = false): SafeScene | null => {
+  const tryAt = (e: number, overflow = false, beltLoss = false): SafeScene | null => {
     for (const pack of PACKS) {
-      const scene = placeAt(flat, base, width, height, box, e, readableMax, pack, base.planets, undefined, false, azimuthDeg, overflow && frame.mode === "fixed" ? { ...frame, overflow: true } : frame);
+      const scene = placeAt(flat, base, width, height, box, e, readableMax, pack, base.planets, undefined, false, azimuthDeg, overflow && frame.mode === "fixed" ? { ...frame, overflow: true } : frame, beltLoss);
       if (scene !== null) return overflow ? { ...scene, overflow: true } : scene;
     }
     return null;
@@ -443,18 +458,26 @@ function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: n
     if (spill !== null) return spill;
   }
   // 粗找（每 5°）再细找（每 1°）：抬到刚好装得下的最小俯角
-  let lo = tilt;
-  for (let e = tilt + 5; e <= ELEVATION_LIMIT; e += 5) {
-    const coarse = tryAt(e);
-    if (coarse !== null) {
-      for (let f = lo + 1; f < e; f++) {
-        const fine = tryAt(f);
-        if (fine !== null) return fine;
+  const raise = (beltLoss: boolean): SafeScene | null => {
+    let lo = tilt;
+    for (let e = tilt + 5; e <= ELEVATION_LIMIT; e += 5) {
+      const coarse = tryAt(e, false, beltLoss);
+      if (coarse !== null) {
+        for (let f = lo + 1; f < e; f++) {
+          const fine = tryAt(f, false, beltLoss);
+          if (fine !== null) return fine;
+        }
+        return coarse;
       }
-      return coarse;
+      lo = e;
     }
-    lo = e;
-  }
+    return null;
+  };
+  const raised = raise(false);
+  if (raised !== null) return raised;
+  // 抬到头也排不下碎石带（极小画布、满载）：退回老规矩——碎石带收掉、碎石块进角落那一列，行星照旧可读
+  const withoutBelt = tryAt(tilt, frame.mode === "fixed", true) ?? raise(true);
+  if (withoutBelt !== null) return withoutBelt;
   // 最后的退路（抬到 ELEVATION_LIMIT 都装不下：子智能体多、画布又小）：就在这个俯角上把行星缩到可读下限以下
   // （每次 ×0.85，最小 2.5px）。子智能体永远不藏——小一点总比没有好；「表情可读」只保证到这之前（见测试）
   for (let px = AGENT_READABLE_FLOOR * 0.85; px >= 2.5; px *= 0.85) {
@@ -486,6 +509,8 @@ export function placeAt(
   azimuthDeg = 0,
   /** 比例尺：缺省按改前的规则 */
   frame: ScaleFrame = { mode: "legacy" },
+  /** 允许收掉碎石带（老规矩「碎石先收」）：只在抬俯角也排不下之后、把行星缩到看不清之前用 */
+  allowBeltLoss = false,
 ): SafeScene | null {
   const ecc = eccOf(flat.eccentricity);
   const starExtent = Math.max(starRadius(flat.starMass), flat.starExtent ?? 0);
@@ -553,10 +578,13 @@ export function placeAt(
     agentMode ? bodyGapOf(minPx) : SCREEN_GAP,
     starPx,
   );
-  // 碎石先收：行星排进了碎石带那一圈（只在 small 排法下会发生），碎石带整条不画
-  const spilled = planets.some((planet) => planet.orbitRadius > PLANET_ZONE - planet.radius);
+  // 行星排进了原来碎石带那一圈（small 排法，低俯角下常见）：碎石带跟着推到最外一颗行星外面，照样画（可以有一部分出画）。
+  // 82d49a6c 起这里整条不画（「碎石先收」），连带碎石块与它们的引线一起没了——用户 101 条会话的意图系统在 20°–30° 下一颗碎石都看不到
+  // （2026-11-24「我想看看碎石带」）。碎石带是会话本身，不能为了排下行星把它收掉
+  // 只有最后的退路（行星缩到可读下限以下 / 最后一搏，极小画布上的满载）还按老规矩收掉碎石带——那里本来就排不开
   const relaidFull = beltInner === undefined ? firstPass : layoutGalaxy({ ...placedSpec, beltInner });
-  const relaid = spilled ? { ...relaidFull, belt: null, rockOrbit: null } : relaidFull;
+  const spilled = planets.some((planet) => planet.orbitRadius > PLANET_ZONE - planet.radius);
+  const relaid = spilled && (force || forcedPx !== undefined) ? { ...relaidFull, belt: null, rockOrbit: null } : relaidFull;
   const layout: GalaxyLayout = {
     ...relaid,
     planets: relaid.planets.map((planet) => {
@@ -569,6 +597,16 @@ export function placeAt(
   };
   // 碎石块那一圈让不开（最外一颗行星或主星）就整圈不画：碎石先收，不为它少画行星
   const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed && !userZoomed);
+  // 碎石带与碎石块必须看得见（2026-11-24 用户：「我想看看碎石带」）：碎石带被推到画框外沿以外、或有碎石块却排不出那一圈，
+  // 就算这个俯角上没排下——外面接着试别的排法、最后抬俯角（比例尺不变），不再默认把会话收掉。最后一搏（force）不管
+  // 碎石带还得让开每一颗行星（行星被推进原来碎石带那一圈时，带子跟着推出去，可能推不够）
+  const beltLost =
+    layout.belt !== null &&
+    (layout.belt.inner > FRAME_EXTENT * BELT_OVERSHOOT - 1 || !beltClearsPlanets(camera, viewport, layout, minPx, agentMode ? bodyGapOf(minPx) : SCREEN_GAP));
+  const rocksLost = layout.rocks.length > 0 && layout.belt !== null && (rock.cramped || rock.orbit === null);
+  const strict = !force && forcedPx === undefined && !allowBeltLoss;
+  if (strict && (beltLost || rocksLost)) return null;
+  if (beltLost) return { camera: ecc === 0 && azimuthDeg !== 0 ? makeCamera(FRAME_EXTENT, e, undefined, azimuthDeg) : camera, viewport, layout: { ...layout, belt: null, rockOrbit: null }, elevationDeg: e, minPlanetPx: minPx, dropped: 0, preferredPx: preferred };
   // 正圆：排布在方位角 0 上算完，换成转过去的相机（画框是圆，视口不变）
   const viewCamera = ecc === 0 && azimuthDeg !== 0 ? makeCamera(FRAME_EXTENT, e, undefined, azimuthDeg) : camera;
   return { camera: viewCamera, viewport, layout: { ...layout, rockOrbit: rock.cramped ? null : rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped: 0, preferredPx: preferred };
