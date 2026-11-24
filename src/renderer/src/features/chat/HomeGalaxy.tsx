@@ -621,16 +621,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const clickableDust = live !== null && layout.belt !== null && layout.belt.particles.length <= DUST_CLICK_MAX;
   const orbitPath = (arc: OrbitArc) => <path key={arc.key} className={arc.expected ? "galaxy-orbit galaxy-orbit-expected" : "galaxy-orbit"} d={arc.d} />;
   const body = (mover: Mover, layer: "far" | "near") => {
-    if (mover.kind === "rock") {
-      const rock = rockById.get(mover.id);
-      return (
-        <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
-          <Local box={square(mover.r + 2)}>
-            <path className="galaxy-rock" data-rock={mover.id} data-state={rock?.state} d={rockPath(0, 0, mover.r, mover.id)} />
-          </Local>
-        </OrbitChain>
-      );
-    }
+    // 碎石块只画在最上层（overlay）
+    if (mover.kind === "rock") return null;
     const planet = planetById.get(mover.id);
     if (planet === undefined) return null;
     const copyUid = `${uid}-${layer}-${mover.id}`;
@@ -664,10 +656,13 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       </OrbitChain>
     );
   };
-  // 最上层：跟着天体走的名字、锁定框、引线与命中圈（相对星体中心画，排布见 plan）
-  const overlay = (mover: Mover) => {
+  // 最上层：跟着天体走的碎石块、名字、锁定框、引线与命中圈（相对星体中心画，排布见 plan）。
+  // 每颗天体的那一串 div 永远挂着（转动层的动画挂在 DOM 上，卸了再挂就丢了相位），排布变了只换里面的内容。
+  // 碎石块只在这一层画一份：它在最外圈，不会被别的轨道线划过；转到主星背后、和主星重叠时整块藏起来（plan.hidden）。
+  const overlayContent = (mover: Mover): { box: Box; content: ReactNode } | null => {
     if (plan.hidden.has(mover.id)) return null;
     if (mover.kind === "planet") {
+      if (!fill) return null;
       const name = agents?.get(mover.id)?.name;
       const tag = plan.names.get(mover.id);
       const target = live !== null && agents !== undefined;
@@ -678,9 +673,10 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
         box = union(box, { x0: tag.dx - w, y0: tag.dy - glyphPx, x1: tag.dx + w, y1: tag.dy + glyphPx });
       }
       const label = t.agents.openPlanet(name ?? mover.id);
-      return (
-        <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top">
-          <Local box={box}>
+      return {
+        box,
+        content: (
+          <>
             {tag !== undefined && name !== undefined && (
               <text className="galaxy-name-text" data-planet={mover.id} x={tag.dx} y={tag.dy} textAnchor={tag.anchor} dominantBaseline="central">
                 {name}
@@ -689,12 +685,14 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
             {target && live !== null && (
               <GalaxyTarget kind="planet" id={mover.id} x={0} y={0} r={mover.r} label={label} onActivate={() => live.actions.openPlanet(live.workspaceId, mover.id)} />
             )}
-          </Local>
-        </OrbitChain>
-      );
+          </>
+        ),
+      };
     }
     const rock = rockById.get(mover.id);
-    if (rock === undefined || rock.label === "") return null;
+    if (rock === undefined) return null;
+    const shape = <path className="galaxy-rock" data-rock={mover.id} data-state={rock.state} d={rockPath(0, 0, mover.r, mover.id)} />;
+    if (rock.label === "" || !fill) return { box: square(mover.r + 2), content: shape };
     const callout = plan.callouts.get(mover.id);
     const title = truncateLabel(rock.label);
     const text = rock.state === "waiting" ? `${t.agents.status.waiting} · ${title}` : title;
@@ -706,9 +704,11 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     if (geo === null) box = union(box, { x0: 0, y0: -glyphPx, x1: mover.r + 7 + rock.label.length * glyphPx, y1: glyphPx });
     const open = live === null ? undefined : () => live.actions.openSession(mover.id);
     const label = t.agents.openRock(rock.label);
-    return (
-      <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top">
-        <Local box={box} className="galaxy-callouts">
+    return {
+      box,
+      content: (
+        <>
+          {shape}
           {geo !== null && <path className="galaxy-lock" data-state={rock.state} data-planet={mover.id} d={lockFramePath(0, 0, mover.r)} />}
           {geo !== null && (
             // 引线上的字也能点（鼠标）：与它那块碎石同一个去处；键盘焦点只落在碎石上，不重复一个 tab 位
@@ -754,7 +754,17 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
               </g>
             )
           )}
-        </Local>
+        </>
+      ),
+    };
+  };
+  const overlay = (mover: Mover) => {
+    // 单智能体首页的行星没有最上层的东西：不挂空串
+    if (mover.kind === "planet" && !fill) return null;
+    const inner = overlayContent(mover);
+    return (
+      <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top">
+        {inner !== null && <Local box={inner.box}>{inner.content}</Local>}
       </OrbitChain>
     );
   };
@@ -851,7 +861,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
             </>,
             "gx-plane gx-top",
           )}
-          {fill && !starless && <div className="gx-layer gx-top">{movers.map(overlay)}</div>}
+          {!starless && <div className="gx-layer gx-top">{movers.map(overlay)}</div>}
         </>
       )}
       {/*

@@ -2689,7 +2689,9 @@ button.ws-fold {
   position: relative;
   width: 100%;
   height: 100%;
-  overflow: visible;
+  /* clip 不是 hidden：不成滚动容器。转动层里那张碎石 SVG 比画布大得多（变换前的盘面坐标），
+     不裁的话它把外层撑出一条横向滚动条（2026-11-24 实测） */
+  overflow: clip;
   pointer-events: none;
 }
 /*
