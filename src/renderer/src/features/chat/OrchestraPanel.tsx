@@ -21,7 +21,7 @@ import type { SessionRunState } from "../notify/completion-notice.ts";
 import { headerStatusOf } from "./agent-status.ts";
 import { HomeGalaxy } from "./HomeGalaxy.tsx";
 import { starRadius } from "./galaxy.ts";
-import { scopeGalaxy, scopeSummary, stateIndexOf } from "./galaxy-data.ts";
+import { RECENT_ROCKS, scopeGalaxy, scopeSummary, stateIndexOf } from "./galaxy-data.ts";
 import { orchestraTree, type TreeNode } from "./orchestra-data.ts";
 import { collabGraph, demoCollab, layoutCollab, type CollabEdge, type CollabGraph, type CollabNode } from "./collab-graph.ts";
 import type { ChatSession } from "./useChatSession.ts";
@@ -61,13 +61,15 @@ export function OrchestraPanel(props: {
   onNewTaskPage: boolean;
   /** 主面板正开着的会话 id（树里标「你在这儿」，R7）；New Task 页为 null */
   currentId: string | null;
+  /** 这个工作区主智能体的常驻对话（mainSessionOf 校验过）：树里置顶、标「主智能体」；没有为 null */
+  mainId: string | null;
 }) {
   const t = useT();
   const to = t.orchestra;
   const view: OrchestraView = props.onNewTaskPage && props.view === "galaxy" ? "tree" : props.view;
   const states = stateIndexOf(props.session);
   const now = Date.now();
-  const tree = orchestraTree({ sessions: props.session.sessions, workspaceId: props.workspaceId, stateOf: states.state, now });
+  const tree = orchestraTree({ sessions: props.session.sessions, workspaceId: props.workspaceId, stateOf: states.state, now, mainId: props.mainId });
   const summary = scopeSummary(props.session.sessions, props.workspaceId, states);
   return (
     <RightPanelFrame
@@ -95,6 +97,7 @@ export function OrchestraPanel(props: {
         <TreeView
           currentId={props.currentId}
           tree={tree}
+          mainLabel={to.mainSession}
           workspaceId={props.workspaceId}
           name={props.workspaceName}
           status={headerStatusOf(summary)}
@@ -107,13 +110,14 @@ export function OrchestraPanel(props: {
           session={props.session}
           workspaceId={props.workspaceId}
           name={props.workspaceName}
+          mainId={props.mainId}
           width={props.width}
           onWiden={() => props.onWiden(GALAXY_WIDEN_TO)}
         />
       ) : (
         <GraphView
           session={props.session}
-          roots={[...tree.recent, ...tree.older].map((node) => node.meta)}
+          roots={[...(tree.main === null ? [] : [tree.main]), ...tree.recent, ...tree.older].map((node) => node.meta)}
           name={props.workspaceName}
           workspaceId={props.workspaceId}
           stateOf={states.state}
@@ -164,6 +168,8 @@ function MainCard(props: { workspaceId: string | null; name: string; status: Ret
 function TreeView(props: {
   currentId: string | null;
   tree: ReturnType<typeof orchestraTree>;
+  /** 常驻对话那一行写的名字（不用它被自动起的标题） */
+  mainLabel: string;
   workspaceId: string | null;
   name: string;
   status: ReturnType<typeof headerStatusOf>;
@@ -179,20 +185,31 @@ function TreeView(props: {
   const home = props.workspaceId === null;
   const body = (
     <>
-      <section className="ssp-group" aria-label={to.sessionsGroup(tree.recent.length)}>
-        <header className="ssp-group-head">{to.sessionsGroup(tree.recent.length)}</header>
-        {tree.total === 0 ? (
-          <PanelEmpty icon="message-square" hint={to.noSessionsHint}>
-            {to.noSessions}
-          </PanelEmpty>
-        ) : tree.recent.length > 0 ? (
+      {/* 主智能体的常驻对话：置顶，自成一张卡（它不属于「最近 / 更早」，永远在这儿） */}
+      {tree.main !== null && (
+        <section className="ssp-group" aria-label={to.mainRole}>
           <div className="ssp-card">
-            {tree.recent.map((node) => (
-              <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} currentId={props.currentId} />
-            ))}
+            <TreeRow node={tree.main} now={props.now} onOpen={props.onOpen} currentId={props.currentId} label={props.mainLabel} tag={to.mainRole} />
           </div>
-        ) : null}
-      </section>
+        </section>
+      )}
+      {/* 只有常驻对话、没有别的会话时不画空的「最近的会话 · 0」组 */}
+      {(tree.total === 0 || tree.recent.length > 0) && (
+        <section className="ssp-group" aria-label={to.sessionsGroup(tree.recent.length)}>
+          <header className="ssp-group-head">{to.sessionsGroup(tree.recent.length)}</header>
+          {tree.total === 0 ? (
+            <PanelEmpty icon="message-square" hint={to.noSessionsHint}>
+              {to.noSessions}
+            </PanelEmpty>
+          ) : (
+            <div className="ssp-card">
+              {tree.recent.map((node) => (
+                <TreeRow key={node.meta.id} node={node} now={props.now} onOpen={props.onOpen} currentId={props.currentId} />
+              ))}
+            </div>
+          )}
+        </section>
+      )}
       {tree.older.length > 0 &&
         (olderOpen ? (
           <section className="ssp-group" aria-label={to.olderGroup(tree.older.length)}>
@@ -250,13 +267,13 @@ function holds(node: TreeNode, id: string | null): boolean {
 }
 
 /** 树的一行：状态饼（没状态是一颗空心点）+ 名字 + 行尾时间；有子会话的行首多一个展开键，子会话缩进一层、左边一根发丝线 */
-function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => void; depth?: number; currentId: string | null }) {
+function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => void; depth?: number; currentId: string | null; label?: string; tag?: string }) {
   const t = useT();
   const { node } = props;
   const current = props.currentId !== null && node.meta.id === props.currentId;
   // 正开着的会话在它下面：默认展开到它（R7）
   const [open, setOpen] = useState(node.activeBelow || node.children.some((child) => holds(child, props.currentId)));
-  const title = node.meta.title.trim() === "" ? t.common.newTask : node.meta.title;
+  const title = props.label ?? (node.meta.title.trim() === "" ? t.common.newTask : node.meta.title);
   const kids = node.children.length;
   const word = stateWord(t, node.state);
   return (
@@ -282,6 +299,7 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
           <span className="ssp-body">
             <span className="ssp-l1">
               <span className="ssp-title">{title}</span>
+              {props.tag !== undefined && <span className="orch-row-word orch-row-tag">{props.tag}</span>}
               {word !== null && <span className="orch-row-word">{word}</span>}
               <span className="ssp-time row-trailing">{relativeTime(node.meta.updatedAt, t)}</span>
             </span>
@@ -301,7 +319,7 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
 
 // ── 星系图 ──────────────────────────────────────────────────────────────
 
-function GalaxyView(props: { session: ChatSession; workspaceId: string | null; name: string; width: number; onWiden: () => void }) {
+function GalaxyView(props: { session: ChatSession; workspaceId: string | null; name: string; mainId: string | null; width: number; onWiden: () => void }) {
   const t = useT();
   const to = t.orchestra;
   const { design } = useGalaxyDesign(props.workspaceId ?? "");
@@ -328,6 +346,9 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
     starExtent: starRadius(star.mass) * starExtentRatio(design),
     designedPlanet: null,
     ...(props.workspaceId === null ? {} : { agents: agentInputsOf(agents) }),
+    // 与入口页同一套标注：在做事的 + 最近几条（虚线框），常驻对话写「常驻对话」
+    recent: RECENT_ROCKS,
+    ...(props.mainId === null ? {} : { labels: new Map([[props.mainId, to.mainSession]]) }),
   });
   return (
     <div className="orch-galaxy" data-view="galaxy">

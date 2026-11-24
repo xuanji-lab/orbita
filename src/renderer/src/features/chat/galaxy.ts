@@ -45,9 +45,15 @@ export type PlanetState = "waiting" | "running" | "done" | "failed" | null;
  * 一块「在做事的碎石」：编排的星系里行星是子智能体，会话是碎石；在跑 / 等你的会话从碎石带里单独拎出来画一块，
  * 锁定框与引线标在它身上（其余会话仍是一整条不逐颗可点的星屑）。
  */
+/**
+ * 碎石块的三种：等你 / 在跑（在做事，实线角括号锁定框）、recent（最近的几条但没在做事：轻一档的虚线框、次级墨，
+ * 2026-11-24 用户：「最近的 session 和工作的 session 可以被框中和伸出一根线标记 session 名字」）
+ */
+export type RockState = "waiting" | "running" | "recent";
+
 export interface RockSpec {
   id: string;
-  state: "waiting" | "running";
+  state: RockState;
   /** 会话标题（引线上写它） */
   label: string;
   /**
@@ -212,7 +218,7 @@ export interface Belt {
 /** 碎石块在碎石带里的位置：同一圈、等角间隔（同一个角速度，永远不互相追上） */
 export interface OrbitRock {
   id: string;
-  state: "waiting" | "running";
+  state: RockState;
   label: string;
   child?: boolean;
   theta0: number;
@@ -678,7 +684,7 @@ export interface RockItem {
   kind: "rock";
   key: string;
   planetId: string;
-  state: "waiting" | "running";
+  state: RockState;
   label: string;
   depth: number;
   x: number;

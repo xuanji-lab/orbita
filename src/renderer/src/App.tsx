@@ -95,7 +95,8 @@ import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
 import { liveFileOpen, onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
-import { APP_MODE_DEFAULT, ORCHESTRA_VIEW_DEFAULT, BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { APP_MODE_DEFAULT, ORCHESTRA_ENTRY_DEFAULT, ORCHESTRA_VIEW_DEFAULT, BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT, type OrchestraEntry } from "@shared/settings";
+import { mainSessionOf } from "./features/chat/orchestra-data.ts";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -1443,7 +1444,14 @@ export function App() {
             workspaceId={wsId}
             name={session.workspaces.find((item) => item.id === wsId)?.name ?? t.agents.home}
             status={headerStatusOf(scopeSummary(session.sessions, wsId, orchestrateStates, mainOpenId === "" ? null : mainOpenId))}
-            task={inSession ? { title: capsuleTitle, onRename: mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title) } : null}
+            task={
+              inSession
+                ? // 主智能体的常驻对话：页头写「主智能体名 › 常驻对话」（它是这个智能体的那一条，不是某件事；不给改名）
+                  mainOpenId !== "" && mainSessionOf(session.sessions, wsId, settings.orchestraMain)?.id === mainOpenId
+                  ? { title: t.orchestra.mainSession }
+                  : { title: capsuleTitle, onRename: mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title) }
+                : null
+            }
             recent={scopeRecent(session.sessions, wsId, state)}
             now={Date.now()}
             onOpenSession={(id) => void session.openSession(id)}
@@ -1473,6 +1481,22 @@ export function App() {
         }
       />
     );
+
+  /**
+   * 编排入口页的二选一（ChatView 的 entry）：上次的选择与常驻对话指针都按工作区记在设置里（原子写、重启 / 刷新都在），
+   * 不写会话 meta。指针指向的会话在列表里但已不算数（归档 / 移走）= 丢了，发送时重建；不在列表里交给磁盘判。
+   */
+  const entryOf = (workspaceId: string) => {
+    const pointer = settings.orchestraMain?.[workspaceId] ?? null;
+    const listedMeta = pointer === null ? undefined : session.sessions.find((meta) => meta.id === pointer);
+    return {
+      choice: settings.orchestraEntry?.[workspaceId] ?? ORCHESTRA_ENTRY_DEFAULT,
+      onChoice: (choice: OrchestraEntry) => changeSettings({ orchestraEntry: { [workspaceId]: choice } }),
+      pointer,
+      pointerStale: listedMeta !== undefined && mainSessionOf(session.sessions, workspaceId, settings.orchestraMain) === null,
+      onMainCreated: (id: string) => changeSettings({ orchestraMain: { [workspaceId]: id } }),
+    };
+  };
 
   // 星系上能点的东西各去哪（New Task 页的大星系与右栏星系图共用；单智能体形态不提供，首页星系只是图）
   const galaxyActions: GalaxyActions | null = orchestrate
@@ -1655,6 +1679,7 @@ export function App() {
                 session={session}
                 providersError={providersError}
                 orchestrate={orchestrate}
+                entry={orchestrate && session.workspaceId !== null ? entryOf(session.workspaceId) : undefined}
                 onOpenVoiceSettings={openVoiceTab}
                 bareHeader
                 onOpenReviewAt={openReviewAt}
@@ -1832,6 +1857,7 @@ export function App() {
                   onSeeAll={() => changeSettings({ appMode: "agent" })}
                   onNewTaskPage={mainOpenId === "" && session.opened === null}
                   currentId={mainOpenId === "" ? (session.opened?.id ?? null) : mainOpenId}
+                  mainId={mainSessionOf(session.sessions, orchestraWsId, settings.orchestraMain)?.id ?? null}
                 />
               ) : shownPanel === "galaxy" ? (
                 <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} focus={designerFocus} />

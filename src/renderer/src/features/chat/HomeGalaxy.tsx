@@ -56,6 +56,7 @@ import {
   lockFrame,
   lockFramePath,
   placeCallouts,
+  recentFramePath,
   placeNameTags,
   type Box,
   type CalloutDir,
@@ -298,9 +299,18 @@ interface OverlayPlan {
   callouts: ReadonlyMap<string, { dir: CalloutDir; lift: number }>;
   /** 名字牌相对星体中心的位置 */
   names: ReadonlyMap<string, { dx: number; dy: number; anchor: "start" | "middle" | "end" }>;
+  /** 此刻落进禁区（avoid，标题与输入框那一块）的天体：星体本身也不画（淡出），不只是不画名字 */
+  masked: ReadonlySet<string>;
 }
 
-const EMPTY_PLAN: OverlayPlan = { key: "", hidden: new Set(), callouts: new Map(), names: new Map() };
+const EMPTY_PLAN: OverlayPlan = { key: "", hidden: new Set(), callouts: new Map(), names: new Map(), masked: new Set() };
+
+/** 禁区与主星外缘之间至少留的空（px） */
+const SAFE_AVOID_GAP = 12;
+
+function boxesOverlap(a: Box, b: Box): boolean {
+  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+}
 
 function usePlan(compute: ((tSec: number) => OverlayPlan) | null, clock: GalaxyClock, running: boolean, signature: string): OverlayPlan {
   const [plan, setPlan] = useState<OverlayPlan>(EMPTY_PLAN);
@@ -479,6 +489,11 @@ type HomeGalaxyProps = {
    * 缺省按 fill 推（fill → page，否则 home）。设置页的小预览传 null：不上报
    */
   surface?: GalaxySurface | null;
+  /**
+   * 禁区（相对星系根节点的像素矩形）：单智能体首页「星系铺满作背景」候选里，标题、slogan 与输入框那一块。
+   * 给了：主星压不进去（画框整体下移到主星让开）；天体走进去时淡出、名字与引线不写进去。缺席 = 没有禁区
+   */
+  avoid?: Box | null;
 };
 
 /**
@@ -511,8 +526,17 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     const box = galaxyBox(size.width, size.height, props.fill === true ? GALAXY_MAX_FILL : GALAXY_MAX);
     const readableMax = props.agents !== undefined && props.agents.size > 0 ? AGENT_READABLE_MAX : PLANET_READABLE_MAX;
     const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax);
-    return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg };
-  }, [size, spec, props.agents, props.fill, tilt]);
+    let viewport = safe.viewport;
+    const avoid = props.avoid ?? null;
+    if (avoid !== null) {
+      // 禁区：主星（连星环 / 日冕外缘）不得压进去——画框整体往下挪到主星让开为止（下沿被裁，它是背景）
+      const star = drawFrame({ ...safe.layout, belt: null }, safe.camera, viewport, [], 0, safe.minPlanetPx).find((item) => item.kind === "star");
+      const reach = star === undefined ? 0 : star.r * (props.starDesign === undefined ? 1 : starExtentRatio(props.starDesign));
+      const delta = star === undefined ? 0 : Math.max(0, avoid.y1 + reach + SAFE_AVOID_GAP - star.y);
+      if (delta > 0) viewport = { ...viewport, cy: viewport.cy + delta };
+    }
+    return { camera: safe.camera, viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg };
+  }, [size, spec, props.agents, props.fill, tilt, props.avoid, props.starDesign]);
   const surface = props.surface === undefined ? (props.fill === true ? "page" : "home") : props.surface;
   const actualElevation = scene?.elevation ?? null;
   useLayoutEffect(() => {
@@ -569,9 +593,16 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
       const rocks = items.filter((item): item is RockItem => item.kind === "rock");
       const hidden = new Set<string>();
+      const masked = new Set<string>();
+      const avoid = props.avoid ?? null;
       for (const body of [...planets, ...rocks]) {
         const reach = body.kind === "rock" ? lockFrame(body.r).half : body.r;
         if (starDisc !== null && star !== undefined && body.depth > star.depth && Math.hypot(body.x - starDisc.x, body.y - starDisc.y) < starDisc.r + reach) hidden.add(body.planetId);
+        // 走进禁区（标题与输入框那一块）：整颗淡出，名字、框、命中圈都不画
+        if (avoid !== null && boxesOverlap(avoid, { x0: body.x - reach, y0: body.y - reach, x1: body.x + reach, y1: body.y + reach })) {
+          masked.add(body.planetId);
+          hidden.add(body.planetId);
+        }
       }
       const visiblePlanets = planets.filter((planet) => !hidden.has(planet.planetId));
       const visibleRocks = rocks.filter((rock) => !hidden.has(rock.planetId));
@@ -588,6 +619,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
               glyphPx,
             });
       for (const tag of tags) {
+        if (avoid !== null && boxesOverlap(avoid, tag.box)) continue;
         const planet = planets.find((p) => p.planetId === tag.id);
         if (planet !== undefined) names.set(tag.id, { dx: Math.round((tag.x - planet.x) * 10) / 10, dy: Math.round((tag.y - planet.y) * 10) / 10, anchor: tag.anchor });
       }
@@ -596,7 +628,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
         const bodies = agents === undefined ? visiblePlanets : [...visiblePlanets.map((planet) => ({ ...planet, label: null })), ...visibleRocks];
         const targets: CalloutTarget[] = [];
         for (const body of bodies) {
-          if (body.state !== "waiting" && body.state !== "running") continue;
+          // recent（最近但没在做事的会话，只有碎石块有）也拉引线写名字，排在在做事的后面、样式轻一档
+          if (body.state !== "waiting" && body.state !== "running" && body.state !== "recent") continue;
           if (body.label === null || body.label === "") continue;
           const title = truncateLabel(body.label);
           targets.push({ id: body.planetId, x: body.x, y: body.y, r: body.r, state: body.state, text: body.state === "waiting" ? `${t.agents.status.waiting} · ${title}` : title, rank: calloutRank(body.state, rankOf.get(body.planetId) ?? 0) });
@@ -610,15 +643,15 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
           glyphPx,
           budget: calloutBudget(scene.viewport.width),
           previous: previousCallouts.current,
-          reserved: tags.map((tag) => tag.box),
+          reserved: avoid === null ? tags.map((tag) => tag.box) : [...tags.map((tag) => tag.box), avoid],
         });
         for (const item of placed) callouts.set(item.id, { dir: item.dir, lift: item.lift });
         previousCallouts.current = new Map(callouts);
       }
-      const key = JSON.stringify([[...hidden].sort(), [...callouts].map(([id, c]) => `${id}:${c.dir}${c.lift}`), [...names].map(([id, n]) => `${id}:${n.anchor}`), glyphPx]);
-      return { key, hidden, callouts, names };
+      const key = JSON.stringify([[...hidden].sort(), [...masked].sort(), [...callouts].map(([id, c]) => `${id}:${c.dir}${c.lift}`), [...names].map(([id, n]) => `${id}:${n.anchor}`), glyphPx]);
+      return { key, hidden, callouts, names, masked };
     },
-    [scene, layout, starless, starExtent, agents, glyphPx, rankOf, t],
+    [scene, layout, starless, starExtent, agents, glyphPx, rankOf, t, props.avoid],
   );
   const plan = usePlan(scene === null ? null : compute, motion.clock, motion.running, signature);
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
@@ -641,7 +674,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     return (
       <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
         <Local box={square(mover.r * 1.6 + 2)}>
-          <g className="gd-figure galaxy-planet-figure" data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} data-r={mover.r.toFixed(1)}>
+          <g className="gd-figure galaxy-planet-figure" data-masked={plan.masked.has(mover.id) || undefined} data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} data-r={mover.r.toFixed(1)}>
             <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null), "planet", mover.r)} uid={`${copyUid}-f`} />
           </g>
         </Local>
@@ -700,7 +733,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       content: (
         <>
           {shape}
-          {geo !== null && <path className="galaxy-lock" data-state={rock.state} data-planet={mover.id} d={lockFramePath(0, 0, mover.r)} />}
+          {geo !== null && <path className="galaxy-lock" data-state={rock.state} data-planet={mover.id} d={rock.state === "recent" ? recentFramePath(0, 0, mover.r) : lockFramePath(0, 0, mover.r)} />}
           {geo !== null && (
             // 引线上的字也能点（鼠标）：与它那块碎石同一个去处；键盘焦点只落在碎石上，不重复一个 tab 位
             <g className="galaxy-callout" data-planet={mover.id} data-state={rock.state} data-dir={geo.dir} data-link={open === undefined ? undefined : "true"} onClick={open}>

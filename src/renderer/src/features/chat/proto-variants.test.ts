@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { agentNameVariantOf, avatarVariantOf, eyesVariantOf, mergeVariants, nameOrderOf, orbitEVariantOf, rowLabelOf, wsTitleVariantOf } from "./proto-variants.ts";
+import { agentNameVariantOf, avatarVariantOf, eyesVariantOf, homeSkyVariantOf, mergeVariants, nameOrderOf, orbitEVariantOf, rowLabelOf, wsTitleVariantOf } from "./proto-variants.ts";
 
 describe("编排工作区页候选版式", () => {
   test("地址参数：title=both 才是带大标题的第一版，其余（含缺省、坏值）都是页头版（默认）", () => {
@@ -13,7 +13,7 @@ describe("编排工作区页候选版式", () => {
     for (const search of ["", "?avatar=seeded", "?avatar=x", "?title=header"]) assert.equal(avatarVariantOf(search), "seeded");
   });
   test("运行时切换：只认合法值，坏值忽略，没给的保持", () => {
-    const rest = { orbitE: "0.3", eyes: "s" } as const;
+    const rest = { orbitE: "0.3", eyes: "s", homeSky: "rise" } as const;
     const base = { title: "header", avatar: "seeded", agentName: "off", ...rest } as const;
     assert.deepEqual(mergeVariants(base, { title: "both" }), { title: "both", avatar: "seeded", agentName: "off", ...rest });
     assert.deepEqual(mergeVariants(base, { avatar: "same", title: "x" }), { title: "header", avatar: "same", agentName: "off", ...rest });
@@ -24,6 +24,13 @@ describe("编排工作区页候选版式", () => {
     assert.equal(mergeVariants(base, { eyes: "huge" }).eyes, "s");
     assert.equal(mergeVariants(base, { agentName: "on" }).agentName, "on");
     assert.equal(mergeVariants(base, { agentName: "yes" }).agentName, "off");
+    assert.equal(mergeVariants(base, { homeSky: "backdrop" }).homeSky, "backdrop");
+    assert.equal(mergeVariants(base, { homeSky: "top" }).homeSky, "rise");
+  });
+  test("单智能体首页星系拉高：缺省 rise，homeSky=backdrop 才是铺满作背景", () => {
+    assert.equal(homeSkyVariantOf(""), "rise");
+    assert.equal(homeSkyVariantOf("?homeSky=backdrop"), "backdrop");
+    assert.equal(homeSkyVariantOf("?homeSky=x"), "rise");
   });
   test("偏心率与眼睛候选：地址里给合法值才用，缺省是 0.3 与 s（现在的眼睛）", () => {
     assert.equal(orbitEVariantOf(""), "0.3");

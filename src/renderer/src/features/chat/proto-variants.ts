@@ -17,6 +17,18 @@
  * - eyes（缺省 "s" = 现在的尺寸，等用户和肖志锋挑）：形象的眼睛四档 s / m / l / xl，外加 xl-white
  *   （规则外的白眼，供讨论）。侧栏头像、页头、星系、设计面板一起换。window.orbitaProto.set({ eyes: "l" })
  */
+/*
+ * - homeSky（缺省 "rise"，2026-11-24 用户「星系拉高吧，拉到顶部都可以，但是要保持星系名字和 slogan」）：单智能体首页星系的两种拉高法。
+ *   rise = 压掉标题上方的空白，标题区上移，星系占输入框下面剩下的全部高度；
+ *   backdrop = 星系铺满整个内容区作背景，标题、slogan 与输入框那一块是禁区（主星让开，天体走进去淡出，名字不写进去）。
+ *   window.orbitaProto.set({ homeSky: "backdrop" })
+ */
+export type HomeSkyVariant = "rise" | "backdrop";
+
+export function homeSkyVariantOf(search: string): HomeSkyVariant {
+  return new URLSearchParams(search).get("homeSky") === "backdrop" ? "backdrop" : "rise";
+}
+
 export type OrbitEVariant = "0.15" | "0.3" | "0.45";
 export type EyesVariant = "s" | "m" | "l" | "xl" | "xl-white";
 export const ORBIT_E_VARIANTS: readonly OrbitEVariant[] = ["0.15", "0.3", "0.45"];
@@ -50,6 +62,7 @@ export interface ProtoVariants {
   agentName: AgentNameVariant;
   orbitE: OrbitEVariant;
   eyes: EyesVariant;
+  homeSky: HomeSkyVariant;
 }
 
 export function agentNameVariantOf(search: string): AgentNameVariant {
@@ -88,5 +101,6 @@ export function mergeVariants(current: ProtoVariants, patch: Partial<Record<keyo
     agentName: patch.agentName === "on" || patch.agentName === "off" ? patch.agentName : current.agentName,
     orbitE: isOrbitE(patch.orbitE) ? patch.orbitE : current.orbitE,
     eyes: isEyes(patch.eyes) ? patch.eyes : current.eyes,
+    homeSky: patch.homeSky === "rise" || patch.homeSky === "backdrop" ? patch.homeSky : current.homeSky,
   };
 }
