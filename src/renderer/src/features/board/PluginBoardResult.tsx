@@ -128,7 +128,7 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
       const { rect, scrollTop } = settled;
       // 只截完整落在窗口里的外框；半露的图贴回来会像被二次裁过
       if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight || rect.width < 1 || rect.height < 1) return;
-      const result = await api.board.shot({ rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, scale: ratio });
+      const result = await api.board.shot({ rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
       if (result === null) return;
       const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
       const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));

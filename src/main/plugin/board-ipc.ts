@@ -4,7 +4,7 @@
  * - `board:frame`：按快照画卡——模板哈希 → 一次性 iframe 地址（模板仓库里读出来、内容对得上哈希才给）。
  * 入参一律当不可信：weekStart 非有限数回 null；哈希不过 /^[0-9a-f]{64}$/ 回 null。
  */
-import { ipcMain, type WebContents } from "electron";
+import { ipcMain, nativeImage, type WebContents } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { BoardShotResponse, BoardWeekResponse } from "../../shared/plugin-board.ts";
 import { boardShotRect, boardShotScale } from "../../shared/plugin-board.ts";
@@ -31,7 +31,8 @@ function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<ty
       // 主路用 CDP：原生 capturePage 实测会偶发只回局部像素（840×400@2 变成 1112×496）
       const png = await captureRegion(contents, { ...rect, scale });
       if (png !== null) {
-        return { base64: png.toString("base64"), width: Math.round(rect.width * scale), height: Math.round(rect.height * scale) };
+        const size = nativeImage.createFromBuffer(png).getSize();
+        return { base64: png.toString("base64"), width: size.width, height: size.height };
       }
     } catch {
       // 换原生补路
