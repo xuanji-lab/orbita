@@ -698,6 +698,8 @@ export const en = {
     pastedExpand: "Show the pasted text in full",
     pastedCollapse: "Collapse the pasted text",
     pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
+    /** 输入框里粘贴胶囊上写的名字（原文的方括号与「Pasted」让给剪贴板图标） */
+    pasteChipName: (seq: number, lines: number) => `${seq} · ${plural(lines, "line")}`,
     pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
     /** 意图召回的会话级开关（实验功能 intent-system）：输入框旁的小开关 */
     intentToggle: "Intent recall",

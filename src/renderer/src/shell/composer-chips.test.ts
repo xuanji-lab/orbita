@@ -5,7 +5,6 @@ import {
   chipIconName,
   chipRangeAfter,
   chipRangeBefore,
-  chipRemovalRange,
   mirrorSegments,
   parseChips,
   snapSelection,
@@ -221,19 +220,3 @@ describe("snapSelection —— 光标与选区不停在胶囊中间", () => {
   });
 });
 
-describe("chipRemovalRange —— 点 × 删整颗", () => {
-  it("连带后面的一个空格（插入 token 自带的那个）", () => {
-    const text = "看 /skill:ab 再";
-    deepStrictEqual(chipRemovalRange(text, parseChips(text)[0]!), { start: 2, end: 12 });
-  });
-
-  it("句末没有后空格：带走前面的一个，不留行尾空格", () => {
-    const text = "看 /skill:ab";
-    deepStrictEqual(chipRemovalRange(text, parseChips(text)[0]!), { start: 1, end: 11 });
-  });
-
-  it("行首、后面紧跟换行：只删 token，换行不动", () => {
-    const text = "/mcp:git\n下一行";
-    deepStrictEqual(chipRemovalRange(text, parseChips(text)[0]!), { start: 0, end: 8 });
-  });
-});

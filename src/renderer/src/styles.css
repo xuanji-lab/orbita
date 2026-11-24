@@ -322,27 +322,25 @@
 }
 
 /*
- * skill / MCP chip 画成胶囊（2026-10-30 用户验收：原来「像一段被高亮的字，不像一个块」）：
- * 类别图标（book-open / plug）+ 名字 + ×，1px 类别色描边、淡底、类别色的字，全圆角，
- * `/skill:` `/mcp:` 前缀不显示（发出去的文本照旧带前缀）。原型：orbita-proto.html 的 .tok。
+ * 句中胶囊（技能 / MCP / 插件 / 粘贴的长文本 / 附图「图 N」）：一个长相，只有颜色不同。
+ * 2026-11-23 用户：「既然大家都继承这个 chip 样式，只是颜色不一样……把 x 去掉……chip 的边框我不想要了，
+ * 就底色是淡淡的纯色就行了。先试试胶囊。」——图标 + 名字，淡纯色底，没有描边、没有 ×（删整颗走退格 / Delete），
+ * 全圆角。技能 = 表格绿、MCP = 文档蓝、插件 = 演示橙（文件类型图标同一组类别色）；粘贴与图 N 是中性灰。
  *
  * 怎么做到不错位：原文在镜像里照样排版、只是透明（与 textarea 同字同宽，光标与选区都对得上），
- * 胶囊（.composer-chip-face）绝对定位盖在原文自己的格子上。名字继承输入框的字，宽度就是原文里
- * 名字那一截；藏掉的前缀（14px Manrope：`/skill:` 34px、`/mcp:` 37.5px）正好让给左 4 + 图标 12
- * + 2 …… 2 + × 12 + 右 2 = 34px，所以胶囊的宽度跟着名字走、两头不挤也不空（/mcp: 多的 3.5px
- * 落在名字与 × 之间）。高度是行高减 2px（21px 行里 19px）：再高，上下两行的胶囊会贴在一起。
- * 光标不停在胶囊中间、× 的点击与悬停在 Composer.tsx（textarea 盖在上面，胶囊收不到指针）。
+ * 胶囊（.composer-chip-face）绝对定位盖在原文自己的格子上，宽度 = 原文的宽度；脸在格子里居中，
+ * 原文比脸宽多出来的（藏掉的 `/skill:` 前缀、插件写成中文显示名）均分成两头的留白。
+ * 高度是行高减 2px（21px 行里 19px）：再高，上下两行的胶囊会贴在一起。
  *
- * 颜色：skill = 表格绿（--color-filetype-sheet）、MCP = 文档蓝（--color-filetype-doc），与文件
- * 类型图标同一组类别色。描边用整色；字与图标用「类别色 70% 混正墨」——纯类别色压在淡底上
- * 只有 3.9–4.4:1，混墨后五档主题都过 4.5（气泡 chip 2026-10-11 的实测口径）；淡底 10%。
- * 气泡里的 chip（.bubble-chip）同一套变量、同一个长相，只是没有 ×。
+ * 颜色：底 = 类别色 14% 混卡底（没了描边，底要比原来的 10% 深一点才认得出是一块）；字与图标用
+ * 「类别色 70% 混正墨」——纯类别色压在淡底上过不了 4.5:1。
+ * 气泡里的 chip（.bubble-chip）同一套变量、同一个长相。
  */
 .composer-chip[data-kind],
 .bubble-chip {
-  --chip-fill: color-mix(in srgb, var(--chip-hue) 10%, var(--chip-ground));
-  --chip-stroke: var(--chip-hue);
+  --chip-fill: color-mix(in srgb, var(--chip-hue) 14%, var(--chip-ground));
   --chip-ink: color-mix(in srgb, var(--chip-hue) 70%, var(--color-text-primary));
+  --chip-radius: var(--radius-pill);
 }
 .composer-chip[data-kind="skill"],
 .bubble-chip-skill {
@@ -352,7 +350,9 @@
 .bubble-chip-mcp {
   --chip-hue: var(--color-filetype-doc);
 }
-/* 图 N 小签 = 中性灰（附图引用，不是调用；与缩略图角标同一个「图 N」） */
+/* 粘贴的长文本、附图「图 N」= 中性灰（不是调用，是材料） */
+.composer-chip[data-kind="paste"],
+.composer-chip[data-kind="image"],
 .bubble-chip-image {
   --chip-hue: var(--color-text-secondary);
 }
@@ -380,10 +380,11 @@
   translate: 0 -50%;
   display: flex;
   align-items: center;
-  padding: 0 var(--space-0-5) 0 var(--space-1);
-  border-radius: var(--radius-pill);
+  justify-content: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  border-radius: var(--chip-radius);
   background: var(--chip-fill);
-  box-shadow: inset 0 0 0 1px var(--chip-stroke);
   color: var(--chip-ink);
   white-space: pre;
   overflow: hidden;
@@ -391,15 +392,15 @@
 
 .composer-chip-face > .orbita-icon {
   flex: 0 0 auto;
-  margin-right: var(--space-0-5);
+}
+/* 粘贴与图 N 的原文只多出方括号与空格那点宽度：两头留白收窄一档，名字才不被截 */
+.composer-chip[data-kind="paste"] > .composer-chip-face,
+.composer-chip[data-kind="image"] > .composer-chip-face {
+  padding: 0 var(--space-0-5);
 }
 
+/* 名字放不下（比原文宽）就省略号截断，胶囊不超出原文的格子 */
 .composer-chip-name {
-  flex: 0 0 auto;
-}
-
-/* 插件 chip 写显示名，宽度与 token 原文无关：名字槽可收缩，放不下省略号，胶囊不超出原文的格子 */
-.composer-chip[data-kind="plugin"] .composer-chip-name {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -409,19 +410,6 @@
 /* 名字走伪元素：face 不许往镜像里加文字（caret-point 按 textContent 定位） */
 .composer-chip-name::before {
   content: attr(data-name);
-}
-
-/* × 收在右端；静止时比字浅一档（实色混淡底，不用 opacity——玻璃上的半透明字形两头不靠），
-   指针停上去回到字色（悬停判定在 Composer.tsx，挂 data-close-hover） */
-.composer-chip-x {
-  display: inline-flex;
-  flex: 0 0 auto;
-  margin-left: auto;
-  padding-left: var(--space-0-5);
-  color: color-mix(in srgb, var(--chip-ink) 60%, var(--chip-fill));
-}
-.composer-chip[data-close-hover] .composer-chip-x {
-  color: var(--chip-ink);
 }
 
 /* 比一行还长的 token 会被折成两行，胶囊盖不住两截：退回「原文 + 淡底」（Composer 量出来挂
@@ -2259,9 +2247,8 @@ button.ssp-group-toggle:hover {
 /*
  * 气泡里的句中 chip：用户原文里的 /skill: / /mcp: token（chip-runs.ts 的 rehype 变换塞进
  * span.bubble-chip，MarkdownBlock 的 ChipSpan 换成图标 + 名字）。与输入框里的胶囊同一个
- * 长相（2026-10-30 用户：「对话气泡里的 chip 也统一成这个样子」）：类别色描边 + 淡底 +
- * 类别色的字，全圆角，名字与正文同字号，高度同输入框的胶囊（ui 行高减 2px）——只是没有 ×，
- * 发出去的话不能再改。颜色变量与 .composer-chip[data-kind] 共用（见上），底色混气泡自己的实底。
+ * 长相（2026-10-30 用户：「对话气泡里的 chip 也统一成这个样子」；2026-11-23 起去描边、淡纯色底）：
+ * 全圆角，名字与正文同字号，高度同输入框的胶囊（ui 行高减 2px）。颜色变量与 .composer-chip[data-kind] 共用（见上），底色混气泡自己的实底。
  * 气泡行高 1.75（约 24.5px），装得下 19px 的胶囊；inline-flex 的基线是名字的基线，与句子对齐。
  */
 .bubble-chip {
@@ -2271,9 +2258,8 @@ button.ssp-group-toggle:hover {
   gap: var(--space-0-5);
   height: calc(var(--font-size-base) * var(--line-height-ui) - 2px);
   padding: 0 var(--space-1-5) 0 var(--space-1);
-  border-radius: var(--radius-pill);
+  border-radius: var(--chip-radius);
   background: var(--chip-fill);
-  box-shadow: inset 0 0 0 1px var(--chip-stroke);
   color: var(--chip-ink);
   line-height: 1;
   white-space: nowrap;
