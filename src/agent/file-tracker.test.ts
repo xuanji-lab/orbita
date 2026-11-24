@@ -193,3 +193,14 @@ describe("字节口径：BOM 与 CRLF 原样进出快照", () => {
     assert.equal(change?.removed, 1);
   });
 });
+
+describe("TurnFileTracker onWrite（跨会话登记的来源）", () => {
+  test("放行 write / edit 时报解析后的绝对路径；别的工具不报", async () => {
+    const seen: string[] = [];
+    const tracker = new TurnFileTracker(CWD, fakeFs({}), (path) => seen.push(path));
+    await tracker.noteAllowed("c1", "write", { path: "demo/index.html" });
+    await tracker.noteAllowed("c2", "edit", { path: "@a.ts" });
+    await tracker.noteAllowed("c3", "bash", { command: "ls" });
+    assert.deepEqual(seen, [join(CWD, "demo/index.html"), join(CWD, "a.ts")]);
+  });
+});

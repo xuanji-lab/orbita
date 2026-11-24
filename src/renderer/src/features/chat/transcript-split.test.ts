@@ -131,7 +131,7 @@ describe("deriveHistorySegment：流式期间历史段对象身份不变", () =>
     records,
     boundary: splitAtLastUser(records).boundary,
     skills: SKILLS,
-    processView: "turn",
+    processView: "chapters",
   });
 
   test("尾段逐帧变化（流式吐字 + 工具结果进尾段）时，历史段全部产物引用不变", () => {

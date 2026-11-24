@@ -156,8 +156,16 @@ export interface UsagePetPref {
   hidden?: true;
 }
 
-/** 过程显示的两种形态，见 AppSettings.processView */
-export type ProcessView = "turn" | "steps";
+/** 过程显示的三档，见 AppSettings.processView */
+export type ProcessView = "chapters" | "flat" | "steps";
+
+/** processView 的读时兼容：新三档原样；旧 "turn" 按旧 processLayout 映射到前两档；旧 "steps" 原样；只有旧 processLayout（缺 processView）也按它认 */
+export function parseProcessView(view: unknown, legacyLayout: unknown): ProcessView | undefined {
+  if (view === "chapters" || view === "flat" || view === "steps") return view;
+  if (view === "turn") return legacyLayout === "flat" ? "flat" : "chapters";
+  if (view === undefined && legacyLayout === "flat") return "flat";
+  return undefined;
+}
 
 export interface AppSettings {
   theme: ThemePreference;
@@ -199,18 +207,23 @@ export interface AppSettings {
    */
   collapsePastedText?: boolean;
   /**
+   * 回答里本地图的默认尺寸（2026-11-23）：右键一张图选「大图 / 小图」，选的这一次记下来，之后新出现的图按它画。
+   * **缺席 = "large"**。已经画在屏幕上的图不跟着变（每张图挂载时读一次），免得右键一张、整页的图一起跳。
+   */
+  chatImageSize?: "large" | "small";
+  /**
    * 后台会话跑完时响一声提示音（客舱呼唤铃）。**缺席 = 响**：这个提醒的价值就在于
    * 人不在跟前时也能知道，默认关等于没做。只管声音——侧栏未读底色与辅助对话旁的
    * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
    */
   completionSound?: boolean;
   /**
-   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30）。**缺席 = "turn"**：
-   * - "turn"：一轮一行——干活时一块定高的现场块（走表 + 当前这一步），落定收成一行结论，
-   *   展开成按旁白切开的几段（features/chat/turn-process.ts）；
-   * - "steps"：逐步铺开——每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条
-   *   Worked（肖志芬的原设计，groupTurns）。
-   * 其余值丢掉。
+   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30 两档，2026-11-22 扩成三档）。**缺席 = "chapters"**：
+   * - "chapters"「按块」：一轮一行——干活时一块现场（走表 + 当前这一步，点开实时往下长），落定收成一行结论，
+   *   展开后按旁白切成几段（features/chat/turn-process.ts）；
+   * - "flat"「铺开」：同样一轮一行，展开后旁白一行、每一步一行平铺；
+   * - "steps"「逐步铺开」：每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条 Worked（肖志芬的原设计，groupTurns）。
+   * 旧设置读时兼容（parseSettings）：旧 "turn" 配旧 processLayout（缺席 / "chapters" → "chapters"，"flat" → "flat"），旧 "steps" 原样。其余值丢掉。
    */
   processView?: ProcessView;
   /**
@@ -535,8 +548,11 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebarWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
+    chatImageSize?: unknown;
     completionSound?: unknown;
     processView?: unknown;
+    /** 只读：旧版「一轮一行」展开后的排法，并进 processView（不再写） */
+    processLayout?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
     docPaper?: unknown;
@@ -618,9 +634,11 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
       : {}),
-    ...(record.processView === "turn" || record.processView === "steps"
-      ? { processView: record.processView }
-      : {}),
+    // 只认两个值，别的丢掉（缺席 = 大图）
+    ...(record.chatImageSize === "large" || record.chatImageSize === "small" ? { chatImageSize: record.chatImageSize } : {}),
+    ...(parseProcessView(record.processView, record.processLayout) === undefined
+      ? {}
+      : { processView: parseProcessView(record.processView, record.processLayout) }),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
       ? { completionSound: record.completionSound }

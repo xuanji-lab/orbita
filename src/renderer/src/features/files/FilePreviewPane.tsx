@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Icon } from "../../shell/Icon";
+import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { Chip } from "../../shell/Chip";
 import { PanelButton, PanelIconButton, PanelLine } from "../../shell/RightPanel";
 import { api } from "../../api";
 import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
-import { fileIcon, formatAge, formatSize } from "./tree-view";
+import { formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { largeTextNotice, textPreviewMode, textRenderKind } from "./preview-view";
 import { WindowedText } from "./WindowedText";
@@ -175,11 +176,7 @@ export function FilePreviewPane(props: {
   return (
     <div className="files-panel-preview">
       <header className="file-preview-header">
-        <Icon
-          name={fileIcon(name, "file")}
-          size={16}
-          style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
-        />
+        <FileTypeIcon name={name} size={16} />
         {/* 面包屑：从所在的根开始的路径分段 + chevron 分隔；太长时在自身容器里
             **从左边裁**（保住末尾的文件段，激活标签上始终有文件名），完整绝对路径
             在本容器的 title 里；meta 在容器外不受挤 */}

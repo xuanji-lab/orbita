@@ -13,10 +13,12 @@
  * 纯模块：不 import React、不 import CSS，`node --test` 直接加载——MarkdownBlock.tsx
  * 顶层 import 了 katex 的 CSS，node 连加载都进不去，可测的决策逻辑必须住在这里。
  */
+import rehypeCallouts from "rehype-callouts";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import type { PluggableList } from "unified";
+import { rehypeCalloutKind } from "../../../../shared/ofm/rehype-callout-kind.ts";
 import { rehypeBubbleChips } from "./chip-runs.ts";
 import { highlightBlock } from "./highlight.ts";
 
@@ -42,6 +44,8 @@ export function streamRenderPolicy(streaming: boolean): StreamRenderPolicy {
 const SANITIZE_SCHEMA = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary"],
+  // 回答里的本地图可以写成 file:// 地址（MarkdownBlock.ChatImage 走文件面板的白名单读，读不到就是占位）
+  protocols: { ...defaultSchema.protocols, src: [...(defaultSchema.protocols?.["src"] ?? []), "file"] },
 };
 
 /**
@@ -66,10 +70,13 @@ export function rehypePluginsFor(bubble: boolean, policy: StreamRenderPolicy): P
     // 与 chip 互不碰面
     return [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], rehypeBubbleChips, KATEX];
   }
+  // 提醒框（`> [!note]`，Obsidian 写法）与文档面板同一套：rehype-callouts 画结构、rehypeCalloutKind 补 data-kind，
+  // 样式是 doc-panel.css 里的 `.chat-md .callout`（2026-11-22：以前这里没挂，回答里的提醒框显示成「[!note] 提示…」原文）。
+  // 顺序同 OfmReader：sanitize 之后、katex 之前（callouts 产出的结构不该被 sanitize 剥）。
   // 流式帧末位不挂 katex：半截公式本来就排不出，这一挂是每帧最贵的一笔
   return policy.katex
-    ? [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], KATEX]
-    : [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA]];
+    ? [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], rehypeCallouts, rehypeCalloutKind, KATEX]
+    : [rehypeRaw, [rehypeSanitize, SANITIZE_SCHEMA], rehypeCallouts, rehypeCalloutKind];
 }
 
 /**

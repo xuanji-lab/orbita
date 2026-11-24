@@ -309,6 +309,19 @@ describe("parseSettings 的 automationKeepAwake", () => {
   });
 });
 
+describe("parseSettings 的 chatImageSize", () => {
+  it("large / small 原样保留，缺席不落键（= 大图）", () => {
+    deepStrictEqual(parseSettings({ chatImageSize: "large" }).chatImageSize, "large");
+    deepStrictEqual(parseSettings({ chatImageSize: "small" }).chatImageSize, "small");
+    deepStrictEqual("chatImageSize" in parseSettings({ theme: "graphite" }), false);
+  });
+
+  it("别的值丢掉", () => {
+    deepStrictEqual(parseSettings({ chatImageSize: "huge" }).chatImageSize, undefined);
+    deepStrictEqual(parseSettings({ chatImageSize: 1 }).chatImageSize, undefined);
+  });
+});
+
 describe("parseSettings 的 collapsePastedText", () => {
   it("缺席 = 折叠（不落键，同 gitAttribution 的纪律）", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }), {
@@ -728,5 +741,26 @@ describe("parseSettings 的 docPaper", () => {
     deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
     deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
     deepStrictEqual(parseSettings({}).docPaper, undefined);
+  });
+});
+
+describe("parseSettings 的 processView（三档：按块 / 铺开 / 逐步铺开；旧值读时兼容）", () => {
+  it("新三档原样", () => {
+    for (const view of ["chapters", "flat", "steps"] as const) deepStrictEqual(parseSettings({ processView: view }).processView, view);
+  });
+  it("旧 turn 配旧 processLayout：缺席 / chapters → chapters，flat → flat", () => {
+    deepStrictEqual(parseSettings({ processView: "turn" }).processView, "chapters");
+    deepStrictEqual(parseSettings({ processView: "turn", processLayout: "chapters" }).processView, "chapters");
+    deepStrictEqual(parseSettings({ processView: "turn", processLayout: "flat" }).processView, "flat");
+  });
+  it("旧 steps 原样（不管 processLayout）；只有旧 processLayout flat 也认；坏值丢掉；缺席不写", () => {
+    deepStrictEqual(parseSettings({ processView: "steps", processLayout: "flat" }).processView, "steps");
+    deepStrictEqual(parseSettings({ processLayout: "flat" }).processView, "flat");
+    deepStrictEqual(parseSettings({ processLayout: "chapters" }).processView, undefined);
+    deepStrictEqual(parseSettings({ processView: "wat" }).processView, undefined);
+    deepStrictEqual(parseSettings({}).processView, undefined);
+  });
+  it("processLayout 不再写回：解析结果里没有这个字段", () => {
+    ok(!("processLayout" in parseSettings({ processView: "turn", processLayout: "flat" })));
   });
 });

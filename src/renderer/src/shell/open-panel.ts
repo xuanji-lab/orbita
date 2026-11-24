@@ -21,6 +21,42 @@ export function onOpenPanelRequest(handler: (hint: OpenPanelHint) => void): () =
   return () => window.removeEventListener(EVENT, listener);
 }
 
+/** 「在右栏看进度」的请求（对话里开头那张计划卡的按钮）：App 收到后切到「这条任务 › 进度」 */
+const PROGRESS_EVENT = "orbita:open-progress";
+
+export function requestOpenProgress(): void {
+  window.dispatchEvent(new Event(PROGRESS_EVENT));
+}
+
+export function onOpenProgressRequest(handler: () => void): () => void {
+  window.addEventListener(PROGRESS_EVENT, handler);
+  return () => window.removeEventListener(PROGRESS_EVENT, handler);
+}
+
+/**
+ * 「在右栏看完整的插件看板」的请求（对话里看板结果底部的「展开」）：对话里的看板限高约半屏，
+ * 完整的在右栏的插件页里看。已装的插件进它的看板视图，草稿进草稿的长页。
+ */
+const PLUGIN_BOARD_EVENT = "orbita:open-plugin-board";
+
+export interface PluginBoardOpenRequest {
+  plugin: string;
+  /** 草稿的真实路径；已装的插件为 null */
+  draftPath: string | null;
+}
+
+export function requestOpenPluginBoard(request: PluginBoardOpenRequest): void {
+  window.dispatchEvent(new CustomEvent<PluginBoardOpenRequest>(PLUGIN_BOARD_EVENT, { detail: request }));
+}
+
+export function onOpenPluginBoardRequest(handler: (request: PluginBoardOpenRequest) => void): () => void {
+  const listener = (event: Event): void => {
+    handler((event as CustomEvent<PluginBoardOpenRequest>).detail);
+  };
+  window.addEventListener(PLUGIN_BOARD_EVENT, listener);
+  return () => window.removeEventListener(PLUGIN_BOARD_EVENT, listener);
+}
+
 /**
  * 文件面板的「打开这个文件」请求此刻还算不算数（2026-11-23 用户：「我每次点文件面板，他都要出现这个 handoff 文件，
  * 即使我关了，离开文件面板，再次来文件面板，也还是记忆这刚写的」）。

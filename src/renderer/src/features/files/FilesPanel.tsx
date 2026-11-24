@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { Icon, type IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { RowHoverAction } from "../../shell/RowHoverAction";
@@ -14,8 +15,6 @@ import {
   countLoadedEntries,
   countVisibleEntries,
   fileIcon,
-  fileIconTone,
-  FILETYPE_TONE_COLOR,
   filterCountText,
   filterEntries,
   formatSize,
@@ -667,11 +666,7 @@ export function FilesPanel(props: {
                         setActivePath(tab.path);
                       }}
                     >
-                      <Icon
-                        name={fileIcon(name, "file")}
-                        size={13}
-                        style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}
-                      />
+                      <FileTypeIcon name={name} size={14} />
                       <span className="files-tab-name">{name}</span>
                       {/* ✕ 停在标签内（button 不能套 button，标签本体是 div）：点击
                           只关这一个标签，不要顺带触发标签的激活 */}
@@ -954,8 +949,7 @@ function TreeRow(props: {
   const dotted = props.name.startsWith(".");
   const isRules = props.name === "AGENTS.md";
   const iconName = fileIcon(props.name, props.kind, props.open);
-  // 文档 / 演示 / 表格三族图标上色（fileIconTone），其余中性——名字文字仍正墨
-  const tone = fileIconTone(props.name, props.kind);
+  // 彩色文件图标（FileTypeIcon，2026-11-22）；名字文字仍正墨
   const hasMeta = props.size !== undefined;
   // hover 行尾把 size·mtime 缩成 `48 KB · 12m`，省略的完整信息（名字、完整时间戳）
   // 放回 title 里；symlink 没有 size，但契约里连目标路径都没有，title 只能如实说
@@ -1026,14 +1020,7 @@ function TreeRow(props: {
             />
           </span>
         ) : (
-          <Icon
-            name={iconName}
-            size={14}
-            style={{
-              color: tone === null ? "var(--color-text-tertiary)" : FILETYPE_TONE_COLOR[tone],
-              flex: "0 0 auto",
-            }}
-          />
+          <FileTypeIcon name={props.name} kind={props.kind} open={props.open} size={16} />
         )}
         <span
           style={{
@@ -1200,11 +1187,7 @@ function ImageAttachmentRow(props: {
       }}
     >
       <span style={{ width: 12, flex: "0 0 auto" }} />
-      <Icon
-        name={fileIcon(name, "file")}
-        size={14}
-        style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-      />
+      <FileTypeIcon name={name} size={16} />
       <DirMarkName name={name} dir={false} wrapStyle={{ flex: "1 1 auto" }} />
     </button>
   );
@@ -1234,7 +1217,6 @@ function AttachmentRow(props: {
     statKind === "dir" || (statKind === undefined && props.declaredKind === "dir")
       ? "directory"
       : "file";
-  const tone = fileIconTone(name, kind);
   const missing = props.fact !== undefined && props.fact.kind === null;
   const owner = props.roots.find((root) => root.exists && pathWithin(root.path, props.path)) ?? null;
   const clickable = !missing && owner !== null;
@@ -1270,14 +1252,7 @@ function AttachmentRow(props: {
         }}
       >
         <span style={{ width: 12, flex: "0 0 auto" }} />
-        <Icon
-          name={fileIcon(name, kind)}
-          size={14}
-          style={{
-            color: tone === null ? "var(--color-text-tertiary)" : FILETYPE_TONE_COLOR[tone],
-            flex: "0 0 auto",
-          }}
-        />
+        <FileTypeIcon name={name} kind={kind} size={16} />
         {/* 名字 + 目录尾 `/`：共用组件 DirMarkName（胶囊 / 面板行 / 气泡三处同一段
             结构；2026-10 验收 I+K：斜杠紧跟名字，不再挂到行的另一头） */}
         <DirMarkName name={name} dir={kind === "directory"} wrapStyle={{ flex: "1 1 auto" }} />

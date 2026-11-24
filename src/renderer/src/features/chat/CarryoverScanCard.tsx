@@ -26,7 +26,7 @@ export function CarryoverScanCard(props: { scan: ScanMessage }) {
         display: "grid",
         gap: "var(--space-3)",
         padding: "var(--space-4)",
-        background: "var(--color-chat-card-bg)",
+        background: "var(--color-bg-panel)",
         border: "1px solid var(--color-border-subtle)",
         borderRadius: "var(--radius-lg)",
       }}
@@ -36,6 +36,7 @@ export function CarryoverScanCard(props: { scan: ScanMessage }) {
           {done.map((item, index) => (
             <Line
               key={index}
+              first={index === 0}
               title={item.title}
               note={item.turns === null ? "" : t.carryover.turns(item.turns[0], item.turns[1])}
             />
@@ -44,7 +45,7 @@ export function CarryoverScanCard(props: { scan: ScanMessage }) {
       )}
       <Group icon={FEATURE_ICON.carryovers} heading={left.length > 0 ? t.carryover.itemsToCarry(left.length) : t.carryover.nothingToCarry}>
         {left.map((item, index) => (
-          <Line key={index} title={item.title} note={item.detail} />
+          <Line key={index} first={index === 0} title={item.title} note={item.detail} />
         ))}
       </Group>
     </section>
@@ -61,13 +62,14 @@ function Group(props: { icon: "circle-check" | (typeof FEATURE_ICON)["carryovers
         <strong style={{ fontSize: "var(--font-size-base)", fontWeight: 600 }}>{props.heading}</strong>
       </div>
       {props.children.length > 0 && (
+        // 清单：白底淡边（与文件账卡的列表同一语言），行与行之间一条淡线，不再是灰块
         <div
           style={{
             display: "grid",
-            gap: "var(--space-2)",
-            padding: "var(--space-2)",
-            background: "var(--color-chat-muted-bg)",
+            background: "var(--color-bg-panel)",
+            border: "1px solid var(--color-border-subtle)",
             borderRadius: "var(--radius-md)",
+            overflow: "hidden",
           }}
         >
           {props.children}
@@ -77,9 +79,17 @@ function Group(props: { icon: "circle-check" | (typeof FEATURE_ICON)["carryovers
   );
 }
 
-function Line(props: { title: string; note: string }) {
+function Line(props: { title: string; note: string; first: boolean }) {
   return (
-    <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+    <div
+      style={{
+        display: "grid",
+        gap: 2,
+        minWidth: 0,
+        padding: "var(--space-2) var(--space-3)",
+        borderTop: props.first ? undefined : "1px solid var(--color-border-subtle)",
+      }}
+    >
       <span
         style={{
           fontSize: "var(--font-size-base)",

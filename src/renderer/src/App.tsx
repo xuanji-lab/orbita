@@ -64,6 +64,7 @@ import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shel
 import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { ChatImageSizeContext } from "./features/chat/chat-file-scope.ts";
 import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { isUnclaimedEscape } from "./shell/escape-key.ts";
@@ -83,7 +84,7 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
 import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
-import { liveFileOpen, onOpenPanelRequest, requestOpenPanel } from "./shell/open-panel.ts";
+import { liveFileOpen, onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
@@ -189,6 +190,15 @@ export function App() {
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
+
+  /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
+  const chatImageSize = useMemo(
+    () => ({
+      size: settings.chatImageSize ?? ("large" as const),
+      setSize: (next: "large" | "small") => changeSettings({ chatImageSize: next }),
+    }),
+    [settings.chatImageSize, changeSettings],
+  );
 
   /** 文档 / 演示文稿面板的纸面：只用设置里的纸样，与应用主题无关 */
   const docPaper = useMemo(() => {
@@ -912,6 +922,15 @@ export function App() {
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
   // 「这条任务」面板的页签：右侧图标条开它时保持上次的页签；输入框旁的用量环开它时直接落在「上下文」
   const [taskTab, setTaskTab] = useState<TaskPanelTab>("progress");
+  // 对话里开头那张计划卡的「在进度里看」：切到「这条任务 › 进度」
+  useEffect(
+    () =>
+      onOpenProgressRequest(() => {
+        setRightPanel("context");
+        setTaskTab("progress");
+      }),
+    [],
+  );
   const openContextPanel = useCallback(() => {
     setTaskTab("context");
     handlePanel("context");
@@ -1156,6 +1175,16 @@ export function App() {
       void session.openSession(sessionId);
     },
     [session, mainSessionId],
+  );
+  // 对话里看板结果的「展开」：已装的插件进右栏插件页的看板视图，草稿进草稿的长页
+  const sessionWorkspaceId = session.workspaceId;
+  useEffect(
+    () =>
+      onOpenPluginBoardRequest((request) => {
+        if (request.draftPath !== null) openPluginDraft({ path: request.draftPath, workspaceId: sessionWorkspaceId });
+        else openPlugin(request.plugin, true);
+      }),
+    [openPlugin, openPluginDraft, sessionWorkspaceId],
   );
   const sessionDraft = draftOf(pluginDrafts, mainSessionId);
   const shownDraft: PluginDraftTarget | null =
@@ -1442,7 +1471,8 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
-    <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
+    <ProcessViewContext.Provider value={settings.processView ?? "chapters"}>
+    <ChatImageSizeContext.Provider value={chatImageSize}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
@@ -1777,6 +1807,7 @@ export function App() {
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>
     </AutomationContext.Provider>
+    </ChatImageSizeContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </DocPaperContext.Provider>

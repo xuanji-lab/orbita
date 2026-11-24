@@ -59,7 +59,11 @@ import { movePiBook, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
 import {
   foldWebArtifacts,
+  dropSavedPages,
+  makeWebAccept,
+  noteSessionWrite,
   scanWebArtifacts,
+  ToolWindows,
   webScanRoots,
   WEB_ARTIFACT_MTIME_SLACK_MS,
   type ScanRoot,
@@ -212,7 +216,7 @@ async function reportFileTurn(
     // 文件账与旁路扫描并行——轮尾收尾不该被其中一边白等
     const [changes, scan] = await Promise.all([
       tracker.finalize(),
-      scanWebArtifactsLogged(webWatch.roots, webWatch.startedAt),
+      scanWebArtifactsLogged(webWatch),
     ]);
     const tracked = new Set(changes.map((change) => change.path));
     const folded = foldWebArtifacts(scan.paths.filter((path) => !tracked.has(path)));
@@ -235,15 +239,26 @@ async function reportFileTurn(
  * TurnParts 上透传，轮尾 reportFileTurn 按它扫描。
  */
 interface WebArtifactWatch {
+  sessionId: string;
   roots: ScanRoot[];
   /** 开轮时刻（Date.now()）：轮尾扫描收 mtime ≥ startedAt − slack 的文件 */
   startedAt: number;
+  /** 本轮脚本类工具（bash / 终端 / 外接工具）的执行窗口：旁路网页的 mtime 必须落在里面 */
+  windows: ToolWindows;
 }
 
 /** 扫一遍并处理好日志面：截断 warn、失败按空结果（本轮没有旁路产物，不让扫描拖砸轮尾）。 */
-async function scanWebArtifactsLogged(roots: readonly ScanRoot[], startedAt: number): Promise<WebScanResult> {
+async function scanWebArtifactsLogged(watch: WebArtifactWatch): Promise<WebScanResult> {
+  const { roots, startedAt } = watch;
   try {
-    const result = await scanWebArtifacts(roots, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS);
+    const windows = watch.windows.snapshot(Date.now());
+    // 本轮没跑过脚本类工具：不可能有旁路产物，也就不必扫盘（顺带省掉大目录的遍历）
+    if (windows.length === 0) return { paths: [], truncated: false };
+    const result = await scanWebArtifacts(roots, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS, undefined, {
+      accept: makeWebAccept(watch.sessionId, windows, startedAt),
+    });
+    // 从网上存下来的页面（canonical / og:url 指向 http）是原料，不是本轮产物
+    const paths = await dropSavedPages(result.paths);
     if (result.truncated) {
       console.warn(
         `[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots
@@ -251,7 +266,7 @@ async function scanWebArtifactsLogged(roots: readonly ScanRoot[], startedAt: num
           .join(" | ")}`,
       );
     }
-    return result;
+    return { ...result, paths };
   } catch (cause) {
     console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
     return { paths: [], truncated: false };
@@ -1011,14 +1026,16 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 文件快照跟踪：闸门**放行之后**才记 before（拒掉的调用不会执行，记了是假账；
   // ask 档等用户点了允许，读到的才是「这一批动手前」的内容）。prepare 阶段
   // pi 顺序跑钩子，同批并行调用的 before 互不踩。
-  const tracker = new TurnFileTracker(command.cwd);
+  const tracker = new TurnFileTracker(command.cwd, undefined, (path) => noteSessionWrite(command.sessionId, path));
   // 网页产物旁路（web-artifacts.ts）：只记开轮时刻，不扫盘——按 mtime 判「本轮
   // 新出现」，批量文件操作会被批量折叠拦住，截断只可能漏报不会误报（上一版
   // 「开轮快照 + 轮尾 diff」两处误报的教训见 web-artifacts.ts 文件头）。
   // 扫描根只有 cwd 与会话工作台——附加目录跨会话共享，分不清是不是这一轮生成的。
   const webWatch: WebArtifactWatch = {
+    sessionId: command.sessionId,
     roots: webScanRoots(command.cwd, command.directories),
     startedAt: Date.now(),
+    windows: new ToolWindows(),
   };
   /**
    * 用户情境的时区（IANA 名）：在本进程解析一次、本轮内全部消息同一口径（详见
@@ -1393,7 +1410,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
     ...createDocxTools(command.cwd),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
-    ...createImageTools(command.cwd),
+    // 白名单外的图（如 /tmp）先拷进会话工作台的 shots/，回答里嵌的路径界面才读得到（2026-11-23）
+    ...createImageTools(command.cwd, {
+      roots: [...(command.directories?.attached ?? []), command.attachmentsDir],
+      workbench: command.directories?.workbench ?? null,
+    }),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
     ...createPlanTools(planOptions),
     // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
@@ -1491,8 +1512,12 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const unsubscribe = session.subscribe((event) => {
     // 文件快照的 after：工具落定即读盘。不 await（读盘是毫秒级，不该卡事件流），
     // finalize 自己等在途读全部落定
+    if (event.type === "tool_execution_start") {
+      webWatch.windows.begin(event.toolCallId, event.toolName, Date.now(), event.args);
+    }
     if (event.type === "tool_execution_end") {
       void tracker.noteExecutionEnd(event.toolCallId);
+      webWatch.windows.finish(event.toolCallId, Date.now());
     }
     // 不重试的模型错误（400 / 401 …）只留下一条空 error 回答，我们不落盘也不渲染它——
     // 回合终局时补报一条回合级失败，让错误挂在这轮没得到回答的话下面（见 ./turn-failure.ts）

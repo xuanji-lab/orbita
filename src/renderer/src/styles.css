@@ -46,6 +46,8 @@
  */
 .composer-card {
   box-shadow: var(--shadow-composer);
+  /* 输入框是一张白底淡边的大圆角框（2026-11-22 回到框式，与右上角状态卡同一语言）：圆角取 --radius-bubble（14），比别的卡大一档 */
+  border-radius: var(--radius-bubble);
 }
 
 .glass-float {
@@ -1207,13 +1209,11 @@ body {
 }
 
 /*
- * 容器一种语言：底色或描边，不混用（方向 N，2026-11-07）。代码块原先是 muted 底 + 1px 发丝线——
- * 两种语言叠在同一个面上；N 只留底（暗档的底已抬到白 7%，比旧的 5% 多一档，靠底分得开）。
- * 用 `--color-chat-muted-bg` 的块与行内代码同一份底。
+ * 容器一种语言：底色或描边，不混用（方向 N，2026-11-07）。当年代码块是 muted 底，N 去掉了它的发丝线、只留底。
+ * 2026-11-22 起对话里只有用户的消息是灰的，代码块改成白底（.chat-md pre 的 --color-bg-panel）——白底放在白色的对话面上，
+ * 再没有线就整个看不见了（2026-11-23 用户：「是不是一个 block 但是没有渲染出来」）。所以这里不再去线：
+ * 白底 + 淡边，同结尾那摞白卡，仍然只有一种语言（线），底与对话面同色不算第二种。
  */
-:root .chat-md pre {
-  border: 0;
-}
 
 /*
  * 内容面：左会话列（ChatView 自带 height:100% 的栅格根）+ 右侧面板壳。
@@ -2056,68 +2056,6 @@ html[data-pointer-drag] iframe {
   color: var(--color-danger);
 }
 
-/*
- * 父会话对话流里的子会话问询胶囊（ChannelFromChildPill）：一行、muted 底、
- * 行首图标按状态色（warning / success / danger——颜色是第二信号），问询带正文
- * 首行（截断）与「去回答 ›」尾签。整行可点：打开 Sub-sessions 面板进入该子会话。
- */
-.channel-from-child-pill {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: fit-content;
-  max-width: 100%;
-  margin: var(--space-1) 0;
-  padding: 5px var(--space-2-5);
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-primary);
-  text-align: left;
-  cursor: pointer;
-}
-
-.channel-from-child-pill:hover {
-  background: var(--color-bg-hover);
-}
-
-.channel-from-child-pill[data-tone="question"] > .orbita-icon {
-  color: var(--color-warning);
-}
-
-.channel-from-child-pill[data-tone="done"] > .orbita-icon {
-  color: var(--color-success);
-}
-
-.channel-from-child-pill[data-tone="failed"] > .orbita-icon {
-  color: var(--color-danger);
-}
-
-/* 「谁在问」固定不变宽；正文吃掉剩余空间后截断，尾签不受挤 */
-.channel-from-child-name {
-  flex: 0 0 auto;
-  color: var(--color-text-primary);
-}
-
-.channel-from-child-text {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-secondary);
-}
-
-.channel-from-child-go {
-  margin-left: auto;
-  flex: 0 0 auto;
-  color: var(--color-accent);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-}
-
 .drawer-body {
   flex: 1;
   min-height: 0;
@@ -2625,10 +2563,11 @@ html[data-pointer-drag] iframe {
   color: var(--color-chat-link);
 }
 
+/* 代码块白底淡边（2026-11-22 用户：对话里除了你的消息是灰的，其余都改白——灰块读起来像你的话） */
 .chat-md pre {
   margin: var(--space-2) 0;
   padding: var(--space-3);
-  background: var(--color-chat-muted-bg);
+  background: var(--color-bg-panel);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   overflow-x: auto;
@@ -2705,7 +2644,8 @@ html[data-pointer-drag] iframe {
  * ——graphite / black 同为暗地，共用同一套双主题翻色，不生成第三套语法色。
  */
 .chat-md pre.shiki {
-  background-color: var(--color-chat-muted-bg) !important;
+  /* 白底淡边，同未高亮的代码块（2026-11-22：对话里只有用户的消息是灰的） */
+  background-color: var(--color-bg-panel) !important;
 }
 
 :root[data-theme="graphite"] .chat-md pre.shiki,
@@ -5772,15 +5712,59 @@ mark.intent-mark {
   font-size: inherit;
 }
 
-/* ===== 「一轮一行」过程块（ChatView 的 TurnProcessLine；推导在 turn-process.ts） =====
- * 字在内线上（--content-hem），与正文首字同一根线。现场块定高：头行 28 + 章节 20 +
- * 三步 3×20 + 当前一步 20 + 末行 18，只换字不加行。颜色只用三档灰 + 成功/失败/警示 token。 */
+/* ===== 「一轮一行」过程块（ChatView 的 TurnProcessLine；推导在 turn-process.ts / process-rows.ts） =====
+ * 字在内线上（--content-hem），与正文首字同一根线。现场块定高：头行 + 在想什么 + 末行，只换字不加行。 */
+.proc-live-wrap {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 现场块整体可点（跑着时点开，实时往下长）：重置成无框的整行按钮 */
 .proc-live {
   display: grid;
   gap: var(--space-0-5);
+  width: 100%;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.proc-head,
+.proc-live:hover {
+  background: var(--color-bg-hover);
+}
+.proc-who > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+/* 跑着点开后列表的最后一行：正在做（呼吸 + 走表）；长命令的输出尾巴在下面一行 */
+.proc-now {
+  list-style: none;
+}
+.proc-now .proc-row-verb {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-primary);
+}
+.proc-now-tail {
+  padding: 0 var(--space-2) var(--space-1) calc(var(--space-2) + var(--proc-icon-w) + var(--space-2));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.proc-now-tail.slow {
+  font-family: var(--font-family-base);
+  color: var(--color-warning);
+}
 .proc-head-row {
   display: flex;
   align-items: center;
@@ -5791,33 +5775,6 @@ mark.intent-mark {
   font-weight: var(--weight-medium);
   color: var(--color-text-secondary);
 }
-.proc-head {
-  min-height: var(--control-height-sm);
-  padding: 0 var(--content-hem);
-}
-.proc-head > .orbita-icon {
-  color: var(--color-info);
-  flex: none;
-}
-.proc-strong {
-  flex: none;
-  color: var(--color-text-secondary);
-  /* 「第 3 步」「3 步」的数字会变，等宽不跳 */
-  font-variant-numeric: tabular-nums;
-}
-.proc-num {
-  display: inline-flex;
-  gap: var(--space-2);
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  font-family: var(--font-family-business);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.proc-bad {
-  color: var(--color-danger);
-}
 .proc-time {
   margin-left: auto;
   flex: none;
@@ -5825,83 +5782,9 @@ mark.intent-mark {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
 }
-.proc-chapter {
-  height: 20px;
-  padding: 0 var(--content-hem);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--font-size-base);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-}
-.proc-chapter.think {
-  color: var(--color-text-secondary);
-}
-/* 计划里在做的那一步：半粗放在章节名前，「· 」隔开（计划就是这一轮的主线，章节是它下面的细节） */
-.proc-plan-step {
-  font-weight: var(--weight-semibold);
-}
-.proc-plan-step::after {
-  content: " · ";
-  font-weight: var(--weight-regular);
-  color: var(--color-text-tertiary);
-}
-.proc-trail {
-  display: grid;
-  grid-auto-rows: 20px;
-  padding: 0 var(--content-hem);
-}
-.proc-step {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-tertiary);
-}
-.proc-step.fade-3 { opacity: 0.45; }
-.proc-step.fade-2 { opacity: 0.7; }
-.proc-step code {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-sm);
-}
-.proc-step.now,
-.proc-step.now code {
-  color: var(--color-text-primary);
-}
-.proc-step .proc-preview {
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-base);
-}
-.proc-mark {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 12px;
-}
-.proc-mark.ok { color: var(--color-success); }
-.proc-mark.bad { color: var(--color-danger); }
-.proc-step.now .proc-mark { color: var(--color-info); }
-.proc-verb {
-  flex: none;
-  min-width: 3em;
-}
-.proc-dur {
-  flex: none;
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
 .proc-foot {
   height: 18px;
-  padding: 0 var(--content-hem) 0 calc(var(--content-hem) + var(--space-3) + var(--space-2));
+  padding: 0 var(--content-hem);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -5911,91 +5794,8 @@ mark.intent-mark {
   color: var(--color-text-tertiary);
 }
 .proc-foot.slow {
-  padding-left: var(--content-hem);
   font-family: var(--font-family-base);
   color: var(--color-warning);
-}
-
-/* 落定后展开的章节时间线：竖线挂在内线上，章节点压在线上 */
-.proc-chapters {
-  list-style: none;
-  margin: var(--space-1) 0 var(--space-2) var(--content-hem);
-  padding: 0 0 0 var(--space-3);
-  border-left: 1px solid var(--color-border-subtle);
-  display: grid;
-  gap: var(--space-1);
-}
-.proc-chapters > li {
-  position: relative;
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.proc-chapters > li::before {
-  content: "";
-  position: absolute;
-  left: calc(-1 * var(--space-3) - 3px);
-  top: 10.5px;
-  /* 实心小点，不是空心圆：子午线上的空心圆只留给「你」（返工 2026-11-07，同一列里空心圆有两个意思，
-     扫读时会把展开的步骤误认成用户消息）。5px、三级墨，比回合头的实心圆小一档。 */
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--color-text-tertiary);
-  box-sizing: border-box;
-}
-.proc-chapters > li.bad::before {
-  background: var(--color-danger);
-}
-.proc-chapter-btn {
-  display: grid;
-  gap: var(--space-0-5);
-  width: 100%;
-  min-width: 0;
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-  transition: var(--transition-hover);
-}
-.proc-chapter-btn:hover {
-  background: var(--color-bg-hover);
-}
-.proc-ch-title {
-  font-size: var(--font-size-base);
-  line-height: var(--line-height-ui);
-  color: var(--color-text-primary);
-}
-.proc-ch-title.think {
-  color: var(--color-text-secondary);
-}
-.proc-ch-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1) var(--space-1-5);
-  font-family: var(--font-family-business);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.proc-ch-steps > span {
-  max-width: 280px;
-  padding: 0 var(--space-1);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  border-radius: var(--radius-xs);
-  background: var(--color-bg-muted);
-}
-.proc-ch-steps > span.bad {
-  color: var(--color-danger);
-}
-.proc-ch-body {
-  display: grid;
-  gap: var(--space-1);
-  /* 逐条的工具行字在内线上（RAIL_X）；挪到与章节标题同一根线（按钮左内边距 space-2） */
-  margin-left: calc(var(--space-2) - var(--content-hem));
 }
 
 /* 「这条任务 › 进度」点一章跳过来：被跳到的那块闪一下底色（一次，不循环） */
@@ -6085,72 +5885,6 @@ mark.intent-mark {
   margin-top: var(--space-0-5);
 }
 
-/* 内置命令的完成卡（features/chat/CommandCard.tsx）：图标 + 标题 + 副标题 + 「在右栏打开」。
-   骨架同 FileTurnCard（chat-card-bg + subtle 边 + radius-md）；accent 不用——它不是主操作。 */
-.command-card {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  width: 100%;
-  min-width: 0;
-  padding: var(--space-3);
-  background: var(--color-chat-card-bg);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  color: var(--color-text-primary);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.command-card:disabled {
-  cursor: default;
-}
-.command-card:not(:disabled):hover {
-  border-color: var(--color-border-strong);
-}
-.command-card:focus-visible {
-  outline: 2px solid var(--color-border-strong);
-  outline-offset: 2px;
-}
-.command-card-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-muted);
-  color: var(--color-text-secondary);
-}
-.command-card-text {
-  display: grid;
-  flex: 1 1 auto;
-  gap: var(--space-1);
-  min-width: 0;
-}
-.command-card-title {
-  overflow: hidden;
-  font-size: var(--font-size-base);
-  font-weight: var(--weight-strong);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.command-card-sub {
-  overflow: hidden;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.command-card-open {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-}
 .command-pill {
   padding: 1px var(--space-2);
   border-radius: var(--radius-sm);
@@ -6310,10 +6044,7 @@ mark.intent-mark {
 }
 @container convo (max-width: 760px) {
   :root {
-    .home-col,
-    .chat-col,
-    .chat-foot-col,
-    .chat-float-col {
+    .home-col {
       --gutter: 32px;
     }
     .log-head {
@@ -6326,7 +6057,7 @@ mark.intent-mark {
 
 /*
  * ======================================================================
- * 对话：消息列 / 用户消息 / 输入框的骨架，以及方向 N 的「子午线」
+ * 对话：消息列 / 用户消息 / 输入框的骨架
  * ======================================================================
  * 下面第一段是原先 ChatView 里的 inline style 原样挪成 class（宽、对齐、气泡配方一个字没变）——
  * 方向 N 要在各主题下改写它们，inline 压得过任何主题规则。第二段才是 N。
@@ -6408,7 +6139,8 @@ mark.intent-mark {
 .user-bubble {
   position: relative;
   width: fit-content;
-  max-width: var(--bubble-max-width);
+  /* 靠右、宽度随内容、最宽约列宽的 80%（长文仍按 user-bubble-clamp 夹高） */
+  max-width: min(var(--bubble-max-width), 80%);
   min-width: 0;
   padding: calc(var(--space-2) + 1px) var(--content-hem);
   background: var(--color-chat-card-bg);
@@ -6425,44 +6157,19 @@ mark.intent-mark {
 }
 
 /*
- * 方向 N（2026-11-07）· 子午线 —— 签名元素，只此一处
- *
- * 一根竖线贯穿整列对话，把「谁说的 / 几点 / 做了几步」钉在同一根轴上：
- *   用户消息 = 空心星，助手回合 = 实心星，每次工具 / 思考调用 = 一道横刻度；
- *   时间落在左侧索引边栏里，右对齐到子午线左侧 18px（不再是消息上下两行小字）。
- * 对话里是现有界面没有的版式：「索引边栏」（首页那节已登记）+「子午线」（同上）。
- * 用户消息不再是右侧的圆气泡，是一整块左对齐的纸签（冷灰底，无描边）。
- * 输入框贴在井底成「台沿」：页脚顶一条发丝线，卡自己只剩底、不描边、不浮起。
- *
- * 实现取舍：消息列是平的一串 `<div data-kind>`（没有「回合」容器），所以星与刻度靠
- * `data-kind` + 相邻选择器认：user → 空心星；紧随 user 的第一个非 user 条目 → 实心星
- * （它若是回合折叠头，时间也在它身上）；thinking / toolCall / toolGroup → 刻度。
+ * 对话列的骨架（2026-11-22 回到简约：撤掉「子午线」竖线、线上的圆点 / 刻度、左侧索引边栏，用户消息回到右侧气泡）。
+ * 用户原话：「聊天框里左侧这一根线就给它撤销掉，不要了。我们还是想回到简约一点的，现在线条太多了」「user message 在右，
+ * agent 的回复在左，时间放在每个 user message 的右下角，agent 的话不标注时间」。
+ * 所以：没有 gutter 缩进（消息列、输入框同一条左缘）；用户气泡靠右，宽度随内容、最宽 80%；时间在气泡下方右对齐（.user-msg-time）。
  */
 :root {
-  .chat-col,
-  .chat-foot-col,
-  .chat-float-col {
-    width: min(100%, calc(var(--content-max-width) + var(--gutter)));
-    box-sizing: border-box;
-    padding-left: var(--gutter);
-  }
   .chat-col {
     --chat-row-gap: var(--space-5);
     position: relative;
     gap: var(--chat-row-gap);
   }
-  .chat-col::before {
-    content: "";
-    position: absolute;
-    left: calc(var(--gutter) - 20px);
-    top: var(--space-1);
-    bottom: 0;
-    width: 1px;
-    background: var(--color-border-default);
-  }
-  /* 条目包裹层 .revert-keep 原本是 display: contents（无盒，回退预演时才变成 grid），星与刻度要一个
-     可定位的盒：N 下把它实化成与预演态 .revert-doomed 同款的 grid（gap 继承，「条目 + 分支行」间距不变；
-     minmax(0,1fr) 防宽表格把轨道撑出列外）。历史段的虚拟行是它的直接父层。 */
+  /* 条目包裹层 .revert-keep 原本是 display: contents（无盒，回退预演时才变成 grid）；这里实化成与预演态
+     .revert-doomed 同款的 grid（gap 继承，「条目 + 分支行」间距不变；minmax(0,1fr) 防宽表格把轨道撑出列外）。 */
   .chat-col > .revert-keep,
   .chat-virtual-row > .revert-keep {
     display: grid;
@@ -6471,103 +6178,9 @@ mark.intent-mark {
     position: relative;
   }
 
-  /*
-   * 记号图例（返工 2026-11-07，子午线上只有四种形状，每种只有一个意思）：
-   *   空心圆   = 你说的话（user）
-   *   空心菱形 = 另一个 agent 说的话（channelMark：子会话里父会话派来的任务，父会话里子会话的回报）
-   *   实心圆   = 这个 agent 的一轮（回合头）
-   *   短横刻度 = 一步（思考 / 工具调用，只在逐步铺开的活跃轮与委派卡前出现）
-   * 展开后的过程成员行用的是一颗实心小点（.proc-chapters 里），不是任何一种空心记号。
-   * 菱形 = 空心圆转 45° 的方块：同一套线宽与色，形状一变就读得出「不是你」；它们都是「有人开口」的记号，
-   * 所以都配一个紧随其后的实心圆（agent 回应）。
-   */
-  .chat-col > :is([data-kind="user"], [data-kind="channelMark"])::before,
-  .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
-  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before,
-  .chat-virtual-row > :is([data-kind="user"], [data-kind="channelMark"])::before,
-  .chat-virtual-row > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
-  .chat-virtual-row:has(> :is([data-kind="user"], [data-kind="channelMark"])) + .chat-virtual-row > [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
-    content: "";
-    position: absolute;
-    left: calc(-20px - 4.5px);
-    width: 9px;
-    height: 9px;
-    box-sizing: border-box;
-    border-radius: 50%;
-    background: var(--color-text-secondary);
-    z-index: 1;
-  }
-  .chat-col > [data-kind="user"]::before,
-  .chat-virtual-row > [data-kind="user"]::before {
-    top: 15px;
-    background: var(--color-bg-panel);
-    border: 1.5px solid var(--color-text-secondary);
-  }
-  .chat-col > [data-kind="channelMark"]::before,
-  .chat-virtual-row > [data-kind="channelMark"]::before {
-    top: 15px;
-    left: calc(-20px - 4px);
-    width: 8px;
-    height: 8px;
-    border-radius: 1px;
-    background: var(--color-bg-panel);
-    border: 1.5px solid var(--color-text-secondary);
-    transform: rotate(45deg);
-  }
-  /* 回合头与紧随其后的第一个条目：实心圆。落在 turnGroup / turnProcess 上也画——它们才带时间，
-     委派卡之后那一轮曾经「有时间没有圆」（审查 §3.10） */
-  .chat-col > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
-  .chat-col > :is([data-kind="user"], [data-kind="channelMark"]) + [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before,
-  .chat-virtual-row > :is([data-kind="turnGroup"], [data-kind="turnProcess"])::before,
-  .chat-virtual-row:has(> :is([data-kind="user"], [data-kind="channelMark"])) + .chat-virtual-row > [data-kind]:not(:is([data-kind="user"], [data-kind="channelMark"]))::before {
-    top: 10px;
-  }
-  /* 刻度：一道横短线跨过子午线；紧随开口记号的那一行已经有实心圆，不再叠刻度 */
-  .chat-col > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"]):not(:is([data-kind="user"], [data-kind="channelMark"]) + *)::after,
-  .chat-virtual-row > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"])::after {
-    content: "";
-    position: absolute;
-    left: -26px;
-    top: 14px;
-    width: 13px;
-    height: 1px;
-    background: var(--color-text-tertiary);
-  }
-  /* 虚拟行里「上一行是 user / 通道标记」没有同父相邻选择器可用，用 :has 从上一行认；
-     下一行已经拿到实心圆，这里把它自己的刻度撤掉 */
-  .chat-virtual-row:has(> :is([data-kind="user"], [data-kind="channelMark"])) + .chat-virtual-row > :is([data-kind="thinking"], [data-kind="toolCall"], [data-kind="toolGroup"])::after {
-    content: none;
-  }
-
-  /* 用户消息：左对齐的整块纸签，不再是右侧圆气泡 */
-  .user-turn {
-    align-items: stretch;
-  }
-  .user-bubble {
-    width: auto;
-    max-width: none;
-    border: 0;
-    border-radius: var(--radius-md);
-  }
-  .user-mat {
-    max-width: none;
-  }
-  .user-mat-grid {
-    justify-items: start;
-  }
-  .user-mat-wrap,
-  .user-images {
-    justify-content: flex-start;
-  }
-  .user-images {
-    max-width: none;
-  }
-  .user-turn .memrow-list {
-    justify-items: start;
-  }
-  /* 复制 / 回退 / 记忆这排动作悬停（或键盘聚焦）才出：静止时它是一排每条消息都有的小灰图标。
-     行尾的时间已经搬进边栏，这排里剩下的都是操作。不用 visibility:hidden——那会把键盘用户挡在外面；
-     用 opacity + pointer-events（没出现时点不到，免得误触「回到这里」）。折叠的长消息要看得到展开键，常显 */
+  /* 复制 / 回退 / 记忆这排动作悬停（或键盘聚焦）才出：静止时它是一排每条消息都有的小灰图标，只有右下角的时间常显。
+     不用 visibility:hidden——那会把键盘用户挡在外面；用 opacity + pointer-events（没出现时点不到，免得误触「回到这里」）。
+     折叠的长消息要看得到展开键，常显 */
   .user-turn .msg-acts > button {
     opacity: 0;
     pointer-events: none;
@@ -6579,61 +6192,9 @@ mark.intent-mark {
     opacity: 1;
     pointer-events: auto;
   }
-  .user-turn .msg-acts {
-    margin-bottom: calc(-1 * var(--control-height-xs));
-  }
-  /* 窄列里时间回到动作行：钉行尾（行尾血线）。宽列里它是绝对定位进边栏的，这条不起作用 */
-  .user-turn .user-msg-time {
-    margin-left: auto;
-  }
-  .user-turn[data-clamped="true"] .msg-acts {
-    margin-bottom: 0;
-  }
 
-  /* 输入框贴井底成台沿：顶一条发丝线，卡自己只剩底、不描边、不浮起 */
-  .chat-footer {
-    border-top: 1px solid var(--color-border-subtle);
-    padding-top: var(--space-3);
-  }
-  /* 输入卡只留描边、不填底（容器一种语言）：首页它是一个细描边框；页脚里连描边也去掉，成为台沿 */
-  .composer-card {
-    background: transparent;
-  }
-  .chat-footer .composer-card {
-    border-color: transparent;
-  }
   .chat-transcript {
     padding-bottom: var(--space-3);
-  }
-}
-
-/*
- * 时间落在索引边栏里——只在边栏有 88px 时（会话列 ≥ 761px）。边栏收成 32 的窄列放不下，
- * 退回原来的位置（回合头的时间在折叠行上方一行，用户消息的时间在动作行最右），信息不丢。
- */
-@container convo (min-width: 761px) {
-  :root {
-    /* 时间落在边栏里：用户消息的时间钉在星的左边，回合头的时间钉在折叠头那一行的左边。
-       回合头的时间原先是折叠行上方独占一行（inline paddingLeft 把它推到血线上），N 把它请出流，
-       !important 只为压过那条 inline 内边距 */
-    .user-turn .user-msg-time,
-    .chat-col .turn-start-time {
-      position: absolute;
-      left: calc(-1 * var(--gutter));
-      width: calc(var(--gutter) - 38px);
-      text-align: right;
-      padding-left: 0 !important;
-      /* 非今天的消息是「08-23 18:23」，比 50px 宽：在空格处折成两行（日期 / 时分），
-         以星心为中线居中，不撞星也不撑宽边栏 */
-      line-height: var(--line-height-tight);
-      transform: translateY(-50%);
-    }
-    .user-turn .user-msg-time {
-      top: 19.5px;
-    }
-    .chat-col .turn-start-time {
-      top: 14.5px;
-    }
   }
 }
 
@@ -6683,4 +6244,1206 @@ html {
   .orbita-icon svg * {
     vector-effect: non-scaling-stroke;
   }
+}
+
+/* 回答里的本地图（MarkdownBlock.ChatImage，2026-11-22）：一张图占一整行，下面紧跟的段落是它的解释。
+   边与圆角同 show_image 的单图；点开看大图。 */
+/* 回答里的本地图：居中，一张占一行；大图最高 480、小图最高 160。左键在右栏文件面板预览，
+   悬停右上角出一颗「放大 / 缩小」小工具条（.quote-toolbar 的按钮样子，2026-11-23） */
+.chat-md .chat-img-frame {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--space-2) auto var(--space-1);
+}
+.chat-md .chat-img-local {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.chat-md .chat-img-local img {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.chat-md .chat-img-frame[data-size="small"] .chat-img-local img {
+  max-height: 160px;
+}
+.chat-md .chat-img-tools {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-0-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.chat-md .chat-img-frame:hover .chat-img-tools,
+.chat-md .chat-img-frame:has(:focus-visible) .chat-img-tools {
+  opacity: 1;
+}
+.chat-md .chat-img-pending {
+  display: block;
+  height: 120px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+.chat-md .chat-img-pending[data-size="small"] {
+  height: 80px;
+}
+/* 回答里读不到的本地图：一颗「图片打不开 · 文件名」小签，悬停看路径与原因（与 .chat-img-ref 同一副骨架，字用三级灰） */
+.chat-md .chat-img-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-1-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+/* 用户气泡里的图片语法：一颗小签（见 MarkdownBlock 的 BubbleImageRef），与附件芯片同一副骨架 */
+.chat-md .chat-img-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-1-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.chat-md .chat-img-ref:hover {
+  color: var(--color-text-primary);
+}
+.chat-md .chat-img-pending {
+  display: block;
+  height: 120px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+.chat-md .chat-img-pending[data-size="small"] {
+  height: 80px;
+}
+
+/* ===== 过程与产物（2026-11-22，ChatView 的 TurnProcessLine / ProcessExpanded / StepRow / TurnOutputsBlock；
+   推导在 process-rows.ts）=====
+ * 一轮只分两处：过程收成一行（「工作了多久 · 做了什么」+ 缩略图），产物收在这一轮的结尾。
+ * 展开后只有一种行：图标 · 动作 · 对象 · 量 · 缩略图。 */
+
+.proc-rows {
+  --proc-icon-w: 14px;
+}
+
+/* 跑着：一句在干什么（正文墨）、一句在想什么（灯泡 + 次级灰），末行是慢 / 输出尾巴 */
+.proc-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--content-hem);
+  min-width: 0;
+}
+.proc-doing {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.proc-idea {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 20px;
+  min-width: 0;
+  padding: 0 var(--content-hem);
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.proc-idea > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-idea > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 落定的那一行：「工作了 19 分 06 秒 · 写了 1 个文件，还有 109 步 ›」 */
+.proc-say {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-secondary);
+}
+.proc-say > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-worked {
+  flex: none;
+}
+/* 被用户打断的一轮：头一句带一枚静止的图标，颜色比正文淡一档（它是状态，不是出错） */
+.proc-interrupted {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+}
+.proc-sep {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proc-quiet {
+  flex: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 缩略图：最多三张；不止一张时前面写总张数（每层是下一层的和）。悬停放大（.proc-thumb-peek，portal 到 body） */
+.proc-thumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  margin-left: auto;
+}
+/* 窄的时候缩略图先让位（收缩权重大），「工作了 3 分 03 秒」那句后缩、不被切半个字 */
+.proc-head-row > .proc-thumbs {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.proc-thumbs-count {
+  margin-right: var(--space-0-5);
+  white-space: nowrap;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.proc-thumb-wrap {
+  display: inline-flex;
+  cursor: zoom-in;
+}
+.proc-thumb {
+  display: block;
+  width: 30px;
+  height: 22px;
+  object-fit: cover;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.proc-thumb-wrap:hover .proc-thumb {
+  border-color: var(--color-border-strong);
+}
+.proc-thumb.empty {
+  background: var(--color-bg-muted);
+}
+.proc-thumb-peek {
+  position: fixed;
+  z-index: var(--z-popover);
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-popover);
+  pointer-events: none;
+}
+.proc-thumb-peek img {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+.proc-thumb-peek-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* 展开后（照 Claude，2026-11-22 用户：「非常的条条框框，然后整洁」）：步骤收在一个白底淡边的框里，行与行之间一条细线，
+   每一行都能点开；左缘对齐正文 */
+.proc-expanded {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-1);
+  min-width: 0;
+}
+.proc-expanded > .proc-rows {
+  gap: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  overflow: hidden;
+}
+.proc-expanded > .proc-rows > li + li {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.proc-expanded > .proc-rows > li > .proc-row,
+.proc-expanded > .proc-rows > li > .proc-chap-btn {
+  min-height: var(--control-height-lg);
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+  border-radius: 0;
+}
+.proc-row-chev {
+  display: inline-flex;
+  flex: none;
+  vertical-align: middle;
+  margin-left: var(--space-1);
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.proc-row-chev[data-open] {
+  transform: rotate(90deg);
+}
+/* 定计划 / 改结构的那一步：清单或左右对照原位画在这一行下面 */
+.proc-step-plan {
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + var(--proc-icon-w) + var(--space-2));
+}
+.proc-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+/* 一段点开：这段的每一步，缩进到段名下面，行间同样一条细线 */
+.proc-rows.nested {
+  gap: 0;
+  margin: 0 0 var(--space-1) calc(var(--space-3) + var(--proc-icon-w));
+  border-top: 1px solid var(--color-border-subtle);
+}
+.proc-rows.nested > li + li {
+  border-top: 1px solid var(--color-border-subtle);
+}
+.proc-rows.nested .proc-row {
+  border-radius: 0;
+}
+.proc-rows > li {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+/* 同一种行：图标 · 动作 · 对象 · 量 · 缩略图 */
+.proc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 26px;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+.proc-row.btn {
+  width: 100%;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.proc-row.btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.proc-row.btn:disabled {
+  cursor: default;
+}
+.proc-row.say {
+  align-items: flex-start;
+  padding-top: var(--space-0-5);
+  padding-bottom: var(--space-0-5);
+}
+.proc-row-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.proc-row.say .proc-row-icon {
+  padding-top: var(--space-0-5);
+}
+.proc-row-verb {
+  flex: none;
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+.proc-row-obj {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-tertiary);
+}
+.proc-row-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+.proc-row-title.quiet {
+  color: var(--color-text-secondary);
+}
+.proc-row-say {
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+}
+.proc-row-meta {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.proc-row-meta .add {
+  color: var(--color-success);
+}
+.proc-row-meta .del {
+  color: var(--color-danger);
+}
+.proc-row-meta + .proc-thumbs {
+  margin-left: 0;
+}
+/* 按段的一段（照原版）：说的话整句、可换行；下面一行是这段的前几步；右边步数、张数、缩略图 */
+.proc-chap-btn {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.proc-chap-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.proc-chap-btn:disabled {
+  cursor: default;
+}
+.proc-chap-btn > .proc-row-icon {
+  padding-top: var(--space-0-5);
+}
+.proc-chap-main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.proc-chap-title {
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.proc-chap-title.quiet {
+  color: var(--color-text-secondary);
+}
+.proc-chap-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-1-5);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.proc-chap-steps > span {
+  max-width: 280px;
+  padding: 0 var(--space-1);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+}
+.proc-chap-steps > span.bad {
+  color: var(--color-text-secondary);
+}
+.proc-chap-aside {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-0-5);
+}
+.proc-chap-aside .proc-row-meta {
+  margin-left: 0;
+}
+.proc-step-li.bad .proc-row-verb {
+  color: var(--color-text-tertiary);
+}
+/* 一步展开：先是它之前想的那段，再是原样的输入输出 */
+.proc-step-body {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-1) calc(var(--space-2) + var(--proc-icon-w) + var(--space-2));
+  min-width: 0;
+}
+.proc-step-thought {
+  display: flex;
+  gap: var(--space-1-5);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+.proc-step-thought > .orbita-icon {
+  flex: none;
+  margin-top: var(--space-0-5);
+  color: var(--color-text-tertiary);
+}
+.proc-step-cmd {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 这一轮交给你的东西（照 Kimi）：一份一张卡，和轮尾文件账卡（FileTurnCard）同宽、同底、同边、同圆角，
+   左右对齐；右边「预览 ▾」 */
+.turn-outputs {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  /* 窄会话列里卡上「来自子会话…」那段再不够就只留「来自子会话」（见 .turn-output-from） */
+  container: outputs / inline-size;
+}
+.turn-output {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+/* 图标同文件面板（形状与类别色），不垫灰底 */
+.turn-output-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  color: var(--color-text-tertiary);
+}
+.turn-output-text {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.turn-output-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.turn-output-sub {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.turn-output-type {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-output-split {
+  display: inline-flex;
+  flex: none;
+  align-items: stretch;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.turn-output-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.turn-output-btn.more {
+  padding: 0 var(--space-2);
+  border-left: 1px solid var(--color-border-subtle);
+}
+.turn-output-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 这一轮的计划卡（features/chat/PlanTurnCard.tsx）：在过程行下面，默认展开、跟着执行实时打勾。
+   骨架同结尾的卡（文件账、产物）：白底、淡边、同圆角、同宽 */
+.plan-turn-card {
+  /* 清单的字对齐到标题：图标 14 + 间距 */
+  --plan-turn-indent: calc(14px + var(--space-2));
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+.plan-turn-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.plan-turn-toggle {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.plan-turn-chevron {
+  display: inline-flex;
+  color: var(--color-text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.plan-turn-chevron[data-open] {
+  transform: rotate(90deg);
+}
+.plan-turn-title {
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+.plan-turn-progress {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.plan-turn-open {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.plan-turn-open:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.plan-turn-second {
+  padding-left: var(--plan-turn-indent);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-tertiary);
+}
+/* 清单：每步前面是状态记号，同右栏进度：勾（绿）/ 在做（实心点）/ 沙漏（黄）/ 空圈。不划线 */
+.plan-turn-lines {
+  list-style: none;
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0 0 0 var(--plan-turn-indent);
+  line-height: var(--line-height-ui);
+}
+.plan-turn-lines.compact {
+  padding-left: 0;
+}
+.plan-line {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-0-5) var(--space-1);
+  border-radius: var(--radius-xs);
+  color: var(--color-text-primary);
+}
+.plan-line[data-status="done"] {
+  color: var(--color-text-tertiary);
+}
+.plan-line[data-status="in_progress"] .plan-turn-text {
+  font-weight: var(--weight-medium);
+}
+/* 左右对照：没动的步整行只列一次；改动的地方左边原来（红底）、右边现在（绿底），一行对一行 */
+.plan-sbs {
+  display: grid;
+  gap: 1px;
+  padding-left: var(--plan-turn-indent);
+  line-height: var(--line-height-ui);
+}
+.plan-sbs.compact {
+  padding-left: 0;
+}
+.plan-sbs-head,
+.plan-sbs-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-1);
+}
+.plan-sbs-head {
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.plan-sbs-cell {
+  min-width: 0;
+  border-radius: var(--radius-xs);
+}
+.plan-sbs-cell[data-kind="del"] {
+  background: var(--color-danger-soft);
+}
+.plan-sbs-cell[data-kind="del"] .plan-line {
+  color: var(--color-text-secondary);
+}
+.plan-sbs-cell[data-kind="add"] {
+  background: var(--color-success-soft);
+}
+.plan-turn-sign {
+  flex: none;
+  width: var(--space-3);
+  text-align: center;
+  font-family: var(--font-family-mono);
+  font-weight: var(--weight-semibold);
+}
+[data-kind="add"] .plan-turn-sign {
+  color: var(--color-success);
+}
+[data-kind="del"] .plan-turn-sign {
+  color: var(--color-danger);
+}
+.plan-turn-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: calc(var(--font-size-sm) * 1.5);
+  color: var(--color-text-tertiary);
+}
+.plan-line[data-status="done"] > .plan-turn-mark {
+  color: var(--color-success);
+}
+.plan-line[data-status="waiting"] > .plan-turn-mark {
+  color: var(--color-warning);
+}
+.plan-turn-ring,
+.plan-turn-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--color-text-tertiary);
+}
+.plan-turn-dot {
+  box-shadow: inset 0 0 0 1.5px var(--color-info);
+  background: radial-gradient(circle, var(--color-info) 0 35%, transparent 40%);
+}
+.plan-turn-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plan-turn-wait {
+  display: inline-block;
+  margin-left: var(--space-1-5);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+
+/* 轮尾文件账卡（FileTurnCard，2026-11-22 照 Kimi）：笔｜已编辑 N 个文件 +x −y｜撤销｜审核；展开逐文件一行，底下「收起」。
+   白底淡边，与产物卡同宽同骨架 */
+.file-turn-card {
+  display: grid;
+  min-width: 0;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+}
+.file-turn-card[data-previewing] {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 1px var(--color-border-strong);
+}
+.ftc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+}
+.ftc-toggle {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ftc-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  color: var(--color-text-tertiary);
+}
+.ftc-title {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.ftc-label {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.ftc-btn,
+.ftc-undone {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-secondary);
+}
+.ftc-btn {
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.ftc-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.ftc-btn:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}
+.ftc-undone {
+  border-color: transparent;
+  background: var(--color-bg-muted);
+  color: var(--color-text-tertiary);
+}
+.ftc-list {
+  display: grid;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.ftc-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.ftc-row:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.ftc-row:disabled {
+  cursor: default;
+}
+.ftc-name {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-secondary);
+}
+.ftc-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  color: var(--color-text-tertiary);
+}
+.ftc-stats {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-family-business);
+  font-variant-numeric: tabular-nums;
+}
+.ftc-fold {
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  background: transparent;
+  font: inherit;
+  color: var(--color-text-tertiary);
+  text-align: left;
+  cursor: pointer;
+}
+.ftc-fold:hover {
+  color: var(--color-text-secondary);
+}
+/* 等你确认的计划卡：边加重一档，标题用正文墨（它在等你，不是过去时） */
+.plan-turn-card[data-awaiting] {
+  border-color: var(--color-border-strong);
+}
+.plan-turn-card[data-awaiting] .plan-turn-title {
+  color: var(--color-text-primary);
+}
+/* 一步展开后的图（导出的 PNG）：中等大小一排，点开看大图 */
+.proc-step-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.proc-step-image {
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  cursor: zoom-in;
+  overflow: hidden;
+}
+.proc-step-image img {
+  display: block;
+  max-width: 320px;
+  max-height: 180px;
+  object-fit: contain;
+}
+
+/* 「要你点」的卡（ExitCard：派出、交接、自动化）与装插件行、自动化改权限行（.pl-line），2026-11-22 统一成白卡：
+   骨架同结尾的产物卡——白底淡边、左边图标、中间两行字、右边状态与描边小按钮 */
+.exit-card-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  color: var(--color-text-tertiary);
+}
+.exit-card-text {
+  display: grid;
+  flex: 1 1 auto;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.exit-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.exit-card-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.exit-card-sub {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.exit-card-meta {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+.exit-card-side {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+.exit-card-status {
+  font-size: var(--font-size-sm);
+}
+/* 卡上的按钮：同产物卡「预览」、改文件卡「撤销 / 审核」 */
+.card-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.card-btn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.pl-line {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  background: var(--color-bg-panel);
+}
+.pl-line-main {
+  gap: var(--space-3);
+}
+.pl-line-main > .pl-line-ic {
+  width: 28px;
+}
+.pl-line .pl-btn {
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+}
+.pl-line .pl-btn.btn-accent {
+  box-shadow: none;
+}
+
+/* 子会话卡标题后面的型号名（灰色小字）与子会话视图顶上的一行 */
+.model-name-label {
+  flex: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.child-session-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 子会话交回卡（ChatView 的 ChildReportCard）：白卡，头一行同「要你点」的卡；子会话做出来的东西挂在卡里，
+   一份一行（同结尾的产物卡，缩进到图标右边）——卡里的是子会话的，卡外结尾那一摞是主会话自己的 */
+.child-report,
+.turn-output-group {
+  /* 卡左边图标那一格的宽：卡里挂的子卡缩进到图标右边 */
+  --card-icon-w: 28px;
+}
+.child-report {
+  display: grid;
+  min-width: 0;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.child-report-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+}
+.child-report-line {
+  display: flex;
+  align-items: baseline;
+  flex: 1 1 auto;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.child-report-first {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.child-report-edited {
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+/* 子会话交回的产物卡：类型字后面接「· 来自「标题」· 型号名」，不另占一行（卡高与主会话的产物卡一样）。
+   放不下时先省略标题、型号名尽量保留；窄列只留「来自子会话」；悬停看全文，点它打开那个子会话 */
+.turn-output-from {
+  display: inline-flex;
+  flex: 0 100 auto;
+  min-width: 0;
+  gap: var(--space-0-5);
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.turn-output-from::before {
+  content: "·";
+  flex: none;
+  margin-right: var(--space-0-5);
+}
+.turn-output-from .from-lead {
+  flex: none;
+}
+.turn-output-from .from-title {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-output-from .from-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-output-from .from-short {
+  display: none;
+}
+@container outputs (max-width: 360px) {
+  .turn-output-from .from-lead,
+  .turn-output-from .from-title,
+  .turn-output-from .from-model {
+    display: none;
+  }
+  .turn-output-from .from-short {
+    display: inline;
+  }
+}
+button.turn-output-from.link {
+  cursor: pointer;
+}
+button.turn-output-from.link:hover {
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+}
+/* 同一类三份以上收成的一张（OutputGroupCard）：头同产物卡，点开在卡里逐个列（缩进到图标右边） */
+.turn-output-group {
+  display: grid;
+  min-width: 0;
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+.turn-output.group-head {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.turn-output.group-head:hover {
+  background: var(--color-bg-hover);
+}
+.turn-output-group-list {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
 }

@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import { BEFORE_PLAN, bucketAt, groupBySteps, OUTSIDE_PLAN, planAwaitingIn, planNoticeOf, planTimeline, planView, stepActiveSince } from "./plan-timeline.ts";
+import { BEFORE_PLAN, bucketAt, groupBySteps, OUTSIDE_PLAN, planAwaitingIn, planHistory, planNoticeOf, planTimeline, planView, stepActiveSince } from "./plan-timeline.ts";
 import type { ProcessChapter } from "../chat/turn-process.ts";
 
 const tool = (o: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">): TranscriptItem =>
@@ -70,6 +70,21 @@ describe("planTimeline", () => {
     assert.equal(t.versions.length, 1);
     assert.equal(t.current.n, 1);
     assert.deepEqual(t.current.changes, []);
+  });
+
+  test("planHistory：写了新计划，前一张的版本仍按调用找得到（对话里旧轮的计划卡不丢）；current 是新计划", () => {
+    const records = [
+      plan("p1", 10, steps(["给 CI 加缓存", "in_progress"], ["改 workflow", "pending"])),
+      plan("p2", 15, steps(["给 CI 加缓存", "in_progress"], ["加测试", "pending"], ["改 workflow", "pending"])),
+      plan("p3", 20, steps(["调研向量库", "in_progress"], ["写对比表", "pending"])),
+    ];
+    const all = planHistory(records);
+    assert.ok(all !== null);
+    assert.deepEqual(all.versions.map((v) => [v.toolCallId, v.n]), [["p1", 1], ["p2", 2], ["p3", 1]]);
+    assert.equal(all.current.toolCallId, "p3");
+    // 旧计划里那一次改动仍出提示；只看当前计划的 planTimeline 已经找不到它
+    assert.equal(planNoticeOf(all, ["p2"])?.changes[0]?.kind, "added");
+    assert.equal(planNoticeOf(planTimeline(records), ["p2"]), null);
   });
 
   test("被拒的不算；还在跑的过严格校验；later / awaiting 带出来", () => {

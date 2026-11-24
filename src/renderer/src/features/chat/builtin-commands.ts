@@ -10,11 +10,12 @@ import { CANVAS_SIZE } from "../../../../shared/slides.ts";
  * 过程行不显示英文 id，而是：`[图标] 中文名  参数摘要`（「新建演示文稿 · 花园城市新加坡 · 16:9」）。
  * 展开能看到完整参数与结果（走通用的 PlainToolBody，不在这里）。
  *
- * **加一个命令 = 在 BUILTIN_COMMANDS 里加一项**，其余（行首、图标、摘要、不并组、完成卡）自动跟上：
+ * **加一个命令 = 在 BUILTIN_COMMANDS 里加一项**，其余（行首、图标、摘要、不并组）自动跟上：
  * - `label`：中文名；
  * - `icon`：lucide 图标（IconName，须已在 Icon.tsx 登记）；
  * - `summary(input)`：从工具入参摘一句话；缺字段 / 类型不对 = null（宁缺毋编）；
- * - `pinCard`：完成后在轮尾钉一张卡（工具结果 `details.card`，约定见 shared/builtin-command.ts）。
+ * 做出来的东西（工具结果 `details.card`，约定见 shared/builtin-command.ts）不在过程里出卡，收在这一轮的结尾
+ * （process-rows.ts 的 turnOutputs，2026-11-22）。
  *
  * 结果 details 里的 `openPanel` 由 App 的自动开面板钩子读（`useAutoOpenPanel.ts`），不经本表。
  */
@@ -22,8 +23,6 @@ export interface BuiltinCommand {
   label: string;
   icon: IconName;
   summary(input: unknown): string | null;
-  /** 完成后钉一张卡（折叠之外、结尾回复之前）；缺席 = 只有过程行 */
-  pinCard?: boolean;
   /**
    * 展开体：给人看的「参数 + 结果」几行。缺席（或返回 null）= 展开体走通用的原样结果文本——
    * 那是写给模型的话（「Created … 0 slides … Next: fill it with …」），用户看了只会困惑。
@@ -186,7 +185,6 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
       const path = str(input, "path");
       return join([path === null ? null : fileLabel(path), record(input)?.["create"] === true ? "新建" : null]);
     },
-    pinCard: true,
     detail: (input, details) => {
       const card = readCommandCard(details);
       const path = card?.path ?? str(input, "path");
@@ -219,7 +217,6 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
       const format = str(input, "format");
       return join([format === null ? null : (DOC_FORMAT_NAME[format] ?? format), path === null ? null : fileLabel(path)]);
     },
-    pinCard: true,
     detail: (input, details) => exportDetail(input, details, DOC_FORMAT_NAME),
   },
   slides_create: {
@@ -231,7 +228,6 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
       const aspect = str(input, "aspect");
       return title === null && aspect === null ? null : join([title, aspect ?? "16:9"]);
     },
-    pinCard: true,
     detail: (input, details) => {
       const aspect = str(input, "aspect") === "4:3" ? "4:3" : "16:9";
       const canvas = CANVAS_SIZE[aspect];
@@ -280,7 +276,6 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
       const name = format === null ? null : (FORMAT_NAME[format] ?? format);
       return join([name, format === "png" && page !== null ? pagesLabel([page]) : null]);
     },
-    pinCard: true,
     detail: (input, details) => exportDetail(input, details, FORMAT_NAME),
   },
 };
@@ -367,10 +362,3 @@ export function builtinCommand(toolName: string): BuiltinCommand | null {
 export function isBuiltinCommand(toolName: string): boolean {
   return builtinCommand(toolName) !== null;
 }
-
-/** 需要在轮尾钉卡的命令名（groupToolUnits / foldSegment 读） */
-export const PINNED_CARD_COMMANDS: ReadonlySet<string> = new Set(
-  Object.entries(BUILTIN_COMMANDS)
-    .filter(([, command]) => command.pinCard === true)
-    .map(([name]) => name),
-);

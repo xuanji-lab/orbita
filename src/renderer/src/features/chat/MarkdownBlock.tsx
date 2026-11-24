@@ -1,4 +1,4 @@
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 // CJK 加粗（2026-10-14 用户报的两例）：CommonMark 的定界规则下 `**标题： **`
 // 的收尾 ** 前是空白、`**说明：**后文` 的收尾 ** 前是中文标点且后是汉字，都算
@@ -11,7 +11,7 @@ import remarkBreaks from "remark-breaks";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { Component, memo, useMemo, useContext } from "react";
+import { Component, memo, useMemo, useContext, useState } from "react";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
 import { MdPre } from "./CodeBlock";
@@ -30,6 +30,10 @@ import { localMediaPathOfHref } from "../files/media-view.ts";
 import { openLocalMedia } from "../files/open-media-link.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
+import { ChatImageSizeContext, resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
+import { requestOpenPanel } from "../../shell/open-panel.ts";
+// 提醒框（`> [!note]`）的样式 = 文档面板阅读视图那一份（`.chat-md .callout`），回答里与文档里长一个样
+import "../doc-panel/doc-panel.css";
 
 /**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
@@ -50,8 +54,10 @@ import { CitationOpenContext, CitationTableContext } from "./citation-context.ts
  *   消息落定后 streaming 翻 false，尾块的那次补渲照旧。
  * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 把网页送进内置浏览器、
  *   mailto 交给系统（`src/main/index.ts` 的 openLink），外链绝不能在应用窗口内导航走。
- * - **图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
- *   渲染成占位链接，点击才去内置浏览器看（ImagePlaceholder）。
+ * - **远程图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
+ *   渲染成占位链接，点击才去内置浏览器看（ImagePlaceholder）。**本地图照常显示**（2026-11-22 用户：
+ *   图要和它的解释放在一起）：回答里写 `![](路径)`，按文件面板同一道白名单读（chat-file-scope.ts），
+ *   不在会话能看到的目录里就是占位。
  * - **raw HTML 只放行 `<details>`/`<summary>`**：rehype-raw 解析 + rehype-sanitize
  *   白名单剥离，其余标签仍是纯文本。白名单可审计，攻击面有界。
  * - 元素样式在 `styles.css` 的 `.chat-md` 作用域里，走设计系统 token。
@@ -71,6 +77,15 @@ const CITATION_MARKER_PRESENT = new RegExp(CITATION_MARKER.source);
  * memo（每次渲染都重跑 remark / rehype），只有把这层 memo 垫在前面，流式期间未变的
  * 块才会被跳过。其余 prop 由 MarkdownBlock 用 useMemo 维持稳定身份，比较即按 text。
  */
+/**
+ * 默认的 URL 清洗会把 `file:` 与 Windows 盘符路径（`C:\\…`）当成未知协议清空；图片的 src 放行这两种本地写法
+ * （读不读得到由 ChatImage 走白名单决定），其余照默认。
+ */
+function chatUrlTransform(url: string, key: string): string {
+  if (key === "src" && (/^file:/i.test(url) || /^[A-Za-z]:[\\/]/.test(url))) return url;
+  return defaultUrlTransform(url);
+}
+
 const MarkdownChunk = memo(function MarkdownChunk(props: {
   text: string;
   remarkPlugins: PluggableList;
@@ -85,6 +100,7 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
   return (
     <MermaidPendingContext.Provider value={props.fenceOpen}>
       <ReactMarkdown
+        urlTransform={chatUrlTransform}
         remarkPlugins={props.remarkPlugins}
         rehypePlugins={props.rehypePlugins}
         components={props.components}
@@ -127,9 +143,12 @@ export const MarkdownBlock = memo(function MarkdownBlock({
     () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight={false} />,
     [],
   );
+  // 用户气泡里的 `![](路径)` 不画成图（2026-11-23 用户：「为什么会有图出现在 user message 里」）：
+  // 用户打进去的是一段文字，模型收到的也只是这段文字、不是这张图——画成图会让人以为 agent 看到了它。
+  // 画成一颗「图片 · 文件名」小签，点了在右栏文件面板看
   const baseComponents = useMemo(
-    () => ({ a: ExternalAnchor, img: ImagePlaceholder, span: ChipSpan }),
-    [],
+    () => ({ a: ExternalAnchor, img: bubble ? BubbleImageRef : ChatImage, span: ChipSpan }),
+    [bubble],
   );
   const highlightComponents = useMemo(
     () => ({ ...baseComponents, pre: preHighlight }),
@@ -287,6 +306,91 @@ function CitationAnchor(props: { id: string; label: ReactNode }) {
         {props.label}
       </a>
     </sup>
+  );
+}
+
+/**
+ * 回答里的图：http(s) 的远程图走占位（不加载）；其余当本地路径（绝对路径，或相对会话目录），
+ * 在会话能看到的目录里就读出来显示，一张图占一整行，下面紧跟的段落就是它的解释。
+ */
+function ChatImage(props: ImageProps) {
+  const src = typeof props.src === "string" ? props.src : "";
+  const scope = useChatFileScope();
+  const remote = /^[a-z][a-z0-9+.-]*:/i.test(src) && !/^file:/i.test(src) && !/^[A-Za-z]:[\\/]/.test(src);
+  const path = remote || src === "" ? null : resolveChatPath(src, scope?.cwd ?? null);
+  if (path === null) return <ImagePlaceholder {...props} />;
+  return <LocalChatImage path={path} alt={typeof props.alt === "string" ? props.alt : ""} fallback={props} />;
+}
+
+function LocalChatImage(props: { path: string; alt: string; fallback: ImageProps }) {
+  const t = useT();
+  const url = useChatImage(props.path);
+  const pref = useContext(ChatImageSizeContext);
+  // 挂载时读一次偏好当初值：之后别处改了偏好，已经画好的这张不跟着跳
+  const [size, setSize] = useState(pref.size);
+  if (url === undefined) return <span className="chat-img-pending" data-size={size} aria-hidden="true" />;
+  if (url === null) {
+    // 读不到（不在这条会话能看的文件夹里，或文件没了）：明说「打不开」，悬停给路径与原因——
+    // 以前退成一颗写着图片说明的签，看不出是坏图（2026-11-23 用户）
+    const name = props.path.split(/[\\/]/).pop() ?? props.path;
+    return (
+      <span className="chat-img-missing" title={t.lightbox.missingTip(props.path)}>
+        <Icon name="image-off" size={12} strokeWidth={1.8} />
+        {t.lightbox.missing(name)}
+      </span>
+    );
+  }
+  const next = size === "large" ? "small" : "large";
+  return (
+    // 悬停图片右上角出一颗小工具条（与划选文字的「复制 / 引用」同一副样子）：大图时「缩小」、小图时「放大」，
+    // 斜对角箭头朝外 = 放大、朝里 = 缩小（2026-11-23 用户）。点了改这一张，并记成之后新图的默认。
+    // 左键图片本身在右栏文件面板里预览。图居中，大图最高 480、小图最高 160
+    <span className="chat-img-frame" data-size={size}>
+      <button
+        type="button"
+        className="chat-img-local"
+        title={t.lightbox.openInFiles}
+        aria-label={t.lightbox.openInFiles}
+        onClick={() => requestOpenPanel({ kind: "files", path: props.path, force: true })}
+      >
+        <img src={url} alt={props.alt} />
+      </button>
+      <span className="chat-img-tools quote-toolbar" role="toolbar">
+        <button
+          type="button"
+          title={next === "large" ? t.lightbox.sizeLarge : t.lightbox.sizeSmall}
+          onClick={() => {
+            setSize(next);
+            pref.setSize(next);
+          }}
+        >
+          <Icon name={next === "large" ? "maximize-2" : "minimize-2"} size={13} strokeWidth={1.8} />
+          {next === "large" ? t.lightbox.sizeLarge : t.lightbox.sizeSmall}
+        </button>
+      </span>
+    </span>
+  );
+}
+
+/** 用户气泡里的图片语法：一颗小签（文件名），不读图。本地路径点了在右栏文件面板看，远程地址照占位的规矩 */
+function BubbleImageRef(props: ImageProps) {
+  const t = useT();
+  const src = typeof props.src === "string" ? props.src : "";
+  const scope = useChatFileScope();
+  const remote = /^[a-z][a-z0-9+.-]*:/i.test(src) && !/^file:/i.test(src) && !/^[A-Za-z]:[\\/]/.test(src);
+  const path = remote || src === "" ? null : resolveChatPath(src, scope?.cwd ?? null);
+  if (path === null) return <ImagePlaceholder {...props} />;
+  const name = path.split(/[\\/]/).pop() ?? path;
+  return (
+    <button
+      type="button"
+      className="chat-img-ref"
+      title={path}
+      onClick={() => requestOpenPanel({ kind: "files", path, force: true })}
+    >
+      <Icon name="image" size={12} strokeWidth={1.8} />
+      {t.lightbox.imageRef(name)}
+    </button>
   );
 }
 

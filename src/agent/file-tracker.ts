@@ -97,15 +97,18 @@ interface PathEntry {
 export class TurnFileTracker {
   private readonly cwd: string;
   private readonly read: PathReader;
+  /** 每次放行 write / edit 时报一下解析后的绝对路径（旁路网页扫描据此认出「别的会话写的」） */
+  private readonly onWrite: ((path: string) => void) | undefined;
   /** toolCallId → 改动路径（execution_end 按调用对回路） */
   private readonly callPaths = new Map<string, string>();
   private readonly paths = new Map<string, PathEntry>();
   /** 在途的 after 读盘（execution_end 触发，不 await 事件流）：finalize 先等它们落定 */
   private readonly inflightReads = new Set<Promise<void>>();
 
-  constructor(cwd: string, read: PathReader = diskReader) {
+  constructor(cwd: string, read: PathReader = diskReader, onWrite?: (path: string) => void) {
     this.cwd = cwd;
     this.read = read;
+    this.onWrite = onWrite;
   }
 
   /**
@@ -119,6 +122,7 @@ export class TurnFileTracker {
     if (typeof target !== "string" || target === "") return;
     const path = resolveToolPath(target, this.cwd);
     this.callPaths.set(toolCallId, path);
+    this.onWrite?.(path);
     if (this.paths.has(path)) return; // 本轮已记过 before——最早的才是还原目标
     this.paths.set(path, { before: toSnapshot(await this.read(path)), after: null });
   }

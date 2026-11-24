@@ -51,9 +51,13 @@ test("整行精确匹配：前缀相同但更长的行不被替换", () => {
 test("追加段措辞锚定（防手滑漂移）", () => {
   assert.equal(
     PROGRESS_NARRATION_GUIDELINE,
-    "Tool calls and thinking are collapsed by default in the UI; the user only sees the text you write.\n" +
-      "Before a group of tool calls, say in one sentence what you are about to do; after each stage (research done, cause found, change made, verification done), state the outcome in one or two sentences.\n" +
-      "Do not narrate every tool call, and do not paste your thinking into the reply.\n",
+    "Your tool calls, thinking and mid-turn text are folded into one collapsed line in the UI; the user reliably sees only your final answer and the outputs listed under it.\n" +
+      "When you start a new stage of work, write one short line naming it (a few words, no paragraph), e.g. \"Checking how the cards are grouped\"; it becomes that stage's title in the folded process. " +
+      "Do not announce routine steps such as reading a file or a skill, and do not paste your thinking.\n" +
+      "Put conclusions, decisions the user should know about, and anything they must act on in the final answer.\n" +
+      "Decks, documents and exported files you made in this turn are listed as clickable cards under your answer: refer to them by name, do not paste their full paths.\n" +
+      "To show the user a picture, embed it in your final answer where you discuss it: ![short caption](</absolute/path/to/image.png>) on its own line, followed by the paragraph that explains it. " +
+      "The file must be inside the workspace, an attached directory or the session workbench — save screenshots and figures you make into the session workbench's shots/ folder, never /tmp, or the user sees a broken image.\n",
   );
 });
 
