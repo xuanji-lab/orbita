@@ -101,33 +101,56 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
     if (host === null || host === undefined) return;
     // 有卡坏了 / 还没都挂上时不截：残缺画面不该成为下次的第一帧
     if (host.querySelectorAll("iframe.bd-iframe").length !== board.cards.length) return;
-    const rect = host.getBoundingClientRect();
-    // 只截完整落在窗口里的外框；半露的图贴回来会像被二次裁过
-    if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight || rect.width < 1 || rect.height < 1) return;
+    const root = host.closest<HTMLElement>(SCROLL_ROOT);
     const ratio = window.devicePixelRatio || 1;
-    void api.board
-      .shot({ rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } })
-      .then(async (result) => {
-        if (result === null) return;
-        const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
-        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-        const current = hostRef.current?.querySelector<HTMLElement>(".board-clip");
-        const currentRect = current?.getBoundingClientRect();
-        // IPC / 解码期间又挪了尺寸或换了主题：这份旧图不能落地
-        if (
-          current === null ||
-          current === undefined ||
-          currentRect === undefined ||
-          Math.abs(currentRect.width - rect.width) >= 2 ||
-          Math.abs(currentRect.height - rect.height) >= 2 ||
-          (document.documentElement.dataset.theme ?? "") !== theme
-        ) {
-          bitmap.close();
-          return;
+    void (async () => {
+      // 阅读位置恢复与虚拟列表测高会在 iframe 就绪后继续挪动页面。连续两次几何不变才截，
+      // 否则 rect 是量的时候的、像素是另一时刻的，贴回来就只剩某个局部（实测右下半张）。
+      let candidate = { rect: host.getBoundingClientRect(), scrollTop: root?.scrollTop ?? 0 };
+      let settled: typeof candidate | null = null;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 120));
+        if (!host.isConnected) return;
+        const next = { rect: host.getBoundingClientRect(), scrollTop: root?.scrollTop ?? 0 };
+        const stable =
+          Math.abs(next.rect.x - candidate.rect.x) < 1 &&
+          Math.abs(next.rect.y - candidate.rect.y) < 1 &&
+          Math.abs(next.rect.width - candidate.rect.width) < 1 &&
+          Math.abs(next.rect.height - candidate.rect.height) < 1 &&
+          Math.abs(next.scrollTop - candidate.scrollTop) < 1;
+        if (stable) {
+          settled = next;
+          break;
         }
-        boardShots.set(cacheKey, { bitmap, cssWidth: rect.width, cssHeight: rect.height, ratio, theme, capturedAt: Date.now() });
-      })
-      .catch(() => undefined);
+        candidate = next;
+      }
+      if (settled === null) return;
+      const { rect, scrollTop } = settled;
+      // 只截完整落在窗口里的外框；半露的图贴回来会像被二次裁过
+      if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight || rect.width < 1 || rect.height < 1) return;
+      const result = await api.board.shot({ rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+      if (result === null) return;
+      const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+      const current = hostRef.current?.querySelector<HTMLElement>(".board-clip");
+      const currentRect = current?.getBoundingClientRect();
+      // IPC / 解码期间又挪了位置、尺寸或主题：这份旧图不能落地
+      if (
+        current === null ||
+        current === undefined ||
+        currentRect === undefined ||
+        Math.abs(currentRect.x - rect.x) >= 1 ||
+        Math.abs(currentRect.y - rect.y) >= 1 ||
+        Math.abs(currentRect.width - rect.width) >= 2 ||
+        Math.abs(currentRect.height - rect.height) >= 2 ||
+        Math.abs((root?.scrollTop ?? 0) - scrollTop) >= 1 ||
+        (document.documentElement.dataset.theme ?? "") !== theme
+      ) {
+        bitmap.close();
+        return;
+      }
+      boardShots.set(cacheKey, { bitmap, cssWidth: rect.width, cssHeight: rect.height, ratio, theme, capturedAt: Date.now() });
+    })().catch(() => undefined);
   }, [board.cards.length, cacheKey, theme]);
 
   const onPainted = useCallback((): void => {
