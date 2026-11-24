@@ -388,6 +388,15 @@ export const ipcChannels = {
   subAgentCreate: "subagent:create",
   subAgentUpdate: "subagent:update",
   subAgentDelete: "subagent:delete",
+  /**
+   * 「生成形象」（shared/planet-avatar.ts）：给一颗天体出地表候选（幕后会话跑插件 planet-render）、读当前这一轮、
+   * 挑一张写进 planet/、取消。进度经 planetAvatarEvent 推（载荷 AvatarJobEvent，带整份状态）。
+   */
+  planetAvatarGenerate: "planet:avatar-generate",
+  planetAvatarGet: "planet:avatar-get",
+  planetAvatarSelect: "planet:avatar-select",
+  planetAvatarCancel: "planet:avatar-cancel",
+  planetAvatarEvent: "planet:avatar-event",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
