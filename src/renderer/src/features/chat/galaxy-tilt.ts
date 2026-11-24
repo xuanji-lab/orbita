@@ -14,6 +14,16 @@ export function useGalaxyTilt(): number {
 }
 
 /**
+ * 改星系倾角（写设置，和设置 › 外观的滑块同一个字段）：星系空白处拖动 / 方向键松手时调它。
+ * 没有提供者（测试、设置页的小预览）= null，星系就不接拖动。
+ */
+export const GalaxyTiltSetterContext = createContext<((deg: number) => void) | null>(null);
+
+export function useGalaxyTiltSetter(): ((deg: number) => void) | null {
+  return useContext(GalaxyTiltSetterContext);
+}
+
+/**
  * 哪块画布把俯角自动抬高了（屏幕安全布局：子智能体在设置的俯角下装不下时，只对这一块画布抬到刚好装得下）。
  * 每个星系组件挂着时上报自己画在多少度；设置页那一行据此写一句「右栏星系图较窄，自动抬高到 X°」。
  */

@@ -41,7 +41,7 @@ import { OrchestraPanel } from "./features/chat/OrchestraPanel.tsx";
 import { headerStatusOf } from "./features/chat/agent-status.ts";
 import { latestWorkspaceId, scopeRecent, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
 import { GalaxyActionsContext, type DesignerFocus, type GalaxyActions } from "./features/chat/galaxy-actions.ts";
-import { GalaxyTiltContext } from "./features/chat/galaxy-tilt.ts";
+import { GalaxyTiltContext, GalaxyTiltSetterContext } from "./features/chat/galaxy-tilt.ts";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
@@ -210,6 +210,8 @@ export function App() {
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
+  /** 星系空白处拖动 / 方向键改的俯角：写同一个设置字段（设置 › 外观 › 星系倾角），重启后还在 */
+  const setGalaxyTilt = useCallback((deg: number) => changeSettings({ galaxyTilt: deg }), [changeSettings]);
 
   /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
   const chatImageSize = useMemo(
@@ -1550,6 +1552,7 @@ export function App() {
     <CitationOpenContext.Provider value={openCitation}>
     <GalaxyActionsContext.Provider value={galaxyActions}>
     <GalaxyTiltContext.Provider value={galaxyTiltOf(settings)}>
+    <GalaxyTiltSetterContext.Provider value={setGalaxyTilt}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
       <div className="layer">
@@ -1899,6 +1902,7 @@ export function App() {
       {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
+    </GalaxyTiltSetterContext.Provider>
     </GalaxyTiltContext.Provider>
     </GalaxyActionsContext.Provider>
     </CitationOpenContext.Provider>

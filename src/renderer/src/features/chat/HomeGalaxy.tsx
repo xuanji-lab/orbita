@@ -1,4 +1,19 @@
-import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   drawFrame,
   frameViewport,
@@ -63,7 +78,8 @@ import {
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
-import { reportElevation, useGalaxyTilt, type GalaxySurface } from "./galaxy-tilt.ts";
+import { reportElevation, useGalaxyTilt, useGalaxyTiltSetter, type GalaxySurface } from "./galaxy-tilt.ts";
+import { dragTilt, isDragMove, keyTilt, raisedTo } from "./tilt-drag.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -101,6 +117,98 @@ function useBoxSize(target: RefObject<Element | null>): { width: number; height:
     return () => observer.disconnect();
   }, [target]);
   return size;
+}
+
+/**
+ * 星系空白处按住左键上下拖动改俯角（规则在 tilt-drag.ts）。拖动中只改这块画布的俯角（live），松手才写设置
+ * （设置 › 外观 › 星系倾角同一个字段），设置回填后 live 清掉，四处星系与滑块一起变。
+ * 按下时不拦：位移 ≤ 4px 是点击，点天体照旧打开；超过才算拖、抓住指针，松手后吞掉那一下 click。
+ * 键盘：焦点在星系根节点上时 ↑ ↓ 每次 5°（焦点在天体上不管，那是天体自己的键）。
+ */
+type TiltGesture = { pointerId: number; x: number; y: number; start: number; active: boolean };
+
+function useTiltDrag(tilt: number, commit: ((deg: number) => void) | null) {
+  const [live, setLive] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [flash, setFlash] = useState(false);
+  const gesture = useRef<TiltGesture | null>(null);
+  const liveRef = useRef<number | null>(null);
+  const swallowClick = useRef(false);
+  const flashTimer = useRef<number | null>(null);
+  // 设置回填（或别处改了设置）：以设置为准
+  useEffect(() => {
+    liveRef.current = null;
+    setLive(null);
+  }, [tilt]);
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+  const show = (value: number | null): void => {
+    liveRef.current = value;
+    setLive(value);
+  };
+  const finish = (event: ReactPointerEvent<HTMLDivElement>, keep: boolean): void => {
+    const g = gesture.current;
+    if (g === null || g.pointerId !== event.pointerId) return;
+    gesture.current = null;
+    if (!g.active) return;
+    swallowClick.current = true;
+    setDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const value = liveRef.current;
+    if (!keep || value === null || value === tilt || commit === null) show(null);
+    else commit(value);
+  };
+  const handlers =
+    commit === null
+      ? null
+      : {
+          onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
+            swallowClick.current = false;
+            if (event.button !== 0 || !event.isPrimary) return;
+            gesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, start: liveRef.current ?? tilt, active: false };
+          },
+          onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => {
+            const g = gesture.current;
+            if (g === null || g.pointerId !== event.pointerId) return;
+            const dy = event.clientY - g.y;
+            if (!g.active) {
+              if (!isDragMove(event.clientX - g.x, dy)) return;
+              g.active = true;
+              setDragging(true);
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }
+            event.preventDefault();
+            const next = dragTilt(g.start, dy);
+            if (next !== (liveRef.current ?? tilt)) show(next);
+            else if (liveRef.current === null) show(tilt);
+          },
+          onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => finish(event, true),
+          onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => finish(event, false),
+          // 拖过之后的那一下 click 不给天体（捕获阶段拦下）
+          onClickCapture: (event: ReactMouseEvent<HTMLDivElement>) => {
+            if (!swallowClick.current) return;
+            swallowClick.current = false;
+            event.stopPropagation();
+            event.preventDefault();
+          },
+          onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (event.target !== event.currentTarget) return;
+            const next = keyTilt(liveRef.current ?? tilt, event.key);
+            if (next === null) return;
+            event.preventDefault();
+            setFlash(true);
+            if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+            flashTimer.current = window.setTimeout(() => setFlash(false), 1400);
+            if (next === (liveRef.current ?? tilt)) return;
+            show(next);
+            commit(next);
+          },
+        };
+  return { tilt: live ?? tilt, dragging, badge: dragging || flash, handlers };
 }
 
 /**
@@ -501,7 +609,12 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const starless = props.starless === true;
   // 轨道是开普勒椭圆（偏心率候选见 proto-variants），俯角是设置里的星系倾角（单智能体首页与编排页同一套）
   const orbitE = Number(useProtoVariants().orbitE);
-  const tilt = useGalaxyTilt();
+  const settingTilt = useGalaxyTilt();
+  const surface = props.surface === undefined ? (props.fill === true ? "page" : "home") : props.surface;
+  // 设置页的小预览（surface = null）不接拖动：那里有滑块
+  const setTilt = useGalaxyTiltSetter();
+  const drag = useTiltDrag(settingTilt, surface === null ? null : setTilt);
+  const tilt = drag.tilt;
   const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE }), [props.spec, orbitE]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {
@@ -513,13 +626,14 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax);
     return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg };
   }, [size, spec, props.agents, props.fill, tilt]);
-  const surface = props.surface === undefined ? (props.fill === true ? "page" : "home") : props.surface;
   const actualElevation = scene?.elevation ?? null;
   useLayoutEffect(() => {
     if (surface === null) return;
     // 卸载时不清：设置页打开时编排页的星系已经卸了，那一句说的是「上次画这块画布时」
+    // 拖动中不报（只是这块画布在预览），松手写进设置后按设置值报
+    if (drag.dragging) return;
     reportElevation(surface, tilt, actualElevation);
-  }, [surface, tilt, actualElevation]);
+  }, [surface, tilt, actualElevation, drag.dragging]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
   // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）
@@ -779,12 +893,19 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       />
     );
   const total = layout.belt?.count ?? 0;
+  const raised = raisedTo(tilt, actualElevation);
   return (
     <div
       ref={rootRef}
       className="home-galaxy gx-root"
-      role={live === null ? "img" : "group"}
+      role={live === null && drag.handlers === null ? "img" : "group"}
       aria-label={props.label}
+      aria-description={drag.handlers === null ? undefined : t.agents.tiltHint}
+      tabIndex={drag.handlers === null ? undefined : 0}
+      data-tilt-drag={drag.handlers === null ? undefined : "true"}
+      data-tilt-dragging={drag.dragging || undefined}
+      data-tilt={tilt}
+      {...(drag.handlers ?? {})}
       data-planets={starless ? 0 : layout.planets.length}
       data-rocks={starless || layout.rockOrbit === null ? 0 : layout.rocks.length}
       data-starless={starless || undefined}
@@ -859,6 +980,13 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
         「全部 N 条会话」：不占画面的入口（2026-11-24 起每条会话都画成碎石，不再有「另有 N 条」那行字）。
         平时视觉隐藏，键盘 Tab 到它时才在左下角出现；读屏念它。碎石几百颗时单颗不可点，键盘要回旧会话就从这里去右栏树状图。
       */}
+      {/* 拖动中 / 刚按过方向键：角落写当前角度；屏幕安全布局把这块画布抬高了就在旁边写一句 */}
+      {drag.badge && (
+        <span className="galaxy-tilt-badge" role="status" data-raised={raised ?? undefined}>
+          <span className="galaxy-tilt-value">{t.agents.tiltValue(tilt)}</span>
+          {raised !== null && <span className="galaxy-tilt-raised">{t.agents.tiltRaised(raised)}</span>}
+        </span>
+      )}
       {live !== null && total > 0 && (
         <button type="button" className="galaxy-all" onClick={live.actions.openTree}>
           {t.agents.allSessions(total)}

@@ -7576,3 +7576,47 @@ button.turn-output-from.link:hover {
   height: 1px;
   background: var(--color-border-default);
 }
+
+/*
+ * 星系空白处拖动改俯角（HomeGalaxy 的 useTiltDrag）：能拖的星系根节点自己接指针（平时整张 .home-galaxy 不接），
+ * 光标 grab，拖动中 grabbing；能点的天体照旧是 pointer。拖动中不选字。
+ */
+.home-galaxy[data-tilt-drag] {
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.home-galaxy[data-tilt-dragging],
+.home-galaxy[data-tilt-dragging] * {
+  cursor: grabbing;
+}
+/* 角落的角度提示：拖动中 / 刚按过方向键才出现，不吃指针；数字等宽，抬高说明是次级墨 */
+.galaxy-tilt-badge {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: calc(100% - var(--space-6));
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  pointer-events: none;
+}
+.galaxy-tilt-value {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+.galaxy-tilt-raised {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
