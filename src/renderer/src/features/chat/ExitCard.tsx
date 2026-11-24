@@ -51,15 +51,18 @@ export function ExitCard(props: {
   clickTitle?: string;
   /** 右边的动作按钮（交接卡：去浏览器 / 完成 / 取消）；用 `.card-btn` */
   actions?: React.ReactNode;
+  /** 卡内第二行动作（失败子会话的重试 / 终止），避免右侧动作挤没标题。 */
+  footer?: React.ReactNode;
   lit?: boolean;
 }) {
   const style: React.CSSProperties = {
     ...EXIT_CARD_STYLE,
     ...(props.lit === true ? LIT_STYLE : {}),
     ...(props.onClick !== undefined ? { width: "100%", textAlign: "left", cursor: "pointer", font: "inherit" } : {}),
+    ...(props.footer !== undefined ? { display: "grid" as const } : {}),
   };
   const sub = [props.preview ?? ""].filter((part) => part !== "");
-  const content = (
+  const head = (
     <>
       <span className="exit-card-icon">
         <Icon name={props.icon ?? "arrow-up-right"} size={18} strokeWidth={1.6} />
@@ -94,7 +97,26 @@ export function ExitCard(props: {
       )}
     </>
   );
-  if (props.onClick === undefined || props.actions !== undefined) return <div style={style}>{content}</div>;
+  const content =
+    props.footer === undefined ? (
+      head
+    ) : (
+      <>
+        <span style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", width: "100%", minWidth: 0 }}>
+          {head}
+        </span>
+        <span
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            paddingLeft: "calc(18px + var(--space-3))",
+          }}
+        >
+          {props.footer}
+        </span>
+      </>
+    );
+  if (props.onClick === undefined || props.actions !== undefined || props.footer !== undefined) return <div style={style}>{content}</div>;
   return (
     <button type="button" onClick={props.onClick} title={props.clickTitle} style={style}>
       {content}

@@ -52,6 +52,7 @@ import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
 import { effectiveIntentSettings } from "../shared/settings.ts";
 import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
+import { ChannelReconciler } from "./channel/reconcile.ts";
 import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
 import { KeepAwake } from "./automation/keep-awake.ts";
 import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
@@ -519,6 +520,34 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+  const channelReconciler = new ChannelReconciler({ sessions, channels, phases, broadcast: broadcastChannelEvent });
+  const channelIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const cancelChannelIdleClose = (sessionId: string): void => {
+    clearTimeout(channelIdleTimers.get(sessionId));
+    channelIdleTimers.delete(sessionId);
+  };
+  const scheduleChannelIdleClose = (sessionId: string): void => {
+    cancelChannelIdleClose(sessionId);
+    // item_finished 的 record() 是异步落盘。等一个很短轮尾再读，且落账前还会复查 phase / 账本；
+    // 用户立刻重试或终止时这一轮清扫会作废，不会关掉新轮。
+    const timer = setTimeout(() => {
+      channelIdleTimers.delete(sessionId);
+      void channelReconciler
+        .reconcileSession(sessionId, { interruptedCause: "incomplete" })
+        .catch((cause: unknown) => console.error("[channel] 子会话轮尾收尾失败", sessionId, cause));
+    }, 80);
+    channelIdleTimers.set(sessionId, timer);
+  };
+  const closeChannelsForLostProcess = (): void => {
+    const lost = [...phases].filter(([, phase]) => phase !== "idle").map(([sessionId]) => sessionId);
+    phases.clear();
+    for (const sessionId of lost) {
+      cancelChannelIdleClose(sessionId);
+      void channelReconciler
+        .reconcileSession(sessionId, { interruptedCause: "process-exit", force: true })
+        .catch((cause: unknown) => console.error("[channel] agent 进程退出后的子会话收尾失败", sessionId, cause));
+    }
+  };
   /*
    * 额度缓存只建一份：provider 的额度查询（registerProviderIpc）与 failed 事件的
    * 额度补丁读同一份 `<userData>/quota-cache.json`。
@@ -670,13 +699,17 @@ void app.whenReady().then(async () => {
     // 子会话：主进程按 phase 事件维护活会话状态；runtime 整个退出时全部会话的
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
-    if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    if (event.type === "phase") {
+      phases.set(event.sessionId, event.phase);
+      if (event.phase === "idle") scheduleChannelIdleClose(event.sessionId);
+      else cancelChannelIdleClose(event.sessionId);
+    }
     // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
     // 只旁听，不 return：事件照常往下 record + broadcast
     automationScheduler.onAgentEvent(event);
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
     if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
-    if (event.type === "failed" && event.sessionId === null) phases.clear();
+    if (event.type === "failed" && event.sessionId === null) closeChannelsForLostProcess();
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
     // 通道账本一并传进去：子会话每一轮的开头是通道消息，正文在那里。
     // 任何路径都必须回执（同 delegateRequest）：读盘抛错没有 catch 的话，agent 进程里的
@@ -821,6 +854,10 @@ void app.whenReady().then(async () => {
     if (event.type === "failed" && event.turn === true && event.sessionId !== null) {
       const turnFailed = event;
       const sessionId = event.sessionId;
+      // 子会话的模型错误就是确定终局：不等 phase idle，也不靠工具尾帧猜。根会话由 readMeta 检查跳过。
+      void channelReconciler
+        .reconcileSession(sessionId, { interruptedCause: "incomplete", failureText: event.message, force: true })
+        .catch((cause: unknown) => console.error("[channel] 子会话模型失败收尾失败", sessionId, cause));
       void quotaHintFor(sessionId).then((quota) => {
         const out = quota === null ? turnFailed : { ...turnFailed, quota };
         intentIngest.onEvent(out);
@@ -1309,7 +1346,11 @@ void app.whenReady().then(async () => {
     phases,
     broadcast: broadcastChannelEvent,
   };
-  registerChannelIpc(deps);
+  const startupChannelNotices = await channelReconciler.reconcileAll().catch((cause: unknown) => {
+    console.error("[channel] 启动子会话收尾失败", cause);
+    return [];
+  });
+  registerChannelIpc(deps, startupChannelNotices);
 
   /*
    * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——
@@ -1401,6 +1442,7 @@ void app.whenReady().then(async () => {
   });
 
   app.on("before-quit", () => {
+    for (const sessionId of channelIdleTimers.keys()) cancelChannelIdleClose(sessionId);
     automationScheduler.stop();
     keepAwake.release();
     appTray?.beginQuit();

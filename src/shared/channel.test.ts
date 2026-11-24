@@ -33,9 +33,9 @@ function message(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 }
 
 describe("allowedKinds", () => {
-  it("父只能发 task / reply / stop；子只能发 question / progress / done / failed", () => {
+  it("方向允许的种类；interrupted 虽能由系统落账，模型发信入口另有硬拦", () => {
     deepStrictEqual([...allowedKinds("parent")], ["task", "reply", "stop"]);
-    deepStrictEqual([...allowedKinds("child")], ["question", "progress", "done", "failed"]);
+    deepStrictEqual([...allowedKinds("child")], ["question", "progress", "done", "failed", "interrupted"]);
   });
 });
 
@@ -82,6 +82,21 @@ describe("parseChannelMessage", () => {
       parseChannelMessage(message({ from: "child", kind: "stop", author: "user" })),
       null,
     );
+  });
+
+  it("system 只能落子侧 done / failed / interrupted；模型与 parent 侧不能伪造系统终局", () => {
+    const closed = message({
+      from: "child",
+      author: "system",
+      kind: "interrupted",
+      text: "app exited",
+      endCause: "app-exit",
+    });
+    deepStrictEqual(parseChannelMessage(closed), closed);
+    strictEqual(parseChannelMessage(message({ from: "child", kind: "interrupted", author: "model" })), null);
+    strictEqual(parseChannelMessage(message({ from: "parent", kind: "interrupted", author: "system" })), null);
+    strictEqual(parseChannelMessage(message({ from: "child", kind: "question", author: "system" })), null);
+    strictEqual(parseChannelMessage(message({ endCause: "model" })), null);
   });
 
   it("author 缺席或坏值归 model；只有字面 \"user\" 才算用户代发", () => {
@@ -151,6 +166,26 @@ describe("channelStatus", () => {
     strictEqual(
       channelStatus([message(), message({ id: "m2", from: "child", kind: "failed", createdAt: 2 })]),
       "failed",
+    );
+  });
+
+  it("system interrupted 是 closed；父 reply 可重试重开，子后续 progress 不能自己翻回 running", () => {
+    const interrupted = message({
+      id: "m2",
+      from: "child",
+      author: "system",
+      kind: "interrupted",
+      endCause: "app-exit",
+      createdAt: 2,
+    });
+    strictEqual(channelStatus([message(), interrupted]), "interrupted");
+    strictEqual(
+      channelStatus([message(), interrupted, message({ id: "m3", from: "child", kind: "progress", createdAt: 3 })]),
+      "interrupted",
+    );
+    strictEqual(
+      channelStatus([message(), interrupted, message({ id: "m4", kind: "reply", author: "user", createdAt: 4 })]),
+      "running",
     );
   });
 
@@ -377,6 +412,20 @@ describe("composeChannelPrompt / parseChannelPrompt", () => {
       peerId: "c1",
       messageId: "m2",
     });
+  });
+
+  it("system interrupted 也能经既有信封交给父模型（不打岔「现在讨论」复用这条路）", () => {
+    const closed = message({
+      id: "sys-1",
+      from: "child",
+      author: "system",
+      kind: "interrupted",
+      text: "app exited",
+      endCause: "app-exit",
+    });
+    const parsed = parseChannelPrompt(composeChannelPrompt(closed, { id: "child-1", title: "子任务" }));
+    strictEqual(parsed?.kind, "interrupted");
+    strictEqual(parsed?.messageId, "sys-1");
   });
 
   it("标题含引号与换行——清洗后不破坏首行属性，且仍能正常解析", () => {

@@ -27,6 +27,7 @@ import { forgetViews, patchView, readView, type StatusView, type StatusViewPatch
 import { LruCache } from "../../../../shared/lru.ts";
 import { OutputThumb, SlideStyles } from "./StatusThumb";
 import { delegationSteps } from "./delegation-steps.ts";
+import { channelEndOf, channelEndText } from "../chat/sub-sessions-rows.ts";
 import {
   childActivityOf,
   childStateOf,
@@ -667,8 +668,14 @@ function KidRow(props: { row: ChildRow; now: number; onOpen: (childId: string) =
   const { row } = props;
   const running = row.state === "running" || row.state === "stuck";
   const question = row.state === "waiting" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "question")?.text : undefined;
-  const failed = row.state === "failed" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "failed")?.text : undefined;
-  const handed = row.state === "done" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "done")?.text.split("\n")[0] : undefined;
+  const failed =
+    row.state === "failed" || row.state === "interrupted"
+      ? channelEndText(channelEndOf(row.messages, row.state), t, t.chatStatus.state[row.state])
+      : undefined;
+  const handed =
+    row.state === "done"
+      ? channelEndText(channelEndOf(row.messages, "done"), t, t.chatStatus.state.done)
+      : undefined;
   const line =
     running && row.activity !== null
       ? toolCallLine(row.activity.toolName, row.activity.input)
@@ -1190,7 +1197,7 @@ interface ChildRow {
  */
 function Robots(props: { rows: readonly ChildRow[] }) {
   const t = useT();
-  const working = sortChildren(props.rows.filter((row) => isWorking(row.state) || row.state === "failed"));
+  const working = sortChildren(props.rows.filter((row) => isWorking(row.state) || row.state === "failed" || row.state === "interrupted"));
   if (working.length === 0) {
     const done = props.rows.filter((row) => row.state === "done").length;
     if (done === 0) return null;

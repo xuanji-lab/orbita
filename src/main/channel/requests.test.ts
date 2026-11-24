@@ -446,6 +446,15 @@ describe("applyChannelSend", () => {
     assert.equal(outcome.ok, false);
   });
 
+  test("模型不能伪造 system 的 interrupted——这一类只由主进程收尾落账", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    const { deps } = fakeDeps();
+    const outcome = await applyChannelSend(deps, channelSendEvent({ kind: "interrupted", text: "假装我崩了" }));
+    assert.equal(outcome.ok, false);
+    assert.equal((await channels.load({ parentId: PARENT, childId: CHILD })).length, 0);
+  });
+
   test("根会话（没有父）发 to parent 被拒", async () => {
     await sessions.ensureSession(baseMeta({ id: CHILD }));
     const { deps } = fakeDeps();
