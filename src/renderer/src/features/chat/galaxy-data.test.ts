@@ -9,7 +9,7 @@ import { AGENT_READABLE_MAX, BELT_OVERSHOOT, FRAME_EXTENT, GALAXY_MAX_FILL, PLAN
 import { fitScreenSafe } from "./screen-safe.ts";
 import { orchestraTree } from "./orchestra-data.ts";
 import { defaultDesign, type GalaxyDesign } from "../galaxy-designer/design.ts";
-import { IDLE_CHILD_MS, ORBIT_FIRST, ORBIT_SPREAD_MAX, ORBIT_STEP, RECENT_MENU_LIMIT, latestWorkspaceId, orbitRadiusOf, ROCK_CAP, planetMassOf, homeGalaxyOf, scopeGalaxy, scopeRecent, scopeSummary, scopeTone, stateIndexOf, stateOfIndex } from "./galaxy-data.ts";
+import { RECENT_ROCKS, IDLE_CHILD_MS, ORBIT_FIRST, ORBIT_SPREAD_MAX, ORBIT_STEP, RECENT_MENU_LIMIT, latestWorkspaceId, orbitRadiusOf, ROCK_CAP, planetMassOf, homeGalaxyOf, scopeGalaxy, scopeRecent, scopeSummary, scopeTone, stateIndexOf, stateOfIndex } from "./galaxy-data.ts";
 
 const meta = (over: { id: string; updatedAt: number } & Partial<SessionMeta>): SessionMeta => ({
   title: `Task ${over.id}`,
@@ -332,6 +332,37 @@ describe("编排星系：行星 = 子智能体，会话 = 碎石", () => {
     const data = scopeGalaxy({ sessions, workspaceId: ws, stateOf: (m) => (m.id === "s0" ? "waiting" : "running"), now: at, starMass: 600, designedPlanet: null, agents });
     assert.equal(data.spec.rocks?.length, ROCK_CAP);
     assert.equal(data.spec.rocks?.[0]?.id, "s0");
+  });
+});
+
+describe("编排入口页：最近几条没在做事的会话也框出来（2026-11-24 用户）", () => {
+  const ws = "ws";
+  const at = 1_000_000_000;
+  const mk = (id: string, over: Partial<SessionMeta> = {}): SessionMeta => meta({ id, updatedAt: at, ...over });
+  const agents = [{ id: "rec", mass: 22, composition: "rock" as const, orbitRadius: 19 }];
+  const base = { workspaceId: ws, now: at, starMass: 600, designedPlanet: null, agents };
+  test("在做事的在前，再按最近活动补 RECENT_ROCKS 条 recent；常驻对话的名字可以覆盖；最近的不再进星屑", () => {
+    const sessions = [mk("old", { updatedAt: at - 9 }), mk("r1", { updatedAt: at - 1 }), mk("r2", { updatedAt: at - 2 }), mk("r3", { updatedAt: at - 3 }), mk("run", { updatedAt: at - 50 }), mk("r4", { updatedAt: at - 4 })];
+    const data = scopeGalaxy({ ...base, sessions, stateOf: states({ run: "running" }), recent: RECENT_ROCKS, labels: new Map([["r2", "常驻对话"]]) });
+    assert.deepEqual(data.spec.rocks?.map((r) => [r.id, r.state, r.label]), [["run", "running", "Task run"], ["r1", "recent", "Task r1"], ["r2", "recent", "常驻对话"], ["r3", "recent", "Task r3"]]);
+    const dust = new Set(data.spec.dust?.map((d) => d.id));
+    for (const id of ["run", "r1", "r2", "r3"]) assert.equal(dust.has(id), false, id);
+    assert.equal(dust.has("r4"), true);
+    assert.equal(data.spec.sessions, sessions.length);
+  });
+  test("总数仍守 ROCK_CAP：在做事的占满 8 块时一条 recent 都不加；占 6 块时只补 2 条", () => {
+    const busy = Array.from({ length: 10 }, (_, i) => mk(`b${i}`, { updatedAt: at + i }));
+    const idle = Array.from({ length: 5 }, (_, i) => mk(`i${i}`, { updatedAt: at + 100 + i }));
+    const all = scopeGalaxy({ ...base, sessions: [...busy, ...idle], stateOf: (m) => (m.id.startsWith("b") ? "running" : null), recent: RECENT_ROCKS });
+    assert.equal(all.spec.rocks?.length, ROCK_CAP);
+    assert.equal(all.spec.rocks?.some((r) => r.state === "recent"), false);
+    const six = scopeGalaxy({ ...base, sessions: [...busy.slice(0, 6), ...idle], stateOf: (m) => (m.id.startsWith("b") ? "running" : null), recent: RECENT_ROCKS });
+    assert.deepEqual(six.spec.rocks?.filter((r) => r.state === "recent").map((r) => r.id), ["i4", "i3"]);
+  });
+  test("不给 recent（单智能体首页）就和原来一样：只有在做事的", () => {
+    const sessions = [mk("a"), mk("b")];
+    const data = scopeGalaxy({ ...base, sessions, stateOf: () => null });
+    assert.deepEqual(data.spec.rocks, []);
   });
 });
 

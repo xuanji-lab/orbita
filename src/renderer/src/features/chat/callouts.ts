@@ -19,7 +19,8 @@ export interface CalloutTarget {
   x: number;
   y: number;
   r: number;
-  state: "waiting" | "running";
+  /** recent = 最近但没在做事的会话：排在在做事的后面，样式轻一档 */
+  state: "waiting" | "running" | "recent";
   /** 已截断好的文字（任务名） */
   text: string;
   /** 要紧程度次序（越小越要紧）：等你在前、同档按轨道次序 */
@@ -195,9 +196,19 @@ export function placeCallouts(input: PlaceInput): CalloutPlacement[] {
   return placed;
 }
 
-/** 候选次序：等你在前（rank 0 段），在跑在后；同档按轨道次序（index） */
-export function calloutRank(state: "waiting" | "running", orbitIndex: number): number {
-  return (state === "waiting" ? 0 : 1000) + orbitIndex;
+/** 候选次序：等你在前（rank 0 段），在跑其次，最近但没在做事的最后；同档按轨道次序（index） */
+export function calloutRank(state: "waiting" | "running" | "recent", orbitIndex: number): number {
+  return (state === "waiting" ? 0 : state === "running" ? 1000 : 2000) + orbitIndex;
+}
+
+/**
+ * 最近但没在做事的会话的「锁定框」：一整圈虚线方框（不是四个角括号）——与在做事的那种一眼分得开，
+ * 框得住又不抢眼。尺寸与 lockFramePath 同一个 half，引线的起点不用改。
+ */
+export function recentFramePath(x: number, y: number, r: number): string {
+  const { half } = lockFrame(r);
+  const f = (n: number): string => n.toFixed(1);
+  return `M${f(x - half)} ${f(y - half)}H${f(x + half)}V${f(y + half)}H${f(x - half)}Z`;
 }
 
 /** 名字牌：一颗子智能体行星常显的名字（写在星体正下方，放不下换右边、左边） */

@@ -11,6 +11,7 @@ import {
   type GalaxySpec,
   type PlanetSpec,
   type RockSpec,
+  type RockState,
 } from "./galaxy.ts";
 
 /**
@@ -145,7 +146,17 @@ export interface ScopeGalaxyInput {
    * 会话一律进碎石带，在跑 / 等你的会话单独拎成带锁定框的碎石块（spec.rocks）。缺席 = 旧规矩（会话当行星，星际空间仍用它）。
    */
   agents?: readonly AgentPlanetInput[];
+  /**
+   * 再拎几条「最近但没在做事」的根会话成碎石块（虚线框 + 引线写会话名，编排入口页给 RECENT_ROCKS）。
+   * 在做事的优先，总数仍守 ROCK_CAP。缺席 = 0（单智能体首页的星系不标）。只对编排星系（agents 给了）生效
+   */
+  recent?: number;
+  /** 碎石块上写的名字覆盖（会话 id → 名字）：常驻对话写「常驻对话」而不是它被自动起的标题 */
+  labels?: ReadonlyMap<string, string>;
 }
+
+/** 编排入口页额外标出的最近会话条数（2026-11-24 用户：最近的 session 也框中、伸出一根线标名字） */
+export const RECENT_ROCKS = 3;
 
 /** 同时拎成碎石块（带锁定框）的在做事会话上限：满载时 15 件同时在跑，一圈 15 个锁定框读不出谁要紧 */
 export const ROCK_CAP = 8;
@@ -255,9 +266,25 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
   }
   active.sort((a, b) => rankOf(a.state) - rankOf(b.state) || b.meta.updatedAt - a.meta.updatedAt || a.meta.id.localeCompare(b.meta.id));
   // 最多拎出 ROCK_CAP 块（等你的排在前面，一定在里面）；再多的只是星屑里的一粒，计数里有、「+N」里有
-  const rocks: RockSpec[] = active
-    .slice(0, ROCK_CAP)
-    .map(({ meta, state }) => ({ id: meta.id, state, label: meta.title.trim(), ...(meta.parentId === undefined ? {} : { child: true }) }));
+  const shown = active.slice(0, ROCK_CAP);
+  // 最近但没在做事的根会话：按最近活动取，填进 ROCK_CAP 剩下的位子（在做事的永远优先）
+  const busy = new Set(active.map(({ meta }) => meta.id));
+  const room = Math.max(0, Math.min(input.recent ?? 0, ROCK_CAP - shown.length));
+  const recent: { meta: SessionMeta; state: RockState }[] =
+    room === 0
+      ? []
+      : roots
+          .filter((meta) => !busy.has(meta.id))
+          .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
+          .slice(0, room)
+          .map((meta) => ({ meta, state: "recent" }));
+  const labelOf = (meta: SessionMeta): string => input.labels?.get(meta.id) ?? meta.title.trim();
+  const rocks: RockSpec[] = [...shown, ...recent].map(({ meta, state }) => ({
+    id: meta.id,
+    state,
+    label: labelOf(meta),
+    ...(meta.parentId === undefined ? {} : { child: true }),
+  }));
   const planets: PlanetSpec[] = agents.map((agent) => {
     const hash = workspaceHash(agent.id);
     return {
@@ -439,6 +466,9 @@ export function homeGalaxyOf(input: {
   now: number;
   /** 这个作用域的主星设计稿（useGalaxyDesign）；子智能体只取它的名单 planets */
   design: GalaxyDesign;
+  /** 见 ScopeGalaxyInput.recent / labels（编排入口页给，单智能体首页不给） */
+  recent?: number;
+  labels?: ReadonlyMap<string, string>;
 }): HomeGalaxy {
   const star = starOf(input.design);
   const planets = input.workspaceId === null ? [] : agentPlanetsOf(input.design);
@@ -451,6 +481,8 @@ export function homeGalaxyOf(input: {
     starMass: star.mass,
     starExtent: starRadius(star.mass) * starExtentRatio(input.design),
     designedPlanet: null,
+    ...(input.recent === undefined ? {} : { recent: input.recent }),
+    ...(input.labels === undefined ? {} : { labels: input.labels }),
     // 星际空间（没有工作区）照旧规矩：会话当碎石画，没有子智能体
     ...(input.workspaceId === null ? {} : { agents: agentInputsOf(planets) }),
   });

@@ -293,6 +293,15 @@ describe("SessionStore", () => {
   });
 
   // 与 update 的既有语义一致：meta 不在就悄悄不做，不为它抛错或重建文件
+  test("setAutoCompact 落 meta、重开还在；ensureSession 建会话时带着 autoCompact: false 原样落盘", async () => {
+    await store.ensureSession(meta({ autoCompact: false }));
+    assert.equal((await new SessionStore(join(dir, "sessions")).readMeta(ID))?.autoCompact, false);
+    await store.setAutoCompact(ID, true);
+    const after = await new SessionStore(join(dir, "sessions")).readMeta(ID);
+    assert.equal(after?.autoCompact, true);
+    assert.equal(after?.pinned, false);
+  });
+
   test("setStarred 对不存在的会话悄悄不做", async () => {
     await store.setStarred(ID, true);
     assert.deepEqual(await store.list(), []);

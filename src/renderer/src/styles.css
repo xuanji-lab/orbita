@@ -5836,6 +5836,20 @@ mark.intent-mark {
     content: "";
     flex: 0 0 clamp(24px, 22vh, 260px);
   }
+  /*
+   * 星系拉高（2026-11-24 用户「拉高吧，拉到顶部都可以，但是要保持星系名字和 slogan」），两种候选（proto-variants 的 homeSky）：
+   * 两种都把标题上方那段空压到一档 --space-6（标题区上移）；
+   * rise（缺省）= 星系占输入框下面剩下的全部高度；
+   * backdrop = 星系铺满整个内容列作背景（绝对定位垫在底下），标题与输入框在上面，那一块由 HomeGalaxy 的禁区（avoid）让开。
+   */
+  .home-col[data-galaxy="true"]:is([data-sky="rise"], [data-sky="backdrop"])::before {
+    flex-basis: var(--space-6);
+  }
+  .home-col[data-galaxy="true"][data-sky="backdrop"] > .home-fade-galaxy {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+  }
   .home-hero[data-galaxy="true"] {
     gap: var(--space-1);
   }
@@ -7431,6 +7445,25 @@ button.turn-output-from.link:hover {
 }
 .galaxy-lock[data-state="waiting"] {
   stroke: var(--color-warning);
+}
+/* 走进禁区（单智能体首页「铺满作背景」时标题与输入框那一块）的行星淡出，走出来再淡入 */
+.galaxy-planet-figure {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.galaxy-planet-figure[data-masked] {
+  opacity: 0;
+}
+/* 最近但没在做事的会话：一整圈虚线框、三级墨，引线与字退一档——框得住、分得开，不和在做事的抢 */
+.galaxy-lock[data-state="recent"] {
+  stroke: var(--color-text-tertiary);
+  stroke-dasharray: 2 2;
+  stroke-linecap: butt;
+}
+.galaxy-callout[data-state="recent"] .galaxy-callout-line {
+  stroke-dasharray: 2 2;
+}
+.galaxy-callout[data-state="recent"] .galaxy-callout-text {
+  fill: var(--color-text-secondary);
 }
 .galaxy-callout-line {
   fill: none;

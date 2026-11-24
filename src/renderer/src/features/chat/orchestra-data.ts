@@ -27,6 +27,8 @@ export interface TreeNode {
 }
 
 export interface OrchestraTree {
+  /** 主智能体的常驻对话（置顶、标「主智能体」）；还没有或指针失效为 null。它不在 recent / older 里 */
+  main: TreeNode | null;
   /** 在跑 / 等你 / 有结果没看 / 子会话在动 / 3 天内动过的会话 */
   recent: TreeNode[];
   /** 其余（默认收起成一行，点开即全部） */
@@ -49,6 +51,8 @@ export function orchestraTree(input: {
   workspaceId: string | null;
   stateOf: (meta: SessionMeta) => SessionRunState;
   now: number;
+  /** 常驻对话的会话 id（mainSessionOf 校验过的）；缺席 / null = 没有 */
+  mainId?: string | null;
 }): OrchestraTree {
   const childrenOf = new Map<string, SessionMeta[]>();
   for (const meta of input.sessions) {
@@ -67,12 +71,34 @@ export function orchestraTree(input: {
     .sort(byNewest);
   const recent: TreeNode[] = [];
   const older: TreeNode[] = [];
+  let main: TreeNode | null = null;
   for (const meta of roots) {
     const each = node(meta);
+    if (input.mainId != null && meta.id === input.mainId) {
+      main = each;
+      continue;
+    }
     const stays = each.state !== null || each.activeBelow || input.now - meta.updatedAt <= TREE_IDLE_MS;
     (stays ? recent : older).push(each);
   }
-  return { recent, older, total: roots.length };
+  return { main, recent, older, total: roots.length };
+}
+
+/**
+ * 这个工作区主智能体的常驻对话（指针在 settings.orchestraMain）：指向的会话还在、没归档、是根会话、仍属于这个工作区，
+ * 才算数；否则当作没有（被删 / 归档 / 移走），由发送的一方重建一条并提示。星际空间（null）没有主智能体，也就没有。
+ */
+export function mainSessionOf(
+  sessions: readonly SessionMeta[],
+  workspaceId: string | null,
+  pointers: Readonly<Record<string, string>> | undefined,
+): SessionMeta | null {
+  if (workspaceId === null) return null;
+  const id = pointers?.[workspaceId];
+  if (id === undefined) return null;
+  const meta = sessions.find((item) => item.id === id);
+  if (meta === undefined || meta.archived || meta.parentId !== undefined || meta.workspaceId !== workspaceId) return null;
+  return meta;
 }
 
 /** 页头次级标题：会话标题；空标题给「新任务」（不露会话 id） */

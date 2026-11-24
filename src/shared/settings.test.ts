@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import { GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
   APP_MODE_DEFAULT,
   ORCHESTRA_VIEW_DEFAULT,
+  ORCHESTRA_ENTRY_DEFAULT,
+  sessionCompaction,
   BOARD_DAYS_DEFAULT,
   effectiveLanguage,
   selectableThemes,
@@ -629,6 +631,35 @@ describe("parseSettings 的编排面板视图", () => {
     for (const view of ["tree", "galaxy", "graph"]) deepStrictEqual(parseSettings({ orchestraView: view }).orchestraView, view);
     for (const bad of ["Tree", "", null, 2, ["graph"], "dag"]) deepStrictEqual("orchestraView" in parseSettings({ orchestraView: bad }), false);
     deepStrictEqual(ORCHESTRA_VIEW_DEFAULT, "tree");
+  });
+});
+
+describe("parseSettings 的常驻对话指针与入口选择（按工作区记）", () => {
+  it("orchestraMain 只留「非空键 → 非空字符串」；一项不剩就不落键", () => {
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", ws2: "s2" } }).orchestraMain, { ws1: "s1", ws2: "s2" });
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", ws2: "", ws3: 3, "": "x" } }).orchestraMain, { ws1: "s1" });
+    for (const bad of [null, "s1", ["s1"], {}, { ws: null }]) deepStrictEqual("orchestraMain" in parseSettings({ orchestraMain: bad }), false);
+  });
+
+  it("orchestraEntry 只认 new / main；默认 new（入口页原来的行为：每句开一条新会话）", () => {
+    deepStrictEqual(parseSettings({ orchestraEntry: { ws1: "main", ws2: "new", ws3: "both" } }).orchestraEntry, { ws1: "main", ws2: "new" });
+    deepStrictEqual("orchestraEntry" in parseSettings({ orchestraEntry: { ws1: "Main" } }), false);
+    deepStrictEqual(ORCHESTRA_ENTRY_DEFAULT, "new");
+  });
+});
+
+describe("sessionCompaction（会话级自动压缩开关 × 全局偏好）", () => {
+  it("会话关了自动压缩：只关 enabled，阈值照全局；没关 / 缺席：原样是全局", () => {
+    const global = { reservePercent: 30, enabled: true };
+    deepStrictEqual(sessionCompaction(global, false), { reservePercent: 30, enabled: false });
+    deepStrictEqual(sessionCompaction(global, undefined), global);
+    deepStrictEqual(sessionCompaction(global, true), global);
+  });
+
+  it("全局缺席退 COMPACTION_DEFAULT；全局关了，会话打开也不会越过全局", () => {
+    deepStrictEqual(sessionCompaction(undefined, undefined), COMPACTION_DEFAULT);
+    deepStrictEqual(sessionCompaction(undefined, false), { ...COMPACTION_DEFAULT, enabled: false });
+    deepStrictEqual(sessionCompaction({ reservePercent: 20, enabled: false }, true).enabled, false);
   });
 });
 

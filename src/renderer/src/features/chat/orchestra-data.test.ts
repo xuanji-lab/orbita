@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { SessionMeta } from "@shared/session";
 import type { SessionRunState } from "../notify/completion-notice.ts";
-import { orchestraTree, sessionHeadTitle, TREE_IDLE_MS } from "./orchestra-data.ts";
+import { mainSessionOf, orchestraTree, sessionHeadTitle, TREE_IDLE_MS } from "./orchestra-data.ts";
 
 const NOW = new Date(2026, 10, 24, 15, 0, 0).getTime();
 const HOUR = 3_600_000;
@@ -89,5 +89,26 @@ describe("编排面板的树：列出这个工作区的全部 session", () => {
     assert.equal(sessionHeadTitle(meta("x", { title: "  修侧栏 " }), "新任务"), "修侧栏");
     assert.equal(sessionHeadTitle(meta("x", { title: "" }), "新任务"), "新任务");
     assert.equal(sessionHeadTitle(null, "新任务"), "新任务");
+  });
+});
+
+describe("主智能体的常驻对话：树里置顶，指针失效当作没有", () => {
+  test("mainId 那条单独拎出来（不在最近 / 更早里），它的子会话照样挂着；总数仍算它", () => {
+    const sessions = [meta("a"), meta("main", { updatedAt: NOW - 30 * 24 * HOUR }), meta("m1", { parentId: "main" })];
+    const tree = orchestraTree({ sessions, workspaceId: "ws", stateOf: none, now: NOW, mainId: "main" });
+    assert.equal(tree.main?.meta.id, "main");
+    assert.deepEqual(tree.main?.children.map((c) => c.meta.id), ["m1"]);
+    assert.deepEqual([...tree.recent, ...tree.older].map((n) => n.meta.id), ["a"]);
+    assert.equal(tree.total, 2);
+  });
+  test("mainSessionOf：在、没归档、是根会话、还在这个工作区才算；星际空间没有", () => {
+    const pointers = { ws: "main" };
+    assert.equal(mainSessionOf([meta("main")], "ws", pointers)?.id, "main");
+    assert.equal(mainSessionOf([], "ws", pointers), null);
+    assert.equal(mainSessionOf([meta("main", { archived: true })], "ws", pointers), null);
+    assert.equal(mainSessionOf([meta("main", { workspaceId: "other" })], "ws", pointers), null);
+    assert.equal(mainSessionOf([meta("main", { parentId: "x" })], "ws", pointers), null);
+    assert.equal(mainSessionOf([meta("main")], "ws", undefined), null);
+    assert.equal(mainSessionOf([meta("main", { workspaceId: null })], null, { "": "main" }), null);
   });
 });

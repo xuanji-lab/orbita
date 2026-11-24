@@ -28,7 +28,7 @@ import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { endpointHintsOf, knownProviderOf } from "../../shared/known-providers.ts";
 import type { CompactionSetting } from "../../shared/settings.ts";
 import { providerDisabledText } from "../../shared/provider.ts";
-import { COMPACTION_DEFAULT, effectiveLanguage, type Language } from "../../shared/settings.ts";
+import { effectiveLanguage, sessionCompaction, type Language } from "../../shared/settings.ts";
 import type { ChannelStore } from "../channel/store.ts";
 import { assertProviderEnabled, ProviderDisabledError, type ProviderStore } from "../provider/store.ts";
 import { oauthRequestAuth } from "../provider/oauth-flows.ts";
@@ -229,8 +229,12 @@ export function registerAgentIpc(
   };
 
   /** 每轮现读压缩偏好：设置改动下一轮即生效，无需重启会话 */
-  const readCompaction = async (): Promise<CompactionSetting> =>
-    (await settings.read()).compaction ?? COMPACTION_DEFAULT;
+  const readCompaction = async (sessionId: string, fresh?: false): Promise<CompactionSetting> => {
+    const global = (await settings.read()).compaction;
+    // 会话级开关：首轮看载荷（meta 还没建），之后看 meta。入口页「新开专门的会话」开出来的是 false
+    const own = fresh === false ? false : (await sessions.readMeta(sessionId))?.autoCompact;
+    return sessionCompaction(global, own);
+  };
 
   /** Git 标识同款每轮现读；缺席 = 开启（兼容从没动过这个开关的旧设置文件） */
   const readGitAttribution = async (): Promise<boolean> =>
@@ -407,6 +411,8 @@ export function registerAgentIpc(
       modelId: input.modelId,
       mode: input.mode,
       thinkingLevel: input.thinkingLevel,
+      // 入口页「新开专门的会话」：这条会话不自动压缩，落进 meta，之后每轮都按它装配
+      ...(input.autoCompact === false ? { autoCompact: false } : {}),
       createdAt: now,
       updatedAt: now,
     });
@@ -517,7 +523,7 @@ export function registerAgentIpc(
         skillsDirs: capabilities.skillsDirs,
         directories: await readDirectories(input),
         mcpServers: capabilities.mcpServers,
-        compaction: await readCompaction(),
+        compaction: await readCompaction(input.sessionId, input.autoCompact),
         gitAttribution: await readGitAttribution(),
         attributionLanguage: await readAttributionLanguage(),
         workspaceName: await workspaceNameOf(input.workspaceId),
@@ -554,13 +560,13 @@ export function registerAgentIpc(
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId, input.autoCompact), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 

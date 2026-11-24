@@ -137,6 +137,19 @@ export interface UndoDialogState {
   plan: UndoPlan;
 }
 
+/**
+ * send 的去处（编排入口页的二选一）：
+ * - id 给了 = 发进这条已有会话（主智能体的常驻对话）：先把它打开进本槽（种好历史），在跑就排进它的队列，闲就直发；
+ *   打开时盘上已经没有它（被删）就当没有：改开一条新会话，onCreated / onMissing 告诉调用方重记指针、提示一句。
+ * - id 为 null = 开一条新会话；autoCompact: false = 这条会话不自动压缩（「新开专门的会话」），onCreated 拿到新 id。
+ */
+export interface SendInto {
+  id: string | null;
+  autoCompact?: false;
+  onCreated?: (id: string) => void;
+  onMissing?: () => void;
+}
+
 export interface ChatSession {
   sessionId: string | null;
   /**
@@ -310,7 +323,8 @@ export interface ChatSession {
    * 界面要如实说出来，不能让输入框看起来能打字（guideline §四写明的代价）。
    */
   readOnly: boolean;
-  openSession: (id: string) => Promise<void>;
+  /** 打开一条会话；落定为 true = 打开了（或本来就是它），false = 盘上没有这条 / 读失败 */
+  openSession: (id: string) => Promise<boolean>;
   /** 改名。空名字会退回从第一条用户消息推导——侧栏不留看不见的行 */
   renameSession: (id: string, title: string) => void;
   pinSession: (id: string, pinned: boolean) => void;
@@ -362,6 +376,10 @@ export interface ChatSession {
   confirmUndo: () => void;
   cancelUndo: () => void;
   send: () => void;
+  /** 把输入框里这句发到指定去处（编排入口页的二选一），见 SendInto */
+  sendInto: (target: SendInto) => void;
+  /** 会话级自动压缩开关（用量环菜单）：本地先动、落盘走 IPC、列表异步刷新；没有会话时不动 */
+  setAutoCompact: (next: boolean) => void;
   /**
    * 发一句不经过输入框的话（通话：听写出来的一句直接发成用户消息）。同 send 的分流——忙就排队、
    * 闲才直发，发到「本槽当前看的这条」；**不碰草稿与附件**：通话中输入框里写了一半的字原样留着。
@@ -1990,7 +2008,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       workspace: string | null,
       resume: { piSessionFile: string } | null,
       images?: readonly PromptImage[],
-      extras?: { files?: readonly ComposerFileRef[]; mode?: PermissionMode },
+      extras?: { files?: readonly ComposerFileRef[]; mode?: PermissionMode; autoCompact?: false },
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -2023,6 +2041,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           // 带着目标开工压过档（见 startGoalTask）：本轮按压过的发，setMode 要到下一次渲染才生效
           mode: extras?.mode ?? mode,
           thinkingLevel,
+          // 只在开新会话那一轮带（resume === null）：主进程据此建 meta.autoCompact
+          ...(extras?.autoCompact === false && resume === null ? { autoCompact: false as const } : {}),
         });
         // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
         if (resume === null) engine.refreshSessions();
@@ -2045,7 +2065,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, model, mode, thinkingLevel, restoreSent, dropOutbox],
   );
 
-  const send = useCallback(async () => {
+  /** send 在 openSession 之前定义：经 ref 取（发进常驻对话要先打开它） */
+  const openSessionRef = useRef<(id: string) => Promise<boolean>>(() => Promise.resolve(false));
+  const send = useCallback(async (into?: SendInto) => {
     const own = draft.trim();
     const images = attachments.map((item) => item.image);
     // 有主的粘贴（句中胶囊或展开区间）也算「有内容」——纯粘贴一条也能发
@@ -2070,8 +2092,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     // 「摘要」贴进对话，而什么都没压缩（真实发生过的事故）。
     // 手工输入时带附件（图 / 文件 / 粘贴块）不认压缩指令：压缩吃不了附件，当命令
     // 拦下会把附件悉数丢掉——按普通消息发。
+    // 指定了去处（编排入口页）时不认压缩指令：入口页没有「这条会话」可压，按普通消息发
     const compact =
-      images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
+      into === undefined && images.length === 0 && quotes.length === 0 && files.length === 0 && !pasteActive
         ? parseCompactCommand(text)
         : null;
     if (compact !== null) {
@@ -2123,11 +2146,29 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       });
       return;
     }
-    // 「本槽当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的
-    let id: string | null = sessionId ?? opened?.id ?? null;
+    // 「本槽当前看哪条」：挂着的活会话，或从盘上打开的那条；首页两者皆无 → 开新的。
+    // 指定了去处：常驻对话先打开进本槽（种好历史）再按它算忙闲——「先打开、再接着发」要等打开落定；
+    // 盘上没有它（被删）就改开新的，并告诉调用方
+    let id: string | null = into === undefined ? (sessionId ?? opened?.id ?? null) : into.id;
+    if (into !== undefined && into.id !== null) {
+      // 草稿先从入口页的槽清掉：打开别的会话后 draftKey 换了，不清会在入口页留一份
+      writeDraft(draftKey, "");
+      writeAttachments(draftKey, () => []);
+      writeFiles(draftKey, () => []);
+      writeBlocks(draftKey, () => []);
+      writeQuotes(draftKey, () => []);
+      const found = await openSessionRef.current(into.id);
+      if (!found) {
+        id = null;
+        into.onMissing?.();
+      }
+    }
     // **忙就排队，闲才直发**：这是队列归我们之后的核心分流。不再把消息推进 pi 的
     // steering/followUp——那边只有裸字符串、没有 id，正是一整晚竞态的来源。
-    const busy = id !== null && engine.statesRef.current.get(id)?.phase !== "idle";
+    // 发进常驻对话时：槽没种上（读盘失败）就当闲，不往一个不存在的槽里排队
+    const busy =
+      id !== null &&
+      (into === undefined ? engine.statesRef.current.get(id)?.phase : (engine.statesRef.current.get(id)?.phase ?? "idle")) !== "idle";
     if (id !== null && busy) {
       const queuedId = crypto.randomUUID();
       engine.applyStates((prev) =>
@@ -2158,7 +2199,10 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       const target = meta?.cwd ?? cwd ?? engine.defaultCwd;
       if (target === "") throw new Error(engine.messagesRef.current.session.noWorkspaceFolder);
       const workspace = meta?.workspaceId ?? workspaceId ?? null;
-      if (id === null) id = crypto.randomUUID();
+      if (id === null) {
+        id = crypto.randomUUID();
+        into?.onCreated?.(id);
+      }
       // 留回填快照：这条没落账就失败（provider 装配、图片解码……）时内容放回输入框。
       // 落账（用户条目回显）由事件订阅作废它；submitTurn 的 catch 兜底 IPC 直接失败的那类
       restoreRef.current = {
@@ -2187,7 +2231,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       } catch (cause) {
         console.error("[outbox] 落盘失败，照常发送", cause);
       }
-      await submitTurn(id, text, target, workspace, resume, images, { files });
+      await submitTurn(id, text, target, workspace, resume, images, { files, ...(into?.autoCompact === false ? { autoCompact: false as const } : {}) });
     } catch (cause) {
       engine.setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -2254,15 +2298,15 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * 会把槽建出来，openSession 的种子看到槽已存在就不种历史了。
    */
   const openSession = useCallback(
-    (id: string): Promise<void> => {
-      if (id === sessionRef.current) return Promise.resolve();
+    (id: string): Promise<boolean> => {
+      if (id === sessionRef.current) return Promise.resolve(true);
       engine.setError(null);
       setLoadingHistory(true);
       return api.session
         .load(id)
         .then((detail) => {
           setLoadingHistory(false);
-          if (detail === null) return;
+          if (detail === null) return false;
           // meta（cwd / 归属 / 权限档 / 模型）两条路都要恢复
           setOpened(detail.meta);
           setCwd(detail.meta.cwd);
@@ -2314,14 +2358,17 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
               seedFromDisk(prev, id, detail.transcript, detail.meta.stats, detail.window),
             );
           }
+          return true;
         })
         .catch((cause: unknown) => {
           setLoadingHistory(false);
           engine.setError(cause instanceof Error ? cause.message : String(cause));
+          return false;
         });
     },
     [engine],
   );
+  openSessionRef.current = openSession;
 
   /**
    * 带着会话目标从来源会话新开一单带着种子开工（startGoalTask）：
@@ -2616,6 +2663,20 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       if (id === null) return;
       void api.session
         .setIntentEnabled(id, next)
+        .then(() => engine.reloadSessions())
+        .catch(() => undefined);
+    },
+    [opened, engine],
+  );
+
+  /** 会话级自动压缩开关：同 setIntentEnabled 的写法（本地 meta 镜像先动，落盘后刷新列表） */
+  const setAutoCompact = useCallback(
+    (next: boolean) => {
+      setOpened((prev) => (prev === null ? prev : { ...prev, autoCompact: next }));
+      const id = sessionRef.current ?? (opened !== null ? opened.id : null);
+      if (id === null) return;
+      void api.session
+        .setAutoCompact(id, next)
         .then(() => engine.reloadSessions())
         .catch(() => undefined);
     },
@@ -3124,6 +3185,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     confirmUndo,
     cancelUndo,
     send: () => void send(),
+    sendInto: (target: SendInto) => void send(target),
+    setAutoCompact,
     sendText,
     stop,
     queued: entry.queued,

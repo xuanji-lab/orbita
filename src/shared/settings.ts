@@ -373,6 +373,19 @@ export interface AppSettings {
    */
   orchestraView?: OrchestraView;
   /**
+   * 每个工作区主智能体的「常驻对话」指针（2026-11-24 用户：入口页发送时可选「继续和主智能体聊」，进的是这个工作区
+   * 主智能体那条持久化的会话）。键 = 工作区 id，值 = 会话 id；首次选「常驻对话」发出时建，之后每次都进同一条。
+   * **放设置里、不写会话 meta**：它是工作区的属性，不是那条会话的；指向的会话被删 / 归档 / 移出工作区时由读的一方
+   * 当作没有、重建一条并提示（不在这里清）。按工作区键合并写入（SettingsStore.write），记一个不抹掉别的。
+   * 顶替：旧内核没有常驻主智能体，先拿一条普通会话（照常自动压缩）当它；迁 pi-durable 后由内核的常驻 agent 接管。
+   */
+  orchestraMain?: Readonly<Record<string, string>>;
+  /**
+   * 入口页「发到哪」的上次选择，按工作区记（同 orchestraMain 按键合并写入）：new = 新开专门的会话，
+   * main = 继续和主智能体的常驻对话聊。缺席 = new（见 ORCHESTRA_ENTRY_DEFAULT）。
+   */
+  orchestraEntry?: Readonly<Record<string, OrchestraEntry>>;
+  /**
    * 左栏会话列表的「时间范围」筛选（用户 2026-11-07：「会话生命周期如果可以有一个用最近一天、
    * 最近三天、最近五天、最近七天来筛选要显示的会话就好了」）：只列最后活动（updatedAt）落在
    * 最近 N 天内的会话。**缺席 = 不限**（打开后行为与此前完全一致）；只认 1 / 3 / 5 / 7，其余丢掉。
@@ -444,6 +457,45 @@ export const ORCHESTRA_VIEW_DEFAULT: OrchestraView = "tree";
 
 export function isOrchestraView(value: unknown): value is OrchestraView {
   return (ORCHESTRA_VIEWS as readonly unknown[]).includes(value);
+}
+
+/**
+ * 入口页发送的两种去处：new = 新开一条专门处理这件事的会话（不自动压缩，上下文干净）；
+ * main = 接着和主智能体的常驻对话聊（持久化，照常自动压缩）。
+ */
+export const ORCHESTRA_ENTRIES = ["new", "main"] as const;
+export type OrchestraEntry = (typeof ORCHESTRA_ENTRIES)[number];
+/**
+ * 默认 new：入口页原来每发一句就开一条新会话（Claude Projects 的「New session in X」也是这样），
+ * 第一次看到二选一的人不选就和以前一样；不会把一件新事悄悄塞进一条已经很长的对话里。
+ */
+export const ORCHESTRA_ENTRY_DEFAULT: OrchestraEntry = "new";
+
+export function isOrchestraEntry(value: unknown): value is OrchestraEntry {
+  return (ORCHESTRA_ENTRIES as readonly unknown[]).includes(value);
+}
+
+/** 只留「非空字符串键 → 合法值」的项；一项都不剩就当没有（不落键） */
+function parseKeyed<V>(value: unknown, valid: (item: unknown) => item is V): Record<string, V> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const out: Record<string, V> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key !== "" && valid(item)) out[key] = item;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+function isSessionId(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/**
+ * 一条会话这一轮实际用的压缩偏好：全局设置打底，会话自己关了自动压缩（meta.autoCompact === false，
+ * 入口页「新开专门的会话」）就只认手动 `/compact`。阈值百分比照全局（手动压缩不看它，自动开回来时沿用）。
+ */
+export function sessionCompaction(global: CompactionSetting | undefined, autoCompact: boolean | undefined): CompactionSetting {
+  const base = global ?? COMPACTION_DEFAULT;
+  return autoCompact === false ? { ...base, enabled: false } : base;
 }
 
 /** 左栏时间范围筛选的可选天数（缺席 = 不限） */
@@ -685,6 +737,8 @@ export function parseSettings(raw: unknown): AppSettings {
     boardDays?: unknown;
     appMode?: unknown;
     orchestraView?: unknown;
+    orchestraMain?: unknown;
+    orchestraEntry?: unknown;
     sidebarAgeDays?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
@@ -700,6 +754,8 @@ export function parseSettings(raw: unknown): AppSettings {
   const sidebar = record.sidebarWidth;
   const docWidth = record.docPanelWidth;
   const compaction = parseCompaction(record.compaction);
+  const orchestraMain = parseKeyed(record.orchestraMain, isSessionId);
+  const orchestraEntry = parseKeyed(record.orchestraEntry, isOrchestraEntry);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
   const choreModel = parseModelPair(record.choreModel) ?? parseModelPair(record.titleModel);
@@ -782,6 +838,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(isAppMode(record.appMode) ? { appMode: record.appMode } : {}),
     // 只认三种视图：别的值当作没选过（缺席 = 树状图）
     ...(isOrchestraView(record.orchestraView) ? { orchestraView: record.orchestraView } : {}),
+    ...(orchestraMain === undefined ? {} : { orchestraMain }),
+    ...(orchestraEntry === undefined ? {} : { orchestraEntry }),
     // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
     ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设

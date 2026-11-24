@@ -8,6 +8,7 @@ import {
   lockFramePath,
   LOCK_GAP,
   placeCallouts,
+  recentFramePath,
   textWidth,
   type CalloutTarget,
   type PlaceInput,
@@ -136,5 +137,22 @@ describe("排布与防碰撞", () => {
     assert.equal(calloutBudget(400), 3);
     assert.equal(calloutBudget(700), 4);
     assert.equal(calloutBudget(1200), 5);
+  });
+});
+
+describe("最近但没在做事的会话（recent）", () => {
+  test("排在等你与在跑之后；预算不够时先让给在做事的", () => {
+    assert.ok(calloutRank("running", 99) < calloutRank("recent", 0));
+    assert.ok(calloutRank("waiting", 99) < calloutRank("running", 0));
+    const targets: CalloutTarget[] = [
+      { id: "r", x: 100, y: 200, r: 4, state: "recent", text: "最近一条", rank: calloutRank("recent", 0) },
+      { id: "w", x: 400, y: 200, r: 4, state: "waiting", text: "等你", rank: calloutRank("waiting", 1) },
+    ];
+    const placed = placeCallouts({ targets, bodies: [], star: null, width: 800, height: 400, glyphPx: 12, budget: 1 });
+    assert.deepEqual(placed.map((p) => p.id), ["w"]);
+  });
+  test("虚线框是一整圈闭合方框，和角括号同一个 half（引线起点不变）", () => {
+    const { half } = lockFrame(4);
+    assert.equal(recentFramePath(0, 0, 4), `M${(-half).toFixed(1)} ${(-half).toFixed(1)}H${half.toFixed(1)}V${half.toFixed(1)}H${(-half).toFixed(1)}Z`);
   });
 });

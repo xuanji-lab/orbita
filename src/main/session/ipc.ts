@@ -129,6 +129,10 @@ export function registerSessionIpc(
     ipcChannels.sessionSetIntentEnabled,
     (_event, id: string, enabled: boolean) => store.setIntentEnabled(id, enabled),
   );
+  ipcMain.handle(ipcChannels.sessionSetAutoCompact, (_event, id: string, enabled: unknown) =>
+    // 载荷在入口就洗：只认布尔，坏形状拒绝（不裸存进 meta）
+    typeof enabled === "boolean" ? store.setAutoCompact(id, enabled) : Promise.reject(new Error("autoCompact 只认布尔")),
+  );
   ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
     // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
     store.setUnread(id, parseSessionUnread(unread)),
