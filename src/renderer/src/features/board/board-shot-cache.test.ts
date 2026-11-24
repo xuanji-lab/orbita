@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BOARD_SHOT_FRESH_MS, BOARD_SHOT_LIMIT, boardShotFits, boardShotFor, boardShotKey, boardShotVariantKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
+import { BOARD_SHOT_LIMIT, boardShotFits, boardShotFor, boardShotKey, boardShotVariantKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
 
 const base = { cssWidth: 752, cssHeight: 400, ratio: 2, theme: "light", capturedAt: 1_000 };
 const current = { width: 752, height: 400, ratio: 2, theme: "light", now: 2_000 };
@@ -20,9 +20,8 @@ test("位图只在宽高、DPR、主题与新鲜度都对得上时可用", () =>
   assert.equal(boardShotFits(base, { ...current, theme: "black" }), false);
 });
 
-test("超过一分钟或时钟倒走的位图不贴", () => {
-  assert.equal(boardShotFits(base, { ...current, now: base.capturedAt + BOARD_SHOT_FRESH_MS - 1 }), true);
-  assert.equal(boardShotFits(base, { ...current, now: base.capturedAt + BOARD_SHOT_FRESH_MS }), false);
+test("快照不按时间过期；只有时钟倒走的未来图不贴", () => {
+  assert.equal(boardShotFits(base, { ...current, now: base.capturedAt + 365 * 24 * 60 * 60 * 1000 }), true);
   assert.equal(boardShotFits(base, { ...current, now: base.capturedAt - 1 }), false);
 });
 
