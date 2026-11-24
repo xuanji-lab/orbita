@@ -70,6 +70,7 @@ import { placeInUserTab } from "./user-tabs.ts";
 import { tabPaint } from "./tab-painting.ts";
 import { emptyElementRefs, type ElementRefs } from "./page-outline.ts";
 import type { ShotGeometry } from "./screenshot-geometry.ts";
+import { PAGE_BACKGROUNDS } from "./page-background.ts";
 
 /** 全局一个持久化 partition（2026-09-27 裁决：学校登录是跨工作区的身份，不按工作区分） */
 export const BROWSER_PARTITION = "persist:orbita-browser";
@@ -89,7 +90,7 @@ const AGENT_TAB_MAX = 8;
 const AGENT_TAB_SWEEP_MS = 60_000;
 
 /** 空白 tab 在第一次读到设置之前的垫底色（明主题壳底）。按档取色见 page-background.ts */
-const PAGE_BACKGROUND_FALLBACK = "#e7ebef";
+const PAGE_BACKGROUND_FALLBACK = PAGE_BACKGROUNDS.light;
 
 /** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
 const PAGE_PREFERENCES = {

@@ -122,7 +122,7 @@ import { registerRightPanelMemoryIpc } from "./right-panel-memory/ipc.ts";
 import { RightPanelMemoryStore } from "./right-panel-memory/store.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
-import { pageBackgroundColor } from "./browser/page-background.ts";
+import { PAGE_BACKGROUNDS, pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
@@ -251,7 +251,7 @@ function createMainWindow(
       : // Windows/Linux：转帧式窗口——最小化/最大化/关闭由渲染层标题栏自绘
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
-        { frame: false, backgroundColor: "#e7ebef" }),
+        { frame: false, backgroundColor: PAGE_BACKGROUNDS.light }),
     webPreferences: rendererPreferences(theme, language),
   });
   mainWindows.track(window);
