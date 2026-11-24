@@ -479,3 +479,23 @@
   font-size: var(--font-size-xs);
   font-weight: var(--weight-regular);
 }
+
+/*
+ * 眼睛跟着指针（gaze-runtime.ts 直接写 .gd-gaze 的 transform: translate）。眨眼：data-blink 期间两只眼睛竖向压扁再张开，
+ * 慢慢眨（约 260ms）；按眼睛自己的中心缩（fill-box）。减少动效时运行时不挂 data-blink。
+ */
+.gd-gaze[data-blink] .gd-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: gd-blink 260ms var(--ease-in-out);
+}
+@keyframes gd-blink {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  45%,
+  55% {
+    transform: scaleY(0.12);
+  }
+}

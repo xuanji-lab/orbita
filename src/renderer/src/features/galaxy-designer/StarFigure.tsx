@@ -1,5 +1,6 @@
 import "./galaxy-designer.css";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { registerGaze, updateGazeReach } from "./gaze-runtime.ts";
 import { avatarScale, bodyArt, displayRadius, ELEMENTS_OF, eyeRimWidth, eyeSizeOf, radiusOf, withStar, type BodyArt, type GalaxyDesign } from "./design.ts";
 
 /**
@@ -34,10 +35,16 @@ export function StarFigure(props: { design: GalaxyDesign; size: number; label: s
       aria-label={props.label}
       data-elements={ELEMENTS_OF.star.filter((key) => design.star.elements[key]).join(" ")}
     >
-      <BodyFigure art={art} uid={uid} />
+      {/* 侧栏头像、页头：眼睛也跟着指针，但幅度小一些 */}
+      <BodyFigure art={art} uid={uid} gaze={AVATAR_GAZE} />
     </svg>
   );
 }
+
+/** 头像的眼睛跟随幅度（相对星系里的天体） */
+const AVATAR_GAZE = 0.6;
+/** 眼睛最多挪眼宽的几倍 */
+const GAZE_REACH = 0.4;
 
 
 /**
@@ -136,7 +143,7 @@ function useSurfaceDark(src: string | null): boolean {
 /** 地表贴图比圆大一点点：球缘那一圈半透明的羽化边落到裁切圆外面，不在球缘描出一道浅边 */
 const IMAGE_OVERSCAN = 1.04;
 
-export function BodyFigure(props: { art: BodyArt; uid: string }) {
+export function BodyFigure(props: { art: BodyArt; uid: string; /** 眼睛跟着指针的幅度（1 = 星系里的天体；0 = 不跟） */ gaze?: number }) {
   // 眼睛样式来自这颗天体的设计稿（bodyArt 已按它换好几何）：侧栏、页头、星系、右栏星系图、设计面板同源
   const eyeSize = eyeSizeOf(props.art.eyeStyle);
   const white = props.art.eyeStyle === "xl-white";
@@ -148,8 +155,25 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
   const shade = `${uid}-shade`;
   const image = art.image;
   const darkSurface = useSurfaceDark(image === null ? null : image.src);
+  // 眼睛跟着指针（gaze-runtime.ts）：最多挪眼宽的 0.4 倍，在脸内平移
+  const bodyRef = useRef<SVGGElement | null>(null);
+  const gazeRef = useRef<SVGGElement | null>(null);
+  const gazeScale = props.gaze ?? 1;
+  const reach = art.eyes === null ? 0 : art.eyes[0].w * GAZE_REACH * gazeScale;
+  const reachRef = useRef(reach);
+  reachRef.current = reach;
+  const hasEyes = art.eyes !== null && gazeScale > 0;
+  useLayoutEffect(() => {
+    const eyes = gazeRef.current;
+    const body = bodyRef.current;
+    if (!hasEyes || eyes === null || body === null) return;
+    return registerGaze(eyes, body, reachRef.current);
+  }, [hasEyes]);
+  useLayoutEffect(() => {
+    if (gazeRef.current !== null) updateGazeReach(gazeRef.current, reach);
+  }, [reach]);
   return (
-    <g className="gd-body" data-surface={art.surface}>
+    <g ref={bodyRef} className="gd-body" data-surface={art.surface}>
       <defs>
         <clipPath id={clip}>
           <circle r={art.r} />
@@ -218,6 +242,7 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
       </g>
       {/* 只有一双竖胶囊眼：不画嘴、鼻子、腮红、眉毛、瞳孔、高光 */}
       {art.eyes !== null && (
+        <g ref={gazeRef} className="gd-gaze">
         <g className="gd-eyes" data-rim={(darkSurface && !white) || undefined} data-white={white || undefined} transform={`rotate(${art.eyesTilt})`}>
           {art.eyes.map((eye) => (
             <rect key={eye.x}
@@ -230,6 +255,7 @@ export function BodyFigure(props: { art: BodyArt; uid: string }) {
               strokeWidth={darkSurface || white ? eyeRimWidth(eye.w, art.r, eyeSize) : undefined}
             />
           ))}
+        </g>
         </g>
       )}
       {art.ring !== null && (
