@@ -15,7 +15,9 @@ import { writeJsonAtomic } from "../atomic-write.ts";
 import { isNotFound } from "../fs-errors.ts";
 import { looksLikeWindowsPath } from "../../shared/path.ts";
 import {
+  consistentBinaries,
   deriveWorkspaceName,
+  pairBinary,
   looksLikePathDerivedName,
   normalizeWorkspaceName,
   parseWorkspace,
@@ -95,7 +97,15 @@ export class WorkspaceStore {
   }
 
   async list(): Promise<Workspace[]> {
-    return (await this.load()).workspaces;
+    // 联星对称在读回时守一次（手改坏的文件不画出半个联星）；不写回——下一次正常的写自然落成对称的
+    return consistentBinaries((await this.load()).workspaces);
+  }
+
+  /** 结成 / 解除联星（partner null = 解除）：两边与各自原来的伴星在同一次原子写里改好。返回更新后的列表 */
+  async setBinary(id: string, partner: string | null): Promise<Workspace[]> {
+    const next = pairBinary(await this.list(), id, partner);
+    await this.save(next);
+    return this.list();
   }
 
   /** 读一次并缓存（list / attachedDirsOf / attach / detach 共用同一个内存态）。旧版本在这里升级一次 */
@@ -277,7 +287,8 @@ export class WorkspaceStore {
    * 「移出列表」和「删掉记录」是两件事，别让一次点击同时干两件。
    */
   async remove(id: string): Promise<void> {
-    const workspaces = await this.list();
+    // 先解除它的联星：伴星那一边不留一个指向不存在工作区的 binaryWith
+    const workspaces = pairBinary(await this.list(), id, null);
     await this.save(workspaces.filter((w) => w.id !== id));
   }
 

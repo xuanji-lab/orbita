@@ -80,6 +80,11 @@ export interface BodyDesign {
   note?: string | null;
   /** 眼睛样式（面板里 DIY，存进 planet/galaxy.json）；缺席 = 没设过，画成 EYE_STYLE_DEFAULT（大） */
   eyeStyle?: EyeStyle;
+  /**
+   * 主星密度（g/cm³，只对主星有意义）：缺席 = STAR_DENSITY。红矮星式的小致密主星（fixture `?designer=reddwarf`）给大数；
+   * 面板里还没有选它的入口（留到以后），也不落盘
+   */
+  density?: number;
   /** 元素构成（面板「成分」一节）；缺席 = 没改过：行星按 composition 映射一组默认元素，主星取太阳的量级（mixOf / starMixOf） */
   mix?: PlanetMix;
 }
@@ -151,13 +156,13 @@ export function withMix(planet: PlanetDesign, mix: PlanetMix): PlanetDesign {
 
 /** 天体的密度（g/cm³）：主星固定；行星按元素构成推（旧稿按成分类别） */
 export function bodyDensity(design: GalaxyDesign, kind: BodyKind): number {
-  if (kind === "star") return STAR_DENSITY;
+  if (kind === "star") return design.star?.density ?? STAR_DENSITY;
   return design.planet === null ? Number.NaN : planetDensity(design.planet);
 }
 
 /** 天体半径（与轨道同一单位）：galaxy.ts 的同一条公式，(质量 / 密度)^(1/3)，质量先夹进区间。这颗天体不存在时是 NaN */
 export function radiusOf(design: GalaxyDesign, kind: BodyKind): number {
-  if (kind === "star") return design.star === null ? Number.NaN : starRadius(design.star.mass);
+  if (kind === "star") return design.star === null ? Number.NaN : starRadius(design.star.mass, design.star.density);
   return design.planet === null ? Number.NaN : planetRadius({ ...design.planet, density: planetDensity(design.planet) });
 }
 
@@ -482,11 +487,25 @@ export function ringFrontPoints(r: number, samples = 48, ry: number = RING.ry): 
 // ── 三档 fixture 与每个工作区一份的设计稿 ──────────────────────────────
 
 /** 原型专用：`?designer=bare|full|nostar` 切空元素 / 满载 / 还没有主星；不带参数是默认（一颗主星 + 一颗行星） */
-export type DesignLevel = "default" | "bare" | "full" | "nostar";
+export type DesignLevel = "default" | "bare" | "full" | "nostar" | "reddwarf";
 
 export function designLevelOf(search: string): DesignLevel {
   const value = new URLSearchParams(search).get("designer");
-  return value === "bare" || value === "full" || value === "nostar" ? value : "default";
+  return value === "bare" || value === "full" || value === "nostar" || value === "reddwarf" ? value : "default";
+}
+
+/**
+ * 「大行星浅坑」演示（`?designer=reddwarf`）：一颗红矮星式的小主星（最轻 300 = 30 M⊕，密度 30 g/cm³——真实的比邻星约 50），
+ * 带一颗气态巨行星（30 = 主星的 10%，密度 1.3）与一颗小岩质行星。按质量与成分算出的真实半径：主星 ≈ 2.15、巨行星 ≈ 2.85、
+ * 岩质 ≈ 0.90（世界单位）——巨行星看起来比主星大，但质量只有主星的十分之一，引力扫描里它的坑更浅（测试钉住）。
+ */
+export const RED_DWARF = { mass: 300, density: 30 } as const;
+
+export function redDwarfDesign(): GalaxyDesign {
+  const star: BodyDesign = { name: "红矮星", mass: RED_DWARF.mass, density: RED_DWARF.density, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star };
+  const giant: PlanetDesign = { id: "giant", name: "巨行星", mass: 30, composition: "gas", orbitRadius: 20, elements: { ...ALL_OFF, eyes: true, clouds: true }, zoom: ZOOM_DEFAULT.planet };
+  const rock: PlanetDesign = { id: "pebble", name: "小岩", mass: 4, composition: "rock", orbitRadius: 34, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.planet };
+  return { editing: "star", star, planet: giant, planets: [giant, rock], planetIndex: 0, backdrop: "muted" };
 }
 
 const ALL_OFF: Readonly<Record<ElementKey, boolean>> = { eyes: false, ring: false, clouds: false, moons: false, corona: false };
@@ -579,6 +598,7 @@ export function withStar(design: GalaxyDesign): GalaxyDesign & { star: BodyDesig
 /** 某一档 fixture 的设计稿：nostar 是还没有主星（也就没有行星）的星系，停在主星页 */
 export function fixtureDesign(workspaceId: string, level: DesignLevel): GalaxyDesign {
   if (level === "nostar") return { editing: "star", star: null, planet: null, backdrop: "muted" };
+  if (level === "reddwarf") return redDwarfDesign();
   return defaultDesign(workspaceId, level);
 }
 
@@ -805,7 +825,7 @@ export function createDesignStore(level: DesignLevel, options: { seeded?: boolea
   const fallback = (id: string): GalaxyDesign => {
     const cached = defaults.get(id);
     if (cached !== undefined) return cached;
-    const fresh = level === "nostar" ? fixtureDesign(id, level) : isSeeded() ? seededDesign(id, level) : defaultDesign(id, level);
+    const fresh = level === "nostar" || level === "reddwarf" ? fixtureDesign(id, level) : isSeeded() ? seededDesign(id, level) : defaultDesign(id, level);
     defaults.set(id, fresh);
     return fresh;
   };

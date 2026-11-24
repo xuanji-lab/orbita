@@ -52,6 +52,7 @@ import { NewSubAgentForm, RoleSection } from "./SubAgentRole.tsx";
 import { PLANET_AGENTS_MAX } from "@shared/planet-design";
 import { MixSection } from "./MixSection.tsx";
 import { AvatarSection } from "./AvatarSection.tsx";
+import { BinarySection } from "./BinarySection.tsx";
 import type { PlanetMix } from "@shared/planet-design";
 import { cssColorOf, mixColor } from "./mix.ts";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
@@ -74,7 +75,13 @@ import { DETAIL_GAP, detailScale, externalTangents, LOUPE_DEFAULT_WIDTH, LOUPE_V
 /** 设计稿仓库是全应用一份（useGalaxyDesign.ts）：面板写，侧栏头像与工作区页的星系读 */
 const store = galaxyDesigns;
 
-export function GalaxyDesigner(props: { workspace: Workspace | null; focus?: DesignerFocus | null }) {
+export function GalaxyDesigner(props: {
+  workspace: Workspace | null;
+  focus?: DesignerFocus | null;
+  /** 全部工作区与刷新入口：主星页「结成联星」用（BinarySection）；缺席不显示那一行 */
+  workspaces?: readonly Workspace[];
+  onWorkspacesChanged?: () => void;
+}) {
   const t = useT();
   const tg = t.galaxyDesigner;
   if (props.workspace === null) {
@@ -87,10 +94,17 @@ export function GalaxyDesigner(props: { workspace: Workspace | null; focus?: Des
     );
   }
   // key：换工作区整块重挂，本地状态只从这个工作区的设计稿来，不会把上一个的数带过去
-  return <Designer key={props.workspace.id} workspace={props.workspace} focus={props.focus ?? null} />;
+  return (
+    <Designer
+      key={props.workspace.id}
+      workspace={props.workspace}
+      focus={props.focus ?? null}
+      binary={props.workspaces === undefined || props.onWorkspacesChanged === undefined ? null : { workspaces: props.workspaces, onChanged: props.onWorkspacesChanged }}
+    />
+  );
 }
 
-function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) {
+function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; binary: { workspaces: readonly Workspace[]; onChanged: () => void } | null }) {
   const t = useT();
   const tg = t.galaxyDesigner;
   const id = props.workspace.id;
@@ -375,6 +389,14 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 mix={kind === "planet" && design.planet !== null ? mixOf(design.planet) : starMixOf(design.star, id)}
                 hasSurface={body.surface !== null && body.surface !== undefined}
               />
+            )}
+
+            {/* 主星页：结成联星（两个工作区的主智能体，两边都写，BinarySection） */}
+            {kind === "star" && props.binary !== null && (
+              <>
+                <PanelGroupHead label={t.gravity.binary} />
+                <BinarySection workspace={props.workspace} workspaces={props.binary.workspaces} onChanged={props.binary.onChanged} />
+              </>
             )}
 
             <PanelGroupHead label={tg.elementsGroup} />

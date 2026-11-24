@@ -76,6 +76,8 @@ export interface DustSeed {
 
 export interface GalaxySpec {
   starMass: number;
+  /** 主星密度（g/cm³）：缺席 = STAR_DENSITY。红矮星式的小致密主星给一个大的数（引力扫描 / 「大行星浅坑」演示） */
+  starDensity?: number;
   planets: readonly PlanetSpec[];
   /** 主星连星环 / 日冕的外缘（世界单位）；缺席 = 主星半径。第一圈轨道不得压进这个外缘 */
   starExtent?: number;
@@ -190,8 +192,12 @@ export function bodyRadius(mass: number, density: number): number {
   return Math.cbrt(mass / density);
 }
 
-export function starRadius(mass: number): number {
-  return bodyRadius(clamp(mass, STAR_MASS.min, STAR_MASS.max), STAR_DENSITY);
+/**
+ * 主星半径。density 缺席 = STAR_DENSITY（现有星系逐位不变）；给了（如红矮星：小而致密，真实的比邻星约 50 g/cm³）
+ * 就按它算——小主星可以比自己的气态巨行星还小（璇玑星系规则：体积不受质量高低约束，高低以质量为准）
+ */
+export function starRadius(mass: number, density: number = STAR_DENSITY): number {
+  return bodyRadius(clamp(mass, STAR_MASS.min, STAR_MASS.max), density > 0 && Number.isFinite(density) ? density : STAR_DENSITY);
 }
 
 export function planetRadius(planet: Pick<PlanetSpec, "mass" | "composition" | "density">): number {
@@ -353,7 +359,7 @@ export function beltAlpha(count: number): number {
  * 分别恒为 a1、a2，两点距离 ≥ a2 − a1），所以只需管半径差。
  */
 export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
-  const star = starRadius(spec.starMass);
+  const star = starRadius(spec.starMass, spec.starDensity);
   const sorted = [...spec.planets].sort((a, b) => a.orbitRadius - b.orbitRadius);
   const shown = sorted.slice(0, VISIBLE_ORBIT_CAP);
   const outermost = shown[shown.length - 1];

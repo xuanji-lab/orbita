@@ -206,6 +206,7 @@ import {
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
+import { useBinaryOf } from "./useBinary.ts";
 import { HomeGalaxy } from "./HomeGalaxy";
 import { HomeLog, type HomeLogRowView } from "./HomeLog";
 import { heroFace } from "./home-hero.ts";
@@ -1566,6 +1567,8 @@ function ChatViewBody(props: {
   }, [orchestrateHome, session.mode, session.pinMode]);
   // 这座星系的主星设计稿（没选工作区时用「主目录」那一份）：面板里一改，页面星系同一帧跟着变
   const galaxyDesign = useGalaxyDesign(session.workspaceId ?? "");
+  // 联星：这个工作区的伴星（没有为 null）
+  const galaxyBinary = useBinaryOf(session.workspaceId, session.workspaces);
   // 不缓存：运行态每个事件都可能变；stateIndexOf 先建子会话表，整趟 O(n)（2000 条也只是一遍）
   // 两种形态的首页都画当前作用域的真实星系（homeGalaxyOf：作用域 → 星系，测试钉住）
   const galaxyStates = galaxyHome ? stateIndexOf(session) : null;
@@ -1609,6 +1612,7 @@ function ChatViewBody(props: {
         emptyHint={t.agents.emptyHint}
         workspaceId={session.workspaceId}
         starName={name}
+        binary={galaxyBinary}
       />
     );
   };
