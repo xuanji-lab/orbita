@@ -11,7 +11,6 @@ import {
   BOARD_SNAPSHOT_CARD_MAX_BYTES,
   BOARD_SNAPSHOT_TOTAL_MAX_BYTES,
   boardShotRect,
-  boardShotScale,
   parsePluginBoardDetails,
   type PluginBoardOutcome,
   type PluginBoardResult,
@@ -354,11 +353,6 @@ describe("board:shot", () => {
       { rect: { x: 0, y: 0, width: 4096, height: 4097 } },
     ];
     for (const raw of invalid) assert.equal(boardShotRect(raw), null, JSON.stringify(raw));
-    assert.equal(boardShotScale({ rect: { x: 0, y: 0, width: 1, height: 1 }, scale: 2 }), 2);
-    assert.equal(boardShotScale({ scale: 0 }), 1);
-    assert.equal(boardShotScale({ scale: 4 }), 1);
-    assert.equal(boardShotScale({ scale: Number.NaN }), 1);
-    assert.equal(boardShotScale(null), 1);
   });
 });
 

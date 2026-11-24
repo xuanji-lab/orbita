@@ -7,9 +7,9 @@
 import { ipcMain, nativeImage, type WebContents } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { BoardShotResponse, BoardWeekResponse } from "../../shared/plugin-board.ts";
-import { boardShotRect, boardShotScale } from "../../shared/plugin-board.ts";
+import { boardShotRect } from "../../shared/plugin-board.ts";
 import { assembleBoardWeek, type BoardWeekDeps } from "./board-week.ts";
-import { captureRegion } from "../browser/frame-capture.ts";
+import { captureFrame } from "../browser/frame-capture.ts";
 import { boardFrameOf, type BoardTemplateStore } from "./board-snapshot.ts";
 import type { PanelFrames } from "./panel-frame.ts";
 
@@ -22,17 +22,20 @@ export interface BoardIpcDeps {
 /** 同一页面里的多块看板可能一起画好；capturePage 并发会等不到帧，按 webContents 串行 */
 const boardShotQueues = new Map<number, Promise<BoardShotResponse>>();
 
-function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<typeof boardShotRect>>, scale: number): Promise<BoardShotResponse> {
+function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<typeof boardShotRect>>): Promise<BoardShotResponse> {
   const previous = boardShotQueues.get(contents.id) ?? Promise.resolve(null);
   const next = previous.then(async () => {
     try {
-      contents.setBackgroundThrottling(false);
-      contents.invalidate();
-      // 只用 CDP 区域截图：原生 capturePage 实测既会回局部像素，也会把视口改成矩形大小
-      const png = await captureRegion(contents, { ...rect, scale });
+      // CDP clip 在 Electron 里会留下一个等于裁剪区的仿真视口。整页取帧后只在内存里裁，页面布局不动。
+      const png = await captureFrame(contents);
       if (png === null) return null;
-      const size = nativeImage.createFromBuffer(png).getSize();
-      return { base64: png.toString("base64"), width: size.width, height: size.height };
+      const page = nativeImage.createFromBuffer(png);
+      const ratio = await contents.executeJavaScript("window.devicePixelRatio || 1");
+      if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 1 || ratio > 3) return null;
+      const image = page.crop({ x: Math.round(rect.x * ratio), y: Math.round(rect.y * ratio), width: Math.round(rect.width * ratio), height: Math.round(rect.height * ratio) });
+      if (image.isEmpty()) return null;
+      const size = image.getSize();
+      return { base64: image.toPNG().toString("base64"), width: size.width, height: size.height };
     } catch {
       return null;
     }
@@ -53,6 +56,6 @@ export function registerBoardIpc(deps: BoardIpcDeps): void {
   ipcMain.handle(ipcChannels.boardShot, async (event, raw: unknown): Promise<BoardShotResponse> => {
     const rect = boardShotRect(raw);
     if (rect === null) return null;
-    return captureBoardShot(event.sender, rect, boardShotScale(raw));
+    return captureBoardShot(event.sender, rect);
   });
 }
