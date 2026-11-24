@@ -9,16 +9,20 @@ import type { ContextScope } from "../../../shared/context-inventory.ts";
 import type { ContextGroupKey } from "../features/context/context-panel-view.ts";
 import { CONTEXT_GROUPS } from "../features/context/context-panel-view.ts";
 import { isReviewSource } from "../../../shared/review.ts";
-import { RIGHT_PANEL_MEMORY_MAX_ENTRIES, type RightPanelMemoryFile } from "../../../shared/right-panel-memory.ts";
+import { RIGHT_PANEL_MEMORY_MAX_ENTRIES, RIGHT_PANEL_MEMORY_VERSION, type RightPanelMemoryFile } from "../../../shared/right-panel-memory.ts";
 import type { WsFilter } from "./workspace-filter.ts";
 
 /**
  * 右栏面板的**按会话记忆**（用户 2026-10-18：「每个 session，应该记住自己离开的
  * 时候，右侧面板是啥」；2026-11-07：「这个树节点要往下探呀」）。
  *
- * 每条主槽会话记一条**路径**：开着哪个面板（或「关着」），再往下一层——面板自己
- * 报上来的 `sub`（进了哪个插件 / 哪条自动化 / 哪个页签……）。切回来时面板从那一层
- * 打开；没记过的会话恢复成「关着」。
+ * 每条主槽会话记：开着哪个面板（或「关着」），外加**每个带第二层的面板各自的 sub**
+ * （进了哪个插件 / 哪条自动化 / 哪个页签……）——按面板种类存成一张表 `subs`。
+ * 切到别的面板**不算关**：那个面板的 sub 原样留在表里，切回来从那一层打开
+ * （用户 2026-11-23：「插件面板记不住我之前的足迹……我进文档面板，不会总是在新建，
+ * 而是会记住我之前在哪」）。面板里**主动**退回列表 / 关掉详情或草稿，面板报上来的 sub
+ * 就是空，表里这一项随之清掉（「关了就记住关了」，同文档面板关掉文档后回到新建）。
+ * 没记过的会话恢复成「关着」。
  *
  * 边界：
  * - `sub` 的形状由各面板定义，**纯数据、可 JSON 序列化**，只放「在哪一层」，不放内容；
@@ -87,7 +91,10 @@ export interface IntentSub {
   view?: "questions";
 }
 
-/** 路径：开着哪个面板，再往下一层。带 sub 的面板才有 sub 字段，其余只有 panel */
+/**
+ * 路径：开着哪个面板，再往下一层。**活的**状态——面板自己报上来的就是它（只有当前开着的那个面板）。
+ * 带 sub 的面板才有 sub 字段，其余只有 panel。落进记忆时拆成 PanelEntry 的 panel + subs[panel]。
+ */
 export type PanelPath =
   | { panel: null }
   | { panel: "files" | "terminal" | "drawer" | "docs" | "slides" }
@@ -98,11 +105,26 @@ export type PanelPath =
   | { panel: "subsessions"; sub?: SubSessionsSub }
   | { panel: "intent"; sub?: IntentSub };
 
-/** 一条会话的记忆：路径，外加「这条任务」面板上次停在哪个页签（面板关着也记，重开仍在那一页） */
-export type PanelEntry = PanelPath & {
+/** 每个带第二层的面板各自的 sub（空 = 那个面板停在列表 / 根）。键序固定（SUB_ORDER），JSON 比较才稳 */
+export interface PanelSubs {
+  plugins?: PluginsSub;
+  automation?: AutomationSub;
+  review?: ReviewSub;
+  context?: ContextSub;
+  subsessions?: SubSessionsSub;
+  intent?: IntentSub;
+}
+
+/**
+ * 一条会话的记忆：开着哪个面板（panel）、每个带第二层的面板各自停在哪（subs，开着的和没开着的都在）、
+ * 以及「这条任务」面板上次停在哪个页签（面板关着也记，重开仍在那一页）
+ */
+export interface PanelEntry {
+  panel: PanelPath["panel"];
+  subs?: PanelSubs;
   /** 默认 "progress"，只记 "context" */
   taskTab?: "context";
-};
+}
 
 /** 会话 id → 它的记忆。**Map 的迭代顺序 = 最近用过的在最后**（rememberEntry 每次先删再放），上限淘汰就吃这个顺序 */
 export type PanelMemory = ReadonlyMap<string, PanelEntry>;
@@ -115,6 +137,44 @@ export type SubPanelKind = "plugins" | "automation" | "review" | "context" | "su
 const SUB_PANELS: ReadonlySet<RightPanelKind> = new Set<RightPanelKind>(["plugins", "automation", "review", "context", "subsessions", "intent"]);
 export function hasSubLayer(panel: RightPanelKind | null): panel is SubPanelKind {
   return panel !== null && SUB_PANELS.has(panel);
+}
+/** subs 的规范键序（落盘 / 比较都按它） */
+const SUB_ORDER: readonly SubPanelKind[] = ["plugins", "automation", "review", "context", "subsessions", "intent"];
+
+/** 这条记忆里某个面板的 sub（没记 = undefined = 列表 / 根） */
+export function subOf<K extends SubPanelKind>(entry: PanelEntry | undefined, panel: K): NonNullable<PanelSubs[K]> | undefined {
+  return entry?.subs?.[panel] as NonNullable<PanelSubs[K]> | undefined;
+}
+
+/** 把一条记忆里「开着的面板」读成活路径（panel + 它自己那份 sub） */
+export function pathOf(entry: PanelEntry, panel: PanelPath["panel"] = entry.panel): PanelPath {
+  if (hasSubLayer(panel)) {
+    const sub = entry.subs?.[panel];
+    return (sub === undefined ? { panel } : { panel, sub }) as PanelPath;
+  }
+  return { panel } as PanelPath;
+}
+
+/**
+ * 同一条记忆，只把「开着哪个面板」换成 panel，并清掉那个面板的 sub（让它从根打开）；其余面板的 sub、页签都留着。
+ * 一次性的「带去某个面板」（carry、从首页带文档面板）用它：目标面板从根开，不误带它上一次的位置。
+ */
+export function withPanelRoot(entry: PanelEntry, panel: PanelPath["panel"]): PanelEntry {
+  const subs = hasSubLayer(panel) ? putSub(entry.subs, panel, undefined) : entry.subs;
+  return { panel, ...(subs === undefined ? {} : { subs }), ...(entry.taskTab === undefined ? {} : { taskTab: entry.taskTab }) };
+}
+
+/**
+ * 在 subs 表里把某个面板的 sub 换成 raw（走各面板的 parse 规范化）；规范化后为空 = 删掉这一项。
+ * 返回新的规范形（键序固定、空表 = undefined）。
+ */
+export function putSub(subs: PanelSubs | undefined, panel: SubPanelKind, raw: unknown): PanelSubs | undefined {
+  const next: Record<string, unknown> = {};
+  for (const kind of SUB_ORDER) {
+    const value = kind === panel ? parseSubFor(kind, raw) : subs?.[kind];
+    if (value !== undefined) next[kind] = value;
+  }
+  return Object.keys(next).length === 0 ? undefined : (next as PanelSubs);
 }
 
 // ── 记 / 取 / 淘汰 ───────────────────────────────────────────────────
@@ -285,6 +345,23 @@ export function parseIntentSub(raw: unknown): IntentSub | undefined {
 // docs / slides 是没有第二层的普通面板：文档本身的位置由 doc-panel 自己按 docScope 记，这里只记「开着」
 const PLAIN_PANELS = ["files", "terminal", "drawer", "docs", "slides"] as const;
 
+function parseSubFor(panel: SubPanelKind, raw: unknown): PanelSubs[SubPanelKind] {
+  switch (panel) {
+    case "plugins":
+      return parsePluginsSub(raw);
+    case "automation":
+      return parseAutomationSub(raw);
+    case "review":
+      return parseReviewSub(raw);
+    case "context":
+      return parseContextSub(raw);
+    case "subsessions":
+      return parseSubSessionsSub(raw);
+    case "intent":
+      return parseIntentSub(raw);
+  }
+}
+
 /** 规范化一条路径（面板报上来的、文件里读回来的都走它）。panel 不认识 → null（整条丢） */
 export function parsePath(raw: unknown): PanelPath | null {
   if (!isRecord(raw)) return null;
@@ -292,12 +369,7 @@ export function parsePath(raw: unknown): PanelPath | null {
   if (panel === null) return { panel: null };
   if (typeof panel !== "string") return null;
   if ((PLAIN_PANELS as readonly string[]).includes(panel)) return { panel: panel as (typeof PLAIN_PANELS)[number] };
-  if (panel === "plugins") return withSub("plugins", parsePluginsSub(raw.sub));
-  if (panel === "automation") return withSub("automation", parseAutomationSub(raw.sub));
-  if (panel === "review") return withSub("review", parseReviewSub(raw.sub));
-  if (panel === "context") return withSub("context", parseContextSub(raw.sub));
-  if (panel === "subsessions") return withSub("subsessions", parseSubSessionsSub(raw.sub));
-  if (panel === "intent") return withSub("intent", parseIntentSub(raw.sub));
+  if (hasSubLayer(panel as RightPanelKind)) return withSub(panel as SubPanelKind, parseSubFor(panel as SubPanelKind, raw.sub));
   return null;
 }
 
@@ -306,19 +378,35 @@ function withSub<K extends SubPanelKind>(panel: K, sub: unknown): PanelPath {
   return (sub === undefined ? { panel } : { panel, sub }) as PanelPath;
 }
 
-/** 规范化一条记忆。旧格式（只有面板种类的字符串）也认：当作没有第二层 */
+/**
+ * 规范化一条记忆（读盘 / 面板报上来的都走它）。认三种形状：
+ * - v2：`{ panel, subs?, taskTab? }`；
+ * - v1：`{ panel, sub?, taskTab? }`——旧条目的 sub 归到它那个面板名下（subs[panel]）；
+ * - 更早的：只有面板种类的字符串 / null，当作没有第二层。
+ * 坏字段丢、不认识的面板整条丢。
+ */
 export function parseEntry(raw: unknown): PanelEntry | null {
-  const path = typeof raw === "string" || raw === null ? parsePath({ panel: raw }) : parsePath(raw);
-  if (path === null) return null;
-  if (isRecord(raw) && raw.taskTab === "context") return { ...path, taskTab: "context" };
-  return path;
+  if (typeof raw === "string" || raw === null) {
+    const bare = parsePath({ panel: raw });
+    return bare === null ? null : { panel: bare.panel };
+  }
+  const path = parsePath(raw);
+  if (path === null || !isRecord(raw)) return null;
+  // v2 的 subs 表；各项逐个校验，只认带第二层的面板名
+  let subs: PanelSubs | undefined;
+  if (isRecord(raw.subs)) for (const kind of SUB_ORDER) subs = putSub(subs, kind, raw.subs[kind]);
+  // v1 的单条 sub：归到开着的那个面板名下；v2 里已有同名项时以 v2 为准
+  if ("sub" in path && path.sub !== undefined && hasSubLayer(path.panel) && subOf({ panel: path.panel, ...(subs === undefined ? {} : { subs }) }, path.panel) === undefined) {
+    subs = putSub(subs, path.panel, path.sub);
+  }
+  return { panel: path.panel, ...(subs === undefined ? {} : { subs }), ...(raw.taskTab === "context" ? { taskTab: "context" as const } : {}) };
 }
 
 // ── 落盘 ──────────────────────────────────────────────────────────────
 
 /**
  * 读回上次的记忆（不可信）：逐条校验，坏条目丢掉，旧 → 新顺序保持，超上限留最新的。
- * 条目形状 `{ id, panel, sub?, taskTab? }`；也认旧的 `[id, panel]` 二元组。
+ * 条目形状 `{ id, panel, subs?, taskTab? }`；也认 v1 的 `{ id, panel, sub? }` 与更早的 `[id, panel]` 二元组。
  */
 export function parseMemoryFile(file: RightPanelMemoryFile | null): PanelMemory {
   if (file === null) return new Map();
@@ -339,14 +427,14 @@ export function parseMemoryFile(file: RightPanelMemoryFile | null): PanelMemory 
   return memory;
 }
 
-/** 落盘的形状：旧 → 新。关着且没有页签偏好的条目不落盘（读回来本来就是「关着」，不值得占一行） */
+/** 落盘的形状（version 2）：旧 → 新。关着、没有页签偏好、也没有任何面板位置的条目不落盘（读回来本来就是「关着」，不值得占一行） */
 export function toMemoryFile(memory: PanelMemory): RightPanelMemoryFile {
   const entries: unknown[] = [];
   for (const [id, entry] of memory) {
-    if (entry.panel === null && entry.taskTab === undefined) continue;
+    if (entry.panel === null && entry.taskTab === undefined && entry.subs === undefined) continue;
     entries.push({ id, ...entry });
   }
-  return { version: 1, entries };
+  return { version: RIGHT_PANEL_MEMORY_VERSION, entries };
 }
 
 /** 合并「读回的旧记忆」与「本次运行里已记下的」：本次的优先，也排在更「新」的一侧 */
@@ -405,31 +493,38 @@ export function intentSubOf(round: number | null, view: "slots" | "questions"): 
 }
 
 /**
- * 此刻右栏的完整记忆条目（App 的写穿用）：面板报上来的路径 + App 自己持有的几块
- * （用户点开的草稿、子会话面板里打开的那条、「这条任务」页签）。
- * 路径里的 panel 与 rightPanel 不一致的是过期的（刚换面板、面板还没来得及报）：当作该面板的根。
+ * 此刻右栏的完整记忆条目（App 的写穿用）：上一份记忆（prev）打底，只改**开着的那个面板**的 sub——
+ * 面板报上来的路径 + App 自己持有的几块（用户点开的草稿、子会话面板里打开的那条、「这条任务」页签）。
+ * 其余面板的 sub 原样带着：切到别的面板不是「关」，不能覆盖（见文件头）。
+ * 路径里的 panel 与 rightPanel 不一致的是过期的（刚换面板、面板还没来得及报）：这一拍不改任何 sub
+ * （把「还没报」当成「回到了列表」会把刚恢复的位置清掉）。
  */
-export function composeEntry(input: {
-  rightPanel: RightPanelKind | null;
-  path: PanelPath;
-  openedDraft: { path: string; workspaceId: string | null } | null;
-  subSessionId: string | null;
-  taskTab: TaskPanelTab;
-}): PanelEntry {
+export function composeEntry(
+  input: {
+    rightPanel: RightPanelKind | null;
+    path: PanelPath;
+    openedDraft: { path: string; workspaceId: string | null } | null;
+    subSessionId: string | null;
+    taskTab: TaskPanelTab;
+  },
+  prev?: PanelEntry,
+): PanelEntry {
   const { rightPanel, path } = input;
-  const reported: unknown = path.panel === rightPanel && "sub" in path ? path.sub : undefined;
-  let raw: Record<string, unknown> = { panel: rightPanel };
-  if (rightPanel === "plugins") {
+  let subs = prev?.subs;
+  const fresh = path.panel === rightPanel;
+  const reported: unknown = fresh && "sub" in path ? path.sub : undefined;
+  if (rightPanel === "plugins" && fresh) {
     // 草稿只认 App 持有的 openedDraft：路径里带的（恢复时从记忆来的）是上一份，不再算数
     const { draft: _stale, ...rest } = isRecord(reported) ? reported : { draft: undefined };
-    raw = { panel: rightPanel, sub: { ...rest, ...(input.openedDraft === null ? {} : { draft: input.openedDraft }) } };
+    subs = putSub(subs, "plugins", { ...rest, ...(input.openedDraft === null ? {} : { draft: input.openedDraft }) });
   } else if (rightPanel === "subsessions") {
-    raw = { panel: rightPanel, sub: input.subSessionId === null ? undefined : { sessionId: input.subSessionId } };
-  } else if (hasSubLayer(rightPanel)) {
-    raw = { panel: rightPanel, sub: reported };
+    // 子会话层归 App 持有（不经面板报上来），任何时候都是最新的
+    subs = putSub(subs, "subsessions", input.subSessionId === null ? undefined : { sessionId: input.subSessionId });
+  } else if (hasSubLayer(rightPanel) && fresh) {
+    subs = putSub(subs, rightPanel, reported);
   }
-  const base = parsePath(raw) ?? CLOSED_ENTRY;
-  return input.taskTab === "context" ? { ...base, taskTab: "context" } : base;
+  const taskTab = input.taskTab === "context" ? { taskTab: "context" as const } : {};
+  return { panel: parsePath({ panel: rightPanel })?.panel ?? null, ...(subs === undefined ? {} : { subs }), ...taskTab };
 }
 
 /** 「这条任务」页签 ↔ entry.taskTab */
