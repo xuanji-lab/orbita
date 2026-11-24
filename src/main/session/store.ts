@@ -7,7 +7,7 @@
  *
  * 分两个文件的理由：meta 会变而 transcript 只增。把可变记录塞进只追加的日志里，
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
- * **列会话只需读 N 个小 meta 文件，完全不碰日志**。
+ * **启动建 meta 索引只需读 N 个小 meta 文件，完全不碰日志；之后列会话走内存索引**。
  */
 import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -89,7 +89,7 @@ export function isSessionId(id: string): boolean {
 const META_SUFFIX = ".meta.json";
 
 /**
- * `list()` 一批同时读几个 meta。16 是折中：libuv 的文件线程池默认 4，并发再大也
+ * `buildMetaIndex()` 启动时一批同时读几个 meta。16 是折中：libuv 的文件线程池默认 4，并发再大也
  * 只能摊到 4 个线程上；批太大反而让 JSON.parse（同步、在主线程）与其它 IPC 抢时间。
  */
 const META_READ_BATCH = 16;
@@ -199,6 +199,10 @@ export class SessionStore {
    */
   readonly snapshots: SnapshotStore;
 
+  /** 启动时读一次、随后随本 Store 的写入增量维护的 meta 索引；list / descendants 不再整表读盘 */
+  private readonly metaById = new Map<string, SessionMeta>();
+  private readonly metaIndexReady: Promise<void>;
+
   /**
    * 每条会话的 meta 写入链（见 `queueMeta`）。会话删掉时清掉自己那条，
    * 不然长会话跑一天下来这里会攒下一堆已经没人要的 promise。
@@ -220,6 +224,44 @@ export class SessionStore {
     this.channels = channels;
     this.snapshots = new SnapshotStore(dir);
     this.citedPdfs = new CitedPdfIndex((id) => this.logPath(id));
+    // 启动即建索引；调用方（list / 第一条 meta 写入）会等它。给拒绝分支挂一个空处理器，
+    // 避免「建了 Store 但从没列会话」时变成 unhandled rejection；真正 await 它的调用方仍拿到原错误。
+    this.metaIndexReady = this.buildMetaIndex();
+    void this.metaIndexReady.catch(() => undefined);
+  }
+
+  /**
+   * 启动时仅有的一次整表扫描。单条坏 meta 照旧跳过；目录不存在是空索引，其它目录错误照抛。
+   * 扫描期间本 Store 的 meta 写入都在 `writeMeta` 里等它，所以不会出现「旧扫描覆盖新写入」。
+   */
+  private async buildMetaIndex(): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(this.dir);
+    } catch (cause) {
+      if (isNotFound(cause)) return;
+      throw cause;
+    }
+    const ids = names
+      .filter((name) => name.endsWith(META_SUFFIX))
+      .map((name) => name.slice(0, -META_SUFFIX.length));
+    for (let start = 0; start < ids.length; start += META_READ_BATCH) {
+      const batch = ids.slice(start, start + META_READ_BATCH);
+      const read = await Promise.all(batch.map((id) => this.readMeta(id).catch(() => null)));
+      for (const meta of read) {
+        if (meta !== null) this.metaById.set(meta.id, meta);
+      }
+    }
+  }
+
+  /** 所有 meta 落盘唯一收口：原子写成功后才更新内存索引；失败时索引继续指向上一份完整值 */
+  private async writeMeta(meta: SessionMeta): Promise<void> {
+    await this.metaIndexReady;
+    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    // 与旧 list() 逐条 readMeta 的口径一致：可选默认值 / 归一化也在索引里生效，不能只存写入前的对象
+    const normalized = parseSessionMeta(meta);
+    if (normalized === null) this.metaById.delete(meta.id);
+    else this.metaById.set(meta.id, normalized);
   }
 
   private metaPath(id: string): string {
@@ -444,11 +486,11 @@ export class SessionStore {
     return this.queueMeta(meta.id, async () => {
       const current = await this.readMeta(meta.id);
       if (current === null) {
-        await writeJsonAtomic(this.metaPath(meta.id), meta);
+        await this.writeMeta(meta);
         return;
       }
       if (current.piSessionFile === meta.piSessionFile) return;
-      await writeJsonAtomic(this.metaPath(meta.id), {
+      await this.writeMeta({
         ...current,
         piSessionFile: meta.piSessionFile,
       });
@@ -595,7 +637,7 @@ export class SessionStore {
     return this.queueMeta(id, async () => {
       const meta = await this.readMeta(id);
       if (meta === null || meta.providerId !== UNASSIGNED_PROVIDER_ID) return false;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, providerId, modelId });
+      await this.writeMeta({ ...meta, providerId, modelId });
       return true;
     });
   }
@@ -613,7 +655,7 @@ export class SessionStore {
       if (meta === null) return;
       const patch = typeof changes === "function" ? changes(meta) : changes;
       if (patch === null) return;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, ...patch });
+      await this.writeMeta({ ...meta, ...patch });
     });
   }
 
@@ -727,7 +769,7 @@ export class SessionStore {
         closedAt: same ? (meta.closedAt ?? Date.now()) : Date.now(),
       };
       delete next.resumedCarryovers;
-      await writeJsonAtomic(this.metaPath(id), next);
+      await this.writeMeta(next);
       return { resumed };
     });
   }
@@ -840,7 +882,7 @@ export class SessionStore {
     } catch (cause) {
       if (!isNotFound(cause)) throw cause;
     }
-    await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile });
+    await this.writeMeta({ ...plan.meta, piSessionFile });
     if (plan.records.length > 0) {
       await writeTextAtomic(
         this.logPath(plan.meta.id),
@@ -858,7 +900,7 @@ export class SessionStore {
    */
   async commitImported(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void> {
     await mkdir(this.dir, { recursive: true });
-    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    await this.writeMeta(meta);
     if (records.length > 0) {
       await writeTextAtomic(
         this.logPath(meta.id),
@@ -886,40 +928,23 @@ export class SessionStore {
       const current = await this.readMeta(id);
       if (current === null) throw new Error("the session was deleted before the update landed");
       await writeTextAtomic(this.logPath(id), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-      await writeJsonAtomic(this.metaPath(id), { ...current, ...patch });
+      await this.writeMeta({ ...current, ...patch });
     });
   }
 
   /**
-   * 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。
+   * 会话列表：置顶在前，其余最近的在前。
    *
-   * meta 按 `META_READ_BATCH` 个一批 `Promise.all` 读：串行时一个会话一次
-   * `readFile` 往返，1432 条实测约 126ms；有上限并发把往返叠起来。批内顺序不影响
-   * 结果——最后统一走 `sortSessions`（只认 pinned / updatedAt），与串行逐条读到
-   * 的那份逐条一致（store.test.ts 有一条 >16 条的对照用例）。
+   * 启动时 `buildMetaIndex` 分批读一次全部 meta；之后只排内存索引，不再每次读 N 个小文件。
+   * 所有本 Store 的写入 / 删除都增量维护它。单条 `readMeta` 仍直接读盘，打开会话时能看到外部修改。
+   *
+   * **外部改文件策略**：不做文件 watcher，也不在 list 里重新校验。本进程外新增 / 改 / 删的 meta
+   * 不保证反映到 list / descendants，重启后重建索引才完全对齐；旧索引只是快照，不会让调用抛错。
+   * 删除一个已被外部删掉的会话也安全：remove 的 rm(force) 与 readMeta(null) 都能接住。
    */
   async list(): Promise<SessionMeta[]> {
-    let names: string[];
-    try {
-      names = await readdir(this.dir);
-    } catch (cause) {
-      // 目录还不存在 = 一条会话都没有；**读不了 ≠ 没有**——权限、ENOTDIR 等照抛，
-      // 吞成空列表会让用户以为会话全没了（D-3 的根因）
-      if (isNotFound(cause)) return [];
-      throw cause;
-    }
-    const ids = names
-      .filter((name) => name.endsWith(META_SUFFIX))
-      .map((name) => name.slice(0, -META_SUFFIX.length));
-    const metas: SessionMeta[] = [];
-    for (let start = 0; start < ids.length; start += META_READ_BATCH) {
-      const batch = ids.slice(start, start + META_READ_BATCH);
-      const read = await Promise.all(batch.map((id) => this.readMeta(id).catch(() => null)));
-      for (const meta of read) {
-        if (meta !== null) metas.push(meta);
-      }
-    }
-    return sortSessions(metas);
+    await this.metaIndexReady;
+    return sortSessions([...this.metaById.values()]);
   }
 
   async load(id: string): Promise<SessionDetail | null> {
@@ -1053,6 +1078,7 @@ export class SessionStore {
     this.citedPdfs.forget(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
+    this.metaById.delete(id);
     // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」
     await rm(this.attachmentsPath(id), { recursive: true, force: true });
     // 快照正文仓同理（回退能力的代价面，跟会话一起走）
