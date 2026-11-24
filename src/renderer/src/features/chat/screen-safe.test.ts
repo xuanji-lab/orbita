@@ -25,6 +25,8 @@ import {
   VISIBLE_ORBIT_CAP,
 } from "./galaxy.ts";
 import { orbitRadiusOf } from "./galaxy-data.ts";
+import { MIN_CLEARANCE, VIEW_REF_ELEVATION } from "./galaxy.ts";
+import type { SafeScene as SafeSceneLike } from "./screen-safe.ts";
 import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, fitScreenSafe } from "./screen-safe.ts";
 import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { lockFrame } from "./callouts.ts";
@@ -136,10 +138,46 @@ const AGENT_SPECS: [string, GalaxySpec][] = [
   ["3000 条会话（碎石带铺到画框外沿）", agentSpec(620, [[40, "gas", 19], [34, "rock", 25], [11, "ice", 31], [22, "rock", 37], [16, "ice", 43], [30, "gas", 49]], 8, 3, 3000)],
 ];
 
+/**
+ * 布局与视角分离（2026-11-24 15:48 用户：「被挡住就挡住了」）之后：只有用户视角 = 排布时的视角（默认 40° · 0°，且没为极小画布借更高俯角）
+ * 才断言屏幕上互不重叠、不出画；别的视角不断言可见性，只断言：布局与默认视角相同、世界坐标里轨道不交叉天体不相撞、绘制按深度排序。
+ */
+function screenChecked(scene: SafeSceneLike, tilt: number, azimuth: number): boolean {
+  return tilt === VIEW_REF_ELEVATION && azimuth === 0 && scene.layoutElevationDeg === VIEW_REF_ELEVATION;
+}
+
+function worldProblems(spec: GalaxySpec, w: number, h: number, readableMax: number, scene: SafeSceneLike): string[] {
+  const problems: string[] = [];
+  const box = galaxyBox(w, h, GALAXY_MAX_FILL);
+  const ref = fitScreenSafe(spec, w, h, box, VIEW_REF_ELEVATION, readableMax, 0);
+  const radii = (sc: SafeSceneLike) => sc.layout.planets.map((p) => p.orbitRadius.toFixed(6)).join(",");
+  if (radii(scene) !== radii(ref)) problems.push(`布局随视角变了：${radii(ref)} → ${radii(scene)}`);
+  const e = scene.layout.ecc;
+  let prevEdge = scene.layout.starRadius;
+  let prevOrbit = 0;
+  for (const planet of scene.layout.planets) {
+    // 世界坐标：相邻两圈在近日点那一侧最挤（半长轴差 × (1 − e)），要放得下两颗天体 + 间距
+    if ((planet.orbitRadius - prevOrbit) * (1 - e) < prevEdge + planet.radius + MIN_CLEARANCE * 0.5 - 1e-6) problems.push(`世界坐标里 ${planet.id} 与里一圈相撞`);
+    prevOrbit = planet.orbitRadius;
+    prevEdge = planet.radius;
+  }
+  const belt = scene.layout.belt;
+  if (belt !== null && scene.layout.planets.length > 0) {
+    const last = scene.layout.planets[scene.layout.planets.length - 1];
+    if (last !== undefined && belt.inner < last.orbitRadius + last.radius) problems.push("碎石带压进了最外一圈");
+  }
+  for (const t of [0, 37, 111]) {
+    const items = drawFrame(scene.layout, scene.camera, scene.viewport, orbitArcs(scene.layout, scene.camera, scene.viewport), t, scene.minPlanetPx);
+    for (let i = 1; i < items.length; i++) if ((items[i]?.depth ?? 0) > (items[i - 1]?.depth ?? 0) + 1e-9) problems.push(`t=${t} 绘制没按深度排序`);
+  }
+  return problems;
+}
+
 function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX, tilt: number = TILT, tStep = 3.7, azimuth = 0): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
   // 与 HomeGalaxy 的工作区页一样：每条会话都是一颗碎石（不封顶）
   const scene = fitScreenSafe({ ...spec }, w, h, box, tilt, readableMax, azimuth);
+  if (!screenChecked(scene, tilt, azimuth)) return worldProblems(spec, w, h, readableMax, scene);
   const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
   const extent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass);
   const problems: string[] = [];
@@ -270,6 +308,14 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
         const scene = fitScreenSafe(spec, w, h, box, TILT, AGENT_READABLE_MAX);
         const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
         const problems: string[] = [];
+        // 极小画布借了更高的俯角排布：40° 下按远近叠，不断言屏幕上不重叠 / 不出画，只断言全部画出、表情可读、世界坐标不相撞
+        if (!screenChecked(scene, TILT, 0)) {
+          problems.push(...worldProblems(spec, w, h, AGENT_READABLE_MAX, scene));
+          if (scene.layout.planets.length !== Math.min(spec.planets.length, VISIBLE_ORBIT_CAP)) problems.push(`只画了 ${scene.layout.planets.length} 颗子智能体`);
+          if (readableBound(spec, w, h) && scene.minPlanetPx < AGENT_READABLE_FLOOR - 0.01) problems.push(`行星 ${scene.minPlanetPx.toFixed(1)}px 不可读`);
+          assert.deepEqual(problems.slice(0, 5), [], `${problems.length} 处`);
+          return;
+        }
         for (let t = 0; t <= 600; t += 7.3) {
           const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx);
           const star = items.find((item): item is StarItem => item.kind === "star");
@@ -328,6 +374,7 @@ const PHASES = 240;
 function sweepProblems(spec: GalaxySpec, w: number, h: number, ecc: number, tilt: number = TILT, phases: number = PHASES): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
   const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, w, h, box, tilt, AGENT_READABLE_MAX);
+  if (!screenChecked(scene, tilt, 0)) return worldProblems({ ...spec, eccentricity: ecc }, w, h, AGENT_READABLE_MAX, scene);
   const { layout, camera, viewport } = scene;
   const problems: string[] = [];
   if (layout.ecc > ecc || layout.ecc < 0) problems.push(`偏心率不对：${layout.ecc}`);

@@ -413,6 +413,10 @@ export const ipcChannels = {
    * 裁决：不考虑专注时合盖，睡就把这一轮收掉）。
    */
   focusSuspend: "focus:suspend",
+  /** 电源状态（shared/power.ts）：renderer 主动问一次，返回 PowerState */
+  powerState: "power:state",
+  /** 电源状态变了（powerMonitor 的 on-battery / on-ac，主进程 → renderer 单向广播，载荷 PowerState） */
+  powerChanged: "power:changed",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */

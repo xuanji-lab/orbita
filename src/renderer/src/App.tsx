@@ -8,7 +8,9 @@ import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, t
 import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
-import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, galaxyZoomOf } from "@shared/settings";
+import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, galaxyZoomOf, galaxyDustDensityOf, GALAXY_DUST_KEEP, galaxyBatterySaverOf } from "@shared/settings";
+import { dustKeepUnderPower, powerNoticeDue, powerSaveOf } from "./features/chat/power-save.ts";
+import { setGazeSuspended } from "./features/galaxy-designer/gaze-runtime.ts";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
 import { reloadAfterSubAgentChange, usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
@@ -225,7 +227,35 @@ export function App() {
   const galaxyAzimuth = galaxyAzimuthOf(settings);
   const galaxyTurntable = galaxyTurntableOf(settings);
   const galaxyZoom = galaxyZoomOf(settings);
-  const galaxyView = useMemo(() => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable, zoom: galaxyZoom }), [galaxyAzimuth, galaxyTurntable, galaxyZoom]);
+  // 离电省电档（power-save.ts）：主进程的电源状态（power:state / power:changed）× 设置 › 外观「离电时省电」
+  const [onBattery, setOnBattery] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void api.power.state().then((state) => {
+      if (live) setOnBattery(state.onBattery);
+    });
+    const off = api.power.onChange((state) => setOnBattery(state.onBattery));
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  const powerSave = powerSaveOf({ onBattery, enabled: galaxyBatterySaverOf(settings) });
+  useEffect(() => setGazeSuspended(powerSave), [powerSave]);
+  // 第一次进省电档时轻提示一次（记进设置，之后不再出）；六秒后自己收起
+  const [powerNotice, setPowerNotice] = useState(false);
+  useEffect(() => {
+    if (!settingsLoaded || !powerNoticeDue(powerSave, settings.galaxyBatteryNoticeSeen === true)) return;
+    setPowerNotice(true);
+    changeSettings({ galaxyBatteryNoticeSeen: true });
+    const timer = window.setTimeout(() => setPowerNotice(false), 6000);
+    return () => window.clearTimeout(timer);
+  }, [powerSave, settingsLoaded, settings.galaxyBatteryNoticeSeen, changeSettings]);
+  const galaxyDustKeep = dustKeepUnderPower(GALAXY_DUST_KEEP[galaxyDustDensityOf(settings)], powerSave);
+  const galaxyView = useMemo(
+    () => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable, zoom: galaxyZoom, dustKeep: galaxyDustKeep, powerSave }),
+    [galaxyAzimuth, galaxyTurntable, galaxyZoom, galaxyDustKeep, powerSave],
+  );
 
   /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
   const chatImageSize = useMemo(
@@ -275,6 +305,12 @@ export function App() {
   /** 模型卡片底部「配置模型」的去处：设置面的服务商页（不是通用页） */
   const openProvidersTab = useCallback(() => {
     setSettingsTab("providers");
+    setOverlay("settings");
+  }, []);
+
+  /** 离电省电提示里「在设置里改」的去处：设置面的通用页（外观那一组） */
+  const openSettingsAppearance = useCallback(() => {
+    setSettingsTab("general");
     setOverlay("settings");
   }, []);
 
@@ -1967,6 +2003,15 @@ export function App() {
           }}
         />
       </div>
+      {/* 第一次离电进省电档：不打扰的轻提示，只出一次（点「设置」去外观页改） */}
+      {powerNotice && (
+        <div className="power-notice" role="status">
+          <span>{t.settings.galaxyBatteryNotice}</span>
+          <button type="button" className="power-notice-link" onClick={() => { setPowerNotice(false); openSettingsAppearance(); }}>
+            {t.settings.galaxyBatteryNoticeAction}
+          </button>
+        </div>
+      )}
       {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>

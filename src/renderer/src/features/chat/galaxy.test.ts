@@ -4,6 +4,10 @@ import { GALAXY_TILT } from "../../../../shared/settings.ts";
 
 const TILT: number = GALAXY_TILT.default;
 import {
+  BELT_OMEGA,
+  BELT_SPIN_RADIUS,
+  KEPLER_REF_PERIOD_S,
+  KEPLER_REF_RADIUS,
   angularSpeed,
   CAMERA_ELEVATION_DEG,
   DENSITY,
@@ -632,5 +636,13 @@ describe("测试用三档星系的形状", () => {
     assert.equal(full.belt?.particles.length, 2000);
     assert.equal(full.belt?.count, 2000);
     assert.ok(full.orbitScale < 1);
+  });
+});
+
+describe("公转速度（2026-11-24 放慢一半）", () => {
+  test("参考半径处 112 秒一圈；行星与碎石带同一条开普勒律，一起慢", () => {
+    assert.equal(KEPLER_REF_PERIOD_S, 112);
+    assert.ok(Math.abs((2 * Math.PI) / angularSpeed(KEPLER_REF_RADIUS) - 112) < 1e-9);
+    assert.ok(Math.abs(BELT_OMEGA - angularSpeed(BELT_SPIN_RADIUS)) < 1e-12);
   });
 });

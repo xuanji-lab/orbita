@@ -7732,3 +7732,36 @@ button.galaxy-spill-row:hover {
 .galaxy-spill li[data-state="recent"] .galaxy-spill-row {
   color: var(--color-text-tertiary);
 }
+
+/*
+ * 离电省电的轻提示（App 的 powerNotice）：第一次进省电档时在窗口顶部居中、标题栏下面浮一条，六秒自己收起，只出一次。
+ * 不抢焦点；放顶上不放右下角——右下角会盖住输入框的发送键；样子是一张小便签：面板底色、发丝边、次级墨字，「在设置里改」是次级文字链接。
+ */
+.power-notice {
+  position: fixed;
+  top: calc(var(--space-8) + var(--space-6));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-float);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(420px, calc(100vw - var(--space-8)));
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.power-notice-link {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}

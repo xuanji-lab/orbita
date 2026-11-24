@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { GALAXY_TILT, parseSettings } from "../../../../shared/settings.ts";
-import { anglesForSave, anglesLabel, clampTilt, dragAngles, isDragMove, keyAngles, raisedTo, TILT_DRAG, VIEW_DEFAULT, wrapAzimuth } from "./tilt-drag.ts";
+import { anglesForSave, anglesLabel, clampTilt, dragAngles, isDragMove, keyAngles, TILT_DRAG, VIEW_DEFAULT, wrapAzimuth } from "./tilt-drag.ts";
 
 const START = { tilt: 40, azimuth: 0 };
 
@@ -76,8 +76,5 @@ describe("星系转台手势（锁 z 轴、无极）", () => {
     assert.equal(anglesLabel({ tilt: 40.2, azimuth: 119.7 }), "40° · 120° · 1×");
     assert.equal(anglesLabel({ tilt: 40, azimuth: 120 }, 1.43), "40° · 120° · 1.4×");
     assert.deepEqual(VIEW_DEFAULT, { tilt: 40, azimuth: 0 });
-    assert.equal(raisedTo(15, 18), 18);
-    assert.equal(raisedTo(15, 15.4), null);
-    assert.equal(raisedTo(40, null), null);
   });
 });

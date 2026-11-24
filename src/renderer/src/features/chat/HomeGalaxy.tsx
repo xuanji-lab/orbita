@@ -80,8 +80,8 @@ import {
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
-import { reportElevation, useGalaxyTilt, useGalaxyTiltSetter, useGalaxyView, type GalaxySurface, type GalaxyViewSetter } from "./galaxy-tilt.ts";
-import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, raisedTo, VIEW_DEFAULT, type ViewAngles } from "./tilt-drag.ts";
+import { useGalaxyTilt, useGalaxyTiltSetter, useGalaxyView, type GalaxySurface, type GalaxyViewSetter } from "./galaxy-tilt.ts";
+import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, VIEW_DEFAULT, type ViewAngles } from "./tilt-drag.ts";
 import { boxesOverlap, planOverlay } from "./overlay-plan.ts";
 import { beltSplit, liveProjection, type FrozenScene, type LiveProjection } from "./turntable.ts";
 import { USER_VIEW_DEFAULT, zoomAt, type UserView } from "./galaxy.ts";
@@ -215,7 +215,8 @@ interface SceneNow extends FrozenScene {
  * - 按下不拦：位移 ≤ 4px 是点击，点天体照旧打开；超过才算拖、抓住指针，松手后吞掉那一下 click。
  * - 拖动中冻结布局、每帧（requestAnimationFrame 合并指针事件）只重新投影，直接写 DOM；不 setState、不跑屏幕安全布局。
  * - 松手按 1° 写设置（倾角与设置 › 外观的滑块同一个字段，方位角另一个字段）；设置回填后 React 按新角度跑一次屏幕安全布局，
- *   根节点挂 gx-settling 让轨道矩阵在 SETTLE_MS 内滑过去（减少动效时不挂，直接落位）。
+ *   布局与视角无关，拖动最后一帧就是落位后的样子：不过渡；方向键 / 双击复位这种一下跳过去的才挂 gx-settling，SETTLE_MS 内滑过去
+ *   （减少动效时不挂）。
  * - 键盘：焦点在星系根节点上时 ↑ ↓ 改俯角、← → 改方位，每次 5°；双击空白处回到默认 40° · 0°。
  */
 interface TurntableOptions {
@@ -230,7 +231,6 @@ interface TurntableOptions {
   /** 拖动中让名字 / 锁定框的排布按新相机重算一次 */
   replan: () => void;
   badge: RefObject<HTMLSpanElement | null>;
-  raisedText: (deg: number) => string;
   /** 这一刻的布局对象（scene 的 useMemo）：落位只在它换了之后做 */
   sceneId: object | null;
   /** 用户缩放与平移（本组件的）与改它的入口 */
@@ -297,11 +297,13 @@ function useTurntable(options: TurntableOptions) {
   };
 
   /** 落位：按 scene（新角度跑完屏幕安全布局的那一份）把拖动时直接写过的 DOM 全部写回合规的值，带短过渡 */
-  const settle = (scene: SceneNow): void => {
+  // 布局与视角分离之后，拖动 / 滚轮松手时布局不变、拖动最后一帧就是落位后的样子：不过渡。只有方向键 / 双击复位这种一下跳过去的才过渡
+  const settleAnimate = useRef(false);
+  const settle = (scene: SceneNow, animateJump = settleAnimate.current): void => {
     const root = opts.current.root.current;
     opts.current.live.current = null;
     if (root === null) return;
-    const animate = !reducedMotion();
+    const animate = animateJump && !reducedMotion();
     const star = lastStar.current;
     if (animate && star !== null) {
       // 主星：React 已经按新布局画在新位置上，先挪回拖动时最后那一帧的样子，再滑过去
@@ -319,8 +321,7 @@ function useTurntable(options: TurntableOptions) {
     timers.current.settle = window.setTimeout(() => root.classList.remove("gx-settling"), SETTLE_MS + 40);
     opts.current.replan();
     const saved = anglesForSave({ tilt: opts.current.setting.tilt, azimuth: opts.current.setting.azimuth });
-    const raised = raisedTo(saved.tilt, scene.elevation);
-    showBadge(anglesLabel(saved, scene.view.zoom), raised === null ? null : opts.current.raisedText(raised), false);
+    showBadge(anglesLabel(saved, scene.view.zoom), null, false);
   };
 
   // 新的布局画好之后（设置回填 → React 按新角度跑完屏幕安全布局）落位
@@ -329,7 +330,7 @@ function useTurntable(options: TurntableOptions) {
   useLayoutEffect(() => {
     if (settlePending.current === false || sceneNow === null || sceneId === settlePending.current) return;
     settlePending.current = false;
-    settle(sceneNow);
+    settle(sceneNow, settleAnimate.current);
   });
 
   // 滚轮 / 双指缩放：以指针为中心，无极、跟手；连续滚动时冻结布局只重新投影，停下 220ms 后存盘并重排落位
@@ -360,10 +361,10 @@ function useTurntable(options: TurntableOptions) {
     zoomFrame();
     const zoom = Math.round(w.view.zoom * 100) / 100;
     const next: UserView = { zoom, panX: w.view.panX, panY: w.view.panY };
-    if (!reducedMotion()) root.classList.add("gx-settling");
     const scene = opts.current.scene.current;
+    settleAnimate.current = false;
     if (next.zoom === w.start.zoom && next.panX === w.start.panX && next.panY === w.start.panY) {
-      if (scene !== null) settle(scene);
+      if (scene !== null) settle(scene, false);
       return;
     }
     settlePending.current = opts.current.sceneId;
@@ -413,18 +414,19 @@ function useTurntable(options: TurntableOptions) {
   );
 
   /** 写设置；角度没变（设置不会回填）就直接落位 */
-  const commitView = (next: ViewAngles, root: HTMLElement, resetZoom = false): void => {
+  const commitView = (next: ViewAngles, root: HTMLElement, resetZoom = false, animate = true): void => {
     const commit = opts.current.commit;
     const saved = anglesForSave(next);
     const current = opts.current.setting;
     const zv = opts.current.zoomView;
     const zoomChanges = resetZoom && (zv.zoom !== 1 || zv.panX !== 0 || zv.panY !== 0);
-    if (!reducedMotion()) root.classList.add("gx-settling");
+    settleAnimate.current = animate;
+    if (animate && !reducedMotion()) root.classList.add("gx-settling");
     // 方向键 / 双击没有拖动帧：主星从此刻画着的位置滑过去
     const scene = opts.current.scene.current;
     if (lastStar.current === null && scene !== null) lastStar.current = liveProjection(scene, scene.elevation, scene.azimuth).star;
     if (commit === null || (saved.tilt === current.tilt && saved.azimuth === current.azimuth && !zoomChanges)) {
-      if (scene !== null) settle(scene);
+      if (scene !== null) settle(scene, animate);
       return;
     }
     settlePending.current = opts.current.sceneId;
@@ -447,10 +449,10 @@ function useTurntable(options: TurntableOptions) {
     if (root.hasPointerCapture(event.pointerId)) root.releasePointerCapture(event.pointerId);
     const final = view.current;
     view.current = null;
-    if (keep && final !== null) commitView(final, root);
+    if (keep && final !== null) commitView(final, root, false, false);
     else {
       const scene = opts.current.scene.current;
-      if (scene !== null) settle(scene);
+      if (scene !== null) settle(scene, false);
     }
   };
 
@@ -544,7 +546,10 @@ function timelineMs(): number {
  * 所有转动层一起 pause()，恢复时按表上的时间重设 currentTime 再 play()（相位不错开）。卸载时 cancel()。
  * 现在跑不跑写在根节点的 data-motion 上（running / paused），验收时可直接读。
  */
-function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: string): { running: boolean; clock: GalaxyClock } {
+function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: string, powerSave = false): { running: boolean; clock: GalaxyClock } {
+  const powerRef = useRef(powerSave);
+  powerRef.current = powerSave;
+  const resync = useRef<() => void>(() => undefined);
   const ledger = useRef<{ base: number; start: number | null }>({ base: 0, start: null });
   const clock = useMemo<GalaxyClock>(
     () => ({
@@ -562,8 +567,9 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
     const el = target.current;
     if (el === null) return;
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const inputs: MotionInputs = { hasFocus: document.hasFocus(), visibilityState: document.visibilityState, onScreen: true, reducedMotion: media.matches };
+    const inputs: MotionInputs = { hasFocus: document.hasFocus(), visibilityState: document.visibilityState, onScreen: true, reducedMotion: media.matches, powerSave: powerRef.current };
     const sync = () => {
+      inputs.powerSave = powerRef.current;
       const run = motionAllowed(inputs);
       if (run !== runningRef.current) {
         const elapsed = clock.now();
@@ -599,6 +605,7 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
     window.addEventListener("blur", onActivity);
     media.addEventListener("change", onMotionPref);
     el.dataset.motion = "paused";
+    resync.current = sync;
     sync();
     return () => {
       observer.disconnect();
@@ -635,6 +642,10 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
     }
     spins.current = list;
   }, [target, clock, signature]);
+  // 离电省电档切换时重新判定（停转 / 恢复）
+  useLayoutEffect(() => {
+    resync.current();
+  }, [powerSave]);
   return { running, clock };
 }
 
@@ -829,7 +840,8 @@ function union(a: Box, b: Box): Box {
  * memo：拖动中名字排布重算会让星系重渲染，几百颗碎石这一大块不跟着重算。
  */
 const BeltHalf = memo(function BeltHalf(props: {
-  side: "far" | "near";
+  /** whole = 整条不裁、画在主星背后那一层（碎石密度低于「全部」时，省电） */
+  side: "far" | "near" | "whole";
   belt: Belt;
   camera: Camera;
   viewport: Viewport;
@@ -853,15 +865,11 @@ const BeltHalf = memo(function BeltHalf(props: {
   const period = periodMs(props.belt.omega);
   const dot = (x: number, y: number) => `M${(x - rho).toFixed(1)} ${y.toFixed(1)}a${rho.toFixed(2)} ${rho.toFixed(2)} 0 1 0 ${(rho * 2).toFixed(2)} 0a${rho.toFixed(2)} ${rho.toFixed(2)} 0 1 0 ${(-rho * 2).toFixed(2)} 0`;
   const split = beltSplit(props.belt.ecc, props.camera.azimuth);
-  const box = beltBox(props.side, L, split.offset);
+  const box = beltBox(props.side === "near" ? "near" : "far", L, split.offset);
   const half: CSSProperties = box;
   const back: CSSProperties = { left: -box.left, top: -box.top };
-  return (
-    <div className="gx-node" data-belt-outer="" style={{ transform: cssMatrix(m) }}>
-      <div className="gx-node" data-belt-rot="" style={{ transform: `rotate(${split.chiDeg.toFixed(3)}deg)` }}>
-      <div className="gx-half" data-belt-half={props.side} data-l={L} style={half}>
-        <div className="gx-node" data-belt-back="" style={back}>
-          <div className="gx-node" data-belt-unrot="" style={{ transform: `rotate(${(-split.chiDeg).toFixed(3)}deg)` }}>
+  // 碎石转动层（一张静止 SVG，整层由合成器转）
+  const spinLayer = (
           <div className="gx-node" data-spin="" data-from={0} data-to={-360} data-period={period}>
             <svg className="gx-local" style={{ left: -L, top: -L }} width={2 * L} height={2 * L} viewBox={`${-L} ${-L} ${2 * L} ${2 * L}`}>
               {props.clickable && props.onOpen !== null ? (
@@ -889,6 +897,24 @@ const BeltHalf = memo(function BeltHalf(props: {
               </div>
             ))}
           </div>
+  );
+  // 整条（碎石密度低于「全部」时）：不裁半平面、整条画在主星背后那一层——实测 GPU 花在两半的半平面裁切上（裁切让合成器每帧另开离屏面），
+  // 不在颗数，也不在这一层转（orbita 435 条：裁成两半 GPU 26–28%，整条不裁 15.4–15.6%，不画碎石带 16.5–16.8%）。
+  // 代价：近侧那一段碎石从主星前面经过时被主星挡住（只在低俯角、主星大时看得出）
+  if (props.side === "whole") {
+    return (
+      <div className="gx-node" data-belt-outer="" data-belt-whole="" style={{ transform: cssMatrix(m) }}>
+        {spinLayer}
+      </div>
+    );
+  }
+  return (
+    <div className="gx-node" data-belt-outer="" style={{ transform: cssMatrix(m) }}>
+      <div className="gx-node" data-belt-rot="" style={{ transform: `rotate(${split.chiDeg.toFixed(3)}deg)` }}>
+      <div className="gx-half" data-belt-half={props.side} data-l={L} style={half}>
+        <div className="gx-node" data-belt-back="" style={back}>
+          <div className="gx-node" data-belt-unrot="" style={{ transform: `rotate(${(-split.chiDeg).toFixed(3)}deg)` }}>
+          {spinLayer}
           </div>
         </div>
       </div>
@@ -975,7 +1001,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const surface = props.surface === undefined ? (props.fill === true ? "page" : "home") : props.surface;
   // 设置页的小预览（surface = null）不接拖动：那里有滑块
   const setView = useGalaxyTiltSetter();
-  const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE }), [props.spec, orbitE]);
+  // 碎石密度（设置 › 外观）：只删减碎石带里的普通会话，在跑 / 等你 / 最近的碎石块不受影响
+  const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE, dustKeep: galaxyView.dustKeep }), [props.spec, orbitE, galaxyView.dustKeep]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
@@ -995,12 +1022,6 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     }
     return { camera: safe.camera, viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg, box, size };
   }, [size, spec, props.agents, props.fill, tilt, azimuth, props.avoid, props.starDesign, zoomView]);
-  const actualElevation = scene?.elevation ?? null;
-  useLayoutEffect(() => {
-    if (surface === null) return;
-    // 卸载时不清：设置页打开时编排页的星系已经卸了，那一句说的是「上次画这块画布时」
-    reportElevation(surface, tilt, actualElevation);
-  }, [surface, tilt, actualElevation]);
   const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
   const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
   // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）
@@ -1020,7 +1041,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       ]),
     [size, movers, layout.belt, ids.length],
   );
-  const motion = useGalaxyMotion(rootRef, signature);
+  const motion = useGalaxyMotion(rootRef, signature, galaxyView.powerSave);
   useSides(rootRef, movers, motion.clock, motion.running, signature);
   const capturing = useCaptures(ids, motion.running);
   useCaptureAnimations(rootRef, capturing);
@@ -1090,7 +1111,6 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     live: liveRef,
     replan,
     badge: badgeRef,
-    raisedText: t.agents.tiltRaised,
     sceneId: scene,
     zoomView,
     setZoomView,
@@ -1247,10 +1267,12 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       {children}
     </svg>
   );
+  // 碎石密度「全部」照旧裁成远近两半（近侧碎石盖在主星前面）；低于「全部」整条画在主星背后（省电，见 BeltHalf）
+  const wholeBelt = galaxyView.dustKeep < 1;
   const beltHalf = (side: "far" | "near") =>
-    scene === null || layout.belt === null || look === null ? null : (
+    scene === null || layout.belt === null || look === null || (wholeBelt && side === "near") ? null : (
       <BeltHalf
-        side={side}
+        side={wholeBelt ? "whole" : side}
         belt={layout.belt}
         camera={scene.camera}
         viewport={scene.viewport}
@@ -1290,7 +1312,8 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
           {plane(arcPaths("back"))}
           <div className="gx-layer">
             {beltHalf("far")}
-            {movers.map((mover) => body(mover, "far"))}
+            {/* 远半圈按远近叠：外圈离镜头更远，先画（倒序）；近半圈外圈更近，后画（正序）。主星前后由两层分开 */}
+            {[...movers].reverse().map((mover) => body(mover, "far"))}
           </div>
           {starItem !== undefined &&
             !starless &&

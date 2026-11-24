@@ -1,4 +1,4 @@
-import { createContext, useContext, useSyncExternalStore } from "react";
+import { createContext, useContext } from "react";
 // 值 import 走相对路径：node --test 解析不了 @shared 别名
 import { GALAXY_TILT } from "../../../../shared/settings.ts";
 
@@ -22,9 +22,13 @@ export interface GalaxyView {
   turntable: boolean;
   /** 缩放（倍，设置里的 galaxyZoom） */
   zoom: number;
+  /** 碎石带实际画出的比例（设置 › 外观 › 碎石密度；离电省电档下为 0） */
+  dustKeep: number;
+  /** 离电省电档：星系停转（碎石带隐藏已折进 dustKeep） */
+  powerSave: boolean;
 }
 
-export const GalaxyViewContext = createContext<GalaxyView>({ azimuth: 0, turntable: true, zoom: 1 });
+export const GalaxyViewContext = createContext<GalaxyView>({ azimuth: 0, turntable: true, zoom: 1, dustKeep: 0.5, powerSave: false });
 
 export function useGalaxyView(): GalaxyView {
   return useContext(GalaxyViewContext);
@@ -42,31 +46,5 @@ export function useGalaxyTiltSetter(): GalaxyViewSetter | null {
   return useContext(GalaxyTiltSetterContext);
 }
 
-/**
- * 哪块画布把俯角自动抬高了（屏幕安全布局：子智能体在设置的俯角下装不下时，只对这一块画布抬到刚好装得下）。
- * 每个星系组件挂着时上报自己画在多少度；设置页那一行据此写一句「右栏星系图较窄，自动抬高到 X°」。
- */
+/** 这是哪块画布：home = 单智能体首页，page = 编排 New Task 页，panel = 右栏星系图 */
 export type GalaxySurface = "home" | "page" | "panel";
-const raised = new Map<GalaxySurface, number>();
-let snapshot: ReadonlyMap<GalaxySurface, number> = new Map();
-const listeners = new Set<() => void>();
-
-export function reportElevation(surface: GalaxySurface, tilt: number, actual: number | null): void {
-  const before = raised.get(surface);
-  if (actual === null || actual <= tilt) raised.delete(surface);
-  else raised.set(surface, Math.round(actual));
-  if (raised.get(surface) === before) return;
-  snapshot = new Map(raised);
-  for (const listener of listeners) listener();
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-export function useRaisedSurfaces(): ReadonlyMap<GalaxySurface, number> {
-  return useSyncExternalStore(subscribe, () => snapshot);
-}

@@ -227,10 +227,22 @@ export interface AppSettings {
   /** 左右拖动旋转星系（转台）：缺席 = 开；关掉后左右拖动与左右方向键不改方位角，只能上下改倾角 */
   galaxyTurntable?: boolean;
   /**
+   * 离电时省电（设置 › 外观）：缺席 = 开。开着时用电池就进省电档——星系停转、碎石带隐藏、眼睛不跟指针；插上电恢复。
+   * （2026-11-24 用户：「能离电就默认关掉吗？」）
+   */
+  galaxyBatterySaver?: boolean;
+  /** 「已切到省电」那条轻提示出过了（只提示一次） */
+  galaxyBatteryNoticeSeen?: boolean;
+  /**
    * 星系缩放（倍，GALAXY_ZOOM 区间，两位小数）：星系上滚轮 / 双指缩放，与倾角、方位一起全局存。缺席 = 1。
    * 平移（以指针为中心缩放带出来的）不存：它按像素算，换一块画布就没意义；重开回到主星居中
    */
   galaxyZoom?: number;
+  /**
+   * 碎石密度（设置 › 外观）：星系碎石带里普通会话画多少——全部 / 一半 / 十分之一 / 不显示。显示越多越耗电
+   * （2026-11-24 用户：「session 太多了，有太多粒子要计算……这个可能得是可以调的」）。缺席 = 一半
+   */
+  galaxyDustDensity?: GalaxyDustDensity;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -693,6 +705,20 @@ export function galaxyAzimuthOf(settings: Pick<AppSettings, "galaxyAzimuth">): n
   return settings.galaxyAzimuth ?? GALAXY_AZIMUTH_DEFAULT;
 }
 
+export type GalaxyDustDensity = "all" | "half" | "tenth" | "none";
+export const GALAXY_DUST_DENSITIES: readonly GalaxyDustDensity[] = ["all", "half", "tenth", "none"];
+export const GALAXY_DUST_DEFAULT: GalaxyDustDensity = "half";
+/** 每档实际画出的比例 */
+export const GALAXY_DUST_KEEP: Readonly<Record<GalaxyDustDensity, number>> = { all: 1, half: 0.5, tenth: 0.1, none: 0 };
+
+export function isGalaxyDustDensity(value: unknown): value is GalaxyDustDensity {
+  return typeof value === "string" && (GALAXY_DUST_DENSITIES as readonly string[]).includes(value);
+}
+
+export function galaxyDustDensityOf(settings: Pick<AppSettings, "galaxyDustDensity">): GalaxyDustDensity {
+  return settings.galaxyDustDensity ?? GALAXY_DUST_DEFAULT;
+}
+
 export const GALAXY_ZOOM = { min: 0.5, max: 3, default: 1 } as const;
 
 export function isGalaxyZoom(value: unknown): value is number {
@@ -701,6 +727,10 @@ export function isGalaxyZoom(value: unknown): value is number {
 
 export function galaxyZoomOf(settings: Pick<AppSettings, "galaxyZoom">): number {
   return settings.galaxyZoom ?? GALAXY_ZOOM.default;
+}
+
+export function galaxyBatterySaverOf(settings: Pick<AppSettings, "galaxyBatterySaver">): boolean {
+  return settings.galaxyBatterySaver ?? true;
 }
 
 export function galaxyTurntableOf(settings: Pick<AppSettings, "galaxyTurntable">): boolean {
@@ -726,7 +756,10 @@ export function parseSettings(raw: unknown): AppSettings {
     galaxyTilt?: unknown;
     galaxyAzimuth?: unknown;
     galaxyTurntable?: unknown;
+    galaxyBatterySaver?: unknown;
+    galaxyBatteryNoticeSeen?: unknown;
     galaxyZoom?: unknown;
+    galaxyDustDensity?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     chatImageSize?: unknown;
@@ -811,7 +844,10 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
     ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
     ...(typeof record.galaxyTurntable === "boolean" ? { galaxyTurntable: record.galaxyTurntable } : {}),
+    ...(typeof record.galaxyBatterySaver === "boolean" ? { galaxyBatterySaver: record.galaxyBatterySaver } : {}),
+    ...(record.galaxyBatteryNoticeSeen === true ? { galaxyBatteryNoticeSeen: true } : {}),
     ...(isGalaxyZoom(record.galaxyZoom) ? { galaxyZoom: record.galaxyZoom } : {}),
+    ...(isGalaxyDustDensity(record.galaxyDustDensity) ? { galaxyDustDensity: record.galaxyDustDensity } : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),

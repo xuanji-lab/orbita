@@ -52,9 +52,8 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
+import { effectiveLanguage, galaxyBatterySaverOf, GALAXY_DUST_DENSITIES, galaxyDustDensityOf, type GalaxyDustDensity, GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 import { HomeGalaxy } from "../chat/HomeGalaxy.tsx";
-import { useRaisedSurfaces } from "../chat/galaxy-tilt.ts";
 import type { GalaxySpec } from "../chat/galaxy.ts";
 
 /** 星系倾角的小预览：一颗主星、三颗行星、三十来颗碎石（演示形状，不是哪个工作区的真数据） */
@@ -389,8 +388,6 @@ function General(props: {
 
   // 单语主题定死的语言（null = 双语主题，听设置）；芯片亮的是实际生效的那一门
   const lockedLanguage = themeLanguage(props.settings.theme);
-  // 哪块画布此刻因为装不下子智能体把俯角抬高了（星系组件挂着时上报）
-  const raisedSurfaces = useRaisedSurfaces();
   const shownLanguage = effectiveLanguage(props.settings.theme, props.settings.language);
 
   return (
@@ -442,11 +439,23 @@ function General(props: {
             />
             <span className="set-galaxy-tilt-value">{t.settings.galaxyTiltValue(galaxyTiltOf(props.settings))}</span>
           </span>
-          {[...raisedSurfaces].map(([surface, deg]) => (
-            <span key={surface} className="set-row-hint">
-              {t.settings.galaxyTiltRaised(surface, deg)}
-            </span>
-          ))}
+        </SettingRow>
+        {/* 碎石密度：碎石带里普通会话画多少（在跑 / 等你 / 最近的会话永远画）；计数照旧按全部会话 */}
+        <SettingRow name={t.settings.galaxyDust} info={t.settings.galaxyDustInfo}>
+          <Segmented<GalaxyDustDensity>
+            label={t.settings.galaxyDust}
+            value={galaxyDustDensityOf(props.settings)}
+            options={GALAXY_DUST_DENSITIES.map((value) => ({ value, label: t.settings.galaxyDustOptions[value] }))}
+            onChange={(galaxyDustDensity) => props.onChange({ galaxyDustDensity })}
+          />
+        </SettingRow>
+        {/* 离电时省电：用电池时星系停转、碎石带隐藏、眼睛不跟；缺席 = 开 */}
+        <SettingRow name={t.settings.galaxyBatterySaver} info={t.settings.galaxyBatterySaverInfo}>
+          <Switch
+            label={t.settings.galaxyBatterySaver}
+            checked={galaxyBatterySaverOf(props.settings)}
+            onChange={(next) => props.onChange({ galaxyBatterySaver: next })}
+          />
         </SettingRow>
         {/* 转台：星系空白处左右拖动绕竖直轴转（方位角）。关掉后左右拖动与左右方向键不改方位角，只剩上下改倾角 */}
         <SettingRow name={t.settings.galaxyTurntable} info={t.settings.galaxyTurntableInfo(galaxyAzimuthOf(props.settings))}>

@@ -1287,11 +1287,16 @@ export const zh: Messages = {
     galaxyTiltInfo: "看星系的角度：小了像贴着盘面平视，大了像从上往下看。单智能体首页、编排页、右栏星系图和设计面板一起换。",
     galaxyTiltValue: (deg: number) => `${deg}°`,
     galaxyTiltPreview: "星系倾角预览",
+    galaxyDust: "碎石密度",
+    galaxyDustInfo: "星系碎石带里画多少条会话。显示越多越耗电。在跑、等你、最近的会话总会画出来，计数仍按全部会话。",
+    galaxyDustOptions: { all: "全部", half: "一半", tenth: "十分之一", none: "不显示" },
+    galaxyBatterySaver: "离电时省电",
+    galaxyBatterySaverInfo: "用电池时星系停转、碎石带隐藏、眼睛不跟指针；插上电自动恢复。",
+    galaxyBatteryNotice: "已切到省电：星系停转、碎石带隐藏",
+    galaxyBatteryNoticeAction: "在设置里改",
     galaxyTurntable: "左右拖动旋转星系",
     galaxyTurntableInfo: (azimuth: number) =>
       `在星系空白处左右拖动，绕竖直轴转着看（现在转到 ${azimuth}°）；上下拖动改倾角。双击星系空白处回到 40° · 0°。关掉后只能上下改倾角。`,
-    galaxyTiltRaised: (surface: "home" | "page" | "panel", deg: number) =>
-      `${surface === "panel" ? "右栏星系图" : surface === "page" ? "编排页" : "单智能体首页"}较窄，放不下全部子智能体，自动抬高到 ${deg}°`,
     /** 「新手引导」页签：顶上一句说明 + 「从头看」，下面整张章节目录 */
     guideLead: "拿一个研究课题从头走到尾，看 Orbita 能帮你做什么。点下面任意一章，直接翻到那一章。",
     guideStart: "从头看",
@@ -3664,7 +3669,6 @@ export const zh: Messages = {
     tiltValue: (deg) => `${deg}°`,
     spillLabel: "画面里放不下引线的会话",
     spillMore: (n: number) => `另 ${n} 条`,
-    tiltRaised: (deg) => `放不下全部子智能体，这里抬到 ${deg}°`,
     tiltHint: "在空白处按住拖动转动星系：上下改倾角，左右绕竖直轴转；也可用方向键，双击空白处复位",
     tiltHintVertical: "在空白处按住上下拖动，或按上下方向键，改星系倾角；双击空白处复位",
     openHomeTip: (name) => `回到 ${name} 的新任务页`,
