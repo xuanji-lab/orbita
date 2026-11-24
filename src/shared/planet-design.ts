@@ -287,7 +287,11 @@ export function patchPluginDesign(raw: unknown, patch: { name: string; massEarth
 /**
  * 界面写回时的伴随文件：保留原文件里界面不管的字段（地表路径、翻转、设计稿路径、note），
  * 用写回请求覆盖界面拥有的字段（元素、轨道、成分）。名字 / 质量：有插件稿的不记在伴随文件里（以插件稿为准），
- * 没有的记在这里。请求里没有的行星从名单里拿掉（面板删了它）。
+ * 没有的记在这里。
+ *
+ * **请求里没有的行星原样留着**（2026-11-24 改：以前是「拿掉」）。删子智能体另走 subagent:delete（要确认），
+ * 不再由面板的整份写回隐式完成——否则聊天里刚建的行星会被面板里一份还没刷新的名单去抖写回时抹掉。
+ * 名单次序：盘上原有的保持原位，请求里新出现的接在后面。
  */
 export function mergeCompanion(
   current: GalaxyCompanion,
@@ -307,14 +311,20 @@ export function mergeCompanion(
     return next;
   };
   const main = request.main === null ? null : writeBody(current.main, request.main, hasDesign.main);
-  const planets = request.planets.slice(0, PLANET_AGENTS_MAX).map((body): CompanionPlanet => {
-    const old = current.planets.find((planet) => planet.id === body.id) ?? null;
+  const merged = (old: CompanionPlanet | null, body: PlanetWriteBody): CompanionPlanet => {
     const next: CompanionPlanet = { ...(old ?? { id: body.id }), ...writeBody(old, body, hasDesign.planets.has(body.id)), id: body.id };
     if (body.composition !== null) next.composition = body.composition;
     if (body.orbit !== null) next.orbit = body.orbit;
     return next;
+  };
+  const byId = new Map(request.planets.map((body) => [body.id, body]));
+  const kept = current.planets.map((old) => {
+    const body = byId.get(old.id);
+    return body === undefined ? old : merged(old, body);
   });
-  return { version: PLANET_GALAXY_VERSION, main, planets };
+  const known = new Set(current.planets.map((planet) => planet.id));
+  const added = request.planets.filter((body) => !known.has(body.id)).map((body) => merged(null, body));
+  return { version: PLANET_GALAXY_VERSION, main, planets: [...kept, ...added].slice(0, PLANET_AGENTS_MAX) };
 }
 
 export function isPlanetWriteBody(raw: unknown): raw is PlanetWriteBody {

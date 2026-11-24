@@ -57,6 +57,9 @@ import type { SentImage } from "../../shared/prompt-images.ts";
 import type { SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { TurnDirectories } from "../../shared/agent-ipc.ts";
 import { resolveTurnDirectories } from "./turn-directories.ts";
+import { SubAgentStore } from "../planet/sub-agents.ts";
+import type { SubAgentTurnIdentity } from "../../shared/sub-agent.ts";
+import { attributionOf } from "../../shared/session.ts";
 import { turnFields } from "./turn-fields.ts";
 import { applyModeCascade } from "./mode-cascade.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
@@ -321,6 +324,29 @@ export function registerAgentIpc(
     return meta?.automationId === undefined && meta?.parentId === undefined;
   };
 
+  /**
+   * 子智能体的开轮装配（每轮现算，设置 / 档案改了下一轮就生效）：
+   * - subAgentTools：编排形态 + 会话属于某个工作区 + 根会话（不是子会话、不是自动化新开的）才注册三个工具——
+   *   星际空间没有主星，不能建行星；子会话不能再建子智能体。
+   * - subAgent：这条会话替哪个子智能体干活（attributionOf(meta)：指名的，或以后推断且比例够高的）→ 现读档案，职能讲进系统提示。
+   *   档案读不到（删了 / 坏了）就不带，降级成普通子会话，不拦开轮。
+   */
+  const subAgentStore = new SubAgentStore();
+  const readSubAgentEnv = async (input: { sessionId: string; workspaceId: string | null }): Promise<{ subAgentTools?: true; subAgent?: SubAgentTurnIdentity }> => {
+    if (input.workspaceId === null) return {};
+    const workspace = (await workspaces.list()).find((each) => each.id === input.workspaceId);
+    if (workspace === undefined) return {};
+    const meta = await sessions.readMeta(input.sessionId).catch(() => null);
+    const out: { subAgentTools?: true; subAgent?: SubAgentTurnIdentity } = {};
+    if (meta?.parentId === undefined && meta?.automationId === undefined && (await settings.read()).appMode === "orchestrate") out.subAgentTools = true;
+    const owner = meta === null ? null : attributionOf(meta);
+    if (owner !== null) {
+      const profile = await subAgentStore.profile(workspace.path, owner.subAgentId).catch(() => null);
+      if (profile !== null) out.subAgent = { id: profile.id, name: profile.name, role: profile.role };
+    }
+    return out;
+  };
+
 
   /**
    * 开轮 / 压缩 / 换模型的装配入口：同 resolveProviderSecrets，但「这家已关闭」按界面语言写成
@@ -514,6 +540,7 @@ export function registerAgentIpc(
       text,
       sessionMemory: true,
       ...(automationTools ? { automationTools: true } : {}),
+      ...(await readSubAgentEnv(input)),
       ...(await sentImages(input)),
       ...(await sentFileRefs(input)),
       ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}),
@@ -560,7 +587,7 @@ export function registerAgentIpc(
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId, input.autoCompact), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await readSubAgentEnv(input)), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId, input.autoCompact), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {

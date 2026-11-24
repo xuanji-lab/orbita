@@ -104,12 +104,16 @@ describe("写回伴随文件", () => {
     assert.equal(next.planets[0]?.orbit, 24);
   });
 
-  it("没有插件稿的天体把名字与质量记在伴随文件；请求里没有的行星拿掉", () => {
-    const current = parseCompanion({ planets: [{ id: "gone" }] });
+  it("没有插件稿的天体把名字与质量记在伴随文件；请求里没有的行星原样留着（删除另走 subagent:delete）", () => {
+    const current = parseCompanion({ planets: [{ id: "kept", name: "聊天里刚建的", orbit: 31 }] });
     const next = mergeCompanion(current, { main: null, planets: [body] }, { main: false, planets: new Set() });
-    assert.equal(next.planets.length, 1);
-    assert.equal(next.planets[0]?.name, "聆箴");
-    assert.equal(next.planets[0]?.massEarth, 2.2);
+    assert.equal(next.planets.length, 2);
+    // 盘上原有的留在原位，请求里新出现的接在后面
+    assert.deepEqual(next.planets.map((planet) => planet.id), ["kept", "rec"]);
+    assert.equal(next.planets[0]?.name, "聊天里刚建的");
+    assert.equal(next.planets[0]?.orbit, 31);
+    assert.equal(next.planets[1]?.name, "聆箴");
+    assert.equal(next.planets[1]?.massEarth, 2.2);
   });
 
   it("眼睛样式：写进伴随文件、读得回来；请求里没带就保留盘上原值；坏值读时丢掉", () => {

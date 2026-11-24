@@ -5,6 +5,8 @@
 import { OutboxStore } from "./session/outbox.ts";
 import { registerOutboxIpc } from "./session/outbox-ipc.ts";
 import { registerPlanetIpc } from "./planet/ipc.ts";
+import { SubAgentStore } from "./planet/sub-agents.ts";
+import { applySubAgentRequest } from "./planet/sub-agent-requests.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
@@ -429,6 +431,8 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
+  // 子智能体档案（工作区 planet/agents/<id>/agent.json）：面板 IPC、agent 工具、指名派活共用一个
+  const subAgentStore = new SubAgentStore();
   // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
   // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
   // 不再随设置开关拉起 / 停
@@ -633,6 +637,21 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerAutomation(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerAutomation(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // 子智能体：agent 的 create_sub_agent / update_sub_agent / list_sub_agents——写工作区 planet/ 在主进程，任何路径都回执
+    if (event.type === "subAgentRequest") {
+      void applySubAgentRequest(
+        { sessions, workspaces, settings, store: subAgentStore, broadcast: (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }) },
+        event,
+      )
+        .then((outcome) => agentHost.answerSubAgent(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerSubAgent(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
@@ -1060,7 +1079,7 @@ void app.whenReady().then(async () => {
   // 发件箱：点了发送的话先落盘再开跑，下次启动核对没落账的（session/outbox.ts）
   registerOutboxIpc(new OutboxStore(configDir));
   // 星系设计稿：工作区 planet/ 里的插件稿与伴随文件（planet/store.ts）
-  registerPlanetIpc(workspaces);
+  registerPlanetIpc(workspaces, subAgentStore, (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }));
   registerSessionIpc(
     sessions,
     (id) => {
@@ -1271,6 +1290,12 @@ void app.whenReady().then(async () => {
     cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
     phases,
     broadcast: broadcastChannelEvent,
+    subAgents: {
+      profile: async (workspaceId, id) => {
+        const workspace = (await workspaces.list()).find((each) => each.id === workspaceId);
+        return workspace === undefined ? null : subAgentStore.profile(workspace.path, id);
+      },
+    },
   };
   registerChannelIpc(deps);
 
