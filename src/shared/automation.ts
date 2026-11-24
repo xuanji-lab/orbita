@@ -415,7 +415,7 @@ export function formatAutomationStamp(at: number): string {
 
 /**
  * 到点送进会话的文本抬头：`[定时任务「标题」第 3/12 次 · 10-31 01:45]`（没有上限写「第 3 次」）。
- * renderer 靠 `parseAutomationHeader` 把 this_session 被叫醒的那一轮渲染成一条细分隔线。
+ * renderer 靠 `parseAutomationHeader` 把 this_session 被叫醒的那一轮渲染成白卡。
  */
 export function composeAutomationHeader(input: { title: string; number: number; max?: number; at: number }): string {
   const nth = input.max === undefined ? `${input.number}` : `${input.number}/${input.max}`;

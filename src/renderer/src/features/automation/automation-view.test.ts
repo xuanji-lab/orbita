@@ -11,10 +11,12 @@ import {
   describeSchedule,
   endFormFrom,
   endFromForm,
+  firstLineOfWake,
   formFromSchedule,
   formatTokens,
   formatWhen,
   groupAutomations,
+  joinWakeText,
   modeRowFailureText,
   modeRowView,
   modelOptionValue,
@@ -30,6 +32,7 @@ import {
   sortAutomations,
   subtitleOf,
   visibleRuns,
+  wakeAutomationId,
 } from "./automation-view.ts";
 
 const T = en.automation;
@@ -66,6 +69,38 @@ const run = (patch: Partial<AutomationRun> & { id: string }): AutomationRun => (
   durationMs: 1,
   tokens: null,
   ...patch,
+});
+
+describe("对话里的唤醒卡", () => {
+  test("分块回显拼回抬头与指令，非文本块不进正文", () => {
+    const text = joinWakeText([
+      { type: "text", text: "[定时任务「巡检」第 1/2 次 · 11-24 08:30]" },
+      { type: "image" },
+      { type: "text", text: "先看结果\n再汇报" },
+    ]);
+    assert.equal(text, "[定时任务「巡检」第 1/2 次 · 11-24 08:30]\n\n先看结果\n再汇报");
+    assert.equal(firstLineOfWake("\n  先看结果  \n再汇报"), "先看结果");
+    assert.equal(firstLineOfWake("\n\n"), "");
+  });
+
+  const bound = (id: string, prompt = "看结果") =>
+    auto({ id, title: "巡检", prompt, target: { kind: "this_session", sessionId: "S", workspaceId: null } });
+
+  test("看自动化只定位到本会话的同标题任务", () => {
+    const list = [
+      bound("match"),
+      auto({ id: "other-kind", title: "巡检", prompt: "看结果" }),
+      auto({ id: "other-session", title: "巡检", prompt: "看结果", target: { kind: "this_session", sessionId: "S2", workspaceId: null } }),
+    ];
+    assert.equal(wakeAutomationId(list, { sessionId: "S", title: "巡检", body: "看结果" }), "match");
+    assert.equal(wakeAutomationId(list, { sessionId: "S", title: "不存在", body: "看结果" }), undefined);
+  });
+
+  test("同名同会话：指令全文能消歧；仍有歧义就不猜", () => {
+    const list = [bound("a", "甲"), bound("b", "乙")];
+    assert.equal(wakeAutomationId(list, { sessionId: "S", title: "巡检", body: "乙" }), "b");
+    assert.equal(wakeAutomationId([bound("a"), bound("b")], { sessionId: "S", title: "巡检", body: "看结果" }), undefined);
+  });
 });
 
 describe("rowStateOf / sortAutomations / runningCount", () => {
