@@ -84,6 +84,16 @@ describe("SettingsStore", () => {
     assert.equal((await store.read()).providersPage, undefined);
   });
 
+  test("常驻对话指针与入口选择按工作区合并：记第二个不抹第一个，重开 store 还在，改别的设置不抹它们", async () => {
+    await store.write({ orchestraMain: { ws1: "s1" }, orchestraEntry: { ws1: "main" } });
+    await store.write({ orchestraMain: { ws2: "s2" }, orchestraEntry: { ws2: "new" } });
+    await store.write({ orchestraMain: { ws1: "s3" } });
+    await store.write({ theme: "light" });
+    const reopened = await new SettingsStore(dir).read();
+    assert.deepEqual(reopened.orchestraMain, { ws1: "s3", ws2: "s2" });
+    assert.deepEqual(reopened.orchestraEntry, { ws1: "main", ws2: "new" });
+  });
+
   test("向量设置按键合并：只切模式不抹掉模型、卸载时间与电池偏好", async () => {
     await store.write({
       vector: { model: "qwen3-embedding-0.6b", idleUnloadMin: 9, deferOnBattery: false },

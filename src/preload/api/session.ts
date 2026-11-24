@@ -62,6 +62,9 @@ export const sessionApi = {
   /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效 */
   setIntentEnabled: (id: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionSetIntentEnabled, id, enabled),
+  /** 会话级自动压缩开关：只落 meta，下一轮生效（false = 只认手动 /compact） */
+  setAutoCompact: (id: string, enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionSetAutoCompact, id, enabled),
   /**
    * 未读标记（后台跑完还没看）：标 `{ at, failed }`，null 清。落盘后重启仍在；
    * 侧栏竖条与铃铛清单都读 meta 上的它，不各存一份
