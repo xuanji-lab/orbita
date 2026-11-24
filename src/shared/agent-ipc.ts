@@ -958,7 +958,7 @@ export type AgentCommand =
        */
       automationTools?: boolean;
       /**
-       * 子智能体工具（create_sub_agent / update_sub_agent / list_sub_agents）的注册开关。**主进程装配**：
+       * 子智能体工具（create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents）的注册开关。**主进程装配**：
        * 编排形态、会话属于某个工作区、且是根会话（主智能体）才带 true——星际空间没有主星，不能建行星。缺席 = 不注册。
        */
       subAgentTools?: boolean;
@@ -1570,7 +1570,7 @@ export type AgentEvent =
    */
   | { type: "automationRequest"; requestId: string; sessionId: string; mode: PermissionMode; request: AutomationToolRequest }
   /**
-   * 子智能体：agent 的 create_sub_agent / update_sub_agent / list_sub_agents。**存盘在主进程**（同 automationRequest）：
+   * 子智能体：agent 的 create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents。**存盘在主进程**（同 automationRequest）：
    * 主进程再核一遍「编排形态 + 有工作区 + 根会话」、校验入参、写工作区 planet/，回 subAgentResult；
    * 建完 / 改完广播 subAgentsChanged（建完 renderer 弹出星系设计面板停在新行星上）。
    */

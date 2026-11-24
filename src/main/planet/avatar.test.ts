@@ -385,4 +385,29 @@ describe("聊天里建子智能体", () => {
     assert.deepEqual(started, ["w1/agent-x"]);
     assert.match((outcome as { text: string }).text, /do not generate or set an avatar image yourself/);
   });
+
+  it("聊天里说『再暖一点』：要求进同一出图流程，广播 avatar 让面板弹到这颗行星", async () => {
+    const { ws } = await fixture();
+    const started: string[] = [];
+    const changes: Record<string, unknown>[] = [];
+    const outcome = await applySubAgentRequest(
+      {
+        sessions: { readMeta: async () => ({ id: "c", parentId: undefined, workspaceId: "w1" }) as unknown as SessionMeta },
+        workspaces: { list: async () => [ws] },
+        settings: { read: async () => ({ ...DEFAULT_SETTINGS, appMode: "orchestrate" }) },
+        store: new SubAgentStore({ newId: () => "agent-x" }),
+        broadcast: (event) => void changes.push({ ...event }),
+        startAvatar: async (workspaceId, bodyId, instruction) => {
+          started.push(`${workspaceId}/${bodyId}/${instruction ?? ""}`);
+          return { ok: true };
+        },
+      },
+      { type: "subAgentRequest", requestId: "r", sessionId: "c", request: { action: "reviseAvatar", input: { id: "rec", instruction: "再暖一点" } } },
+    );
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(started, ["w1/rec/再暖一点"]);
+    assert.deepEqual(changes, [{ workspaceId: "w1", subAgentId: "rec", action: "avatar", source: "chat", sessionId: "c" }]);
+    assert.match((outcome as { text: string }).text, /Galaxy Design panel/);
+    assert.match((outcome as { text: string }).text, /Do not generate, choose or set/);
+  });
 });
