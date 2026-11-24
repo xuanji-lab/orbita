@@ -32,6 +32,7 @@ import {
   type ChannelMessage,
 } from "../../shared/channel.ts";
 import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
+import { detectReplyLang, isReplyLang } from "../../shared/reply-language.ts";
 import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
 import type { AppSettings, ModelPair } from "../../shared/settings.ts";
@@ -201,6 +202,8 @@ export async function applyDelegate(
     text: task,
     delivery: "followUp",
     createdAt: Date.now(),
+    // 用户此刻的语言（agent 按父会话里用户亲手打的字算好）：子会话收到的全是信封，靠它写对语言
+    ...(isReplyLang(event.replyLang) ? { lang: event.replyLang } : {}),
   };
 
   // 先建子 meta 再开轮：ensureSession 对已存在的 meta 只校准 piSessionFile
@@ -362,6 +365,7 @@ export async function applyChannelSend(
     text,
     delivery: event.delivery ?? "steer",
     createdAt: Date.now(),
+    ...(isReplyLang(event.replyLang) ? { lang: event.replyLang } : {}),
   };
   await deps.channels.append(key, message);
   await broadcastAfterAppend(deps, key, message);
@@ -390,6 +394,7 @@ export async function applySpeak(deps: ChannelDeps, input: ChannelSpeakInput): P
   if (text === "") throw new Error("Message text must not be empty.");
 
   const key: ChannelKey = { parentId: parent.id, childId: child.id };
+  const lang = detectReplyLang(text);
   const message: ChannelMessage = {
     id: randomUUID(),
     from: "parent",
@@ -398,6 +403,8 @@ export async function applySpeak(deps: ChannelDeps, input: ChannelSpeakInput): P
     text,
     delivery: input.delivery,
     createdAt: Date.now(),
+    // 这句话就是用户亲手打的：直接按它算语言；太短判不出就不带，子会话沿用此前的
+    ...(lang === null ? {} : { lang }),
   };
   await deps.channels.append(key, message);
   // 不写父侧标记（子会话 2026-09-23 不变量修正）：ChannelMarkRecord 顶替的是 pi
