@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BOARD_SHOT_FRESH_MS, BOARD_SHOT_LIMIT, boardShotFits, boardShotKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
+import { BOARD_SHOT_FRESH_MS, BOARD_SHOT_LIMIT, boardShotFits, boardShotFor, boardShotKey, boardShotVariantKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
 
 const base = { cssWidth: 752, cssHeight: 400, ratio: 2, theme: "light", capturedAt: 1_000 };
 const current = { width: 752, height: 400, ratio: 2, theme: "light", now: 2_000 };
@@ -24,6 +24,19 @@ test("超过一分钟或时钟倒走的位图不贴", () => {
   assert.equal(boardShotFits(base, { ...current, now: base.capturedAt + BOARD_SHOT_FRESH_MS - 1 }), true);
   assert.equal(boardShotFits(base, { ...current, now: base.capturedAt + BOARD_SHOT_FRESH_MS }), false);
   assert.equal(boardShotFits(base, { ...current, now: base.capturedAt - 1 }), false);
+});
+
+test("右栏开合的宽窄布局各留一张，不按当前宽度互相覆盖", () => {
+  const key = boardShotKey("variant-test", "call");
+  const wide = { ...base, cssWidth: 840, bitmap: {} as ImageBitmap } satisfies BoardShot;
+  const narrow = { ...base, cssWidth: 406, bitmap: {} as ImageBitmap } satisfies BoardShot;
+  boardShots.set(boardShotVariantKey(key, wide), wide);
+  boardShots.set(boardShotVariantKey(key, narrow), narrow);
+  assert.equal(boardShotFor(key, { ...current, width: 840 }), wide);
+  assert.equal(boardShotFor(key, { ...current, width: 406 }), narrow);
+  assert.equal(boardShotFor(key, { ...current, width: 600 }), undefined);
+  boardShots.delete(boardShotVariantKey(key, wide));
+  boardShots.delete(boardShotVariantKey(key, narrow));
 });
 
 test("LRU 只留最近 8 张，最久没用的先淘汰", () => {

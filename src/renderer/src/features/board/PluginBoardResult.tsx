@@ -22,7 +22,7 @@ import { requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import { BoardGrid } from "../plugins/BoardGrid.tsx";
 import { containerLayout, gridHeight } from "../plugins/board-layout.ts";
 import { boardClip, boardExpandStore, collapseScrollDelta } from "./board-expand.ts";
-import { boardShotFits, boardShotKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
+import { boardShotFor, boardShotKey, boardShotVariantKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
 import { skippedText } from "./board-text.ts";
 import { useSnapshotCards, type SnapshotCardInput } from "./useSnapshotCards.ts";
 import "./board.css";
@@ -149,7 +149,10 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
         bitmap.close();
         return;
       }
-      boardShots.set(cacheKey, { bitmap, cssWidth: rect.width, cssHeight: rect.height, ratio, theme, capturedAt: Date.now() });
+      boardShots.set(
+        boardShotVariantKey(cacheKey, { cssWidth: rect.width, cssHeight: rect.height, ratio, theme }),
+        { bitmap, cssWidth: rect.width, cssHeight: rect.height, ratio, theme, capturedAt: Date.now() },
+      );
     })().catch(() => undefined);
   }, [board.cards.length, cacheKey, theme]);
 
@@ -168,11 +171,11 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
     if (!live) setLiveReady(false);
   }, [live]);
 
-  const shot = cacheKey === null || width === 0 ? undefined : boardShots.get(cacheKey);
-  const pasteShot =
-    shot !== undefined &&
-    boardShotFits(shot, { width, height: visibleHeight, ratio: window.devicePixelRatio || 1, theme, now: Date.now() }) &&
-    (!live || !liveReady);
+  const shot =
+    cacheKey === null || width === 0
+      ? undefined
+      : boardShotFor(cacheKey, { width, height: visibleHeight, ratio: window.devicePixelRatio || 1, theme, now: Date.now() });
+  const pasteShot = shot !== undefined && (!live || !liveReady);
   const collapse = (): void => {
     // 「收起」钮在展开的看板最底下：整块缩回半屏后，顶部若在视口上方就把它拉回视口里，别让用户迷路
     // （行在虚拟列表里是绝对定位，缩短不挪它的顶；下面的行等测高后才补位，所以这里直接按现在的顶部算）

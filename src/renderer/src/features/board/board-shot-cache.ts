@@ -29,6 +29,23 @@ export function boardShotKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}:${toolCallId}`;
 }
 
+/** 同一块看板在右栏开合 / 窗口缩放时会经过多个宽度：每种布局各留一张，互不覆盖。 */
+export function boardShotVariantKey(
+  cacheKey: string,
+  shot: Pick<BoardShot, "cssWidth" | "cssHeight" | "ratio" | "theme">,
+): string {
+  return `${cacheKey}:${Math.round(shot.cssWidth)}:${Math.round(shot.cssHeight)}:${shot.ratio}:${shot.theme}`;
+}
+
+/** 取当前布局的变体；没有或过期就没有，不回退到别的尺寸（避免拉伸 / 错位）。 */
+export function boardShotFor(
+  cacheKey: string,
+  current: { width: number; height: number; ratio: number; theme: string; now: number },
+): BoardShot | undefined {
+  const shot = boardShots.get(boardShotVariantKey(cacheKey, { cssWidth: current.width, cssHeight: current.height, ratio: current.ratio, theme: current.theme }));
+  return shot !== undefined && boardShotFits(shot, current) ? shot : undefined;
+}
+
 /** 位图能不能直接贴：布局、像素比、主题一致，且仍是刚切回时该用的近期图。 */
 export function boardShotFits(
   shot: Pick<BoardShot, "cssWidth" | "cssHeight" | "ratio" | "theme" | "capturedAt">,
