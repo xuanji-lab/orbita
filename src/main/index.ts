@@ -99,6 +99,8 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { installMediaProtocol, registerMediaScheme } from "./files/media-protocol.ts";
+import { MediaTokens } from "./files/media-stream.ts";
 import { applyDocRequest } from "./doc-panel/agent-requests.ts";
 import { printDocPdf } from "./doc-panel/print-doc-pdf.ts";
 import { registerDocIpc } from "./doc-panel/ipc.ts";
@@ -141,6 +143,8 @@ preferIPv4();
 
 // 插件面板的 iframe 协议（orbita-panel://）：Electron 要求自定义协议在 app ready 之前登记
 registerPanelScheme();
+// 文件面板的音视频协议（orbita-media://）：同样要在 app ready 之前登记
+registerMediaScheme();
 
 // Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
 // 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
@@ -1212,7 +1216,9 @@ void app.whenReady().then(async () => {
     await plugins.removeWorkspace(id);
   });
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
-  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots));
+  const mediaTokens = new MediaTokens();
+  installMediaProtocol(mediaTokens, (url) => isOwnRendererPage(url, ownRendererOrigin()));
+  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots), mediaTokens);
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
   registerSlidesIpc(workspaces, sessions);

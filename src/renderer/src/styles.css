@@ -3858,6 +3858,190 @@ html[data-pointer-drag] iframe {
   padding: 0;
   overflow: hidden;
 }
+/*
+ * 音视频播放器（MediaView.tsx）：自绘控制条，不用原生 controls。播放键是这块面板的唯一主操作，
+ * 所以只有它吃 accent；进度条与时间都是中性墨色。字号只取 sm（时间 / 倍速 / 元信息）与 base（文件名）。
+ */
+.file-preview-body[data-kind="media"] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.media-player {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  outline: none;
+}
+.media-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+.media-play {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: var(--control-height-md);
+  height: var(--control-height-md);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  cursor: pointer;
+  transition: background-color var(--duration-instant) var(--ease-standard);
+}
+.media-play:hover {
+  background: var(--color-accent-strong);
+}
+.media-play:focus-visible,
+.media-rate:focus-visible,
+.media-seek:focus-visible {
+  outline: 2px solid var(--color-border-strong);
+  outline-offset: 2px;
+}
+.media-time {
+  flex: 0 0 auto;
+  min-width: 4ch;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.media-time[data-side="current"] {
+  text-align: right;
+}
+/* 进度条：24 高的可点区，里面 4 高的轨；圆点只在悬停 / 聚焦 / 拖动时出现 */
+.media-seek {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-height-xs);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.media-seek[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.5;
+}
+.media-seek-track {
+  width: 100%;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+  overflow: hidden;
+}
+.media-seek-fill {
+  height: 100%;
+  background: var(--color-text-primary);
+}
+.media-seek-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-primary);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.media-seek:hover .media-seek-thumb,
+.media-seek:focus-visible .media-seek-thumb,
+.media-seek[data-dragging="true"] .media-seek-thumb {
+  opacity: 1;
+}
+.media-rate {
+  flex: 0 0 auto;
+  min-width: 48px;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.media-rate:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+/* 音频：文件名 + 元信息 + 控制条，整体居中成一小块，别空得发虚 */
+.media-audio-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: var(--space-4) 0;
+}
+.media-audio-body .media-controls {
+  margin-top: var(--space-4);
+}
+.media-audio-tile {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: var(--space-2);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-muted);
+  color: var(--color-text-tertiary);
+}
+.media-audio-name {
+  max-width: 100%;
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-audio-meta {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+/* 视频：画面按面板宽度自适应（留给控制条一行的高度），控制条在下面 */
+.media-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  overflow: hidden;
+}
+.media-video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  cursor: pointer;
+}
+/* 播放器自己的全屏（用户点全屏键才进）：画面铺满、控制条压在底部 */
+.media-player[data-kind="video"]:fullscreen {
+  padding: var(--space-3);
+  background: var(--color-bg-panel);
+}
 .pdf-view {
   flex: 1 1 auto;
   min-height: 0;

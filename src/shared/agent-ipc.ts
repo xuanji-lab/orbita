@@ -266,6 +266,12 @@ export const ipcChannels = {
    */
   fsReadPdf: "fs:read-pdf",
   /**
+   * 给音 / 视频文件要一个播放地址（同 root/dir 白名单，且须是媒体扩展名，回 `FileMediaUrl`，files.ts）。
+   * 不读字节：主进程发一个映射到 realpath 的随机 token，renderer 的 <audio> / <video> 经
+   * `orbita-media://` 协议按 Range 流式读，大文件不过 IPC
+   */
+  fsMediaUrl: "fs:media-url",
+  /**
    * 建一个文件的行索引（同 root/dir 白名单，回 `FileLineIndex`，files.ts）：大于
    * PREVIEW_TEXT_LIMIT 的文本走「按行分段预览」时，renderer 先问这份文件有多少行。
    * 主进程按 8 MB 分块扫换行、逐块让出事件循环；同一个文件同时只扫一遍（在途的请求合并），
