@@ -54,6 +54,7 @@ import {
   hasSubLayer,
   mergeLoaded,
   panelFromHome,
+  panelForMode,
   parseMemoryFile,
   parsePath,
   recallEntry,
@@ -423,6 +424,11 @@ export function App() {
     const workspace = session.workspaces.find((item) => item.id === target);
     if (workspace !== undefined) session.newTaskIn(workspace);
   }, [orchestrate, overlay, session]);
+  // 切回单智能体时「编排」面板没有内容可画（它只属于编排形态）：收起右栏，不留一块空白框
+  useEffect(() => {
+    const allowed = panelForMode(rightPanel, orchestrate);
+    if (allowed !== rightPanel) setRightPanel(allowed);
+  }, [rightPanel, orchestrate]);
   const startNewTaskFromTools = (): void => {
     setOverlay(null);
     setSidebarCollapsed(false);

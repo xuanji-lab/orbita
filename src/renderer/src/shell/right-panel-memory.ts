@@ -117,6 +117,15 @@ export function hasSubLayer(panel: RightPanelKind | null): panel is SubPanelKind
   return panel !== null && SUB_PANELS.has(panel);
 }
 
+/**
+ * 这个形态里还能不能开着这块面板：「编排」面板只在编排形态有（入口与内容都按 appMode 给），
+ * 开着它切回单智能体时右栏框还在、里面什么都不渲染——一整块空白（2026-11-24 截图里查到）。
+ * 返回该开着的面板：不该开的收成 null。
+ */
+export function panelForMode(panel: RightPanelKind | null, orchestrate: boolean): RightPanelKind | null {
+  return panel === "orchestra" && !orchestrate ? null : panel;
+}
+
 // ── 记 / 取 / 淘汰 ───────────────────────────────────────────────────
 
 /**

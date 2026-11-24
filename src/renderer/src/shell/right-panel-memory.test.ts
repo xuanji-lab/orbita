@@ -2,6 +2,7 @@ import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
 import { RIGHT_PANEL_MEMORY_MAX_ENTRIES } from "../../../shared/right-panel-memory.ts";
 import {
+  panelForMode,
   automationSubOf,
   composeEntry,
   contextSubOf,
@@ -319,5 +320,19 @@ describe("docs / slides 是普通面板：按会话记、落盘往返都不丢",
   it("落盘往返：docs 条目读回来仍是 docs", () => {
     const memory = rememberEntry(new Map(), "a", { panel: "docs" });
     deepStrictEqual(recallEntry(parseMemoryFile(toMemoryFile(memory)), "a"), { panel: "docs" });
+  });
+});
+
+describe("panelForMode：这个形态里还能开着哪块面板", () => {
+  it("单智能体下「编排」面板收起（它没有内容可画，开着就是一块空白框）；编排下照旧", () => {
+    strictEqual(panelForMode("orchestra", false), null);
+    strictEqual(panelForMode("orchestra", true), "orchestra");
+  });
+  it("别的面板两种形态都不动，关着的仍是关着", () => {
+    for (const panel of ["files", "galaxy", "subsessions", "docs"] as const) {
+      strictEqual(panelForMode(panel, false), panel);
+      strictEqual(panelForMode(panel, true), panel);
+    }
+    strictEqual(panelForMode(null, false), null);
   });
 });
