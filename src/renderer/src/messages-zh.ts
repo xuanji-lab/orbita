@@ -568,8 +568,12 @@ export const zh: Messages = {
         failed: (detail) => `没改成：${detail}`,
       },
     },
-    wake: (title, number, max, stamp) => `定时任务「${title}」第 ${max === null ? number : `${number}/${max}`} 次 · ${stamp}`,
+    wakeKicker: "定时任务",
+    wakeTitle: (title) => `「${title}」`,
+    wakeRun: (number, max) => `· 第 ${max === null ? number : `${number}/${max}`} 次`,
+    wakeOpen: "看自动化",
     wakeExpand: "展开指令",
+    wakeCollapse: "收起指令",
     runBar: {
       label: (title, number, when, trigger) =>
         `${title} · 第 ${number} 次 · ${when} · ${trigger === "manual" ? "手动" : trigger === "caughtUp" ? "补跑" : "定时"}`,

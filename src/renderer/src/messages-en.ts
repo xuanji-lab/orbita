@@ -644,9 +644,12 @@ export const en = {
         failed: (detail: string) => `Could not change it: ${detail}`,
       },
     },
-    wake: (title: string, number: number, max: number | null, stamp: string) =>
-      `Automation “${title}” · run ${max === null ? number : `${number}/${max}`} · ${stamp}`,
-    wakeExpand: "Show the instruction",
+    wakeKicker: "Automation",
+    wakeTitle: (title: string) => `“${title}”`,
+    wakeRun: (number: number, max: number | null) => `· run ${max === null ? number : `${number}/${max}`}`,
+    wakeOpen: "View automation",
+    wakeExpand: "Show instruction",
+    wakeCollapse: "Hide instruction",
     runBar: {
       label: (title: string, number: number, when: string, trigger: "schedule" | "manual" | "caughtUp") =>
         `${title} · run ${number} · ${when} · ${trigger === "manual" ? "manual" : trigger === "caughtUp" ? "catch-up" : "scheduled"}`,
