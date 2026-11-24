@@ -1287,6 +1287,9 @@ export const zh: Messages = {
     galaxyTiltInfo: "看星系的角度：小了像贴着盘面平视，大了像从上往下看。单智能体首页、编排页、右栏星系图和设计面板一起换。",
     galaxyTiltValue: (deg: number) => `${deg}°`,
     galaxyTiltPreview: "星系倾角预览",
+    galaxyTurntable: "左右拖动旋转星系",
+    galaxyTurntableInfo: (azimuth: number) =>
+      `在星系空白处左右拖动，绕竖直轴转着看（现在转到 ${azimuth}°）；上下拖动改倾角。双击星系空白处回到 40° · 0°。关掉后只能上下改倾角。`,
     galaxyTiltRaised: (surface: "home" | "page" | "panel", deg: number) =>
       `${surface === "panel" ? "右栏星系图" : surface === "page" ? "编排页" : "单智能体首页"}较窄，放不下全部子智能体，自动抬高到 ${deg}°`,
     /** 「新手引导」页签：顶上一句说明 + 「从头看」，下面整张章节目录 */
@@ -3650,7 +3653,8 @@ export const zh: Messages = {
     openStar: (name) => `${name}（主星）：在设计面板里打开`,
     tiltValue: (deg) => `${deg}°`,
     tiltRaised: (deg) => `放不下全部子智能体，这里抬到 ${deg}°`,
-    tiltHint: "在空白处按住上下拖动，或按上下方向键，改星系倾角",
+    tiltHint: "在空白处按住拖动转动星系：上下改倾角，左右绕竖直轴转；也可用方向键，双击空白处复位",
+    tiltHintVertical: "在空白处按住上下拖动，或按上下方向键，改星系倾角；双击空白处复位",
     openHomeTip: (name) => `回到 ${name} 的新任务页`,
     mainLine: (planets, sessions) => `${planets} 颗行星 · ${sessions} 条会话`,
   },

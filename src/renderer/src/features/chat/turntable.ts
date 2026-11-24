@@ -1,0 +1,84 @@
+import {
+  beltFrame,
+  FRAME_EXTENT,
+  farWindow,
+  frameViewport,
+  makeCamera,
+  orbitArcs,
+  orbitFrame,
+  project,
+  type Camera,
+  type GalaxyLayout,
+  type OrbitArc,
+  type OrbitFrame,
+  type Viewport,
+} from "./galaxy.ts";
+import { FAR_MARGIN } from "./galaxy-motion.ts";
+
+/**
+ * 拖动中的「只重新投影」（纯计算，可被 node --test 直接加载）。
+ *
+ * 屏幕安全布局（screen-safe.fitScreenSafe）一次 30–50ms，每帧跑就掉到十几帧。所以拖动时**冻结布局**：轨道半径、哪些天体显示、
+ * 偏心率、行星屏幕半径都用按下那一刻的；每帧只换相机（俯角、方位角）重新投影——视口（画框按新相机重新装进画布，保留布局时的放大倍数）、
+ * 每圈轨道的仿射矩阵、碎石带的矩阵与远近分界、主星的位置与大小、轨道弧的远近分段。这里不 import screen-safe：拖动中不可能调到它。
+ * 松手后才按新角度跑一次屏幕安全布局，再用短过渡落到合规的位置（HomeGalaxy）。
+ *
+ * 拖动中允许暂时不完全合规（轨道间距按按下时的角度排的），但远近分层每帧按新相机算：主星永远画在它挡住的天体前面。
+ */
+export interface FrozenScene {
+  camera: Camera;
+  viewport: Viewport;
+  layout: GalaxyLayout;
+  width: number;
+  height: number;
+  box: { width: number; height: number };
+}
+
+export interface LiveProjection {
+  camera: Camera;
+  viewport: Viewport;
+  /** 行星 id → 轨道矩阵（与 moversOf 同一个 orbitFrame） */
+  planets: Map<string, OrbitFrame>;
+  /** 碎石块那一圈（没有就 null） */
+  rock: OrbitFrame | null;
+  /** 行星 / 碎石块画在主星背后那一层的偏近点角区间（已收 FAR_MARGIN） */
+  far: { lo: number; hi: number };
+  /** 碎石带：矩阵与远近分界（转动层坐标里的半平面：先转 chi 度，再在 v < −offset 那边是远侧） */
+  belt: { frame: OrbitFrame; chiDeg: number; offset: number } | null;
+  /** 主星此刻在屏幕上的中心与半径 */
+  star: { x: number; y: number; r: number; depth: number };
+  arcs: OrbitArc[];
+}
+
+/** 布局时在画框之外又放大了多少（窄画布的 zoomed，见 screen-safe.placeAt）：按下时量一次，拖动中保持 */
+export function zoomOf(frozen: FrozenScene): number {
+  const base = frameViewport(frozen.camera, frozen.width, frozen.height, frozen.box, frozen.layout.ecc);
+  return frozen.viewport.focal / Math.max(base.focal, 1e-9);
+}
+
+/** 碎石带远近分界（转动层坐标）：与 farWindow 同一个式子 sin(E + χ) > k，k 按带子中间那一圈换成像素（R0 = 1000） */
+export function beltSplit(ecc: number, azimuth: number): { chiDeg: number; offset: number } {
+  const A = Math.sin(azimuth);
+  const B = Math.cos(azimuth) * Math.sqrt(1 - ecc * ecc);
+  const R = Math.max(Math.hypot(A, B), 1e-9);
+  const chi = Math.atan2(A, B);
+  const k = Math.max(-1, Math.min(1, (ecc * Math.sin(azimuth)) / R));
+  return { chiDeg: (chi * 180) / Math.PI, offset: k * 1000 };
+}
+
+export function liveProjection(frozen: FrozenScene, tiltDeg: number, azimuthDeg: number, zoom = zoomOf(frozen)): LiveProjection {
+  const { layout, width, height, box } = frozen;
+  const ecc = layout.ecc;
+  const camera = makeCamera(FRAME_EXTENT, tiltDeg, undefined, azimuthDeg);
+  const base = frameViewport(camera, width, height, box, ecc);
+  // 与 placeAt 的放大同一个式子：正圆绕主星放大（cx 不动），偏心时横向绕画布中线放大
+  const viewport: Viewport =
+    zoom === 1 ? base : { ...base, focal: base.focal * zoom, cx: ecc === 0 ? base.cx : width / 2 + (base.cx - width / 2) * zoom };
+  const planets = new Map<string, OrbitFrame>();
+  for (const planet of layout.planets) planets.set(planet.id, orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, viewport, ecc));
+  const rock = layout.rockOrbit === null ? null : orbitFrame(layout.rockOrbit, 0, 0, camera, viewport, ecc);
+  const belt = layout.belt === null ? null : { frame: beltFrame(layout.belt, camera, viewport), ...beltSplit(layout.belt.ecc, camera.azimuth) };
+  const p = project({ x: 0, y: 0, z: 0 }, camera);
+  const star = { x: viewport.cx + viewport.focal * p.sx, y: viewport.cy + viewport.focal * p.sy, r: (viewport.focal * layout.starRadius) / p.depth, depth: p.depth };
+  return { camera, viewport, planets, rock, far: farWindow(ecc, camera.azimuth, FAR_MARGIN), belt, star, arcs: orbitArcs(layout, camera, viewport) };
+}

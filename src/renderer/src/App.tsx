@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, t
 import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
-import { effectiveIntentSettings, galaxyTiltOf } from "@shared/settings";
+import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
 import { usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
@@ -41,7 +41,7 @@ import { OrchestraPanel } from "./features/chat/OrchestraPanel.tsx";
 import { headerStatusOf } from "./features/chat/agent-status.ts";
 import { latestWorkspaceId, scopeRecent, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
 import { GalaxyActionsContext, type DesignerFocus, type GalaxyActions } from "./features/chat/galaxy-actions.ts";
-import { GalaxyTiltContext, GalaxyTiltSetterContext } from "./features/chat/galaxy-tilt.ts";
+import { GalaxyTiltContext, GalaxyTiltSetterContext, GalaxyViewContext } from "./features/chat/galaxy-tilt.ts";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
@@ -211,7 +211,14 @@ export function App() {
     void api.settings.set(patch).then(setSettings);
   }, []);
   /** 星系空白处拖动 / 方向键改的俯角：写同一个设置字段（设置 › 外观 › 星系倾角），重启后还在 */
-  const setGalaxyTilt = useCallback((deg: number) => changeSettings({ galaxyTilt: deg }), [changeSettings]);
+  const setGalaxyTilt = useCallback(
+    (view: { tilt?: number; azimuth?: number }) =>
+      changeSettings({ ...(view.tilt === undefined ? {} : { galaxyTilt: view.tilt }), ...(view.azimuth === undefined ? {} : { galaxyAzimuth: view.azimuth }) }),
+    [changeSettings],
+  );
+  const galaxyAzimuth = galaxyAzimuthOf(settings);
+  const galaxyTurntable = galaxyTurntableOf(settings);
+  const galaxyView = useMemo(() => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable }), [galaxyAzimuth, galaxyTurntable]);
 
   /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
   const chatImageSize = useMemo(
@@ -1553,6 +1560,7 @@ export function App() {
     <GalaxyActionsContext.Provider value={galaxyActions}>
     <GalaxyTiltContext.Provider value={galaxyTiltOf(settings)}>
     <GalaxyTiltSetterContext.Provider value={setGalaxyTilt}>
+    <GalaxyViewContext.Provider value={galaxyView}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
       <div className="layer">
@@ -1902,6 +1910,7 @@ export function App() {
       {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
+    </GalaxyViewContext.Provider>
     </GalaxyTiltSetterContext.Provider>
     </GalaxyTiltContext.Provider>
     </GalaxyActionsContext.Provider>

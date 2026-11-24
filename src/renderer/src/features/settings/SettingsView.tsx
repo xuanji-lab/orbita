@@ -52,7 +52,7 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, GALAXY_TILT, galaxyTiltOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
+import { effectiveLanguage, GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 import { HomeGalaxy } from "../chat/HomeGalaxy.tsx";
 import { useRaisedSurfaces } from "../chat/galaxy-tilt.ts";
 import type { GalaxySpec } from "../chat/galaxy.ts";
@@ -447,6 +447,14 @@ function General(props: {
               {t.settings.galaxyTiltRaised(surface, deg)}
             </span>
           ))}
+        </SettingRow>
+        {/* 转台：星系空白处左右拖动绕竖直轴转（方位角）。关掉后左右拖动与左右方向键不改方位角，只剩上下改倾角 */}
+        <SettingRow name={t.settings.galaxyTurntable} info={t.settings.galaxyTurntableInfo(galaxyAzimuthOf(props.settings))}>
+          <Switch
+            label={t.settings.galaxyTurntable}
+            checked={galaxyTurntableOf(props.settings)}
+            onChange={(next) => props.onChange({ galaxyTurntable: next })}
+          />
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；

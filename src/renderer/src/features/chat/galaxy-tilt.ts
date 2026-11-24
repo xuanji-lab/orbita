@@ -14,12 +14,29 @@ export function useGalaxyTilt(): number {
 }
 
 /**
- * 改星系倾角（写设置，和设置 › 外观的滑块同一个字段）：星系空白处拖动 / 方向键松手时调它。
+ * 星系的方位角（转台，度）与「左右拖动旋转星系」开关：与倾角一样由 App 从设置里读出来往下发，四处同一个值。
+ * 没有提供者时是默认（0°、开）。
+ */
+export interface GalaxyView {
+  azimuth: number;
+  turntable: boolean;
+}
+
+export const GalaxyViewContext = createContext<GalaxyView>({ azimuth: 0, turntable: true });
+
+export function useGalaxyView(): GalaxyView {
+  return useContext(GalaxyViewContext);
+}
+
+/**
+ * 改星系视角（写设置：倾角与设置 › 外观的滑块同一个字段，方位角另一个字段）：星系空白处拖动松手、方向键、双击复位时调它。
  * 没有提供者（测试、设置页的小预览）= null，星系就不接拖动。
  */
-export const GalaxyTiltSetterContext = createContext<((deg: number) => void) | null>(null);
+export type GalaxyViewSetter = (view: { tilt?: number; azimuth?: number }) => void;
 
-export function useGalaxyTiltSetter(): ((deg: number) => void) | null {
+export const GalaxyTiltSetterContext = createContext<GalaxyViewSetter | null>(null);
+
+export function useGalaxyTiltSetter(): GalaxyViewSetter | null {
   return useContext(GalaxyTiltSetterContext);
 }
 

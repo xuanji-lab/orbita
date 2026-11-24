@@ -7596,7 +7596,29 @@ button.turn-output-from.link:hover {
 .home-galaxy .galaxy-target:focus:not(:focus-visible) {
   outline: none;
 }
-/* 角落的角度提示：拖动中 / 刚按过方向键才出现，不吃指针；数字等宽，抬高说明是次级墨 */
+/*
+ * 转台落位（HomeGalaxy 的 useTurntable）：松手后按新角度跑完屏幕安全布局，轨道矩阵、碎石带、主星、轨道弧从拖动时的样子
+ * 在 --duration-fast（160ms）内滑到合规的位置。只在 gx-settling 期间有过渡（拖动中每帧直接写，不能带过渡）；减少动效时不挂这个类。
+ */
+.home-galaxy.gx-settling [data-orbit],
+.home-galaxy.gx-settling [data-orbit-inv],
+.home-galaxy.gx-settling [data-belt-outer],
+.home-galaxy.gx-settling [data-belt-rot],
+.home-galaxy.gx-settling [data-belt-unrot],
+.home-galaxy.gx-settling [data-star-wrap] {
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.home-galaxy.gx-settling path[data-arc] {
+  transition: d var(--duration-fast) var(--ease-out-quint);
+}
+.home-galaxy [data-star-wrap] {
+  transform-box: view-box;
+  transform-origin: 0 0;
+}
+/* 角落的角度提示（「40° · 120°」）：拖动中 / 刚按过方向键、双击复位后才出现，不吃指针；数字等宽，抬高说明是次级墨 */
+.galaxy-tilt-badge:not([data-show]) {
+  display: none;
+}
 .galaxy-tilt-badge {
   position: absolute;
   top: var(--space-3);

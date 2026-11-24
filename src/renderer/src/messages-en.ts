@@ -1387,6 +1387,9 @@ export const en = {
     galaxyTiltInfo: "The angle you view the galaxy from: low looks across the disc, high looks down on it. Applies to the home page, the workspace page, the side-panel galaxy and the designer.",
     galaxyTiltValue: (deg: number) => `${deg}°`,
     galaxyTiltPreview: "Galaxy tilt preview",
+    galaxyTurntable: "Drag sideways to spin the galaxy",
+    galaxyTurntableInfo: (azimuth: number) =>
+      `Drag left or right on empty space to turn the galaxy round its vertical axis (now at ${azimuth}°); drag up or down to tilt it. Double-click empty space to go back to 40° · 0°. Turn this off to tilt only.`,
     galaxyTiltRaised: (surface: "home" | "page" | "panel", deg: number) =>
       `The ${surface === "panel" ? "side-panel galaxy" : surface === "page" ? "workspace page" : "home page"} is too narrow for every sub-agent, so it tilts up to ${deg}°`,
     /** The "Guide" tab: one line of intro + "Start from the top", then the whole chapter list */
@@ -3884,7 +3887,8 @@ export const en = {
     openStar: (name: string) => `${name} (main star): open in the designer`,
     tiltValue: (deg: number) => `${deg}°`,
     tiltRaised: (deg: number) => `Not every sub-agent fits; raised to ${deg}° here`,
-    tiltHint: "Drag up or down on empty space, or press the up and down arrow keys, to change the galaxy tilt",
+    tiltHint: "Drag on empty space to turn the galaxy: up and down tilts it, left and right spins it round the vertical axis. Arrow keys work too; double-click empty space to reset",
+    tiltHintVertical: "Drag up or down on empty space, or press the up and down arrow keys, to change the galaxy tilt; double-click empty space to reset",
     openHomeTip: (name: string) => `Back to ${name}'s new task page`,
     mainLine: (planets: number, sessions: number) => `${planets} planet${planets === 1 ? "" : "s"} · ${sessions} session${sessions === 1 ? "" : "s"}`,
   },
