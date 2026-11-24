@@ -3,7 +3,7 @@ import { describe, test } from "node:test";
 import type { SessionMeta } from "@shared/session";
 import type { SessionRunState } from "../features/notify/completion-notice.ts";
 import { scopeSummary } from "../features/chat/galaxy-data.ts";
-import { activityVariantOf, orderedSubAgents, rowActivityOf, subAgentFixturesOf } from "./sidebar-activity.ts";
+import { orderedSubAgents, rowActivityOf, subAgentFixtureEnabled, subAgentFixturesOf } from "./sidebar-activity.ts";
 
 const meta = (over: { id: string } & Partial<SessionMeta>): SessionMeta => ({
   title: `Task ${over.id}`,
@@ -96,8 +96,10 @@ describe("orderedSubAgents / fixture 解析", () => {
   });
 
   test("坏值忽略", () => {
-    assert.equal(activityVariantOf("b"), "b");
-    assert.equal(activityVariantOf("d"), null);
+    assert.equal(subAgentFixtureEnabled("?fixture=sub-agents"), true);
+    assert.equal(subAgentFixtureEnabled("?designer=full&fixture=sub-agents"), true);
+    assert.equal(subAgentFixtureEnabled(""), false);
+    assert.equal(subAgentFixtureEnabled("?fixture=other"), false);
     assert.deepEqual(subAgentFixturesOf({ orbita: [{ planet: 1, state: "working" }] }), { orbita: [{ planet: 1, state: "working" }] });
     assert.equal(subAgentFixturesOf({ orbita: [{ planet: -1, state: "working" }] }), null);
     assert.equal(subAgentFixturesOf({ orbita: [{ planet: 0, state: "busy" }] }), null);

@@ -1,13 +1,11 @@
 /*
- * 侧栏智能体行的「谁在干活」三个候选（AgentActivity.tsx，原型）。版式登记：
+ * 编排侧栏智能体行的「谁在干活」（AgentActivity.tsx）。版式登记：
  * | 版式 | 用途 | 结构 | 现有最近的同类 |
- * | 行首脸 | A：第二行最前面（状态饼之前） | 14px 行星脸，有几个画几个，并排间隔 2px | 头像栈（Claude / Linear 的成员栈），但不叠 |
- * | 行内脸 | B：第二行状态词后面 | 14px 行星脸 + 插入符 | 状态饼后接状态词（.agent-status） |
- * | 行尾一列 | C：第一行行尾顶替时间 | 14px 行星脸 + 插入符，钉在行右内边距（.row-trailing） | 时间（.agent-time） |
+ * | 行首脸串 | 子智能体在干活 | 第二行最前面（状态饼之前）14px 行星脸，并排间隔 2px，有几个画几个 | 头像栈（Claude / Linear 的成员栈），但不叠 |
  *
- * 颜色：只用墨色三档与 warning（等你的那颗子智能体描一圈；状态词本身照旧）；不用 accent。
+ * 颜色：只用墨色三档与 warning（等你的那颗子智能体描一圈）；不用 accent。
  * 动效：只有 opacity 与 transform（交给合成器），都带 .anim-continuous——失焦 / 隐藏时 styles.css 统一暂停；
- * 减少动效时直接不演，静止的样子本身也读得出状态（日冕圈常亮、月亮停在顶上、插入符常亮）。
+ * 减少动效时不演，静止的样子本身也读得出状态（日冕圈常亮、插入符常亮）。
  */
 
 .aa-avatar {
@@ -16,14 +14,18 @@
 
 /* ── 子智能体小脸 ───────────────────────────────── */
 /*
- * 有几个画几个（不折 +N）。真放不下时（实测 288 宽第二行放到第 10 个、240 宽到第 7 个）脸串自己在尾巴上被裁掉，
- * 不把状态词与行尾小圆点挤出去——「等你」那几样永远在。overflow-clip-margin 给等你那一圈 warning 留出位置。
+ * 有几个画几个（不折 +N）。放不下时（实测 288 宽第二行到第 10 个、240 宽到第 7 个）整张不画、不留半张：
+ * 脸串可换行，高度只有一行，折到第二行的那几张被裁掉（行距拉开，等你那一圈的外溢也碰不到它们）；
+ * 脸串自己可以缩，所以状态词与行尾小圆点永远在。
  */
 .aa-faces {
   display: inline-flex;
   flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
+  gap: var(--space-4) var(--space-0-5);
   min-width: 0;
+  margin-right: var(--space-0-5);
   overflow: clip;
   overflow-clip-margin: 3px;
 }
@@ -42,18 +44,6 @@
 }
 .aa-face-svg {
   display: block;
-}
-/* A：第二行最前面（状态饼之前）；B：状态词之后；C：第一行行尾。都在主头像右边，不压主星的脸 */
-/* 一行里的小脸：并排、不叠（叠起来后面的只剩一条边，「几个在干活」数不出来；用户要看见每一个） */
-.aa-faces {
-  gap: var(--space-0-5);
-}
-.aa-faces[data-place="inline"] {
-  margin-left: var(--space-0-5);
-}
-/* 行首 / 行尾的脸串不缩，挤的时候让名字与「最近：…」先省略 */
-.aa-faces[data-place="lead"] {
-  margin-right: var(--space-0-5);
 }
 
 /* ── 会话在跑：插入符 ────────────────────────────── */
@@ -75,30 +65,7 @@
   }
 }
 
-/* C：行尾那一列（顶替时间），悬停时与时间一样让位给动作键 */
-/* 比 .row-trailing（flex: 0 0 auto）高一档，好让这一列在挤的时候自己缩、裁掉尾巴上的脸 */
-.agent-line > .aa-trailing {
-  display: inline-flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-1);
-  height: 16px;
-  transition: opacity var(--duration-instant) var(--ease-standard);
-}
-/* 名字至少留四个字宽，再多的脸从行尾那串里裁掉（实测 288 宽第 9 个、240 宽第 6 个开始挤名字） */
-.agent-row[data-activity="c"] .agent-name {
-  min-width: 4em;
-}
-.agent-row:hover .aa-trailing,
-.agent-row:has(:focus-visible) .aa-trailing,
-.agent-row[data-armed] .aa-trailing,
-.agent-row[data-designing] .aa-trailing {
-  opacity: 0;
-}
-
-/* ── 主智能体在干活 ──────────────────────────────── */
-/* A：一圈细日冕慢慢呼吸（设计系统里已有的「呼吸」一类，只是慢一档） */
+/* ── 主智能体在干活：一圈细日冕慢慢呼吸（设计系统里已有的「呼吸」一类，只是慢一档） ── */
 .aa-corona {
   position: absolute;
   inset: -2px;
@@ -119,83 +86,7 @@
   }
 }
 
-/* C：一颗小月亮沿一圈淡轨道绕行（设计系统里已有的「旋转」一类；9 秒一圈，不是加载转圈） */
-.aa-orbit {
-  position: absolute;
-  inset: -3px;
-  border: 1px solid color-mix(in srgb, var(--color-text-tertiary) 45%, transparent);
-  border-radius: var(--radius-pill);
-  pointer-events: none;
-}
-.aa-moon-track {
-  position: absolute;
-  inset: 0;
-  animation: aa-orbit 9s linear infinite;
-}
-.aa-moon {
-  position: absolute;
-  top: -2.5px;
-  left: 50%;
-  width: 4px;
-  height: 4px;
-  margin-left: calc(-1 * var(--space-0-5));
-  border-radius: var(--radius-pill);
-  background: var(--color-text-secondary);
-}
-@keyframes aa-orbit {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* B：眼睛活过来——外层左右看（7.2 秒一个来回，大部分时间看正前方），里层偶尔眨一下 */
-.aa-lively {
-  position: relative;
-  display: grid;
-  place-items: center;
-}
-.aa-look {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-  animation: aa-look 7.2s var(--ease-in-out) infinite;
-}
-@keyframes aa-look {
-  0%,
-  28% {
-    transform: translateX(0);
-  }
-  36%,
-  50% {
-    transform: translateX(-1.4px);
-  }
-  60%,
-  76% {
-    transform: translateX(1.4px);
-  }
-  84%,
-  100% {
-    transform: translateX(0);
-  }
-}
-.aa-blink {
-  display: block;
-  animation: aa-blink 4.8s linear infinite;
-}
-@keyframes aa-blink {
-  0%,
-  92%,
-  100% {
-    transform: scaleY(1);
-  }
-  96% {
-    transform: scaleY(0.12);
-  }
-}
-
-/* 「等你」必须仍是最醒目的：候选开着时，等你那一行的状态词升到主墨、中等字重（在跑 / 空闲照旧淡墨） */
+/* 「等你」必须仍是最醒目的：等你那一行的状态词升到主墨、中等字重（在跑 / 空闲照旧淡墨） */
 .agent-row[data-activity][data-waiting="true"] .agent-status-word {
   color: var(--color-text-primary);
   font-weight: var(--weight-medium);
@@ -203,17 +94,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .aa-corona,
-  .aa-moon-track,
-  .aa-look,
-  .aa-blink,
   .aa-caret {
     animation: none;
   }
   .aa-corona {
     opacity: 0.5;
-  }
-  /* B 不动时也要读得出「在干活」：眼睛停在往旁边看的位置（看着手上的活） */
-  .aa-look {
-    transform: translateX(-1.4px);
   }
 }

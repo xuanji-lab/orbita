@@ -2,20 +2,19 @@ import type { SessionMeta } from "@shared/session";
 import { scopeMembers, type SummaryStates } from "../features/chat/galaxy-data.ts";
 
 /**
- * 侧栏智能体行的「谁在干活」（原型，等用户挑；window.orbitaProto.set({ sidebarActivity: "a" | "b" | "c" })，默认 off = 现状）。
+ * 编排侧栏智能体行的「谁在干活」（2026-11-24 用户在三个候选里挑了「行首」那个）：
+ * 主智能体在干活 = 头像外一圈细日冕呼吸；派出的会话在跑 = 状态词后一根插入符；子智能体在干活 = 第二行最前面一串小头像。
  *
  * 真实数据里能分清的只有两种（这条线还是旧内核，会话与持久子智能体之间没有归属关系）：
  * - 根会话自己的槽在跑 = 主智能体在干活（用户和主智能体的对话）；在等你 = 主智能体在等你；
  * - 子会话在跑 = 派出去的会话在跑。
- * 「某个子智能体在干活」现在只能来自演示数据（SubAgentFixture），等内核线接上归属后再走真数据——
- * 不拿真实会话去冒充子智能体。
+ * 「某个子智能体在干活」现在只能来自演示数据（SubAgentFixture，地址带 ?fixture=sub-agents 才认），
+ * 等内核线接上归属后再走真数据——真实实例里不画子智能体小头像，不拿真实会话去冒充子智能体。
  *
  * 口径与 scopeSummary 逐件一致：根会话读自己的槽（own），子会话读含孙会话的汇总态（state）；
  * 所以 mainWorking + sessionsRunning = summary.running、mainWaiting + sessionsWaiting = summary.waiting（见测试）。
  * 星际空间（workspaceId = null）没有主智能体：它的根会话在跑算会话，不算主智能体。
  */
-export type ActivityVariant = "off" | "a" | "b" | "c";
-
 export interface RowActivity {
   /** 主智能体自己：等你优先于在干活（等你时不演「在干活」的动效，免得把等你压下去） */
   main: "waiting" | "working" | "idle";
@@ -75,8 +74,11 @@ export function orderedSubAgents(list: readonly SubAgentFixture[]): SubAgentFixt
     .map((item) => item.agent);
 }
 
-export function activityVariantOf(value: unknown): ActivityVariant | null {
-  return value === "off" || value === "a" || value === "b" || value === "c" ? value : null;
+/** 演示数据开关：地址带 ?fixture=sub-agents 时才收 window.orbitaProto.set({ subAgents }) */
+export const SUB_AGENT_FIXTURE = "sub-agents";
+
+export function subAgentFixtureEnabled(search: string): boolean {
+  return new URLSearchParams(search).getAll("fixture").includes(SUB_AGENT_FIXTURE);
 }
 
 /** 坏数据整份忽略：只认 { 名字: [{ planet: 非负整数, state }] } */

@@ -15,7 +15,6 @@ import { useScrollEdges } from "./scroll-inset.ts";
 import { orderAgentRows } from "../features/chat/agent-status.ts";
 import { NO_STATES, scopeSummary, stateIndexOf } from "../features/chat/galaxy-data.ts";
 import { rowActivityOf } from "./sidebar-activity.ts";
-import { useSidebarActivity } from "./sidebar-activity-store.ts";
 import {
   EMPTY_SELECTION,
   nextSelection,
@@ -332,8 +331,6 @@ export function Sidebar(props: {
   };
   // 编排侧栏每行的运行态：子会话表建一遍，整趟 O(n)（单智能体侧不算）
   const agentStates = props.appMode === "orchestrate" ? stateIndexOf(session) : null;
-  // 「谁在干活」候选开着才多算一遍（原型，见 sidebar-activity.ts）
-  const activityOn = useSidebarActivity().variant !== "off";
   /** 编排侧栏里亮着哪一行：正在看的会话所在的工作区，否则是首页选中的工作区；盖着设置 / 周看板时都不亮 */
   const activeAgentId: string | null | undefined = props.overlay !== null ? undefined : (openWorkspaceId ?? session.workspaceId);
 
@@ -746,7 +743,7 @@ export function Sidebar(props: {
               orderAgentRows(
                 [null, ...session.workspaces].map((workspace) => {
                   const summary = scopeSummary(session.sessions, workspace?.id ?? null, agentStates ?? NO_STATES, openId);
-                  const activity = activityOn ? rowActivityOf(session.sessions, workspace?.id ?? null, agentStates ?? NO_STATES) : undefined;
+                  const activity = agentStates === null ? undefined : rowActivityOf(session.sessions, workspace?.id ?? null, agentStates);
                   return { workspace, summary, activity };
                 }),
                 (row) => ({ pinned: row.workspace === null, waiting: row.summary.waiting, lastActive: row.summary.lastActive }),

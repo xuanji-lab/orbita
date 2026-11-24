@@ -1,35 +1,28 @@
 import { useSyncExternalStore } from "react";
 import { getProtoVariants, setProtoVariants } from "../features/chat/proto-variants-store.ts";
 import type { ProtoVariants } from "../features/chat/proto-variants.ts";
-import { activityVariantOf, subAgentFixturesOf, type ActivityVariant, type SubAgentFixtures } from "./sidebar-activity.ts";
+import { subAgentFixtureEnabled, subAgentFixturesOf, type SubAgentFixtures } from "./sidebar-activity.ts";
 
 /**
- * 侧栏「谁在干活」候选的运行时状态（见 sidebar-activity.ts）。不改 proto-variants 那两份共用文件（另一条线也在改），
- * 在这里把 window.orbitaProto 包一层：set 先交给原来的，再认自己的两个键——
- *   window.orbitaProto.set({ sidebarActivity: "a" })                         // "a" | "b" | "c" | "off"（缺省 off = 现状）
- *   window.orbitaProto.set({ subAgents: { orbita: [{ planet: 0, state: "working" }] } })   // 演示数据：哪座星系的第几颗行星在干活
- * 初值也可以从地址读 `?sidebarActivity=b`。
+ * 侧栏「子智能体在干活」的演示数据（见 sidebar-activity.ts）。真实数据里会话与子智能体还没有归属关系，
+ * 所以只有地址带 ?fixture=sub-agents 时才收数据，其余时候永远是空的——真实实例里不画子智能体小头像。
+ * 不改 proto-variants 那两份共用文件，在这里把 window.orbitaProto 包一层：
+ *   window.orbitaProto.set({ subAgents: { orbita: [{ planet: 0, state: "working" }] } })
  */
-export interface SidebarActivityState {
-  variant: ActivityVariant;
-  subAgents: SubAgentFixtures;
-}
-
-let current: SidebarActivityState = {
-  variant: activityVariantOf(new URLSearchParams(window.location.search).get("sidebarActivity")) ?? "off",
-  subAgents: {},
-};
+const enabled = subAgentFixtureEnabled(window.location.search);
+const EMPTY: SubAgentFixtures = {};
+let current: SubAgentFixtures = EMPTY;
 const listeners = new Set<() => void>();
 
-export function getSidebarActivity(): SidebarActivityState {
+export function getSubAgentFixtures(): SubAgentFixtures {
   return current;
 }
 
-export function setSidebarActivity(patch: Readonly<Record<string, unknown>>): SidebarActivityState {
-  const variant = activityVariantOf(patch.sidebarActivity) ?? current.variant;
-  const subAgents = subAgentFixturesOf(patch.subAgents) ?? current.subAgents;
-  if (variant === current.variant && subAgents === current.subAgents) return current;
-  current = { variant, subAgents };
+function setSubAgentFixtures(value: unknown): SubAgentFixtures {
+  if (!enabled) return current;
+  const next = subAgentFixturesOf(value);
+  if (next === null) return current;
+  current = next;
   for (const listener of listeners) listener();
   return current;
 }
@@ -41,16 +34,16 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-export function useSidebarActivity(): SidebarActivityState {
-  return useSyncExternalStore(subscribe, getSidebarActivity);
+export function useSubAgentFixtures(): SubAgentFixtures {
+  return useSyncExternalStore(subscribe, getSubAgentFixtures);
 }
 
 Object.assign(window, {
   orbitaProto: {
-    get: (): ProtoVariants & SidebarActivityState => ({ ...getProtoVariants(), ...current }),
-    set: (patch: Readonly<Record<string, unknown>>): ProtoVariants & SidebarActivityState => {
+    get: (): ProtoVariants & { subAgents: SubAgentFixtures } => ({ ...getProtoVariants(), subAgents: current }),
+    set: (patch: Readonly<Record<string, unknown>>): ProtoVariants & { subAgents: SubAgentFixtures } => {
       const variants = setProtoVariants(patch);
-      return { ...variants, ...setSidebarActivity(patch) };
+      return { ...variants, subAgents: patch.subAgents === undefined ? current : setSubAgentFixtures(patch.subAgents) };
     },
   },
 });
