@@ -1390,6 +1390,10 @@ export const en = {
     galaxyDust: "Debris density",
     galaxyDustInfo: "How many sessions the galaxy's debris belt draws. More uses more power. Running, waiting and recent sessions are always drawn; counts still include every session.",
     galaxyDustOptions: { all: "All", half: "Half", tenth: "A tenth", none: "None" },
+    galaxyBatterySaver: "Save power on battery",
+    galaxyBatterySaverInfo: "On battery the galaxy stops turning, the debris belt hides and the eyes stop following the pointer. Plugging in brings it all back.",
+    galaxyBatteryNotice: "Power saving on: the galaxy has stopped and the debris belt is hidden",
+    galaxyBatteryNoticeAction: "Change in Settings",
     galaxyTurntable: "Drag sideways to spin the galaxy",
     galaxyTurntableInfo: (azimuth: number) =>
       `Drag left or right on empty space to turn the galaxy round its vertical axis (now at ${azimuth}°); drag up or down to tilt it. Double-click empty space to go back to 40° · 0°. Turn this off to tilt only.`,

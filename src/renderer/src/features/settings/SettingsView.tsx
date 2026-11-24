@@ -52,7 +52,7 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, GALAXY_DUST_DENSITIES, galaxyDustDensityOf, type GalaxyDustDensity, GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
+import { effectiveLanguage, galaxyBatterySaverOf, GALAXY_DUST_DENSITIES, galaxyDustDensityOf, type GalaxyDustDensity, GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
 import { HomeGalaxy } from "../chat/HomeGalaxy.tsx";
 import type { GalaxySpec } from "../chat/galaxy.ts";
 
@@ -447,6 +447,14 @@ function General(props: {
             value={galaxyDustDensityOf(props.settings)}
             options={GALAXY_DUST_DENSITIES.map((value) => ({ value, label: t.settings.galaxyDustOptions[value] }))}
             onChange={(galaxyDustDensity) => props.onChange({ galaxyDustDensity })}
+          />
+        </SettingRow>
+        {/* 离电时省电：用电池时星系停转、碎石带隐藏、眼睛不跟；缺席 = 开 */}
+        <SettingRow name={t.settings.galaxyBatterySaver} info={t.settings.galaxyBatterySaverInfo}>
+          <Switch
+            label={t.settings.galaxyBatterySaver}
+            checked={galaxyBatterySaverOf(props.settings)}
+            onChange={(next) => props.onChange({ galaxyBatterySaver: next })}
           />
         </SettingRow>
         {/* 转台：星系空白处左右拖动绕竖直轴转（方位角）。关掉后左右拖动与左右方向键不改方位角，只剩上下改倾角 */}

@@ -58,8 +58,21 @@ function reduced(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/** 离电省电档：眼睛不跟（App 按电源状态设） */
+let suspended = false;
+
 function active(): boolean {
-  return document.visibilityState === "visible" && document.hasFocus() && !reduced();
+  return document.visibilityState === "visible" && document.hasFocus() && !reduced() && !suspended;
+}
+
+/** 离电省电档开关：开时停、眼睛回正中；关时恢复 */
+export function setGazeSuspended(value: boolean): void {
+  if (suspended === value) return;
+  suspended = value;
+  if (value) {
+    stop();
+    resetAll();
+  } else kick();
 }
 
 function write(entry: Entry): void {

@@ -22,11 +22,13 @@ export interface GalaxyView {
   turntable: boolean;
   /** 缩放（倍，设置里的 galaxyZoom） */
   zoom: number;
-  /** 碎石带实际画出的比例（设置 › 外观 › 碎石密度） */
+  /** 碎石带实际画出的比例（设置 › 外观 › 碎石密度；离电省电档下为 0） */
   dustKeep: number;
+  /** 离电省电档：星系停转（碎石带隐藏已折进 dustKeep） */
+  powerSave: boolean;
 }
 
-export const GalaxyViewContext = createContext<GalaxyView>({ azimuth: 0, turntable: true, zoom: 1, dustKeep: 0.5 });
+export const GalaxyViewContext = createContext<GalaxyView>({ azimuth: 0, turntable: true, zoom: 1, dustKeep: 0.5, powerSave: false });
 
 export function useGalaxyView(): GalaxyView {
   return useContext(GalaxyViewContext);

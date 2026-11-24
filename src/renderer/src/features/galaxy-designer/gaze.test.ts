@@ -90,10 +90,12 @@ describe("眼睛的注意力（假随机数播种）", () => {
     assert.doesNotMatch(css, /\.gd-gaze \{[^}]*transition/);
   });
 
-  test("减少动效 / 失焦 / 隐藏时不动、眼睛回正中；只写 CSS transform（源码级）", () => {
+  test("减少动效 / 失焦 / 隐藏 / 离电省电时不动、眼睛回正中；只写 CSS transform（源码级）", () => {
     const source = readFileSync(new URL("./gaze-runtime.ts", import.meta.url), "utf8");
     assert.match(source, /prefers-reduced-motion: reduce/);
-    assert.match(source, /function active\(\): boolean \{\s*return document\.visibilityState === "visible" && document\.hasFocus\(\) && !reduced\(\);/);
+    assert.match(source, /function active\(\): boolean \{\s*return document\.visibilityState === "visible" && document\.hasFocus\(\) && !reduced\(\) && !suspended;/);
+    // 离电省电档：一开就停、眼睛回正中
+    assert.match(source, /export function setGazeSuspended\(value: boolean\): void \{[\s\S]*?if \(value\) \{\s*stop\(\);\s*resetAll\(\);/);
     // 不活跃时 tick / kick 都先 resetAll（cur 归零、transform 清空）
     assert.match(source, /if \(!active\(\)\) \{\s*resetAll\(\);/);
     assert.match(source, /entry\.eyes\.style\.transform =/);

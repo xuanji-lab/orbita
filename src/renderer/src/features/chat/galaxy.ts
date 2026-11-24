@@ -988,10 +988,12 @@ export interface MotionInputs {
   visibilityState: DocumentVisibilityState;
   onScreen: boolean;
   reducedMotion: boolean;
+  /** 离电省电档（power-save.ts）：停转 */
+  powerSave?: boolean;
 }
 
 export function motionAllowed(inputs: MotionInputs): boolean {
-  return !isWindowInactive(inputs) && inputs.onScreen && !inputs.reducedMotion;
+  return !isWindowInactive(inputs) && inputs.onScreen && !inputs.reducedMotion && inputs.powerSave !== true;
 }
 
 /**

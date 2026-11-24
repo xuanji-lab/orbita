@@ -1290,6 +1290,10 @@ export const zh: Messages = {
     galaxyDust: "碎石密度",
     galaxyDustInfo: "星系碎石带里画多少条会话。显示越多越耗电。在跑、等你、最近的会话总会画出来，计数仍按全部会话。",
     galaxyDustOptions: { all: "全部", half: "一半", tenth: "十分之一", none: "不显示" },
+    galaxyBatterySaver: "离电时省电",
+    galaxyBatterySaverInfo: "用电池时星系停转、碎石带隐藏、眼睛不跟指针；插上电自动恢复。",
+    galaxyBatteryNotice: "已切到省电：星系停转、碎石带隐藏",
+    galaxyBatteryNoticeAction: "在设置里改",
     galaxyTurntable: "左右拖动旋转星系",
     galaxyTurntableInfo: (azimuth: number) =>
       `在星系空白处左右拖动，绕竖直轴转着看（现在转到 ${azimuth}°）；上下拖动改倾角。双击星系空白处回到 40° · 0°。关掉后只能上下改倾角。`,

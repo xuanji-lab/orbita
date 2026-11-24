@@ -546,7 +546,10 @@ function timelineMs(): number {
  * 所有转动层一起 pause()，恢复时按表上的时间重设 currentTime 再 play()（相位不错开）。卸载时 cancel()。
  * 现在跑不跑写在根节点的 data-motion 上（running / paused），验收时可直接读。
  */
-function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: string): { running: boolean; clock: GalaxyClock } {
+function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: string, powerSave = false): { running: boolean; clock: GalaxyClock } {
+  const powerRef = useRef(powerSave);
+  powerRef.current = powerSave;
+  const resync = useRef<() => void>(() => undefined);
   const ledger = useRef<{ base: number; start: number | null }>({ base: 0, start: null });
   const clock = useMemo<GalaxyClock>(
     () => ({
@@ -564,8 +567,9 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
     const el = target.current;
     if (el === null) return;
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const inputs: MotionInputs = { hasFocus: document.hasFocus(), visibilityState: document.visibilityState, onScreen: true, reducedMotion: media.matches };
+    const inputs: MotionInputs = { hasFocus: document.hasFocus(), visibilityState: document.visibilityState, onScreen: true, reducedMotion: media.matches, powerSave: powerRef.current };
     const sync = () => {
+      inputs.powerSave = powerRef.current;
       const run = motionAllowed(inputs);
       if (run !== runningRef.current) {
         const elapsed = clock.now();
@@ -601,6 +605,7 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
     window.addEventListener("blur", onActivity);
     media.addEventListener("change", onMotionPref);
     el.dataset.motion = "paused";
+    resync.current = sync;
     sync();
     return () => {
       observer.disconnect();
@@ -637,6 +642,10 @@ function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: st
     }
     spins.current = list;
   }, [target, clock, signature]);
+  // 离电省电档切换时重新判定（停转 / 恢复）
+  useLayoutEffect(() => {
+    resync.current();
+  }, [powerSave]);
   return { running, clock };
 }
 
@@ -1032,7 +1041,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       ]),
     [size, movers, layout.belt, ids.length],
   );
-  const motion = useGalaxyMotion(rootRef, signature);
+  const motion = useGalaxyMotion(rootRef, signature, galaxyView.powerSave);
   useSides(rootRef, movers, motion.clock, motion.running, signature);
   const capturing = useCaptures(ids, motion.running);
   useCaptureAnimations(rootRef, capturing);
