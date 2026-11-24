@@ -87,7 +87,7 @@ export class PlanetStore {
         orbit: null,
         elements: companion.main?.elements ?? null,
         eyeStyle: companion.main?.eyeStyle ?? null,
-        mix: null,
+        mix: companion.main?.mix ?? null,
       };
     }
     const planets: PlanetBody[] = [];

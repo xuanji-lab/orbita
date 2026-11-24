@@ -55,8 +55,11 @@ export type MixBasis = "mass_fraction" | "volume_fraction";
 export const MIX_BASES: readonly MixBasis[] = ["mass_fraction", "volume_fraction"];
 /** 插件稿里 scope 写的是中文 */
 export const MIX_SCOPE_PLUGIN: Readonly<Record<MixScope, string>> = { bulk: "整体", atmosphere: "大气", surface: "表面" };
-/** 值从哪来：user = 用户在面板里定的；default = 按天体类型给的默认（旧稿映射、插件稿导入也算默认）。留空的值显示为「随机」，不存 origin */
-export type MixOrigin = "user" | "default";
+/**
+ * 值从哪来：user = 用户在面板里定的；default = 按天体类型给的默认（旧稿映射）；random = 「随机一版」按种子给的。
+ * 留空的值（share = null）也显示为「随机」，但它是现算的，不落盘。
+ */
+export type MixOrigin = "user" | "default" | "random";
 /** 一颗行星最多几条构成项 */
 export const MIX_ITEMS_MAX = 24;
 
@@ -90,7 +93,7 @@ function isMixItem(raw: unknown): raw is PlanetMixItem {
     (MIX_SCOPES as readonly unknown[]).includes(raw["scope"]) &&
     (MIX_BASES as readonly unknown[]).includes(raw["basis"]) &&
     (share === null || (typeof share === "number" && Number.isFinite(share) && share >= 0 && share <= 1)) &&
-    (raw["origin"] === "user" || raw["origin"] === "default") &&
+    (raw["origin"] === "user" || raw["origin"] === "default" || raw["origin"] === "random") &&
     (raw["placed"] === undefined || raw["placed"] === true)
   );
 }
@@ -134,7 +137,8 @@ export interface PlanetBody {
   /** 眼睛样式；没设过为 null（界面取 EYE_STYLE_DEFAULT） */
   eyeStyle: EyeStyle | null;
   /**
-   * 行星的元素构成：伴随文件里的；没有为 null（界面按成分类别映射一组默认元素，半径照旧按类别算）。主星恒为 null。
+   * 元素构成：伴随文件里的；没有为 null（界面按天体类型映射一组默认元素，半径照旧按类别算）。
+   * 主星也有（只影响颜色提示与科普，主星密度固定）。
    * 不从插件稿的 compositionItems 导入：那里元素、分子、材料混在一起，单挑出元素项不是这颗星的整体构成——
    * 拿它推密度，读一遍旧稿行星就变大（2026-11-24 实测：聆箴的 O / Co / Si 三项推出 2.58，半径 1.59 → 2.04）。
    */
@@ -160,7 +164,7 @@ export interface PlanetWriteBody {
   elements: PlanetElements;
   /** 眼睛样式；缺席 = 没设过（伴随文件里原有的值不动） */
   eyeStyle?: EyeStyle;
-  /** 行星的元素构成；缺席 = 不动伴随文件里原有的 */
+  /** 元素构成（主星、行星都可以有）；缺席 = 不动伴随文件里原有的 */
   mix?: PlanetMix;
 }
 
@@ -184,6 +188,8 @@ export interface CompanionBody {
   name?: string;
   massEarth?: number;
   note?: string;
+  /** 元素构成（成分类别 composition 由它推出来，行星上一并写着，给只认三类的读者用） */
+  mix?: PlanetMix;
 }
 
 export interface CompanionPlanet extends CompanionBody {
@@ -192,8 +198,6 @@ export interface CompanionPlanet extends CompanionBody {
   design?: string;
   composition?: PlanetComposition;
   orbit?: number;
-  /** 元素构成（成分类别 composition 由它推出来，一并写着，给只认三类的读者用） */
-  mix?: PlanetMix;
 }
 
 export interface GalaxyCompanion {
@@ -253,6 +257,8 @@ function parseBody(raw: Record<string, unknown>): CompanionBody {
   if (mass !== undefined && mass > 0) body.massEarth = mass;
   const note = str(raw["note"]);
   if (note !== undefined) body.note = note;
+  const mix = parseMix(raw["mix"]);
+  if (mix !== undefined) body.mix = mix;
   return body;
 }
 
@@ -274,8 +280,6 @@ export function parseCompanion(raw: unknown): GalaxyCompanion {
     if (isComposition(item["composition"])) planet.composition = item["composition"];
     const orbit = num(item["orbit"]);
     if (orbit !== undefined && orbit > 0) planet.orbit = orbit;
-    const mix = parseMix(item["mix"]);
-    if (mix !== undefined) planet.mix = mix;
     planets.push(planet);
     if (planets.length >= PLANET_AGENTS_MAX) break;
   }
@@ -379,6 +383,7 @@ export function mergeCompanion(
   const writeBody = (old: CompanionBody | null, body: PlanetWriteBody, designed: boolean): CompanionBody => {
     const next: CompanionBody = { ...(old ?? {}), elements: body.elements };
     if (body.eyeStyle !== undefined) next.eyeStyle = body.eyeStyle;
+    if (body.mix !== undefined) next.mix = body.mix;
     if (designed) {
       delete next.name;
       delete next.massEarth;
@@ -394,7 +399,6 @@ export function mergeCompanion(
     const next: CompanionPlanet = { ...(old ?? { id: body.id }), ...writeBody(old, body, hasDesign.planets.has(body.id)), id: body.id };
     if (body.composition !== null) next.composition = body.composition;
     if (body.orbit !== null) next.orbit = body.orbit;
-    if (body.mix !== undefined) next.mix = body.mix;
     return next;
   });
   return { version: PLANET_GALAXY_VERSION, main, planets };

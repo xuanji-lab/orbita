@@ -140,6 +140,12 @@ describe("PlanetStore：写回", () => {
     await store.write(dir, { main, planets: [gas] });
     read = await store.read(dir);
     assert.deepEqual(read?.planets[0]?.mix, mix, "不带 mix 的写回不抹掉原来的构成");
+    // 主星也存构成；「随机一版」给的值来源记 random
+    const starMix = { seed: 9, items: [{ id: "H", kind: "element" as const, scope: "bulk" as const, basis: "mass_fraction" as const, share: 0.73, origin: "random" as const }] };
+    await store.write(dir, { main: { ...main, mix: starMix }, planets: [gas] });
+    read = await store.read(dir);
+    assert.deepEqual(read?.main?.mix, starMix);
+    assert.deepEqual(read?.planets[0]?.mix, mix);
     await rm(dir, { recursive: true });
   });
 
