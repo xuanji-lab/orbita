@@ -1,6 +1,6 @@
 import type { SessionMeta } from "@shared/session";
 import { sessionRunState, type RunStateSource, type SessionRunState } from "../notify/completion-notice.ts";
-import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf, workspaceHash, type DesignOrigin, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
+import { agentInputsOf, agentMapOf, agentPlanetsOf, starExtentRatio, starOf, workspaceHash, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
 import {
   PLANET_MASS,
   PLANET_ZONE,
@@ -424,12 +424,11 @@ export function homeGalaxyOf(input: {
   stateOf: (meta: SessionMeta) => SessionRunState;
   ownStateOf?: (meta: SessionMeta) => SessionRunState;
   now: number;
-  /** 这个作用域的主星设计稿与来历（useGalaxyDesign） */
+  /** 这个作用域的主星设计稿（useGalaxyDesign）；子智能体只取它的名单 planets */
   design: GalaxyDesign;
-  origin: DesignOrigin;
 }): HomeGalaxy {
   const star = starOf(input.design);
-  const planets = input.workspaceId === null ? [] : agentPlanetsOf(input.design, input.origin);
+  const planets = input.workspaceId === null ? [] : agentPlanetsOf(input.design);
   const data = scopeGalaxy({
     sessions: input.sessions,
     workspaceId: input.workspaceId,

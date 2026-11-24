@@ -1527,7 +1527,6 @@ function ChatViewBody(props: {
           ownStateOf: galaxyStates.own,
           now: Date.now(),
           design: galaxyDesign.design,
-          origin: galaxyDesign.origin,
         });
 
   /**

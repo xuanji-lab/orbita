@@ -10,6 +10,7 @@ import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { MASS_UNIT_PER_EARTH,
   addPlanet,
+  commitPlanet,
   BACKDROPS,
   bodyArt,
   clampValue,
@@ -116,7 +117,8 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
       setDesign({ ...design, star: { ...design.star, ...rest } });
     } else {
       if (design.planet === null) return;
-      setDesign({ ...design, planet: { ...design.planet, ...patch } });
+      // 在行星页改了它 = 用户要这颗行星：草稿进名单（之后才画、才写盘）
+      setDesign(commitPlanet({ ...design, planet: { ...design.planet, ...patch } }));
     }
   };
   const errors = validateDesign(design);

@@ -9,6 +9,8 @@ import {
   designFromPlanets,
   normalizeDesign,
   planetsWriteOf,
+  commitPlanet,
+  addPlanet,
   seededDesign,
   selectPlanet,
   writableDesign,
@@ -112,21 +114,50 @@ describe("写回请求", () => {
     );
   });
 
-  test("没有 id 的新行星按次序起名；质量清空（NaN）时不写", () => {
+  test("没有 id 的新行星按次序起名（用户点了添加 / 改了它才进名单）；质量清空（NaN）时不写", () => {
     const seeded = seededDesign("ws-x");
-    assert.equal(planetsWriteOf("ws-x", seeded).planets[0]?.id, "planet-1");
+    assert.equal(planetsWriteOf("ws-x", commitPlanet(seeded)).planets[0]?.id, "planet-1");
     assert.equal(writableDesign({ ...seeded, star: { ...seeded.star, mass: Number.NaN } }), false);
     assert.equal(writableDesign(seeded), true);
   });
 });
 
+describe("只改主星不落盘行星（2026-11-24 Windows 验收：主星质量 40 → 71 后多出一颗「未命名行星」）", () => {
+  test("没有子智能体的种子稿：只改主星 → 写盘的 planets 为空；页面星系也不画行星", () => {
+    const seeded = seededDesign("ws-z");
+    assert.ok(seeded.planet !== null, "面板里有一颗示例草稿");
+    const edited = { ...seeded, star: { ...seeded.star, mass: 710 } };
+    const request = planetsWriteOf("ws-z", edited);
+    assert.equal(request.main?.massEarth, 71);
+    assert.deepEqual(request.planets, []);
+    assert.deepEqual(agentPlanetsOf(edited), []);
+  });
+
+  test("有子智能体时只改主星 → planets 原样（id、质量、成分、轨道、顺序都不变）", () => {
+    const fromFile = designFromPlanets(INTENT, seededDesign("ws-intent"));
+    const before = planetsWriteOf("ws-intent", fromFile).planets;
+    const after = planetsWriteOf("ws-intent", { ...fromFile, star: { ...(fromFile.star as NonNullable<typeof fromFile.star>), mass: 710 } }).planets;
+    assert.deepEqual(after, before);
+    assert.deepEqual(after.map((p) => p.id), ["rec", "eval", "mem"]);
+  });
+
+  test("点了「添加行星」或改了那颗草稿才进名单、才写盘", () => {
+    const seeded = seededDesign("ws-w");
+    const added = addPlanet({ ...seeded, planet: null }, "ws-w");
+    assert.ok(added.ok);
+    if (added.ok) assert.equal(planetsWriteOf("ws-w", added.design).planets.length, 1);
+    assert.equal(agentPlanetsOf(commitPlanet(seeded)).length, 1);
+    assert.equal(commitPlanet(commitPlanet(seeded)).planets?.length, 1, "重复提交不加第二颗");
+  });
+});
+
 describe("页面星系画哪些子智能体", () => {
   const seeded = seededDesign("ws-y");
-  test("种子稿 / 默认稿不画行星（那颗只是面板示例）；面板改过的画它；盘上读来的画名单", () => {
-    assert.deepEqual(agentPlanetsOf(seeded, "default"), []);
-    assert.equal(agentPlanetsOf(seeded, "edited").length, 1);
+  test("种子稿 / 默认稿不画行星（那颗只是面板示例）；进了名单的画它；盘上读来的画名单", () => {
+    assert.deepEqual(agentPlanetsOf(seeded), []);
+    assert.equal(agentPlanetsOf(commitPlanet(seeded)).length, 1);
     const fromFile = designFromPlanets(INTENT, seeded);
-    assert.equal(agentPlanetsOf(fromFile, "file").length, 3);
+    assert.equal(agentPlanetsOf(fromFile).length, 3);
     assert.deepEqual(agentInputsOf(fromFile.planets ?? []).map((a) => a.id), ["rec", "eval", "mem"]);
   });
 });

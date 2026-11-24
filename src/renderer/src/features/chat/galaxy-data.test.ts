@@ -433,7 +433,7 @@ describe("首页星系：作用域 → 星系（单智能体首页与编排页�
     return { ...base, star: { ...base.star, mass }, planets: ids.map((id, i) => ({ ...base.planet, id, name: id, orbitRadius: 19 + 12 * i })) };
   };
   const at = (workspaceId: string | null, design: GalaxyDesign) =>
-    homeGalaxyOf({ sessions, workspaceId, stateOf: states({}), now: 100_000, design, origin: "file" });
+    homeGalaxyOf({ sessions, workspaceId, stateOf: states({}), now: 100_000, design });
 
   test("选了工作区 A：A 的主星质量、A 的子智能体行星、A 的会话碎石；切到 B 换成 B 的那一套", () => {
     const a = at("A", designOf("A", ["烛霓-1", "烛霓-2", "烛霓-3"], 600));

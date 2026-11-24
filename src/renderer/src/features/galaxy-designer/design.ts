@@ -544,13 +544,22 @@ export function selectPlanet(design: GalaxyDesign, index: number): GalaxyDesign 
 }
 
 /**
- * 页面星系上画哪些子智能体：设计稿有名单（工作区 planet/ 里读来的、或面板里改过的）就画名单；
- * 没有名单的种子稿 / 默认稿不画行星——种子稿里那颗行星只是面板的示例，不是真的子智能体。
+ * 页面星系上画哪些子智能体：只画名单 planets（工作区 planet/ 里读来的，或用户在面板里明确新增 / 改过的那颗，见 commitPlanet）。
+ * 没有名单时 planet 只是面板里的示例草稿，不是真的子智能体——只改主星不会让它变成行星
+ * （2026-11-24 Windows 验收：只把主星质量 40 → 71，重载后多出一颗「未命名行星」，galaxy.json 里写进了 planet-1）。
  */
-export function agentPlanetsOf(design: GalaxyDesign, origin: DesignOrigin): readonly PlanetDesign[] {
+export function agentPlanetsOf(design: GalaxyDesign): readonly PlanetDesign[] {
   if (design.star === null) return [];
-  if (design.planets !== undefined) return design.planets;
-  return origin === "edited" && design.planet !== null ? [design.planet] : [];
+  return design.planets ?? [];
+}
+
+/**
+ * 用户明确要这颗行星（点了「添加行星」或在行星页改了它）：草稿进名单。已有名单原样返回。
+ * 只有进了名单的行星才画到页面星系上、才写回工作区 planet/。
+ */
+export function commitPlanet(design: GalaxyDesign): GalaxyDesign {
+  if (design.star === null || design.planet === null || design.planets !== undefined) return design;
+  return { ...design, planets: [design.planet], planetIndex: 0 };
 }
 
 /** 星系数据层要的子智能体行星（galaxy-data 的 AgentPlanetInput）：没有 id 的按次序起一个 */
@@ -631,7 +640,8 @@ export function writableDesign(design: GalaxyDesign): boolean {
 
 /** 面板的设计稿 → 写回请求（没有 id 的新行星按次序起一个 planet-N） */
 export function planetsWriteOf(workspaceId: string, design: GalaxyDesign): PlanetWriteRequest {
-  const list = design.star === null ? [] : (design.planets ?? (design.planet === null ? [] : [design.planet]));
+  // 只写名单里的行星：面板里没进名单的示例草稿不落盘（只改主星时 planets 原样，原来没有就写空）
+  const list = design.star === null ? [] : (design.planets ?? []);
   return {
     workspaceId,
     main: design.star === null ? null : writeBody("main", design.star, null, null),
@@ -649,8 +659,8 @@ export type AddPlanetResult = { ok: true; design: GalaxyDesign } | { ok: false; 
 /** 加一颗行星（已有就原样返回）。没有主星时拒绝——行星必须绕着主星，这是数据层的规矩，不靠按钮置灰 */
 export function addPlanet(design: GalaxyDesign, workspaceId: string): AddPlanetResult {
   if (design.star === null) return { ok: false, reason: "no-star" };
-  if (design.planet !== null) return { ok: true, design: { ...design, editing: "planet" } };
-  return { ok: true, design: { ...design, planet: defaultPlanet(workspaceId), editing: "planet" } };
+  if (design.planet !== null) return { ok: true, design: commitPlanet({ ...design, editing: "planet" }) };
+  return { ok: true, design: commitPlanet({ ...design, planet: defaultPlanet(workspaceId), editing: "planet" }) };
 }
 
 /**

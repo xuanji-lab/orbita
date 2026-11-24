@@ -129,11 +129,11 @@ export function OrchestraPanel(props: {
 function MainCard(props: { workspaceId: string | null; name: string; status: ReturnType<typeof headerStatusOf>; sessions: number }) {
   const t = useT();
   const bySize = useAvatarBySize();
-  const { design, origin } = useGalaxyDesign(props.workspaceId ?? "");
+  const { design } = useGalaxyDesign(props.workspaceId ?? "");
   const word = t.agents.status[props.status.status];
   // 名字顺序与页头同一条：工作区名为主、智能体名为副（候选 agentName=on 时反过来）
   const names = nameOrderOf(useProtoVariants().agentName, props.name, design.star?.name ?? "");
-  const planets = agentPlanetsOf(design, origin).length;
+  const planets = agentPlanetsOf(design).length;
   return (
     <div className="orch-main">
       <span className="orch-main-avatar">
@@ -304,8 +304,8 @@ function TreeRow(props: { node: TreeNode; now: number; onOpen: (id: string) => v
 function GalaxyView(props: { session: ChatSession; workspaceId: string | null; name: string; width: number; onWiden: () => void }) {
   const t = useT();
   const to = t.orchestra;
-  const { design, origin } = useGalaxyDesign(props.workspaceId ?? "");
-  const agents = useMemo(() => agentPlanetsOf(design, origin), [design, origin]);
+  const { design } = useGalaxyDesign(props.workspaceId ?? "");
+  const agents = useMemo(() => agentPlanetsOf(design), [design]);
   const agentMap = useMemo(() => agentMapOf(agents), [agents]);
   if (props.width < GALAXY_MIN_WIDTH) {
     return (
