@@ -3866,8 +3866,7 @@ export const en = {
     avatar: (name: string) => `${name}'s main star`,
     pageLabel: (name: string) => `${name} · new task`,
     emptyHint: "Nothing sent out yet. Write a task below.",
-    more: (n: number) => `${n} more sessions`,
-    foldedTip: (n: number) => `${n} more sessions: find them in the tree on the right`,
+    allSessions: (n: number) => `All ${n} sessions: find them in the tree on the right`,
     /** 星系上能点的东西（读屏与悬停提示） */
     openRock: (title: string) => `Open session: ${title}`,
     openPlanet: (name: string) => `${name} (planet): open in the designer`,

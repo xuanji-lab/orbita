@@ -3633,8 +3633,7 @@ export const zh: Messages = {
     avatar: (name) => `${name} 的主星`,
     pageLabel: (name) => `${name} · 新任务`,
     emptyHint: "还没有派出的活，在下面写一件事",
-    more: (n) => `另有 ${n} 条会话`,
-    foldedTip: (n) => `另有 ${n} 条会话：在右栏树状图里找`,
+    allSessions: (n) => `全部 ${n} 条会话：在右栏树状图里找`,
     /** 星系上能点的东西（读屏与悬停提示） */
     openRock: (title) => `打开会话：${title}`,
     openPlanet: (name) => `${name}（行星）：在设计面板里打开`,

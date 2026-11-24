@@ -16,10 +16,16 @@ import {
   planetRadius,
   project,
   readablePlanetPx,
+  planetPx,
+  dustLookOf,
+  beltOuterOf,
+  framePoint,
+  orbitFrame,
   starRadius,
   type Camera,
   type GalaxyLayout,
   type GalaxySpec,
+  type OrbitFrame,
   type Viewport,
 } from "./galaxy.ts";
 import { ORBIT_STEP } from "./galaxy-data.ts";
@@ -81,13 +87,32 @@ function screenOf(camera: Camera, vp: Viewport, a: number, theta: number): { x: 
   return { x: vp.cx + vp.focal * p.sx, y: vp.cy + vp.focal * p.sy, depth: p.depth };
 }
 
-/** 某颗行星在轨道 a 的 theta 处的屏幕半径（与 drawFrame 同一个算法：物理半径透视、下限、等你放大） */
-function bodyPx(body: Body, depth: number, vp: Viewport, minPx: number): number {
-  return Math.max((vp.focal * body.radius) / depth, minPx) * (body.waiting ? WAITING_SCALE : 1);
+/** 某颗行星的屏幕半径（与 drawFrame 同一个 planetPx：公转时不变，合成器只平移它） */
+function bodyPx(body: Body, camera: Camera, vp: Viewport, minPx: number): number {
+  return planetPx(body.radius, body.waiting, camera, vp, minPx);
 }
 
 const NEAR = -Math.PI / 2;
 const FAR = Math.PI / 2;
+
+/**
+ * 两圈轨道（仿射模型 framePoint，与合成器转出来的同一个）在屏幕上最近的距离：沿一圈取 GAP_SAMPLES 个角，
+ * 每个角上量到另一圈相邻几个角的点的距离，取最小。不只量短轴两端——两圈椭圆的圆心按透视上下错开，
+ * 最窄处不一定在短轴上（2026-11-24 换成合成器模型后，只量短轴的版本在斜向上量出过 19.4px < 20px 的相交）。
+ */
+const GAP_SAMPLES = 72;
+function ellipseGap(a: OrbitFrame, aScale: number, b: OrbitFrame, bScale: number): number {
+  const step = (Math.PI * 2) / GAP_SAMPLES;
+  let best = Infinity;
+  for (let i = 0; i < GAP_SAMPLES; i++) {
+    const p = framePoint(a, i * step, aScale);
+    for (let j = -3; j <= 3; j++) {
+      const q = framePoint(b, (i + j * 0.5) * step, bScale);
+      best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
+    }
+  }
+  return best;
+}
 
 /**
  * 在给定相机下按屏幕约束排出每颗行星的轨道半径；装不下返回 null。
@@ -117,16 +142,12 @@ function placeOrbits(
       if (a > PLANET_ZONE - body.radius) return null;
       const near = screenOf(camera, vp, a, NEAR);
       const far = screenOf(camera, vp, a, FAR);
-      const rNear = bodyPx(body, near.depth, vp, minPx);
-      const rFar = bodyPx(body, far.depth, vp, minPx);
+      const rNear = bodyPx(body, camera, vp, minPx);
+      const rFar = bodyPx(body, camera, vp, minPx);
       if (inside && !orbitInside(camera, vp, a, Math.max(rNear, rFar))) return null;
       let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + rNear + gap;
       if (ok && prevA !== undefined && prevBody !== undefined) {
-        const pNear = screenOf(camera, vp, prevA, NEAR);
-        const pFar = screenOf(camera, vp, prevA, FAR);
-        ok =
-          Math.abs(near.y - pNear.y) >= rNear + bodyPx(prevBody, pNear.depth, vp, minPx) + gap &&
-          Math.abs(far.y - pFar.y) >= rFar + bodyPx(prevBody, pFar.depth, vp, minPx) + gap;
+        ok = ellipseGap(orbitFrame(prevA, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= Math.max(rNear, rFar) + bodyPx(prevBody, camera, vp, minPx) + gap;
       }
       if (ok) break;
       a += ORBIT_NUDGE;
@@ -173,11 +194,7 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
     const far = screenOf(camera, vp, a, FAR);
     let ok = Math.hypot(near.x - star.x, near.y - star.y) >= starPx + ROCK_CLEAR_PX + SCREEN_GAP;
     if (ok && last !== undefined && lastBody !== null) {
-      const pNear = screenOf(camera, vp, last.orbitRadius, NEAR);
-      const pFar = screenOf(camera, vp, last.orbitRadius, FAR);
-      ok =
-        Math.abs(near.y - pNear.y) >= ROCK_CLEAR_PX + bodyPx(lastBody, pNear.depth, vp, minPx) + SCREEN_GAP &&
-        Math.abs(far.y - pFar.y) >= ROCK_CLEAR_PX + bodyPx(lastBody, pFar.depth, vp, minPx) + SCREEN_GAP;
+      ok = ellipseGap(orbitFrame(last.orbitRadius, 0, 0, camera, vp), 1, orbitFrame(a, 0, 0, camera, vp), 1) >= ROCK_CLEAR_PX + bodyPx(lastBody, camera, vp, minPx) + SCREEN_GAP;
     }
     if (ok) break;
   }
@@ -185,6 +202,25 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
   // 放大过的窄画面：碎石块那一圈出画就整圈不画——它们归进角上那一行「另有 N 条会话」（HomeGalaxy）
   if (inside && !orbitInside(camera, vp, placed, ROCK_CLEAR_PX)) return null;
   return placed;
+}
+
+/**
+ * 碎石带的内沿（世界单位）：按屏幕约束往外让——碎石带共用中间那一圈的 frame（与合成器转的同一个模型），
+ * 内沿的碎石在近侧 / 远侧短轴端点上与最外一颗行星竖向留出「行星半径 + 碎石半径 + 间距」。
+ * 几百颗碎石铺满带宽之后，内沿那几颗不再贴着最外的行星（2026-11-24：每条会话都是一颗碎石）。
+ */
+function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, lastOrbit: number, lastPx: number, gap: number): number | undefined {
+  const belt = layout.belt;
+  if (belt === null) return undefined;
+  const dustPx = dustLookOf(belt.count).px;
+  const planetFrame = orbitFrame(lastOrbit, 0, 0, camera, vp);
+  let inner = belt.inner;
+  for (let i = 0; i < 400; i++) {
+    const mid = (inner + beltOuterOf(inner, belt.count)) / 2;
+    if (ellipseGap(planetFrame, 1, orbitFrame(mid, 0, 0, camera, vp), inner / mid) >= lastPx + dustPx + gap) break;
+    inner += ORBIT_NUDGE;
+  }
+  return inner;
 }
 
 export function fitScreenSafe(
@@ -231,18 +267,24 @@ export function fitScreenSafe(
         return { ...planet, orbitRadius: a, inclination: 0, omega: angularSpeed(a) };
       });
       // 碎石带跟着最外圈往外挪：重排之后带子的内沿仍在最外一颗行星之外
-      const relaid = layoutGalaxy({
+      const placedSpec: GalaxySpec = {
         ...flat,
         planets: flat.planets.filter((planet) => planets.some((p) => p.id === planet.id)).map((planet) => ({
           ...planet,
           orbitRadius: planets.find((p) => p.id === planet.id)?.orbitRadius ?? planet.orbitRadius,
         })),
-      });
+      };
+      const firstPass = layoutGalaxy(placedSpec);
+      const lastPlaced = planets[planets.length - 1];
+      const beltInner =
+        lastPlaced === undefined ? undefined : placeBeltInner(camera, viewport, firstPass, lastPlaced.orbitRadius, bodyPx({ radius: lastPlaced.radius, waiting: lastPlaced.state === "waiting" }, camera, viewport, minPx), agentMode ? bodyGapOf(minPx) : SCREEN_GAP);
+      const relaid = beltInner === undefined ? firstPass : layoutGalaxy({ ...placedSpec, beltInner });
       const layout: GalaxyLayout = {
         ...relaid,
         planets: relaid.planets.map((planet) => {
           const fixed = planets.find((p) => p.id === planet.id);
-          return fixed === undefined ? planet : { ...planet, orbitRadius: fixed.orbitRadius, inclination: 0, omega: fixed.omega, phase: fixed.phase };
+          // 放平的轨道上升交点只是相位：并进 phase、node 归零——orbitFrame 的远近两点才正好是短轴两端（合成器模型按它们拉椭圆）
+          return fixed === undefined ? planet : { ...planet, orbitRadius: fixed.orbitRadius, inclination: 0, node: 0, omega: fixed.omega, phase: fixed.phase + fixed.node };
         }),
         hidden: base.hidden + dropped,
         expectedOrbit: base.expectedOrbit,

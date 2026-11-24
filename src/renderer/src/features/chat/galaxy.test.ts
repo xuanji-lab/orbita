@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
-  advanceClock,
   angularSpeed,
   CAMERA_ELEVATION_DEG,
   ELEVATION_MAX,
   DENSITY,
   drawFrame,
-  dustCapFor,
-  DUST_MIN_CAP,
-  DUST_REF_CAP,
-  foldedMarkAt,
+  beltFrame,
+  beltGrowthOf,
+  beltOuterOf,
+  BELT_FULL_AT,
+  BELT_MAX_WIDTH,
+  BELT_OVERSHOOT,
+  capturedIds,
+  dustLookOf,
+  dustPoints,
+  DUST_CLICK_MAX,
+  DEBRIS_PX,
+  ROCK_PX,
   emptyHintAt,
   truncateLabel,
   WAITING_SCALE,
@@ -25,7 +32,6 @@ import {
   galaxySpecOf,
   layoutGalaxy,
   makeCamera,
-  MAX_STEP_MS,
   MIN_CLEARANCE,
   motionAllowed,
   orbitArcs,
@@ -146,7 +152,7 @@ describe("量：行星封顶、星屑聚合", () => {
     assert.ok(layout.belt.inner > last.orbitRadius + last.radius);
     assert.equal(layout.extent, layout.belt.outer);
     for (const fixture of ["empty", "typical", "full"] as const) {
-      assert.ok(layoutGalaxy(galaxySpecOf(fixture)).extent <= FRAME_EXTENT + 1e-9, fixture);
+      assert.ok(layoutGalaxy(galaxySpecOf(fixture)).extent <= FRAME_EXTENT * BELT_OVERSHOOT + 1e-9, fixture);
     }
   });
 
@@ -205,13 +211,19 @@ describe("透视投影", () => {
     return (["empty", "typical", "full"] as const).map((fixture) => {
       const layout = layoutGalaxy(galaxySpecOf(fixture));
       const items = drawFrame(layout, cam, vp, orbitArcs(layout, cam, vp), 7);
-      // 外缘一圈（含碎石带外沿）落在框里（留 1px 投影 / 取整误差）：轨道放大也不会顶到框外（也就顶不到输入框）
+      // 行星区落在框里；碎石带外沿可以伸进框外的边距（BELT_OVERSHOOT），但不出画布（也就顶不到输入框）
+      const planetEdge = layout.planets.reduce((edge, planet) => Math.max(edge, planet.orbitRadius + planet.radius), 0);
       for (let i = 0; i < 72; i++) {
-        const p = project(orbitPoint(layout.extent, 0, 0, (i / 72) * Math.PI * 2), cam);
-        const x = vp.cx + vp.focal * p.sx;
-        const y = vp.cy + vp.focal * p.sy;
-        assert.ok(x >= boxLeft - 1 && x <= boxLeft + box.width + 1, `${width}x${height} ${fixture} x ${x}`);
-        assert.ok(y >= boxTop - 1 && y <= boxTop + box.height + 1, `${width}x${height} ${fixture} y ${y}`);
+        for (const [a, left, top, right, bottom] of [
+          [planetEdge, boxLeft, boxTop, boxLeft + box.width, boxTop + box.height],
+          [layout.extent, 0, 0, width, height],
+        ] as const) {
+          const p = project(orbitPoint(a, 0, 0, (i / 72) * Math.PI * 2), cam);
+          const x = vp.cx + vp.focal * p.sx;
+          const y = vp.cy + vp.focal * p.sy;
+          assert.ok(x >= left - 1 && x <= right + 1, `${width}x${height} ${fixture} a=${a} x ${x}`);
+          assert.ok(y >= top - 1 && y <= bottom + 1, `${width}x${height} ${fixture} a=${a} y ${y}`);
+        }
       }
       const star = items.find((item) => item.kind === "star");
       assert.ok(star?.kind === "star");
@@ -219,7 +231,7 @@ describe("透视投影", () => {
     });
   }
 
-  test("响应式统一视口：任一画布尺寸下，三档主星像素半径与圆心完全一致；星系不越出 galaxyBox", () => {
+  test("响应式统一视口：任一画布尺寸下，三档主星像素半径与圆心完全一致；行星区不越出 galaxyBox、碎石带不出画布", () => {
     for (const [width, height] of [
       [900, 240],
       [1150, 420],
@@ -357,19 +369,13 @@ describe("等你的行星：前置、放大；名字、碎石与「+N」", () =>
     assert.deepEqual([...new Set(orbitArcs(empty, camera, vp).map((arc) => arc.planetId))], [EXPECTED_ID]);
   });
 
-  test("碎石：上限可给，超出的折成 folded；画出的颗粒数 = min(会话数, 上限)；随画布面积缩放并夹在 [DUST_MIN_CAP, DUST_REF_CAP]", () => {
-    const layout = layoutGalaxy(spec(["running"], { sessions: 2000, dustCap: DUST_REF_CAP }));
-    assert.equal(layout.belt?.particles.length, DUST_REF_CAP);
-    assert.equal(layout.belt?.folded, 2000 - DUST_REF_CAP);
-    const few = layoutGalaxy(spec(["running"], { sessions: 3, dustCap: DUST_REF_CAP }));
-    assert.equal(few.belt?.folded, 0);
-    assert.equal(foldedMarkAt(few, camera, vp), null);
-    assert.ok(foldedMarkAt(layout, camera, vp) !== null);
-    assert.equal(dustCapFor(1000, 600), DUST_REF_CAP);
-    assert.equal(dustCapFor(4000, 3000), DUST_REF_CAP);
-    assert.equal(dustCapFor(300, 200), DUST_MIN_CAP);
-    assert.ok(dustCapFor(700, 420) < DUST_REF_CAP && dustCapFor(700, 420) > DUST_MIN_CAP);
-    // 缺省仍是 DUST_CAP（单智能体首页原型不受影响）
+  test("碎石：工作区页每条会话一颗（不封顶）；单智能体原型带子缺省仍封顶 DUST_CAP", () => {
+    const all = layoutGalaxy(spec(["running"], { sessions: 2000, dustCap: Number.POSITIVE_INFINITY }));
+    assert.equal(all.belt?.particles.length, 2000);
+    assert.equal(all.belt?.count, 2000);
+    // 根会话拎成的碎石块不再画成碎石带里的一颗；子会话碎石块不在 sessions 里
+    const lifted = layoutGalaxy({ ...spec([]), sessions: 10, dustCap: Number.POSITIVE_INFINITY, rocks: [{ id: "a", state: "running", label: "A" }, { id: "b", state: "waiting", label: "B", child: true }] });
+    assert.equal(lifted.belt?.particles.length, 9);
     assert.equal(layoutGalaxy(spec([], { sessions: 2000 })).belt?.particles.length, DUST_CAP);
   });
 
@@ -481,23 +487,100 @@ describe("按深度排序与遮挡", () => {
     }
   });
 
-  test("星屑按主星前后拆成两条路径：满载也只有两个对象", () => {
-    const items = frameAt(galaxySpecOf("full"), 3);
-    const dust = items.filter((item) => item.kind === "dust");
-    assert.equal(dust.length, 2);
-    assert.ok(indexOf(items, "dust-back") < indexOf(items, "star"));
-    assert.ok(indexOf(items, "dust-front") > indexOf(items, "star"));
+  test("碎石带按主星前后分两半：远半圈（主星背后）的在主星中心之上，近半圈的在之下", () => {
+    const layout = layoutGalaxy({ ...galaxySpecOf("full"), dustCap: Number.POSITIVE_INFINITY });
+    const camera = makeCamera(FRAME_EXTENT);
+    const vp = frameViewport(camera, 900, 240);
+    assert.ok(layout.belt !== null);
+    // 分界线 = 碎石带那一圈的中线（合成器按这条线裁开两份）
+    const midY = beltFrame(layout.belt, camera, vp).cy;
+    const points = dustPoints(layout.belt, camera, vp, 3);
+    assert.ok(points.some((p) => p.far) && points.some((p) => !p.far));
+    for (const p of points) assert.ok(p.far ? p.y < midY + 1e-6 : p.y > midY - 1e-6, `${p.id} far=${p.far} y=${p.y}`);
+  });
+});
+
+describe("星系随会话长大（2026-11-24 用户：「这个星系它一直在捕捉新的东西，在长大」）", () => {
+  const agentsOf = (sessions: number): GalaxySpec => ({
+    starMass: 620,
+    planets: [planet("a", 19), planet("b", 31), planet("c", 43)],
+    sessions,
+    dustCap: Number.POSITIVE_INFINITY,
+  });
+  const counts = [0, 1, 2, 3, 5, 10, 40, 100, 450, 1000, 2000, BELT_FULL_AT, 10_000, 1_000_000];
+
+  test("会话数 → 碎石带宽度与外沿半径：单调不减、有上限（到 BELT_FULL_AT 条最宽，再多不再变宽；外沿不超过画框的 BELT_OVERSHOOT 倍）", () => {
+    let prevGrowth = 0;
+    let prevOuter = 0;
+    let prevWidth = 0;
+    for (const n of counts) {
+      const growth = beltGrowthOf(n);
+      assert.ok(growth >= prevGrowth && growth <= 1, `${n}: ${growth}`);
+      prevGrowth = growth;
+      const belt = layoutGalaxy(agentsOf(n)).belt;
+      if (n === 0) {
+        assert.equal(belt, null);
+        continue;
+      }
+      assert.ok(belt !== null);
+      assert.ok(belt.outer >= prevOuter - 1e-9, `${n}: 外沿 ${belt.outer} < ${prevOuter}`);
+      assert.ok(belt.outer - belt.inner >= prevWidth - 1e-9, `${n}: 宽度变窄了`);
+      assert.ok(belt.outer <= Math.min(belt.inner + BELT_MAX_WIDTH, FRAME_EXTENT * BELT_OVERSHOOT) + 1e-9, `${n}: 外沿 ${belt.outer} 超了上限`);
+      prevOuter = belt.outer;
+      prevWidth = belt.outer - belt.inner;
+    }
+    assert.equal(beltGrowthOf(BELT_FULL_AT), 1);
+    assert.equal(beltGrowthOf(10 * BELT_FULL_AT), 1);
+    assert.equal(beltOuterOf(30, BELT_FULL_AT), 30 + BELT_MAX_WIDTH);
+    assert.equal(beltOuterOf(64, 10 * BELT_FULL_AT), FRAME_EXTENT * BELT_OVERSHOOT);
   });
 
-  test("受光（位相）：行星在主星与相机之间时只看到背光面（「新月」），在主星远侧时看到满面（「满月」）", () => {
-    const front = frameAt({ starMass: 600, planets: [planet("x", 30, { phaseDeg: 270 })], sessions: 0 }, 0);
-    const back = frameAt({ starMass: 600, planets: [planet("x", 30, { phaseDeg: 90 })], sessions: 0 }, 0);
-    const litOf = (items: DrawItem[]) => {
-      const item = items.find((i) => i.kind === "planet");
-      return item?.kind === "planet" ? item.lit : -1;
+  test("看得出在长大：3 条 → 40 条 → 450 条，带宽每一档都明显变宽（≥ 1.3 倍）", () => {
+    const width = (n: number) => {
+      const belt = layoutGalaxy(agentsOf(n)).belt;
+      return belt === null ? 0 : belt.outer - belt.inner;
     };
-    assert.ok(litOf(front) < 0.1);
-    assert.ok(litOf(back) > 0.9);
+    assert.ok(width(40) >= width(3) * 1.3, `${width(3)} → ${width(40)}`);
+    assert.ok(width(450) >= width(40) * 1.3, `${width(40)} → ${width(450)}`);
+  });
+
+  test("同一条会话：方位角永远不变；越老越靠外圈，新会话进来时老会话只往外沉、不往里跳", () => {
+    const seeds = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `s${n - 1 - i}` })); // 新的在前：s(n-1) 最新
+    const at = (n: number) => new Map((layoutGalaxy({ ...agentsOf(n), dust: seeds(n) }).belt?.particles ?? []).map((p) => [p.id, p]));
+    const small = at(40);
+    const big = at(41);
+    for (const [id, p] of small) {
+      const q = big.get(id);
+      assert.ok(q !== undefined);
+      assert.equal(q.theta0, p.theta0, `${id} 的方位角变了`);
+      // 名次往后挪一位、带子变宽：只会更靠外
+      assert.ok(q.r >= p.r - 1e-9, `${id}: ${p.r} → ${q.r}`);
+    }
+    // 最老的在外、最新的在内（抖动只在一小段里）
+    const list = [...big.values()];
+    const newest = list.slice(0, 5).reduce((sum, p) => sum + p.r, 0) / 5;
+    const oldest = list.slice(-5).reduce((sum, p) => sum + p.r, 0) / 5;
+    assert.ok(oldest > newest);
+  });
+
+  test("几百上千颗时变成更小更淡的尘埃；永远小于在做事的碎石块与最小的行星；量大单颗不可点", () => {
+    let prev = dustLookOf(1);
+    for (const n of [3, 40, 450, 3000]) {
+      const look = dustLookOf(n);
+      assert.ok(look.px <= prev.px && look.alpha <= prev.alpha, `${n}`);
+      assert.ok(look.px < ROCK_PX && look.px < PLANET_READABLE_MIN);
+      prev = look;
+    }
+    assert.ok(dustLookOf(450).px < dustLookOf(3).px * 0.6);
+    assert.ok(dustLookOf(3, true).px <= DEBRIS_PX[1]);
+    assert.ok(DUST_CLICK_MAX >= 40 && DUST_CLICK_MAX < 450);
+  });
+
+  test("新会话「被捕获」只在新增时触发：第一次画不算；顺序变了、减少了、从碎石块落回碎石带都不算", () => {
+    assert.deepEqual(capturedIds(null, ["a", "b"]), []);
+    assert.deepEqual(capturedIds(new Set(["a", "b"]), ["c", "a", "b"]), ["c"]);
+    assert.deepEqual(capturedIds(new Set(["a", "b", "c"]), ["b", "a"]), []);
+    assert.deepEqual(capturedIds(new Set(["a", "b"]), ["b", "a"]), []);
   });
 });
 
@@ -512,12 +595,6 @@ describe("动效生命周期", () => {
     assert.equal(motionAllowed({ ...running, reducedMotion: true }), false);
   });
 
-  test("时钟只在跑的时候走：恢复后第一帧不推进，卡顿 / 节流后最多推进一步", () => {
-    assert.equal(advanceClock(500, null, 99999), 500);
-    assert.equal(advanceClock(500, 1000, 1016), 516);
-    assert.equal(advanceClock(500, 1000, 60_000), 500 + MAX_STEP_MS);
-    assert.equal(advanceClock(500, 1000, 900), 500);
-  });
 });
 
 describe("原型 fixture 参数", () => {

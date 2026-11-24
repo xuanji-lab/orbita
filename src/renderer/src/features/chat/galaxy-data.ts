@@ -6,6 +6,7 @@ import {
   PLANET_ZONE,
   VISIBLE_ORBIT_CAP,
   type Composition,
+  type DustSeed,
   type GalaxySpec,
   type PlanetSpec,
   type RockSpec,
@@ -16,7 +17,7 @@ import {
  * 行星 = 这里的子智能体 / 派出去的活，碎石带 = 其余会话。守「引力语法」：
  * - 行星只来自子会话（久没动静的退场）与自己此刻在跑 / 在等你的根会话；质量夹在 PLANET_MASS 里（远小于主星），
  *   所以再忙的会话也长不成主星；
- * - 其余会话只是碎石带的颗粒数（2000 条也只是更浓，不逐条画）；
+ * - 其余会话是碎石带里的碎石（编排星系每条根会话一颗，带子随会话数长大）；
  * - 行星按「要你动手 → 在跑 → 出错 → 跑完 → 其它」排，越要紧越靠内圈；只画 VISIBLE_ORBIT_CAP 圈，
  *   其余计进 hidden（layoutGalaxy 按轨道半径取最内的那几颗，所以排名就是轨道次序）。
  *
@@ -172,12 +173,12 @@ export function scopeGalaxy(input: ScopeGalaxyInput): ScopeGalaxy {
   if (input.agents !== undefined) return agentGalaxy(input, input.agents, roots, children);
   const candidates: { meta: SessionMeta; state: SessionRunState }[] = [];
   const planetIds = new Set<string>();
-  let retired = 0;
+  const retired: SessionMeta[] = [];
   for (const meta of children) {
     const state = input.stateOf(meta);
     // 没动静又久没碰：退场进碎石带（不再占轨道），平常的星系只剩真在走动的那几件
     if (state === null && input.now - meta.updatedAt > IDLE_CHILD_MS) {
-      retired += 1;
+      retired.push(meta);
       continue;
     }
     candidates.push({ meta, state });
@@ -212,10 +213,22 @@ export function scopeGalaxy(input: ScopeGalaxyInput): ScopeGalaxy {
       starMass: input.starMass,
       ...(input.starExtent === undefined ? {} : { starExtent: input.starExtent }),
       planets,
-      sessions: roots.filter((meta) => !planetIds.has(meta.id)).length + retired,
+      sessions: roots.filter((meta) => !planetIds.has(meta.id)).length + retired.length,
+      dust: dustSeedsOf([...roots, ...retired], planetIds),
     },
     planetIds: candidates.map(({ meta }) => meta.id),
   };
+}
+
+/**
+ * 碎石带里的会话（每条根会话一颗，拎成碎石块的除外）：新的在前（按创建时间）——新会话落在内沿，
+ * 老会话随着新会话进来一点点被挤到外圈。按创建时间而不是最近活动排：聊一句不该让一颗碎石跳到别处。
+ */
+export function dustSeedsOf(roots: readonly SessionMeta[], lifted: ReadonlySet<string>): DustSeed[] {
+  return roots
+    .filter((meta) => !lifted.has(meta.id))
+    .sort((a, b) => b.createdAt - a.createdAt || a.id.localeCompare(b.id))
+    .map((meta) => ({ id: meta.id, title: meta.title.trim() }));
 }
 
 /**
@@ -259,6 +272,7 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
       // 只数根会话：与右栏树主卡「N 条会话」（orchestraTree.total）同一个口径；子会话碎石块带 child 标记，不进这个数
       sessions: roots.length,
       rocks,
+      dust: dustSeedsOf(roots, new Set(rocks.map((rock) => rock.id))),
     },
     planetIds: [],
   };

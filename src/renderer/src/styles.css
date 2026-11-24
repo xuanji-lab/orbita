@@ -2686,10 +2686,39 @@ button.ws-fold {
   /* 明主题的主星用浅一档的墨：深灰实心球在白纸上太重，会和输入框抢；暗档用次级墨，最亮的就是它 */
   --galaxy-star: color-mix(in srgb, var(--color-text-tertiary) 50%, var(--color-bg-panel));
   display: block;
+  position: relative;
   width: 100%;
   height: 100%;
   overflow: visible;
   pointer-events: none;
+}
+/*
+ * 星系的分层（HomeGalaxy 的画家顺序）：几张铺满的静止 SVG（轨道弧、主星）与几层零尺寸的 div（在轨道上走的东西）。
+ * 走的东西是一串零尺寸、原点在左上的 div，只有 transform：轨道矩阵、合成器转动、平移、反转、逆矩阵（galaxy-motion.ts）。
+ */
+.home-galaxy .gx-plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+.home-galaxy .gx-layer,
+.home-galaxy .gx-node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+/* 碎石带的半平面：远半圈 / 近半圈各一份，靠这一层裁开（主星夹在两份中间） */
+.home-galaxy .gx-half {
+  position: absolute;
+  overflow: hidden;
+}
+.home-galaxy .gx-local {
+  position: absolute;
+  overflow: visible;
 }
 :root:is([data-theme="graphite"], [data-theme="black"]) .home-galaxy {
   --galaxy-light: var(--color-text-primary);
@@ -7413,13 +7442,6 @@ button.turn-output-from.link:hover {
   paint-order: stroke;
   pointer-events: none;
 }
-.galaxy-folded {
-  font-family: var(--font-family-base);
-  font-size: var(--font-size-xs);
-  font-variant-numeric: tabular-nums;
-  fill: var(--color-text-tertiary);
-  pointer-events: auto;
-}
 
 /*
  * 星系上能点的东西（2026-11-24 设计审查 R1）：主星、子智能体行星、在做事的碎石块、角上「另有 N 条会话」。
@@ -7428,15 +7450,54 @@ button.turn-output-from.link:hover {
  */
 .galaxy-target,
 .galaxy-tag.galaxy-target,
-.galaxy-more[data-link],
+.galaxy-dot,
 .galaxy-callout[data-link] {
   cursor: pointer;
   /* 整张 .home-galaxy 是 pointer-events: none（星系只是图）；能点的这几样单独打开 */
   pointer-events: auto;
 }
-.galaxy-target:focus-visible,
-.galaxy-more[data-link]:focus-visible {
+.galaxy-target:focus-visible {
   outline: none;
+}
+/* 会话少时每颗碎石都能点：命中圈透明，悬停时那颗加深一档 */
+.galaxy-dot-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.galaxy-dot:hover .galaxy-dust {
+  fill: var(--color-text-primary);
+}
+/*
+ * 「全部 N 条会话」：键盘 / 读屏才用的入口——平时视觉隐藏（不占画面），Tab 到它时贴着星系左下角出现，
+ * 样子与次级文字链接一致；点了打开右栏树状图。
+ */
+.galaxy-all {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.galaxy-all:focus-visible {
+  width: auto;
+  height: auto;
+  padding: var(--space-1) var(--space-2);
+  overflow: visible;
+  clip-path: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  outline: 1.5px solid var(--color-accent);
 }
 .galaxy-target .galaxy-hit {
   fill: transparent;
@@ -7461,22 +7522,6 @@ button.turn-output-from.link:hover {
 }
 .galaxy-target:focus-visible .galaxy-tag-text {
   opacity: 1;
-}
-.galaxy-more-hit {
-  fill: transparent;
-  pointer-events: all;
-}
-.galaxy-more .galaxy-folded {
-  font-size: var(--font-size-sm);
-  fill: var(--color-text-secondary);
-}
-.galaxy-more[data-link]:hover .galaxy-folded {
-  fill: var(--color-text-primary);
-  text-decoration: underline;
-}
-.galaxy-more[data-link]:focus-visible .galaxy-more-hit {
-  stroke: var(--color-accent);
-  stroke-width: 1.5;
 }
 .galaxy-callout[data-link]:hover .galaxy-callout-text {
   text-decoration: underline;

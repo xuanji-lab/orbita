@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { SessionMeta } from "@shared/session";
 import { runStateOf, type RunStateSource, type SessionRunState } from "../notify/completion-notice.ts";
-import { AGENT_READABLE_MAX, FRAME_EXTENT, GALAXY_MAX_FILL, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, dustCapFor, elevationFor, foldedCountOf, galaxyBox, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
+import { AGENT_READABLE_MAX, BELT_OVERSHOOT, FRAME_EXTENT, GALAXY_MAX_FILL, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, elevationFor, galaxyBox, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
 import { orchestraTree } from "./orchestra-data.ts";
 import { IDLE_CHILD_MS, ORBIT_FIRST, ORBIT_SPREAD_MAX, ORBIT_STEP, RECENT_MENU_LIMIT, latestWorkspaceId, orbitRadiusOf, ROCK_CAP, planetMassOf, scopeGalaxy, scopeRecent, scopeSummary, scopeTone, stateIndexOf, stateOfIndex } from "./galaxy-data.ts";
@@ -30,7 +30,7 @@ const states = (map: Record<string, SessionRunState>) => (m: SessionMeta): Sessi
 describe("scopeGalaxy —— 真实会话 → 星系", () => {
   test("空工作区：只有主星，没有行星与碎石（交给 layoutGalaxy 画预期轨道）", () => {
     const galaxy = scopeGalaxy({ sessions: [], workspaceId: "ws", now: 100_000, stateOf: states({}), starMass: 620, designedPlanet: null });
-    assert.deepEqual(galaxy.spec, { starMass: 620, planets: [], sessions: 0 });
+    assert.deepEqual(galaxy.spec, { starMass: 620, planets: [], sessions: 0, dust: [] });
     assert.equal(layoutGalaxy(galaxy.spec).expectedOrbit !== null, true);
   });
 
@@ -87,7 +87,7 @@ describe("scopeGalaxy —— 真实会话 → 星系", () => {
     assert.equal(layout.hidden, 14 + 42 - VISIBLE_ORBIT_CAP);
     assert.deepEqual(layout.planets.slice(0, 3).map((planet) => planet.state), ["waiting", "waiting", "waiting"]);
     assert.equal(galaxy.spec.sessions, 2000);
-    assert.ok(layout.extent <= FRAME_EXTENT, `外缘 ${layout.extent}`);
+    assert.ok(layout.extent <= FRAME_EXTENT * BELT_OVERSHOOT, `外缘 ${layout.extent}`);
     const biggest = Math.max(...galaxy.spec.planets.map((planet) => planetRadius(planet)));
     assert.ok(biggest < starRadius(STAR_MASS.min) / 2);
   });
@@ -369,7 +369,7 @@ describe("「等你」件数：页头 / 侧栏（scopeSummary）与星系碎石�
   });
 });
 
-describe("「另有 N 条会话」与右栏树主卡同源：N = 根会话总数 − 画面上已画出的，0 ≤ N ≤ 总数（2026-11-24 主会话核对：窄窗写「另有 447」、树主卡 437）", () => {
+describe("每条根会话都是一颗碎石，与右栏树主卡同源：碎石 + 拎成碎石块的根会话 = 总数（2026-11-24：星系随会话长大，不再折成「另有 N 条」）", () => {
   // 满载 orbita 的形状：40 条根会话，其中一条派出 14 个子会话（11 在跑、3 等你），另一条根会话自己在跑
   const sessions = [
     ...Array.from({ length: 40 }, (_, i) => meta({ id: `r${i}`, updatedAt: 100 + i })),
@@ -398,15 +398,16 @@ describe("「另有 N 条会话」与右栏树主卡同源：N = 根会话总数
     ["右栏星系图", 416, 333],
     ["窄窗页面 + 右栏（碎石块整圈出画）", 196, 214],
   ] as const) {
-    test(`${name}（${w}×${h}）：另有 N + 星屑颗粒 + 画出的根会话碎石块 = 总数`, () => {
+    test(`${name}（${w}×${h}）：碎石带颗粒 + 根会话碎石块 = 总数；子会话碎石块不在里面`, () => {
       const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-      const scene = fitScreenSafe({ ...galaxy.spec, dustCap: dustCapFor(w, h) }, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
+      const scene = fitScreenSafe({ ...galaxy.spec, dustCap: Number.POSITIVE_INFINITY }, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
       const layout = scene.layout;
-      const n = foldedCountOf(layout);
-      const dust = layout.belt?.particles.length ?? 0;
-      const rootRocksDrawn = layout.rockOrbit === null ? 0 : layout.rocks.filter((rock) => rock.child !== true).length;
-      assert.ok(n >= 0 && n <= tree.total, `另有 ${n}，总数 ${tree.total}`);
-      assert.equal(n + dust + rootRocksDrawn, tree.total);
+      const dust = layout.belt?.particles ?? [];
+      const rootRocks = layout.rocks.filter((rock) => rock.child !== true);
+      assert.equal(dust.length + rootRocks.length, tree.total);
+      const ids = new Set(dust.map((p) => p.id));
+      for (const rock of layout.rocks) assert.ok(!ids.has(rock.id), `${rock.id} 既是碎石块又是碎石`);
+      for (const id of ids) assert.ok(/^r\d+$/.test(id), `${id} 不是根会话`);
     });
   }
 });

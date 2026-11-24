@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   drawFrame,
-  DUST_PX,
+  dustLookOf,
+  dustPoints,
   elevationFor,
   galaxyBox,
   GALAXY_MAX_FILL,
@@ -64,10 +65,10 @@ const SPECS: [string, GalaxySpec][] = [
  * 编排星系（行星 = 子智能体、会话 = 碎石）：几颗子智能体照设计稿的质量与轨道，在做事的会话是碎石块。
  * 质量单位 = M⊕ × 10（今晚六个工作区：主星 35–90 M⊕，行星 1.1–3.4 M⊕）
  */
-function agentSpec(starMass: number, agents: readonly [number, "rock" | "ice" | "gas", number][], rocks: number, waitingRocks = 0): GalaxySpec {
+function agentSpec(starMass: number, agents: readonly [number, "rock" | "ice" | "gas", number][], rocks: number, waitingRocks = 0, sessions = 120): GalaxySpec {
   return {
     starMass,
-    sessions: 120,
+    sessions,
     planets: agents.map(([mass, composition, orbitRadius], i) => ({
       id: `a${i}`,
       mass,
@@ -88,16 +89,20 @@ const AGENT_SPECS: [string, GalaxySpec][] = [
   ["空（只有主星与子智能体，没有在做事的会话）", agentSpec(900, [[34, "rock", 19], [20, "rock", 31], [28, "rock", 43]], 0)],
   ["满载（6 颗子智能体 + 8 块碎石，3 块等你）", agentSpec(620, [[40, "gas", 19], [34, "rock", 25], [11, "ice", 31], [22, "rock", 37], [16, "ice", 43], [30, "gas", 49]], 8, 3)],
   ["满载 · 最轻主星 6 颗最重行星", agentSpec(300, Array.from({ length: 6 }, (_, i): [number, "gas", number] => [40, "gas", 19 + 6 * i]), 6, 2)],
+  ["只有 3 条会话（碎石带最窄）", agentSpec(600, [[22, "rock", 19], [30, "rock", 31], [16, "rock", 43]], 1, 0, 3)],
+  ["450 条会话（满载 orbita）", agentSpec(620, [[40, "gas", 19], [34, "rock", 25], [11, "ice", 31], [22, "rock", 37]], 8, 3, 450)],
+  ["3000 条会话（碎石带铺到画框外沿）", agentSpec(620, [[40, "gas", 19], [34, "rock", 25], [11, "ice", 31], [22, "rock", 37], [16, "ice", 43], [30, "gas", 49]], 8, 3, 3000)],
 ];
 
 function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-  const scene = fitScreenSafe(spec, w, h, box, elevationFor(box), readableMax);
+  // 与 HomeGalaxy 的工作区页一样：每条会话都是一颗碎石（不封顶）
+  const scene = fitScreenSafe({ ...spec, dustCap: Number.POSITIVE_INFINITY }, w, h, box, elevationFor(box), readableMax);
   const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
   const extent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass);
   const problems: string[] = [];
   for (let t = 0; t <= 600; t += 3.7) {
-    const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx, DUST_PX, false);
+    const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx, false);
     const star = items.find((item): item is StarItem => item.kind === "star");
     const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
     const order = new Map(items.map((item, index) => [item.key, index]));
@@ -135,6 +140,18 @@ function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number 
         const a = rocks[i] as RockItem;
         const b = rocks[j] as RockItem;
         if (Math.hypot(a.x - b.x, a.y - b.y) < a.r + b.r) problems.push(`t=${t.toFixed(1)} 碎石 ${a.planetId} 与 ${b.planetId} 相交`);
+      }
+    }
+    // 碎石带（每条会话一颗）：每颗都不压任何行星，也不画在主星上面
+    const belt = scene.layout.belt;
+    if (belt !== null) {
+      const px = dustLookOf(belt.count).px;
+      for (const dot of dustPoints(belt, scene.camera, scene.viewport, t)) {
+        for (const p of planets) {
+          const d = Math.hypot(dot.x - p.x, dot.y - p.y);
+          if (d < px + p.r) problems.push(`t=${t.toFixed(1)} 碎石带的一颗 ${dot.id} 压在 ${p.planetId} 上（${d.toFixed(1)} < ${(px + p.r).toFixed(1)}）`);
+        }
+        if (star !== undefined && !dot.far && Math.hypot(dot.x - star.x, dot.y - star.y) < star.r * extent + px) problems.push(`t=${t.toFixed(1)} 碎石带的一颗画在主星上面`);
       }
     }
   }
@@ -178,7 +195,7 @@ describe("编排星系（行星 = 子智能体、会话 = 碎石）：屏幕上�
       for (const [canvasName, w, h] of CANVASES) {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
         const scene = fitScreenSafe(spec, w, h, box, elevationFor(box), AGENT_READABLE_MAX);
-        const items = drawFrame(scene.layout, scene.camera, scene.viewport, orbitArcs(scene.layout, scene.camera, scene.viewport), 0, scene.minPlanetPx, DUST_PX, false);
+        const items = drawFrame(scene.layout, scene.camera, scene.viewport, orbitArcs(scene.layout, scene.camera, scene.viewport), 0, scene.minPlanetPx, false);
         const star = items.find((item): item is StarItem => item.kind === "star");
         const biggest = Math.max(...items.filter((item): item is PlanetItem => item.kind === "planet").map((p) => p.r), 0);
         assert.ok(star !== undefined && star.r >= biggest * STAR_OVER_PLANET * 0.99, `${canvasName}: 主星 ${star?.r.toFixed(1)} 行星 ${biggest.toFixed(1)}`);
@@ -210,7 +227,7 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
         const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
         const problems: string[] = [];
         for (let t = 0; t <= 600; t += 7.3) {
-          const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx, DUST_PX, false);
+          const items = drawFrame(scene.layout, scene.camera, scene.viewport, arcs, t, scene.minPlanetPx, false);
           const star = items.find((item): item is StarItem => item.kind === "star");
           const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
           const rocks = items.filter((item): item is RockItem => item.kind === "rock");

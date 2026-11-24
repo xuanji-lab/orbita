@@ -1,41 +1,71 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import {
-  advanceClock,
   drawFrame,
   frameViewport,
   FRAME_EXTENT,
-  FRAME_MS,
   CAMERA_ELEVATION_DEG,
+  CAPTURE_MS,
+  DUST_CLICK_MAX,
   elevationFor,
   galaxyBox,
   galaxySpecOf,
   galaxyFixtureOf,
   GALAXY_MAX,
   GALAXY_MAX_FILL,
+  LIVE_FRAME_MS,
   layoutGalaxy,
   makeCamera,
-  dustCapFor,
-  foldedMarkAt,
-  foldedCountOf,
+  beltFrame,
+  capturedIds,
+  dustLookOf,
   emptyHintAt,
   motionAllowed,
   orbitArcs,
-  DEBRIS_PX,
-  DUST_PX,
+  truncateLabel,
   AGENT_READABLE_MAX,
   PLANET_READABLE_MAX,
-  type DrawItem,
+  ROCK_PX,
+  type Belt,
+  type Camera,
+  type GalaxyLayout,
   type GalaxySpec,
   type MotionInputs,
+  type OrbitArc,
+  type PlanetItem,
+  type RockItem,
+  type Viewport,
 } from "./galaxy.ts";
+import {
+  R0,
+  captureOffsets,
+  cssMatrix,
+  dustDiskPoint,
+  inverseLinear,
+  moverFar,
+  moversOf,
+  msToNextSide,
+  orbitMatrix,
+  periodMs,
+  spinFrames,
+  type Mover,
+} from "./galaxy-motion.ts";
 import { useT } from "../../locale.ts";
 import { BodyFigure, StarBody } from "../galaxy-designer/StarFigure.tsx";
 import { bodyArt, planetFaceDesign, starExtentRatio, type GalaxyDesign, type PlanetDesign } from "../galaxy-designer/design.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
-import { GalaxyCallouts } from "./GalaxyCallouts.tsx";
-import { lockFrame, placeNameTags, textWidth } from "./callouts.ts";
-import { useGalaxyActions } from "./galaxy-actions.ts";
-import type { PlanetItem, RockItem } from "./galaxy.ts";
+import {
+  calloutBudget,
+  calloutGeometry,
+  calloutRank,
+  lockFrame,
+  lockFramePath,
+  placeCallouts,
+  placeNameTags,
+  type Box,
+  type CalloutDir,
+  type CalloutTarget,
+} from "./callouts.ts";
+import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -54,13 +84,12 @@ export function rockPath(x: number, y: number, r: number, id: string): string {
 }
 
 /**
- * 画布的真实尺寸（CSS px）：ResizeObserver 量 svg 自己的盒子。星系占首页输入框下方剩下的全部空间，
- * 窗口 / 侧栏 / 右栏一变，画布跟着变，viewBox 与像素一比一（不靠 preserveAspectRatio 拉伸）。
- * 还没量到（首帧）时不画天体，免得先按错误尺寸闪一下。
+ * 画布的真实尺寸（CSS px）：ResizeObserver 量根节点自己的盒子。星系占首页输入框下方剩下的全部空间，
+ * 窗口 / 侧栏 / 右栏一变，画布跟着变，坐标与像素一比一。还没量到（首帧）时不画天体，免得先按错误尺寸闪一下。
  */
 function useBoxSize(target: RefObject<Element | null>): { width: number; height: number } | null {
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = target.current;
     if (el === null) return;
     const observer = new ResizeObserver((entries) => {
@@ -76,57 +105,44 @@ function useBoxSize(target: RefObject<Element | null>): { width: number; height:
   return size;
 }
 
+/** 时钟动画的跨度：一个没有效果的 Web Animation，只当「星系走了多少毫秒」的表（与转动层同一条时间线，暂停一起停） */
+const CLOCK_SPAN_MS = 1e12;
+
+function clockMs(clock: Animation | null): number {
+  const time = clock?.currentTime;
+  return typeof time === "number" ? time : 0;
+}
+
 /**
- * 时钟：只在 motionAllowed 时走表——每帧 requestAnimationFrame 取时间并重绘，帧与帧之间隔 FRAME_MS
- * （约 30 帧/秒）。
- * 停的条件——页面隐藏、窗口失焦、星系滚出 / 被藏出视口（IntersectionObserver）、
- * 系统要求减少动效——任何一个成立就 cancelAnimationFrame，卸载时一并清掉。
- * 现在跑不跑写在 svg 的 data-motion 上（running / paused），验收时可直接读。
+ * 公转（galaxy-motion.ts）：根节点里每个 [data-spin] 元素挂一个无限循环的 transform 动画，由合成器线程跑，React 不再每帧重绘。
+ * 停的条件——页面隐藏、窗口失焦、星系滚出 / 被藏出视口（IntersectionObserver）、系统要求减少动效——任何一个成立，
+ * 时钟与所有转动层一起 pause()，恢复时一起 play()（同一帧起步，相位不错开）。卸载时 cancel()。
+ * 现在跑不跑写在根节点的 data-motion 上（running / paused），验收时可直接读。
  */
-function useGalaxyClock(target: RefObject<SVGSVGElement | null>): number {
-  const [seconds, setSeconds] = useState(0);
-  useEffect(() => {
+function useGalaxyMotion(target: RefObject<HTMLDivElement | null>, signature: string): { running: boolean; clock: RefObject<Animation | null> } {
+  const clock = useRef<Animation | null>(null);
+  const spins = useRef<Animation[]>([]);
+  const runningRef = useRef(false);
+  const [running, setRunning] = useState(false);
+  useLayoutEffect(() => {
     const el = target.current;
     if (el === null) return;
+    const timer = new Animation(new KeyframeEffect(null, null, { duration: CLOCK_SPAN_MS }), document.timeline);
+    timer.currentTime = 0;
+    timer.pause();
+    clock.current = timer;
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const inputs: MotionInputs = {
-      hasFocus: document.hasFocus(),
-      visibilityState: document.visibilityState,
-      onScreen: true,
-      reducedMotion: media.matches,
-    };
-    // 下一帧要么在等 rAF，要么在等两帧之间的 setTimeout：只排一个，停的时候两样都清。
-    // 不每个 rAF 都接着排 rAF——120Hz 的屏上那是每秒 120 次唤醒，而画面只需 30 帧
-    let raf = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let running = false;
-    let elapsed = 0;
-    let last: number | null = null;
-    const tick = (now: number) => {
-      raf = 0;
-      elapsed = advanceClock(elapsed, last, now);
-      last = now;
-      setSeconds(elapsed / 1000);
-      timer = setTimeout(() => {
-        timer = null;
-        raf = requestAnimationFrame(tick);
-      }, FRAME_MS);
-    };
-    const stop = () => {
-      if (raf !== 0) cancelAnimationFrame(raf);
-      if (timer !== null) clearTimeout(timer);
-      raf = 0;
-      timer = null;
-    };
+    const inputs: MotionInputs = { hasFocus: document.hasFocus(), visibilityState: document.visibilityState, onScreen: true, reducedMotion: media.matches };
     const sync = () => {
       const run = motionAllowed(inputs);
-      if (run && !running) {
-        last = null;
-        raf = requestAnimationFrame(tick);
-      } else if (!run && running) {
-        stop();
+      if (run !== runningRef.current) {
+        runningRef.current = run;
+        for (const anim of [timer, ...spins.current]) {
+          if (run) anim.play();
+          else anim.pause();
+        }
+        setRunning(run);
       }
-      running = run;
       el.dataset.motion = run ? "running" : "paused";
     };
     // 与 window-activity.ts 挂同三个事件；每次都现读 hasFocus / visibilityState，不靠事件猜
@@ -148,28 +164,274 @@ function useGalaxyClock(target: RefObject<SVGSVGElement | null>): number {
     window.addEventListener("focus", onActivity);
     window.addEventListener("blur", onActivity);
     media.addEventListener("change", onMotionPref);
+    el.dataset.motion = "paused";
     sync();
     return () => {
-      stop();
-      running = false;
       observer.disconnect();
       document.removeEventListener("visibilitychange", onActivity);
       window.removeEventListener("focus", onActivity);
       window.removeEventListener("blur", onActivity);
       media.removeEventListener("change", onMotionPref);
+      for (const anim of spins.current) anim.cancel();
+      spins.current = [];
+      timer.cancel();
+      clock.current = null;
+      runningRef.current = false;
     };
   }, [target]);
-  return seconds;
+  // 几何一变（画布尺寸、轨道、会话数）就把转动层的动画重挂一遍：相位都从同一个时钟读，不跳
+  useLayoutEffect(() => {
+    const el = target.current;
+    if (el === null) return;
+    for (const anim of spins.current) anim.cancel();
+    const now = clockMs(clock.current);
+    const list: Animation[] = [];
+    for (const node of el.querySelectorAll<HTMLElement>("[data-spin]")) {
+      const from = Number(node.dataset.from);
+      const to = Number(node.dataset.to);
+      const period = Number(node.dataset.period);
+      if (!Number.isFinite(period) || period <= 0) continue;
+      const anim = node.animate([{ transform: `rotate(${from}deg)` }, { transform: `rotate(${to}deg)` }], { duration: period, iterations: Infinity, easing: "linear" });
+      anim.currentTime = now % period;
+      if (!runningRef.current) anim.pause();
+      list.push(anim);
+    }
+    spins.current = list;
+  }, [target, signature]);
+  return { running, clock };
 }
 
 /**
- * 首页 / 工作区页的星系：一颗主星、若干小得多的行星、一条会话星屑带。数据是真实的（galaxy-data.ts）。
- * 真 3D 坐标 + 透视投影 + 画家算法，画成 SVG——几何与排序都在 galaxy.ts（有测试），
- * 这里只画。颜色全部取墨色与发丝线 token（styles.css 的 .home-galaxy），不用 accent：
- * 它是这座星系的样子，不是要你点的东西。唯一的状态色是「等你」行星外的一圈细环（warning）。
+ * 行星 / 碎石块过了换层边界就从主星背后那一层挪到前面那一层（反之亦然）：每颗按到点时间排一个 setTimeout（一圈两次），
+ * 不每帧问。两层各有一份同样的 DOM，只切 visibility（不影响正在跑的合成器动画）。
+ */
+function useSides(target: RefObject<HTMLDivElement | null>, movers: readonly Mover[], clock: RefObject<Animation | null>, running: boolean, signature: string): void {
+  useLayoutEffect(() => {
+    const el = target.current;
+    if (el === null) return;
+    const timers = new Map<string, ReturnType<typeof setTimeout>>();
+    const apply = (mover: Mover) => {
+      const t = clockMs(clock.current) / 1000;
+      const far = moverFar(mover, t);
+      for (const node of el.querySelectorAll<HTMLElement>(`[data-body="${CSS.escape(mover.id)}"]`)) {
+        const show = (node.dataset.layer === "far") === far;
+        node.style.visibility = show ? "" : "hidden";
+      }
+      if (running && !mover.alwaysNear) timers.set(mover.id, setTimeout(() => apply(mover), msToNextSide(mover, t) + 20));
+    };
+    for (const mover of movers) apply(mover);
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer);
+    };
+  }, [target, movers, clock, running, signature]);
+}
+
+/**
+ * 新会话「被捕获」：第一次画之后再出现的会话 id（碎石带或碎石块里）在 CAPTURE_MS 内走一段从外缘吸进来的螺线。
+ * 动效被停（减少动效、失焦、看不见）时不演，直接出现在自己的位置。
+ */
+function useCaptures(ids: readonly string[], enabled: boolean): ReadonlySet<string> {
+  const known = useRef<Set<string> | null>(null);
+  const [active, setActive] = useState<ReadonlySet<string>>(() => new Set());
+  const key = ids.join("\n");
+  useLayoutEffect(() => {
+    const fresh = capturedIds(known.current, ids);
+    const seen = known.current ?? new Set<string>();
+    for (const id of ids) seen.add(id);
+    known.current = seen;
+    if (fresh.length === 0 || !enabled) return;
+    setActive((prev) => new Set([...prev, ...fresh]));
+    setTimeout(() => {
+      setActive((prev) => {
+        const next = new Set(prev);
+        for (const id of fresh) next.delete(id);
+        return next;
+      });
+    }, CAPTURE_MS + 120);
+  }, [key, ids, enabled]);
+  return active;
+}
+
+/** 给正在被捕获的元素挂一次性的位移动画（data-capture = 会话 id，data-cx / data-cy = 它在转动层里离最终位置的参照点） */
+function useCaptureAnimations(target: RefObject<HTMLDivElement | null>, active: ReadonlySet<string>): void {
+  const started = useRef(new Set<string>());
+  useLayoutEffect(() => {
+    const el = target.current;
+    if (el === null) return;
+    for (const id of active) {
+      if (started.current.has(id)) continue;
+      started.current.add(id);
+      for (const node of el.querySelectorAll<HTMLElement>(`[data-capture="${CSS.escape(id)}"]`)) {
+        const offsets = captureOffsets(Number(node.dataset.cx), Number(node.dataset.cy));
+        node.animate(
+          offsets.map((o) => ({ transform: `translate(${o.dx.toFixed(1)}px, ${o.dy.toFixed(1)}px)`, opacity: o.opacity })),
+          { duration: CAPTURE_MS, easing: "linear", fill: "backwards" },
+        );
+      }
+    }
+    for (const id of started.current) if (!active.has(id)) started.current.delete(id);
+  }, [target, active]);
+}
+
+/** 锁定框 / 引线 / 名字的排布（每 LIVE_FRAME_MS 重算一次，只在「朝哪边、谁有线、谁被主星挡住」变了时才重绘那一层） */
+interface OverlayPlan {
+  key: string;
+  /** 被主星挡住的天体：不画名字、锁定框、命中圈 */
+  hidden: ReadonlySet<string>;
+  callouts: ReadonlyMap<string, { dir: CalloutDir; lift: number }>;
+  /** 名字牌相对星体中心的位置 */
+  names: ReadonlyMap<string, { dx: number; dy: number; anchor: "start" | "middle" | "end" }>;
+}
+
+const EMPTY_PLAN: OverlayPlan = { key: "", hidden: new Set(), callouts: new Map(), names: new Map() };
+
+function usePlan(compute: ((tSec: number) => OverlayPlan) | null, clock: RefObject<Animation | null>, running: boolean, signature: string): OverlayPlan {
+  const [plan, setPlan] = useState<OverlayPlan>(EMPTY_PLAN);
+  const computeRef = useRef(compute);
+  computeRef.current = compute;
+  const lastKey = useRef("");
+  useLayoutEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = () => {
+      const fn = computeRef.current;
+      if (fn === null) return;
+      const next = fn(clockMs(clock.current) / 1000);
+      if (next.key !== lastKey.current) {
+        lastKey.current = next.key;
+        setPlan(next);
+      }
+      if (running) timer = setTimeout(tick, LIVE_FRAME_MS);
+    };
+    tick();
+    return () => {
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [clock, running, signature]);
+  return compute === null ? EMPTY_PLAN : plan;
+}
+
+/**
+ * 一串「跟着轨道走」的 div：轨道矩阵 · 转 −θ · 平移到 R0 ·（捕获位移）· 转 +θ · 轨道矩阵的逆 → 对 children 只是平移。
+ * 两个转动层带 data-spin，由 useGalaxyMotion 挂合成器动画。
+ */
+function OrbitChain(props: { mover: Mover; layer: "far" | "near" | "top"; children: ReactNode; className?: string }) {
+  const { mover } = props;
+  const m = orbitMatrix(mover.frame);
+  const period = periodMs(mover.omega);
+  const out = spinFrames(mover.phase, -1);
+  const back = spinFrames(mover.phase, 1);
+  return (
+    <div className={props.className === undefined ? "gx-node" : `gx-node ${props.className}`} style={{ transform: cssMatrix(m) }} data-body={props.layer === "top" ? undefined : mover.id} data-layer={props.layer}>
+      <div className="gx-node" data-spin="" data-from={out.from} data-to={out.to} data-period={period}>
+        <div className="gx-node" style={{ transform: `translateX(${R0}px)` }}>
+          <div className="gx-node" data-capture={mover.id} data-cx={R0} data-cy={0}>
+            <div className="gx-node" data-spin="" data-from={back.from} data-to={back.to} data-period={period}>
+              <div className="gx-node" style={{ transform: cssMatrix(inverseLinear(m)) }}>
+                {props.children}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 以 (0,0) 为中心的一小张 SVG（星体、名字、锁定框都按相对坐标画）；box 是内容的外接框 */
+function Local(props: { box: Box; children: ReactNode; className?: string }) {
+  const x0 = Math.floor(props.box.x0);
+  const y0 = Math.floor(props.box.y0);
+  const w = Math.ceil(props.box.x1) - x0;
+  const h = Math.ceil(props.box.y1) - y0;
+  const style: CSSProperties = { left: x0, top: y0 };
+  return (
+    <svg className={props.className === undefined ? "gx-local" : `gx-local ${props.className}`} style={style} width={w} height={h} viewBox={`${x0} ${y0} ${w} ${h}`}>
+      {props.children}
+    </svg>
+  );
+}
+
+function square(r: number): Box {
+  return { x0: -r, y0: -r, x1: r, y1: r };
+}
+
+function union(a: Box, b: Box): Box {
+  return { x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) };
+}
+
+/** 碎石带的一半（远半圈在主星之下那层、近半圈在之上那层）：轨道矩阵 · 半平面裁切 · 转 α · 一张静止的碎石 SVG */
+function BeltHalf(props: {
+  side: "far" | "near";
+  belt: Belt;
+  camera: Camera;
+  viewport: Viewport;
+  look: { px: number; alpha: number };
+  capturing: ReadonlySet<string>;
+  clickable: boolean;
+  onOpen: ((id: string) => void) | null;
+  openLabel: (title: string) => string;
+}) {
+  const frame = beltFrame(props.belt, props.camera, props.viewport);
+  const m = orbitMatrix(frame);
+  // 转动层里 1px 在屏幕上横向约 sx 像素：碎石按屏幕上的直径画（纵向被轨道矩阵压扁，像平躺在盘面上）
+  const sx = Math.max(Math.hypot(m.a, m.b), 1e-3);
+  const rho = props.look.px / sx;
+  const hit = 6 / sx;
+  const mid = (props.belt.inner + props.belt.outer) / 2;
+  const L = Math.ceil((R0 * props.belt.outer) / mid + hit + 8);
+  const points = props.belt.particles.map((particle) => ({ particle, ...dustDiskPoint(props.belt, particle.r, particle.theta0) }));
+  const still = points.filter((point) => !props.capturing.has(point.particle.id));
+  const moving = points.filter((point) => props.capturing.has(point.particle.id));
+  const period = periodMs(props.belt.omega);
+  const dot = (x: number, y: number) => `M${(x - rho).toFixed(1)} ${y.toFixed(1)}a${rho.toFixed(2)} ${rho.toFixed(2)} 0 1 0 ${(rho * 2).toFixed(2)} 0a${rho.toFixed(2)} ${rho.toFixed(2)} 0 1 0 ${(-rho * 2).toFixed(2)} 0`;
+  const half: CSSProperties = props.side === "far" ? { left: -L, top: -L, width: 2 * L, height: L } : { left: -L, top: 0, width: 2 * L, height: L };
+  const back: CSSProperties = props.side === "far" ? { left: L, top: L } : { left: L, top: 0 };
+  return (
+    <div className="gx-node" style={{ transform: cssMatrix(m) }}>
+      <div className="gx-half" style={half}>
+        <div className="gx-node" style={back}>
+          <div className="gx-node" data-spin="" data-from={0} data-to={-360} data-period={period}>
+            <svg className="gx-local" style={{ left: -L, top: -L }} width={2 * L} height={2 * L} viewBox={`${-L} ${-L} ${2 * L} ${2 * L}`}>
+              {props.clickable && props.onOpen !== null ? (
+                still.map(({ particle, x, y }) => {
+                  const label = props.openLabel(particle.title ?? "");
+                  return (
+                    <g key={particle.id} className="galaxy-dot" data-session={particle.id} onClick={() => props.onOpen?.(particle.id)} style={{ opacity: props.look.alpha }}>
+                      <title>{label}</title>
+                      <circle className="galaxy-dot-hit" cx={x} cy={y} r={hit} />
+                      <circle className="galaxy-dust" cx={x} cy={y} r={rho} />
+                    </g>
+                  );
+                })
+              ) : (
+                <path className="galaxy-dust" d={still.map(({ x, y }) => dot(x, y)).join("")} style={{ opacity: props.look.alpha }} />
+              )}
+            </svg>
+            {moving.map(({ particle, x, y }) => (
+              <div key={particle.id} className="gx-node" style={{ left: x, top: y }}>
+                <div className="gx-node" data-capture={particle.id} data-cx={x} data-cy={y}>
+                  <svg className="gx-local" style={{ left: -rho - 1, top: -rho - 1 }} width={rho * 2 + 2} height={rho * 2 + 2} viewBox={`${-rho - 1} ${-rho - 1} ${rho * 2 + 2} ${rho * 2 + 2}`}>
+                    <circle className="galaxy-dust" r={rho} style={{ opacity: props.look.alpha }} />
+                  </svg>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 首页 / 工作区页的星系：一颗主星、若干小得多的行星、一条会话碎石带。数据是真实的（galaxy-data.ts）。
+ * 几何在 galaxy.ts（有测试），公转交给合成器（galaxy-motion.ts）：这里只搭一次静止的 DOM。
+ * 颜色全部取墨色与发丝线 token（styles.css 的 .home-galaxy），不用 accent：它是这座星系的样子，不是要你点的东西。
  *
- * starDesign：这座星系的主星设计稿（星系设计面板）。给了就把主星画成面板里那颗（眼睛、星环、日冕），
- * 与侧栏头像同一个形象；不给是一颗素球。
+ * 画家顺序拆成几层（从下到上）：远半圈轨道弧 → 远半圈的碎石与天体 → 主星 → 近半圈轨道弧 → 近半圈的碎石与天体 →
+ * 锁定框 / 引线 / 名字 / 命中圈。天体过了左右两点在两层之间换（useSides）。
+ *
+ * 编排星系（fill）：每条根会话都是碎石带里的一颗碎石，带子随会话数长大（beltGrowthOf）；新会话从外缘被吸进来（useCaptures）。
  */
 export function HomeGalaxy(props: {
   spec: GalaxySpec;
@@ -179,7 +441,7 @@ export function HomeGalaxy(props: {
   emptyHint?: string;
   /**
    * 没有主星的「星际空间」（不属于任何工作区）：没有工作区就没有主智能体，也就没有主星与行星——
-   * 只画缓慢漂移的碎石，每颗是一条会话（量大了也只是更浓，余数折成「+N」）。
+   * 只画缓慢转动的碎石，每颗是一条会话。
    */
   starless?: boolean;
   /**
@@ -189,7 +451,7 @@ export function HomeGalaxy(props: {
   agents?: ReadonlyMap<string, PlanetDesign>;
   /**
    * 这座星系属于哪个工作区：给了且有 GalaxyActions（App 提供）时星系能点——碎石开会话、行星 / 主星开设计面板、
-   * 角上「另有 N 条会话」开右栏树状图（2026-11-24 设计审查 R1）。
+   * 「全部 N 条会话」（读屏 / 键盘入口）开右栏树状图。
    */
   workspaceId?: string | null;
   /** 主星的名字（读屏与悬停提示「X（主星）：在设计面板里打开」）；缺省用主星设计稿的名字 */
@@ -198,47 +460,52 @@ export function HomeGalaxy(props: {
   const t = useT();
   const actions = useGalaxyActions();
   const uid = useId().replace(/:/g, "");
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const seconds = useGalaxyClock(svgRef);
-  const size = useBoxSize(svgRef);
-  // 工作区页（fill）的碎石上限随画布面积缩放；单智能体首页的带子仍用原来的上限
-  const dustCap = props.fill === true && size !== null ? dustCapFor(size.width, size.height) : undefined;
-  const baseLayout = useMemo(
-    () => layoutGalaxy(dustCap === undefined ? props.spec : { ...props.spec, dustCap }),
-    [props.spec, dustCap],
-  );
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const size = useBoxSize(rootRef);
+  const fill = props.fill === true;
+  const starless = props.starless === true;
+  // 工作区页：每条会话都是一颗碎石（不封顶）；单智能体首页的原型带子仍封顶 DUST_CAP
+  const spec = useMemo(() => (fill ? { ...props.spec, dustCap: Number.POSITIVE_INFINITY } : props.spec), [props.spec, fill]);
+  const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {
     if (size === null || size.width < 2 || size.height < 2) return null;
-    // 相机与视口只按统一画框 + 画布尺寸定：同一块画布上三档主星同大同位，不按星系自己的外缘缩放
-    // 默认（全局首页那条带子）20° + 460 封顶，与原型一致——单智能体首页这一支一个像素都不动
-    if (props.fill !== true) {
+    // 默认（全局首页那条带子）20° + 460 封顶，与原型一致
+    if (!fill) {
       const box = galaxyBox(size.width, size.height, GALAXY_MAX);
       const camera = makeCamera(FRAME_EXTENT, CAMERA_ELEVATION_DEG);
       const viewport = frameViewport(camera, size.width, size.height, box);
-      return { camera, viewport, layout: baseLayout, minPlanetPx: 0, arcs: orbitArcs(baseLayout, camera, viewport) };
+      return { camera, viewport, layout: baseLayout, minPlanetPx: 0 };
     }
-    // 工作区页 / 右栏：屏幕安全布局（screen-safe.ts）——在屏幕坐标里排轨道，任何相位上天体都不在画面上相撞：
-    // 近侧行星让开主星，相邻两圈在短轴上留出间距，轨道放平；排不下就抬俯角，再不行少画最外一圈
+    // 工作区页 / 右栏：屏幕安全布局（screen-safe.ts）——在屏幕坐标里排轨道，任何相位上天体都不在画面上相撞
     const box = galaxyBox(size.width, size.height, GALAXY_MAX_FILL);
     const readableMax = props.agents !== undefined && props.agents.size > 0 ? AGENT_READABLE_MAX : PLANET_READABLE_MAX;
-    const safe = fitScreenSafe(dustCap === undefined ? props.spec : { ...props.spec, dustCap }, size.width, size.height, box, elevationFor(box), readableMax);
-    return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, arcs: orbitArcs(safe.layout, safe.camera, safe.viewport) };
-  }, [baseLayout, size, props.fill, props.spec, dustCap, props.agents]);
-  const layout = scene?.layout ?? baseLayout;
-  const minPlanetPx = scene?.minPlanetPx ?? 0;
-  // 工作区页 / 右栏：等你的行星不再强行画在主星前面——转到主星背后就让主星挡住（天体不得画在主星上面）
-  const drawn =
-    scene === null
-      ? []
-      : drawFrame(layout, scene.camera, scene.viewport, scene.arcs, seconds, minPlanetPx, props.starless === true ? DEBRIS_PX : DUST_PX, props.fill !== true);
-  // 星际空间：不画主星、轨道与行星，只留碎石
-  const items = props.starless === true ? drawn.filter((item) => item.kind === "dust") : drawn;
-  // 工作区页（fill）：在做工的行星画锁定框，最要紧的几颗升起引线写任务名（GalaxyCallouts，与右栏星系图共用）
-  const rankOf = useMemo(() => new Map(layout.planets.map((planet, index) => [planet.id, index])), [layout]);
-  const planetItems = items.filter((item): item is PlanetItem => item.kind === "planet");
-  const rockItems = items.filter((item): item is RockItem => item.kind === "rock");
-  const starItem = items.find((item) => item.kind === "star");
-  // 名字牌的字号跟设计系统走：挂上后量一次（同 GalaxyCallouts）
+    const safe = fitScreenSafe(spec, size.width, size.height, box, elevationFor(box), readableMax);
+    return { camera: safe.camera, viewport: safe.viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx };
+  }, [baseLayout, size, fill, spec, props.agents]);
+  const layout: GalaxyLayout = scene === null ? baseLayout : starless ? { ...scene.layout, planets: [] } : scene.layout;
+  const arcs: OrbitArc[] = useMemo(() => (scene === null || starless ? [] : orbitArcs(layout, scene.camera, scene.viewport)), [scene, layout, starless]);
+  // 一张 t = 0 的快照：主星的位置与半径、碎石块的大小（碎石 < 行星的规矩在 drawFrame 里）
+  const snapshot = useMemo(() => (scene === null ? [] : drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx, !fill)), [scene, layout, fill]);
+  const starItem = snapshot.find((item) => item.kind === "star");
+  const rockPx = snapshot.find((item): item is RockItem => item.kind === "rock")?.r ?? ROCK_PX;
+  const movers = useMemo(() => (scene === null ? [] : moversOf(layout, scene.camera, scene.viewport, scene.minPlanetPx, !fill, rockPx)), [scene, layout, fill, rockPx]);
+  const look = layout.belt === null ? null : dustLookOf(layout.belt.count, starless);
+  const ids = useMemo(() => [...layout.rocks.map((rock) => rock.id), ...(layout.belt?.particles.map((particle) => particle.id) ?? [])], [layout]);
+  const signature = useMemo(
+    () =>
+      JSON.stringify([
+        size,
+        movers.map((m) => [m.id, m.phase, m.omega, m.frame.cx, m.frame.cy, m.frame.m1x, m.frame.m2y]),
+        layout.belt === null ? null : [layout.belt.inner, layout.belt.outer, layout.belt.particles.length],
+        ids.length,
+      ]),
+    [size, movers, layout.belt, ids.length],
+  );
+  const motion = useGalaxyMotion(rootRef, signature);
+  useSides(rootRef, movers, motion.clock, motion.running, signature);
+  const capturing = useCaptures(ids, motion.running);
+  useCaptureAnimations(rootRef, capturing);
+  // 名字牌 / 锁定框的字号跟设计系统走：挂上后量一次
   const probeRef = useRef<SVGTextElement | null>(null);
   const [glyphPx, setGlyphPx] = useState(12);
   useLayoutEffect(() => {
@@ -248,228 +515,327 @@ export function HomeGalaxy(props: {
     if (Number.isFinite(px) && px > 0 && px !== glyphPx) setGlyphPx(px);
   });
   const starExtent = props.starDesign === undefined ? 1 : starExtentRatio(props.starDesign);
-  // 被主星挡住的行星（在它背后、画面上与它重叠）：不画锁定框与引线，转出来再画——框画在主星上面也是「压在主星上」
-  const visiblePlanets =
-    starItem === undefined || starItem.kind !== "star"
-      ? planetItems
-      : planetItems.filter(
-          (planet) => !(planet.depth > starItem.depth && Math.hypot(planet.x - starItem.x, planet.y - starItem.y) < starItem.r * starExtent + planet.r),
-        );
-  // 子智能体行星的名字常显；被主星挡住的不写（与锁定框同一个规矩）
   const agents = props.agents;
-  const nameTags =
-    agents === undefined || scene === null || props.fill !== true
-      ? []
-      : placeNameTags({
-          planets: visiblePlanets.map((planet) => ({ id: planet.planetId, x: planet.x, y: planet.y, r: planet.r, name: agents.get(planet.planetId)?.name ?? "" })),
-          // 碎石块按它的锁定框算：名字牌不能被框压住（ann-2 E：框压在「定盘星」身上，名字被吃掉）
-          bodies: [
-            ...planetItems.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })),
-            ...rockItems.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: lockFrame(body.r).half })),
-          ],
-          star: starItem === undefined || starItem.kind !== "star" ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent },
+  const workspaceId = props.workspaceId ?? null;
+  // 能点的星系：只有编排的工作区星系（有 App 给的去处、有工作区 id、不是星际空间）
+  const live: { actions: GalaxyActions; workspaceId: string } | null = fill && !starless && actions !== null && workspaceId !== null ? { actions, workspaceId } : null;
+  const rankOf = useMemo(() => new Map(layout.planets.map((planet, index) => [planet.id, index])), [layout]);
+  const previousCallouts = useRef(new Map<string, { dir: CalloutDir; lift: number }>());
+  // 排布：此刻每颗天体在哪（drawFrame 不带碎石带），谁被主星挡住、谁有引线、名字写哪边
+  const compute = useCallback(
+    (tSec: number): OverlayPlan => {
+      if (scene === null) return EMPTY_PLAN;
+      const items = drawFrame({ ...layout, belt: null }, scene.camera, scene.viewport, [], tSec, scene.minPlanetPx, !fill);
+      const star = items.find((item) => item.kind === "star");
+      const starDisc = star === undefined ? null : { x: star.x, y: star.y, r: star.r * starExtent };
+      const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
+      const rocks = items.filter((item): item is RockItem => item.kind === "rock");
+      const hidden = new Set<string>();
+      for (const body of [...planets, ...rocks]) {
+        const reach = body.kind === "rock" ? lockFrame(body.r).half : body.r;
+        if (starDisc !== null && star !== undefined && body.depth > star.depth && Math.hypot(body.x - starDisc.x, body.y - starDisc.y) < starDisc.r + reach) hidden.add(body.planetId);
+      }
+      const visiblePlanets = planets.filter((planet) => !hidden.has(planet.planetId));
+      const visibleRocks = rocks.filter((rock) => !hidden.has(rock.planetId));
+      const names = new Map<string, { dx: number; dy: number; anchor: "start" | "middle" | "end" }>();
+      const tags =
+        agents === undefined || !fill
+          ? []
+          : placeNameTags({
+              planets: visiblePlanets.map((planet) => ({ id: planet.planetId, x: planet.x, y: planet.y, r: planet.r, name: agents.get(planet.planetId)?.name ?? "" })),
+              bodies: [...planets.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })), ...rocks.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: lockFrame(body.r).half }))],
+              star: starDisc,
+              width: scene.viewport.width,
+              height: scene.viewport.height,
+              glyphPx,
+            });
+      for (const tag of tags) {
+        const planet = planets.find((p) => p.planetId === tag.id);
+        if (planet !== undefined) names.set(tag.id, { dx: Math.round((tag.x - planet.x) * 10) / 10, dy: Math.round((tag.y - planet.y) * 10) / 10, anchor: tag.anchor });
+      }
+      const callouts = new Map<string, { dir: CalloutDir; lift: number }>();
+      if (fill && !starless) {
+        const bodies = agents === undefined ? visiblePlanets : [...visiblePlanets.map((planet) => ({ ...planet, label: null })), ...visibleRocks];
+        const targets: CalloutTarget[] = [];
+        for (const body of bodies) {
+          if (body.state !== "waiting" && body.state !== "running") continue;
+          if (body.label === null || body.label === "") continue;
+          const title = truncateLabel(body.label);
+          targets.push({ id: body.planetId, x: body.x, y: body.y, r: body.r, state: body.state, text: body.state === "waiting" ? `${t.agents.status.waiting} · ${title}` : title, rank: calloutRank(body.state, rankOf.get(body.planetId) ?? 0) });
+        }
+        const placed = placeCallouts({
+          targets,
+          bodies: bodies.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })),
+          star: starDisc,
           width: scene.viewport.width,
           height: scene.viewport.height,
           glyphPx,
+          budget: calloutBudget(scene.viewport.width),
+          previous: previousCallouts.current,
+          reserved: tags.map((tag) => tag.box),
         });
-  // 锁定框与引线只认在做事的：子智能体行星（没有运行态）+ 在做事的碎石块
-  const calloutBodies = agents === undefined ? visiblePlanets : [...visiblePlanets.map((planet) => ({ ...planet, label: null })), ...rockItems];
-  // 能点的星系：只有编排的工作区星系（有 App 给的去处、有工作区 id、不是星际空间）
-  const workspaceId = props.workspaceId ?? null;
-  const live = props.fill === true && props.starless !== true && actions !== null && workspaceId !== null ? { actions, workspaceId } : null;
-  // 角上那一行「另有 N 条会话」：星屑带折掉的 + 这一帧没画出来的碎石块（窄画布里整圈碎石块出画时归进这一行）
-  const foldedCount = foldedCountOf(layout);
-  const foldedLine = scene === null || props.fill !== true || props.starless === true || foldedCount <= 0 ? null : t.agents.more(foldedCount);
-  const foldedBox =
-    foldedLine === null || scene === null
-      ? null
-      : { x: 12, y: scene.viewport.height - 12, w: textWidth(foldedLine, glyphPx) };
-  // 星际空间仍用星屑带旁边那个「+N」（它没有树状图可去）
-  const folded = scene === null || props.fill !== true || props.starless !== true ? null : foldedMarkAt(layout, scene.camera, scene.viewport);
+        for (const item of placed) callouts.set(item.id, { dir: item.dir, lift: item.lift });
+        previousCallouts.current = new Map(callouts);
+      }
+      const key = JSON.stringify([[...hidden].sort(), [...callouts].map(([id, c]) => `${id}:${c.dir}${c.lift}`), [...names].map(([id, n]) => `${id}:${n.anchor}`), glyphPx]);
+      return { key, hidden, callouts, names };
+    },
+    [scene, layout, fill, starless, starExtent, agents, glyphPx, rankOf, t],
+  );
+  const plan = usePlan(scene === null ? null : compute, motion.clock, motion.running, signature);
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
   const starGradient = `${uid}-star`;
-  const render = (item: DrawItem) => {
-    if (item.kind === "orbit") {
-      return <path key={item.key} className={item.expected ? "galaxy-orbit galaxy-orbit-expected" : "galaxy-orbit"} d={item.d} />;
-    }
-    if (item.kind === "dust") {
-      return <path key={item.key} className="galaxy-dust" d={item.d} style={{ opacity: item.alpha }} />;
-    }
-    if (item.kind === "rock") {
-      return <path key={item.key} className="galaxy-rock" data-rock={item.planetId} data-state={item.state} d={rockPath(item.x, item.y, item.r, item.planetId)} />;
-    }
-    if (item.kind === "star") {
-      if (props.starDesign !== undefined) {
-        return <StarBody key={item.key} design={props.starDesign} x={item.x} y={item.y} r={item.r} uid={`${uid}-sf`} />;
-      }
-      return <circle key={item.key} cx={item.x} cy={item.y} r={item.r} fill={`url(#${starGradient})`} />;
-    }
-    const lightId = `${uid}-${item.planetId}`;
-    if (props.fill === true) {
-      // 工作区页：每颗行星都是一个带两只竖胶囊眼的小天体（与设计面板同一个 BodyFigure），不再是素圆点；
-      // 子智能体行星按它的设计稿画（地表图 + 代码眼睛）
-      const agent = props.agents?.get(item.planetId);
+  const starDepth = starItem?.depth ?? 0;
+  const backArcs = arcs.filter((arc) => arc.depth > starDepth);
+  const frontArcs = arcs.filter((arc) => arc.depth <= starDepth);
+  const planetById = new Map(layout.planets.map((planet) => [planet.id, planet]));
+  const rockById = new Map(layout.rocks.map((rock) => [rock.id, rock]));
+  const clickableDust = live !== null && layout.belt !== null && layout.belt.particles.length <= DUST_CLICK_MAX;
+  const orbitPath = (arc: OrbitArc) => <path key={arc.key} className={arc.expected ? "galaxy-orbit galaxy-orbit-expected" : "galaxy-orbit"} d={arc.d} />;
+  const body = (mover: Mover, layer: "far" | "near") => {
+    if (mover.kind === "rock") {
+      const rock = rockById.get(mover.id);
       return (
-        <g
-          key={item.key}
-          className="gd-figure galaxy-planet-figure"
-          data-planet={item.planetId}
-          data-composition={item.composition}
-          data-state={item.state ?? undefined}
-          data-r={item.r.toFixed(1)}
-          transform={`translate(${item.x} ${item.y})`}
-        >
-          <BodyFigure art={bodyArt(planetFaceDesign(item.composition, agent?.surface ?? null), "planet", item.r)} uid={`${lightId}-f`} />
-        </g>
+        <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
+          <Local box={square(mover.r + 2)}>
+            <path className="galaxy-rock" data-rock={mover.id} data-state={rock?.state} d={rockPath(0, 0, mover.r, mover.id)} />
+          </Local>
+        </OrbitChain>
+      );
+    }
+    const planet = planetById.get(mover.id);
+    if (planet === undefined) return null;
+    const copyUid = `${uid}-${layer}-${mover.id}`;
+    if (fill) {
+      // 工作区页：每颗行星都是一个带两只竖胶囊眼的小天体（与设计面板同一个 BodyFigure）；子智能体行星按它的设计稿画
+      const agent = agents?.get(mover.id);
+      return (
+        <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
+          <Local box={square(mover.r * 1.6 + 2)}>
+            <g className="gd-figure galaxy-planet-figure" data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} data-r={mover.r.toFixed(1)}>
+              <BodyFigure art={bodyArt(planetFaceDesign(planet.composition, agent?.surface ?? null), "planet", mover.r)} uid={`${copyUid}-f`} />
+            </g>
+          </Local>
+        </OrbitChain>
       );
     }
     return (
-      <g key={item.key}>
-        {/* 等你的细环只留给单智能体首页的 fixture 星系；工作区页改由锁定框说（见 GalaxyCallouts） */}
-        {item.state === "waiting" && <circle className="galaxy-planet-waiting" cx={item.x} cy={item.y} r={item.r + 3} />}
-        <circle
-          className="galaxy-planet"
-          data-planet={item.planetId}
-          data-composition={item.composition}
-          data-state={item.state ?? undefined}
-          cx={item.x}
-          cy={item.y}
-          r={item.r}
-        />
-        <circle cx={item.x} cy={item.y} r={item.r} fill={`url(#${lightId})`} />
-      </g>
-    );
-  };
-  return (
-    <svg
-      ref={svgRef}
-      className="home-galaxy"
-      viewBox={size === null ? undefined : `0 0 ${size.width} ${size.height}`}
-      role="img"
-      aria-label={props.label}
-      data-planets={props.starless === true ? 0 : layout.planets.length}
-      data-rocks={props.starless === true || layout.rockOrbit === null ? 0 : layout.rocks.length}
-      data-starless={props.starless === true || undefined}
-      data-min-planet={minPlanetPx > 0 ? minPlanetPx.toFixed(1) : undefined}
-      data-hidden={layout.hidden}
-      data-sessions={layout.belt?.count ?? 0}
-    >
-      <defs>
-        <radialGradient id={starGradient} cx="50%" cy="50%" r="50%" fx="38%" fy="34%">
-          <stop offset="0%" className="galaxy-star-hi" />
-          <stop offset="100%" className="galaxy-star-lo" />
-        </radialGradient>
-        {items.map((item) =>
-          item.kind === "planet" ? (
-            <radialGradient key={item.key} id={`${uid}-${item.planetId}`} cx="50%" cy="50%" r="50%" fx={item.fx} fy={item.fy}>
-              <stop offset="0%" className="galaxy-light" stopOpacity={0.12 + 0.78 * item.lit} />
+      <OrbitChain key={`${layer}-${mover.id}`} mover={mover} layer={layer}>
+        <Local box={square(mover.r + 4)}>
+          <defs>
+            <radialGradient id={`${copyUid}-l`} cx="50%" cy="50%" r="50%" fx="38%" fy="34%">
+              <stop offset="0%" className="galaxy-light" stopOpacity={0.5} />
               <stop offset="100%" className="galaxy-light" stopOpacity={0} />
             </radialGradient>
-          ) : null,
-        )}
-      </defs>
-      {items.map(render)}
-      {/* 锁定框、引线与悬停名字画在最上层；碎石折掉的会话数收成一个「+N」 */}
-      {props.fill === true && scene !== null && props.starless !== true && (
-        <GalaxyCallouts
-          planets={calloutBodies}
-          reserved={[
-            ...nameTags.map((tag) => tag.box),
-            // 「+N」也占一块：引线标签不压它（满载右栏里两者曾叠在一起）
-            ...(foldedBox === null ? [] : [{ x0: foldedBox.x - 4, y0: foldedBox.y - glyphPx - 4, x1: foldedBox.x + foldedBox.w + 4, y1: foldedBox.y + glyphPx }]),
-          ]}
-          rankOf={rankOf}
-          star={starItem === undefined ? null : { x: starItem.x, y: starItem.y, r: starItem.r * starExtent }}
-          width={scene.viewport.width}
-          height={scene.viewport.height}
-          waitingWord={t.agents.status.waiting}
-          onActivate={live === null ? undefined : live.actions.openSession}
-          activateLabel={t.agents.openRock}
-        />
-      )}
-      {/* 主星与子智能体行星能点：一层透明命中圈叠在天体上（键盘可达，悬停 / 聚焦亮一圈细环）；被主星挡住的行星不给 */}
-      {live !== null && (
-        <g className="galaxy-targets">
-          {starItem !== undefined && starItem.kind === "star" && (
-            <GalaxyTarget
-              kind="star"
-              id="star"
-              x={starItem.x}
-              y={starItem.y}
-              r={starItem.r}
-              label={t.agents.openStar(props.starName ?? props.starDesign?.star?.name ?? props.label)}
-              onActivate={() => live.actions.openStar(live.workspaceId)}
-            />
+          </defs>
+          {/* 等你的细环只留给单智能体首页的 fixture 星系；工作区页改由锁定框说 */}
+          {planet.state === "waiting" && <circle className="galaxy-planet-waiting" r={mover.r + 3} />}
+          <circle className="galaxy-planet" data-planet={mover.id} data-composition={planet.composition} data-state={planet.state ?? undefined} r={mover.r} />
+          <circle r={mover.r} fill={`url(#${copyUid}-l)`} />
+        </Local>
+      </OrbitChain>
+    );
+  };
+  // 最上层：跟着天体走的名字、锁定框、引线与命中圈（相对星体中心画，排布见 plan）
+  const overlay = (mover: Mover) => {
+    if (plan.hidden.has(mover.id)) return null;
+    if (mover.kind === "planet") {
+      const name = agents?.get(mover.id)?.name;
+      const tag = plan.names.get(mover.id);
+      const target = live !== null && agents !== undefined;
+      if ((tag === undefined || name === undefined) && !target) return null;
+      let box = square(mover.r + 6);
+      if (tag !== undefined && name !== undefined) {
+        const w = name.length * glyphPx + 8;
+        box = union(box, { x0: tag.dx - w, y0: tag.dy - glyphPx, x1: tag.dx + w, y1: tag.dy + glyphPx });
+      }
+      const label = t.agents.openPlanet(name ?? mover.id);
+      return (
+        <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top">
+          <Local box={box}>
+            {tag !== undefined && name !== undefined && (
+              <text className="galaxy-name-text" data-planet={mover.id} x={tag.dx} y={tag.dy} textAnchor={tag.anchor} dominantBaseline="central">
+                {name}
+              </text>
+            )}
+            {target && live !== null && (
+              <GalaxyTarget kind="planet" id={mover.id} x={0} y={0} r={mover.r} label={label} onActivate={() => live.actions.openPlanet(live.workspaceId, mover.id)} />
+            )}
+          </Local>
+        </OrbitChain>
+      );
+    }
+    const rock = rockById.get(mover.id);
+    if (rock === undefined || rock.label === "") return null;
+    const callout = plan.callouts.get(mover.id);
+    const title = truncateLabel(rock.label);
+    const text = rock.state === "waiting" ? `${t.agents.status.waiting} · ${title}` : title;
+    const geo = callout === undefined ? null : calloutGeometry({ id: mover.id, x: 0, y: 0, r: mover.r, state: rock.state, text, rank: 0 }, callout.dir, callout.lift, glyphPx);
+    const frameHalf = lockFrame(mover.r).half;
+    let box = square(Math.max(frameHalf + 2, mover.r + 8));
+    if (geo !== null) box = union(box, { x0: geo.box.x0 - 4, y0: geo.box.y0 - 4, x1: geo.box.x1 + 4, y1: geo.box.y1 + 4 });
+    // 悬停名字（没有引线的那块）：写在右边
+    if (geo === null) box = union(box, { x0: 0, y0: -glyphPx, x1: mover.r + 7 + rock.label.length * glyphPx, y1: glyphPx });
+    const open = live === null ? undefined : () => live.actions.openSession(mover.id);
+    const label = t.agents.openRock(rock.label);
+    return (
+      <OrbitChain key={`top-${mover.id}`} mover={mover} layer="top">
+        <Local box={box} className="galaxy-callouts">
+          {geo !== null && <path className="galaxy-lock" data-state={rock.state} data-planet={mover.id} d={lockFramePath(0, 0, mover.r)} />}
+          {geo !== null && (
+            // 引线上的字也能点（鼠标）：与它那块碎石同一个去处；键盘焦点只落在碎石上，不重复一个 tab 位
+            <g className="galaxy-callout" data-planet={mover.id} data-state={rock.state} data-dir={geo.dir} data-link={open === undefined ? undefined : "true"} onClick={open}>
+              <path className="galaxy-callout-line" d={`M${geo.start.x.toFixed(1)} ${geo.start.y.toFixed(1)}L${geo.elbow.x.toFixed(1)} ${geo.elbow.y.toFixed(1)}L${geo.end.x.toFixed(1)} ${geo.end.y.toFixed(1)}`} />
+              <text className="galaxy-callout-text" x={geo.textX} y={geo.textY} textAnchor={geo.anchor}>
+                {text}
+              </text>
+            </g>
           )}
-          {agents !== undefined &&
-            visiblePlanets.map((planet) => {
-              const name = agents.get(planet.planetId)?.name ?? planet.planetId;
-              return (
-                <GalaxyTarget
-                  key={`target-${planet.planetId}`}
-                  kind="planet"
-                  id={planet.planetId}
-                  x={planet.x}
-                  y={planet.y}
-                  r={planet.r}
-                  label={t.agents.openPlanet(name)}
-                  onActivate={() => live.actions.openPlanet(live.workspaceId, planet.planetId)}
-                />
-              );
-            })}
-        </g>
-      )}
-      {props.fill === true && agents !== undefined && (
-        <g className="galaxy-names" data-names={nameTags.length}>
-          <text ref={probeRef} className="galaxy-name-text" x={-999} y={-999} aria-hidden="true">
-            {""}
-          </text>
-          {nameTags.map((tag) => (
-            <text key={`name-${tag.id}`} className="galaxy-name-text" data-planet={tag.id} x={tag.x} y={tag.y} textAnchor={tag.anchor} dominantBaseline="central">
-              {agents.get(tag.id)?.name}
-            </text>
-          ))}
-        </g>
-      )}
-      {hint !== null && props.emptyHint !== undefined && (
-        <text className="galaxy-empty-hint" x={hint.x} y={hint.y} textAnchor="middle" dominantBaseline="central">
-          {props.emptyHint}
-        </text>
-      )}
-      {foldedLine !== null && foldedBox !== null && (
-        // 一行看得懂的字，不是悬空的「+431」（设计审查 R9）；能点的星系里点了打开右栏树状图
-        <g
-          className="galaxy-more"
-          data-count={foldedCount}
-          {...(live === null
-            ? {}
-            : {
-                role: "button",
-                tabIndex: 0,
-                "aria-label": t.agents.foldedTip(foldedCount),
-                "data-link": "true",
-                onClick: live.actions.openTree,
-                onKeyDown: (event: KeyboardEvent<SVGGElement>) => {
-                  if (event.key !== "Enter" && event.key !== " ") return;
-                  event.preventDefault();
-                  live.actions.openTree();
-                },
-              })}
-        >
-          <title>{t.agents.foldedTip(foldedCount)}</title>
-          <rect className="galaxy-more-hit" x={foldedBox.x - 6} y={foldedBox.y - glyphPx} width={foldedBox.w + 12} height={glyphPx * 2} rx={4} />
-          <text className="galaxy-folded" x={foldedBox.x} y={foldedBox.y} textAnchor="start" dominantBaseline="central">
-            {foldedLine}
-          </text>
-        </g>
-      )}
-      {folded !== null && layout.belt !== null && (
-        <text className="galaxy-folded" x={folded.x} y={folded.y} textAnchor="start" dominantBaseline="central">
-          <title>{t.agents.foldedTip(layout.belt.folded)}</title>
-          {t.agents.more(layout.belt.folded)}
-        </text>
-      )}
+          {open !== undefined ? (
+            // 能点的碎石：一个键盘可达的按钮（role=button + tabIndex），key 按 id 稳定——它在动，焦点不丢
+            <g
+              className="galaxy-tag galaxy-target"
+              data-target="rock"
+              data-planet={mover.id}
+              role="button"
+              tabIndex={0}
+              aria-label={label}
+              onClick={open}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                open();
+              }}
+            >
+              <title>{label}</title>
+              <circle className="galaxy-hit" r={Math.max(mover.r + 7, 12)} />
+              <circle className="galaxy-target-ring" r={mover.r + 4} />
+              {geo === null && (
+                <text className="galaxy-tag-text" x={mover.r + 7} y={0} textAnchor="start" dominantBaseline="central">
+                  {title}
+                </text>
+              )}
+            </g>
+          ) : (
+            geo === null && (
+              <g className="galaxy-tag">
+                <circle className="galaxy-hit" r={mover.r + 7} />
+                <text className="galaxy-tag-text" x={mover.r + 7} y={0} textAnchor="start" dominantBaseline="central">
+                  {title}
+                </text>
+              </g>
+            )
+          )}
+        </Local>
+      </OrbitChain>
+    );
+  };
+  const width = scene?.viewport.width ?? 0;
+  const height = scene?.viewport.height ?? 0;
+  const plane = (children: ReactNode, className = "gx-plane") => (
+    <svg className={className} width={width} height={height} viewBox={`0 0 ${Math.max(width, 1)} ${Math.max(height, 1)}`}>
+      {children}
     </svg>
+  );
+  const beltHalf = (side: "far" | "near") =>
+    scene === null || layout.belt === null || look === null ? null : (
+      <BeltHalf
+        side={side}
+        belt={layout.belt}
+        camera={scene.camera}
+        viewport={scene.viewport}
+        look={look}
+        capturing={capturing}
+        clickable={clickableDust}
+        onOpen={live === null ? null : live.actions.openSession}
+        openLabel={t.agents.openRock}
+      />
+    );
+  const total = layout.belt?.count ?? 0;
+  return (
+    <div
+      ref={rootRef}
+      className="home-galaxy"
+      role={live === null ? "img" : "group"}
+      aria-label={props.label}
+      data-planets={starless ? 0 : layout.planets.length}
+      data-rocks={starless || layout.rockOrbit === null ? 0 : layout.rocks.length}
+      data-starless={starless || undefined}
+      data-min-planet={scene !== null && scene.minPlanetPx > 0 ? scene.minPlanetPx.toFixed(1) : undefined}
+      data-hidden={layout.hidden}
+      data-sessions={total}
+      data-dust={layout.belt?.particles.length ?? 0}
+      data-belt={layout.belt === null ? undefined : `${layout.belt.inner.toFixed(1)}-${layout.belt.outer.toFixed(1)}`}
+    >
+      {scene !== null && (
+        <>
+          {plane(backArcs.map(orbitPath))}
+          <div className="gx-layer">
+            {beltHalf("far")}
+            {movers.map((mover) => body(mover, "far"))}
+          </div>
+          {starItem !== undefined &&
+            !starless &&
+            plane(
+              <>
+                <defs>
+                  <radialGradient id={starGradient} cx="50%" cy="50%" r="50%" fx="38%" fy="34%">
+                    <stop offset="0%" className="galaxy-star-hi" />
+                    <stop offset="100%" className="galaxy-star-lo" />
+                  </radialGradient>
+                </defs>
+                {props.starDesign !== undefined ? (
+                  <StarBody design={props.starDesign} x={starItem.x} y={starItem.y} r={starItem.r} uid={`${uid}-sf`} />
+                ) : (
+                  <circle cx={starItem.x} cy={starItem.y} r={starItem.r} fill={`url(#${starGradient})`} />
+                )}
+              </>,
+            )}
+          {plane(frontArcs.map(orbitPath))}
+          <div className="gx-layer">
+            {beltHalf("near")}
+            {movers.map((mover) => body(mover, "near"))}
+          </div>
+          {plane(
+            <>
+              <text ref={probeRef} className="galaxy-name-text" x={-999} y={-999} aria-hidden="true">
+                {""}
+              </text>
+              {/* 主星能点：一层透明命中圈叠在天体上（键盘可达，悬停 / 聚焦亮一圈细环） */}
+              {live !== null && starItem !== undefined && (
+                <g className="galaxy-targets">
+                  <GalaxyTarget
+                    kind="star"
+                    id="star"
+                    x={starItem.x}
+                    y={starItem.y}
+                    r={starItem.r}
+                    label={t.agents.openStar(props.starName ?? props.starDesign?.star?.name ?? props.label)}
+                    onActivate={() => live.actions.openStar(live.workspaceId)}
+                  />
+                </g>
+              )}
+              {hint !== null && props.emptyHint !== undefined && (
+                <text className="galaxy-empty-hint" x={hint.x} y={hint.y} textAnchor="middle" dominantBaseline="central">
+                  {props.emptyHint}
+                </text>
+              )}
+            </>,
+            "gx-plane gx-top",
+          )}
+          {fill && !starless && <div className="gx-layer gx-top">{movers.map(overlay)}</div>}
+        </>
+      )}
+      {/*
+        「全部 N 条会话」：不占画面的入口（2026-11-24 起每条会话都画成碎石，不再有「另有 N 条」那行字）。
+        平时视觉隐藏，键盘 Tab 到它时才在左下角出现；读屏念它。碎石几百颗时单颗不可点，键盘要回旧会话就从这里去右栏树状图。
+      */}
+      {live !== null && total > 0 && (
+        <button type="button" className="galaxy-all" onClick={live.actions.openTree}>
+          {t.agents.allSessions(total)}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -482,7 +848,7 @@ export const PROTO_GALAXY_SPEC: GalaxySpec = galaxySpecOf(galaxyFixtureOf(window
 
 /**
  * 星系上一颗能点的天体（主星 / 子智能体行星）：透明命中圈 + 悬停 / 聚焦时的一圈细环。
- * role=button、tabIndex=0、Enter / 空格触发；key 按天体 id 稳定，天体每帧在动，焦点不丢。
+ * role=button、tabIndex=0、Enter / 空格触发；key 按天体 id 稳定，天体在动，焦点不丢。
  */
 function GalaxyTarget(props: { kind: "star" | "planet"; id: string; x: number; y: number; r: number; label: string; onActivate: () => void }) {
   return (

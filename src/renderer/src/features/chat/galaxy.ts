@@ -57,17 +57,34 @@ export interface RockSpec {
   child?: boolean;
 }
 
+/** 碎石带里的一条会话 */
+export interface DustSeed {
+  id: string;
+  /** 会话标题（悬停提示与读屏用）；缺席 = 没有标题 */
+  title?: string;
+}
+
 export interface GalaxySpec {
   starMass: number;
   planets: readonly PlanetSpec[];
   /** 主星连星环 / 日冕的外缘（世界单位）；缺席 = 主星半径。第一圈轨道不得压进这个外缘 */
   starExtent?: number;
-  /** 碎石颗粒数上限；缺席 = DUST_CAP。工作区页按画布面积给（面积小就少画几颗，剩下的折成「+N」） */
+  /**
+   * 碎石颗粒数上限；缺席 = DUST_CAP（单智能体首页的原型带子）。工作区页传 Infinity：每条根会话都是一颗碎石
+   * （2026-11-24 用户：「这个星系它一直在捕捉新的东西，在长大」），不再折成「另有 N 条会话」
+   */
   dustCap?: number;
-  /** 这座星系里的会话数：只决定星屑的颗粒数（封顶）与浓淡，不逐条画 */
+  /** 这座星系里的会话数：决定碎石带的宽窄（beltGrowthOf）、颗粒数与浓淡 */
   sessions: number;
+  /**
+   * 进碎石带的那些会话（新的在前）：一颗碎石 = 一条会话，同一条会话永远在同一个方位角（按 id 取），
+   * 越老越靠外圈。缺席 = 只有数（原型 fixture），按序号造假 id
+   */
+  dust?: readonly DustSeed[];
   /** 在做事的会话（单独画成碎石块，带锁定框）；它们也计在 sessions 里 */
   rocks?: readonly RockSpec[];
+  /** 碎石带内沿的下限（世界单位）：屏幕安全布局按屏幕间距算出来的；缺席 = 只按世界间距 */
+  beltInner?: number;
 }
 
 /** 主星与行星的质量区间互不重叠，且行星上限远低于主星下限 */
@@ -140,22 +157,25 @@ export interface OrbitBody {
 }
 
 export interface DustParticle {
+  /** 会话 id */
+  id: string;
+  title: string | null;
+  /** 离主星的距离（世界单位）：新的在内沿、老的在外沿 */
   r: number;
+  /** t = 0 时的方位角：按 id 取，同一条会话永远在同一处 */
   theta0: number;
-  z: number;
-  omega: number;
 }
 
 export interface Belt {
   inner: number;
   outer: number;
-  /** 真实会话数（可能远大于 particles.length） */
+  /** 真实会话数（单智能体原型带子封顶 DUST_CAP 颗，可能大于 particles.length；工作区页两者相等） */
   count: number;
-  /** 没画出来的会话数（count − 画出的颗粒数）：界面折成一个「+N」 */
-  folded: number;
   particles: DustParticle[];
-  /** 碎石带浓淡：随会话数取对数，有上限——量再大也只是「更浓」，不会更多对象 */
+  /** 碎石带浓淡：随会话数取对数，有上限 */
   alpha: number;
+  /** 碎石带整体转动的角速度（rad/s）：整条带子一起转（合成器转一个分组），不随会话数变，长大时不跳 */
+  omega: number;
 }
 
 /** 碎石块在碎石带里的位置：同一圈、等角间隔（同一个角速度，永远不互相追上） */
@@ -198,17 +218,61 @@ function hashText(text: string): number {
   return hash >>> 0;
 }
 
-/** 确定性的伪随机（mulberry32）：同一个会话数每次排出同一条碎石带，截图可复现 */
-function seeded(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let x = state;
-    x = Math.imul(x ^ (x >>> 15), x | 1);
-    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
-    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+/**
+ * 碎石带长多宽（0..1，乘 BELT_MAX_WIDTH）：随会话数取对数，几条时是窄窄一圈，BELT_FULL_AT 条时到最宽，
+ * 再多也不再变宽（只变密）。单调不减、有上限。
+ */
+export const BELT_GROWTH_MIN = 0.16;
+export const BELT_FULL_AT = 3000;
+export function beltGrowthOf(sessions: number): number {
+  if (sessions <= 0) return BELT_GROWTH_MIN;
+  return clamp(BELT_GROWTH_MIN + ((1 - BELT_GROWTH_MIN) * Math.log10(1 + sessions)) / Math.log10(1 + BELT_FULL_AT), BELT_GROWTH_MIN, 1);
+}
+
+/**
+ * 碎石带最宽多少（世界单位）。不按「内沿到画框外沿」剩多少给：屏幕安全布局把行星轨道往外推之后，
+ * 那一段常只剩 5 个单位，450 条和 3 条看不出差别（2026-11-24 实测：满载 orbita 内沿被推到 58.5）。
+ * 带子可以越过统一画框（FRAME_EXTENT）一点，最多到 BELT_OVERSHOOT 倍——那是画框四周留的边距，满载时尘埃铺到这里。
+ */
+export const BELT_MAX_WIDTH = 13;
+export const BELT_OVERSHOOT = 1.06;
+
+/** 碎石带外沿：内沿 + BELT_MAX_WIDTH × beltGrowthOf（至少 2 个单位宽），不超过 FRAME_EXTENT × BELT_OVERSHOOT */
+export function beltOuterOf(inner: number, sessions: number): number {
+  return Math.max(inner + 2, Math.min(inner + BELT_MAX_WIDTH * beltGrowthOf(sessions), FRAME_EXTENT * BELT_OVERSHOOT));
+}
+
+/** 碎石带整体的角速度：取轨道半径 BELT_SPIN_RADIUS 处的开普勒角速度（约 3 分 40 秒一圈） */
+export const BELT_SPIN_RADIUS = 56;
+export const BELT_OMEGA = angularSpeed(BELT_SPIN_RADIUS);
+
+/**
+ * 一颗碎石画多大、多浓（px、0..1）：量越大，单颗越小越淡——几条时是看得清、点得着的碎石，
+ * 几百上千条时成了尘埃（整条带子靠数量变浓）。永远小于最小的行星（PLANET_READABLE_MIN）与在做事的碎石块（ROCK_PX）。
+ * 星际空间（没有主星，碎石就是会话本身）大一档。
+ */
+export function dustLookOf(count: number, starless = false): { px: number; alpha: number } {
+  const n = Math.max(1, count);
+  const base = clamp(2.4 - 0.55 * Math.log10(n), 0.7, 2.4);
+  return {
+    px: starless ? clamp(base * 1.6, DEBRIS_PX[0], DEBRIS_PX[1]) : base,
+    alpha: clamp(0.92 - 0.17 * Math.log10(n), 0.38, 0.92),
   };
 }
+
+/** 碎石少到这个数以内，每颗都能点（打开那条会话）；再多就是尘埃，只有锁定框选中的那几块能点 */
+export const DUST_CLICK_MAX = 150;
+
+/**
+ * 新会话「被捕获」：上一次见过的会话集合（null = 第一次画，什么都不算新）→ 这一次新出现的 id。
+ * 只有新增的触发；从碎石块（在跑）落回碎石带、换顺序、删掉的都不触发。
+ */
+export function capturedIds(previous: ReadonlySet<string> | null, next: readonly string[]): string[] {
+  if (previous === null) return [];
+  return next.filter((id) => !previous.has(id));
+}
+/** 捕获动画的时长（ms） */
+export const CAPTURE_MS = 1000;
 
 export function beltAlpha(count: number): number {
   if (count <= 0) return 0;
@@ -262,22 +326,23 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   const rootRocks = rockSpecs.filter((rock) => rock.child !== true).length;
   const sessions = Math.max(0, Math.floor(spec.sessions), rootRocks);
   if (sessions > 0 || rockSpecs.length > 0) {
-    const inner = lastEdge + MIN_CLEARANCE * 2;
-    const outer = Math.max(FRAME_EXTENT, inner + 6);
-    const rand = seeded(9173);
-    const particles: DustParticle[] = [];
+    const inner = Math.max(lastEdge + MIN_CLEARANCE * 2, spec.beltInner ?? 0);
+    // 碎石带随会话数长大：宽度按对数从 BELT_GROWTH_MIN 长到整个画框外沿，几条和几千条都装得下
+    const outer = beltOuterOf(inner, sessions);
     const n = Math.min(sessions - rootRocks, Math.max(0, Math.floor(spec.dustCap ?? DUST_CAP)));
+    const seeds = spec.dust ?? [];
+    const particles: DustParticle[] = [];
     for (let i = 0; i < n; i++) {
-      const r = inner + rand() * (outer - inner);
-      particles.push({
-        r,
-        theta0: rand() * Math.PI * 2,
-        z: (rand() - 0.5) * (outer - inner) * 0.14,
-        omega: angularSpeed(r),
-      });
+      const seed = seeds[i];
+      const id = seed?.id ?? `dust-${i}`;
+      const hash = hashText(id);
+      // 越老越靠外：按「新 → 老」的名次铺满带宽，再按 id 抖一点（不排成一条线）
+      const rank = n <= 1 ? 0 : i / (n - 1);
+      const jitter = ((hash >>> 8) & 1023) / 1023 - 0.5;
+      const u = clamp(0.06 + 0.86 * rank + 0.12 * jitter, 0.02, 0.98);
+      particles.push({ id, title: seed?.title ?? null, r: inner + (outer - inner) * u, theta0: ((hash % 3600) / 3600) * Math.PI * 2 });
     }
-    // folded = 没画成星屑、也没拎成碎石块的根会话数（不含子会话：子会话不在 sessions 里）
-    belt = { inner, outer, count: sessions, folded: sessions - n - rootRocks, particles, alpha: beltAlpha(sessions) };
+    belt = { inner, outer, count: sessions, particles, alpha: beltAlpha(sessions), omega: BELT_OMEGA };
   }
   // 碎石块：等角排开，起点按第一块的 id 取（同一组会话每次排成同一个样子）
   const rockBase = rockSpecs[0] === undefined ? 0 : (hashText(rockSpecs[0].id) % 360) * DEG;
@@ -465,6 +530,74 @@ function toScreen(p: Projected, vp: Viewport): { x: number; y: number } {
   return { x: vp.cx + vp.focal * p.sx, y: vp.cy + vp.focal * p.sy };
 }
 
+/**
+ * 一圈轨道在屏幕上的样子（仿射近似）：屏幕点 = c + m1·cosθ + m2·sinθ。
+ * 为什么不逐点透视：星系改由合成器转（HomeGalaxy：CSS transform 动画作用在分组上），合成器只会做矩阵——
+ * 「矩阵 · 旋转 · 平移」能精确画出一个椭圆上匀速走的点，画不出透视下变速的点。所以轨道线、行星、碎石一律按这一个模型画，
+ * 行星永远正好压在自己的轨道线上。c、m2 取远近两个短轴端点（精确的透视投影，屏幕安全布局就在这两点上量间距），
+ * m1 取左右两点；透视带来的只是左右两点上下差几个像素。
+ */
+export interface OrbitFrame {
+  cx: number;
+  cy: number;
+  m1x: number;
+  m1y: number;
+  m2x: number;
+  m2y: number;
+}
+
+export function orbitFrame(a: number, inclination: number, node: number, camera: Camera, vp: Viewport): OrbitFrame {
+  const at = (theta: number) => toScreen(project(orbitPoint(a, inclination, node, theta), camera), vp);
+  const right = at(0);
+  const left = at(Math.PI);
+  const far = at(Math.PI / 2);
+  const near = at(-Math.PI / 2);
+  return {
+    cx: (far.x + near.x) / 2,
+    cy: (far.y + near.y) / 2,
+    m1x: (right.x - left.x) / 2,
+    m1y: (right.y - left.y) / 2,
+    m2x: (far.x - near.x) / 2,
+    m2y: (far.y - near.y) / 2,
+  };
+}
+
+/** 轨道 frame 上 θ 处的屏幕点；scale = 离主星的距离 / 这圈轨道半径（碎石带里内外沿的碎石共用中间那一圈的 frame） */
+export function framePoint(frame: OrbitFrame, theta: number, scale = 1): { x: number; y: number } {
+  const c = Math.cos(theta) * scale;
+  const s = Math.sin(theta) * scale;
+  return { x: frame.cx + frame.m1x * c + frame.m2x * s, y: frame.cy + frame.m1y * c + frame.m2y * s };
+}
+
+/** 碎石带共用的那一圈（内外沿的正中）：整条带子按它转 */
+export function beltFrame(belt: Belt, camera: Camera, vp: Viewport): OrbitFrame {
+  return orbitFrame((belt.inner + belt.outer) / 2, 0, 0, camera, vp);
+}
+
+/** 远半圈（θ ∈ (0, π)，主星背后）：画在主星之前；近半圈画在主星之后 */
+export function isFarSide(theta: number): boolean {
+  return Math.sin(theta) > 0;
+}
+
+/**
+ * 行星的屏幕半径：物理半径按「主星那么远」透视一次（不随公转变大变小——合成器只平移它），再取可读下限、等你放大。
+ * 屏幕安全布局（screen-safe.ts）与绘制用同一个数。
+ */
+export function planetPx(radius: number, waiting: boolean, camera: Camera, vp: Viewport, minPx: number): number {
+  const depth = project({ x: 0, y: 0, z: 0 }, camera).depth;
+  return Math.max((vp.focal * radius) / depth, minPx) * (waiting ? WAITING_SCALE : 1);
+}
+
+/** 碎石带里每颗碎石此刻的屏幕位置（与 HomeGalaxy 合成器转出来的同一个模型） */
+export function dustPoints(belt: Belt, camera: Camera, vp: Viewport, t: number): { id: string; x: number; y: number; far: boolean }[] {
+  const frame = beltFrame(belt, camera, vp);
+  const mid = (belt.inner + belt.outer) / 2;
+  return belt.particles.map((particle) => {
+    const theta = particle.theta0 + belt.omega * t;
+    return { id: particle.id, ...framePoint(frame, theta, particle.r / mid), far: isFarSide(theta) };
+  });
+}
+
 function round1(value: number): string {
   return (Math.round(value * 10) / 10).toString();
 }
@@ -505,11 +638,6 @@ export interface PlanetItem {
   x: number;
   y: number;
   r: number;
-  /** 受光面朝向（径向渐变焦点，0..1） */
-  fx: number;
-  fy: number;
-  /** 从相机看到的受光比例（位相）：1 = 在主星远侧、整面亮；0 = 挡在主星前、只看到背光面 */
-  lit: number;
 }
 
 /** 在做事的一块碎石（屏幕坐标）：字段名与 PlanetItem 对齐（planetId / state / label），锁定框与引线层直接认它 */
@@ -525,15 +653,7 @@ export interface RockItem {
   r: number;
 }
 
-export interface DustItem {
-  kind: "dust";
-  key: "dust-back" | "dust-front";
-  depth: number;
-  d: string;
-  alpha: number;
-}
-
-export type DrawItem = OrbitArc | StarItem | PlanetItem | DustItem | RockItem;
+export type DrawItem = OrbitArc | StarItem | PlanetItem | RockItem;
 
 /** 碎石块的屏幕半径（px）：比星屑大一圈、远小于行星——它是会话，不是天体 */
 export const ROCK_PX = 4.5;
@@ -542,36 +662,6 @@ export const ARCS_PER_ORBIT = 16;
 
 /** 等你的行星画大一档（仍远小于主星：最大的行星质量 40 也只有主星半径的一半不到） */
 export const WAITING_SCALE = 1.35;
-
-/**
- * 碎石上限随画布面积缩放（工作区页）：参考画布 1000×600 给 DUST_REF_CAP 颗，面积小就少画，
- * 夹在 [DUST_MIN_CAP, DUST_REF_CAP]——窄窗口里碎石不会散到标题与输入框边缘。
- */
-export const DUST_REF_CAP = 12;
-export const DUST_MIN_CAP = 4;
-export function dustCapFor(width: number, height: number): number {
-  const ratio = (Math.max(width, 0) * Math.max(height, 0)) / (1000 * 600);
-  return clamp(Math.round(DUST_REF_CAP * ratio), DUST_MIN_CAP, DUST_REF_CAP);
-}
-
-/** 「+N」标记的屏幕位置：碎石带外沿、近侧偏右一点（不压行星，也不压标题） */
-/**
- * 画布角上「另有 N 条会话」的 N：这座星系的根会话总数（spec.sessions，与右栏树主卡「N 条会话」同源）
- * 减去画面上已经画出来的——星屑颗粒（每颗一条根会话）与这一帧画出的根会话碎石块。
- * 碎石块那一圈整圈出画（窄画布，rockOrbit = null）时，根会话碎石块加回来；子会话碎石块从来不算。
- * 永远 0 ≤ N ≤ 总数（2026-11-24 主会话核对：窄窗曾写「另有 447」而总数只有 437——把子会话与出画碎石重复计入）。
- */
-export function foldedCountOf(layout: GalaxyLayout): number {
-  if (layout.belt === null) return 0;
-  const hiddenRootRocks = layout.rockOrbit === null ? layout.rocks.filter((rock) => rock.child !== true).length : 0;
-  return Math.max(0, layout.belt.folded + hiddenRootRocks);
-}
-
-export function foldedMarkAt(layout: GalaxyLayout, camera: Camera, vp: Viewport): { x: number; y: number } | null {
-  if (layout.belt === null || layout.belt.folded <= 0) return null;
-  const p = project(orbitPoint(layout.belt.outer, 0, 0, -0.7), camera);
-  return toScreen(p, vp);
-}
 
 /**
  * 轨道是静止的几何：每条拆成 ARCS_PER_ORBIT 段，各带自己的平均深度。分段是为了遮挡——
@@ -585,6 +675,7 @@ export function orbitArcs(layout: GalaxyLayout, camera: Camera, vp: Viewport, sa
     rings.push({ id: EXPECTED_ID, a: layout.expectedOrbit, inclination: 0, node: 0, expected: true });
   }
   for (const planet of rings) {
+    const frame = orbitFrame(planet.a, planet.inclination, planet.node, camera, vp);
     for (let k = 0; k < ARCS_PER_ORBIT; k++) {
       const from = k * span;
       let d = "";
@@ -592,7 +683,7 @@ export function orbitArcs(layout: GalaxyLayout, camera: Camera, vp: Viewport, sa
       for (let i = 0; i <= samplesPerArc; i++) {
         const theta = from + (span * i) / samplesPerArc;
         const projected = project(orbitPoint(planet.a, planet.inclination, planet.node, theta), camera);
-        const { x, y } = toScreen(projected, vp);
+        const { x, y } = framePoint(frame, theta);
         d += `${i === 0 ? "M" : "L"}${round1(x)} ${round1(y)}`;
         depthSum += projected.depth;
       }
@@ -616,15 +707,6 @@ function normalizeAngle(theta: number): number {
   return ((theta % twoPi) + twoPi) % twoPi;
 }
 
-function dustPath(points: { x: number; y: number; r: number }[]): string {
-  let d = "";
-  for (const p of points) {
-    const r = round1(p.r);
-    d += `M${round1(p.x - p.r)} ${round1(p.y)}a${r} ${r} 0 1 0 ${round1(p.r * 2)} 0a${r} ${r} 0 1 0 ${round1(-p.r * 2)} 0`;
-  }
-  return d;
-}
-
 /**
  * 某一时刻的绘制表，按深度从远到近排好（画家算法）。
  * 行星压在自己的轨道线上：与它相邻的三段自家轨道弧的排序深度不小于行星，先画；
@@ -637,8 +719,7 @@ function dustPath(points: { x: number; y: number; r: number }[]): string {
  * 只在工作区页 / 右栏星系图用（drawFrame 的 minPlanetPx）；单智能体首页的 fixture 星系不动。
  */
 export const PLANET_READABLE_MAX = 11;
-/** 星屑默认的屏幕半径区间；星际空间（没有主星，碎石 = 会话）用大一档的 DEBRIS_PX */
-export const DUST_PX = [0.6, 2.2] as const;
+/** 星际空间（没有主星，碎石 = 会话）的碎石屏幕半径区间（dustLookOf） */
 export const DEBRIS_PX = [2.4, 4.4] as const;
 export const PLANET_READABLE_MIN = 5;
 export const PLANET_READABLE_GAP = 0.36;
@@ -669,8 +750,6 @@ export function drawFrame(
   t: number,
   /** 行星屏幕半径的下限（px）：0 = 照物理半径画（单智能体首页） */
   minPlanetPx = 0,
-  /** 星屑颗粒的屏幕半径区间（px）：缺省 0.6–2.2；星际空间里碎石就是会话本身，画大一档（DEBRIS_PX） */
-  dustPx: readonly [number, number] = DUST_PX,
   /**
    * 等你的行星是否强行画在主星前面（单智能体首页的 fixture 星系沿用第二轮的做法）。工作区页 / 右栏传 false：
    * 星系规则「天体不得相撞」——转到主星背后时就让主星挡住它，不画在主星上面（屏幕安全布局保证它在近侧不碰主星）
@@ -685,20 +764,11 @@ export function drawFrame(
   const planetAngle = new Map<string, { theta: number; depth: number }>();
   for (const planet of layout.planets) {
     const theta = planet.phase + planet.omega * t;
-    const world = orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta);
-    const p = project(world, camera);
-    const s = toScreen(p, vp);
-    // 受光：主星在原点。屏幕上亮面朝主星；从相机看到多少亮面 = 「指向主星」与「指向相机」的夹角
-    const toStar = { x: -world.x, y: -world.y, z: -world.z };
-    const toCam = { x: camera.position.x - world.x, y: camera.position.y - world.y, z: camera.position.z - world.z };
-    const ls = Math.hypot(toStar.x, toStar.y, toStar.z) || 1;
-    const lc = Math.hypot(toCam.x, toCam.y, toCam.z) || 1;
-    const cosPhase = (toStar.x * toCam.x + toStar.y * toCam.y + toStar.z * toCam.z) / (ls * lc);
-    const dx = starS.x - s.x;
-    const dy = starS.y - s.y;
-    const dl = Math.hypot(dx, dy) || 1;
-    // 等你的行星：放大一档，并固定画在主星前面（再被主星挡住就等于看不见最要紧的那件事）
+    const p = project(orbitPoint(planet.orbitRadius, planet.inclination, planet.node, theta), camera);
+    const s = framePoint(orbitFrame(planet.orbitRadius, planet.inclination, planet.node, camera, vp), theta);
+    // 等你的行星：放大一档；单智能体首页固定画在主星前面（再被主星挡住就等于看不见最要紧的那件事）
     const waiting = planet.state === "waiting";
+    const depth = waiting && waitingInFront ? Math.min(p.depth, starP.depth - 1e-3) : p.depth;
     items.push({
       kind: "planet",
       key: `planet-${planet.id}`,
@@ -706,15 +776,12 @@ export function drawFrame(
       composition: planet.composition,
       state: planet.state,
       label: planet.label,
-      depth: waiting && waitingInFront ? Math.min(p.depth, starP.depth - 1e-3) : p.depth,
+      depth,
       x: s.x,
       y: s.y,
-      r: Math.max((vp.focal * planet.radius) / p.depth, minPlanetPx) * (waiting ? WAITING_SCALE : 1),
-      fx: 0.5 + (0.32 * dx) / dl,
-      fy: 0.5 + (0.32 * dy) / dl,
-      lit: (1 + cosPhase) / 2,
+      r: planetPx(planet.radius, waiting, camera, vp, minPlanetPx),
     });
-    planetAngle.set(planet.id, { theta: normalizeAngle(theta), depth: waiting && waitingInFront ? Math.min(p.depth, starP.depth - 1e-3) : p.depth });
+    planetAngle.set(planet.id, { theta: normalizeAngle(theta), depth });
   }
   const span = (Math.PI * 2) / ARCS_PER_ORBIT;
   for (const arc of arcs) {
@@ -731,44 +798,23 @@ export function drawFrame(
   if (layout.rockOrbit !== null) {
     // 碎石块永远小于行星（层级：碎石 < 行星 < 主星；2026-11-24 设计审查 R3 量到窄窗里碎石比行星大）：
     // 不超过此刻最小那颗行星的一半
-    let smallest = Number.POSITIVE_INFINITY;
-    for (const item of items) if (item.kind === "planet") smallest = Math.min(smallest, item.r);
-    const rockR = Number.isFinite(smallest) ? Math.min(ROCK_PX, smallest * 0.5) : ROCK_PX;
+    const rockR = rockPxOf(items);
     const omega = angularSpeed(layout.rockOrbit);
+    const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp);
     for (const rock of layout.rocks) {
       const theta = rock.theta0 + omega * t;
       const p = project(orbitPoint(layout.rockOrbit, 0, 0, theta), camera);
-      const s = toScreen(p, vp);
+      const s = framePoint(frame, theta);
       items.push({ kind: "rock", key: `rock-${rock.id}`, planetId: rock.id, state: rock.state, label: rock.label, depth: p.depth, x: s.x, y: s.y, r: rockR });
     }
   }
-  if (layout.belt !== null) {
-    const back: { x: number; y: number; r: number }[] = [];
-    const front: { x: number; y: number; r: number }[] = [];
-    let backDepth = 0;
-    let frontDepth = 0;
-    for (const particle of layout.belt.particles) {
-      const theta = particle.theta0 + particle.omega * t;
-      const p = project({ x: particle.r * Math.cos(theta), y: particle.r * Math.sin(theta), z: particle.z }, camera);
-      const s = toScreen(p, vp);
-      // 星屑随画布放大而变清楚（每单位像素 × 0.22，夹在 0.6–2.2px 之间），近大远小
-      const point = { x: s.x, y: s.y, r: clamp((vp.focal * 0.22 * dustPx[1]) / (2.2 * p.depth), dustPx[0], dustPx[1]) };
-      if (p.depth > starP.depth) {
-        back.push(point);
-        backDepth += p.depth;
-      } else {
-        front.push(point);
-        frontDepth += p.depth;
-      }
-    }
-    if (back.length > 0) {
-      items.push({ kind: "dust", key: "dust-back", depth: backDepth / back.length, d: dustPath(back), alpha: layout.belt.alpha });
-    }
-    if (front.length > 0) {
-      items.push({ kind: "dust", key: "dust-front", depth: frontDepth / front.length, d: dustPath(front), alpha: layout.belt.alpha });
-    }
-  }
   return items.sort((a, b) => b.depth - a.depth);
+}
+
+function rockPxOf(items: readonly DrawItem[]): number {
+  let smallest = Number.POSITIVE_INFINITY;
+  for (const item of items) if (item.kind === "planet") smallest = Math.min(smallest, item.r);
+  return Number.isFinite(smallest) ? Math.min(ROCK_PX, smallest * 0.5) : ROCK_PX;
 }
 
 /**
@@ -787,16 +833,11 @@ export function motionAllowed(inputs: MotionInputs): boolean {
   return !isWindowInactive(inputs) && inputs.onScreen && !inputs.reducedMotion;
 }
 
-/** 两次重绘之间至少隔这么久（约 30 帧/秒）：天体走得很慢，60 帧只是多一倍重合成 */
-export const FRAME_MS = 33;
-/** 一帧最多推进这么多：卡顿或后台节流后恢复时不跳一大截 */
-export const MAX_STEP_MS = 100;
-
-/** 只在跑的时候走表：暂停期间不计时，恢复后第一帧（last 为 null）不推进 */
-export function advanceClock(elapsedMs: number, lastMs: number | null, nowMs: number): number {
-  if (lastMs === null) return elapsedMs;
-  return elapsedMs + clamp(nowMs - lastMs, 0, MAX_STEP_MS);
-}
+/**
+ * 锁定框、引线、名字牌（HomeGalaxy 里唯一还由 JS 摆的东西）两次重排之间至少隔这么久（约 30 帧/秒）：
+ * 天体本身由合成器连续转，这几样只需跟上它
+ */
+export const LIVE_FRAME_MS = 33;
 
 /** 原型专用：`?galaxy=empty|typical|full` 切三档 fixture；不带参数时用 typical */
 export type GalaxyFixture = "empty" | "typical" | "full";
