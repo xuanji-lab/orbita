@@ -113,28 +113,6 @@ export function parseMix(raw: unknown): PlanetMix | undefined {
   return { seed, items };
 }
 
-const PLUGIN_SCOPE_BACK: Readonly<Record<string, MixScope>> = { 整体: "bulk", 大气: "atmosphere", 干空气: "atmosphere", 表面: "surface" };
-
-/**
- * 插件稿 compositionItems 里的元素项 → 构成项（来源记「默认」：不是用户在面板里定的）。分子 / 材料项跳过（这一版不收）。
- * 没有元素项返回 undefined（界面按成分类别给默认构成）。种子取插件稿的 seed。
- */
-export function mixFromPluginItems(items: unknown, seed: unknown): PlanetMix | undefined {
-  if (!Array.isArray(items)) return undefined;
-  const out: PlanetMixItem[] = [];
-  for (const raw of items) {
-    if (!isRecord(raw) || raw["kindKey"] !== "element" || typeof raw["id"] !== "string" || !/^[A-Z][a-z]?$/.test(raw["id"])) continue;
-    const scope = PLUGIN_SCOPE_BACK[String(raw["scope"] ?? "整体")];
-    const basis = raw["basis"];
-    if (scope === undefined || (basis !== "mass_fraction" && basis !== "volume_fraction")) continue;
-    const share = num(raw["share"]);
-    out.push({ id: raw["id"], kind: "element", scope, basis, share: share !== undefined && share >= 0 && share <= 1 ? share : null, origin: "default" });
-  }
-  if (out.length === 0) return undefined;
-  const s = num(seed);
-  return parseMix({ seed: s !== undefined && Number.isInteger(s) && s >= 0 ? s % 0x100000000 : 0, items: out });
-}
-
 /** 读回来的一颗天体（主星或一颗子智能体行星） */
 export interface PlanetBody {
   /** 主星恒为 "main"；行星是伴随文件里的 id */
@@ -155,7 +133,11 @@ export interface PlanetBody {
   elements: PlanetElements | null;
   /** 眼睛样式；没设过为 null（界面取 EYE_STYLE_DEFAULT） */
   eyeStyle: EyeStyle | null;
-  /** 行星的元素构成：伴随文件里的；没有就取插件稿的元素项；都没有为 null（界面按成分类别给默认）。主星恒为 null */
+  /**
+   * 行星的元素构成：伴随文件里的；没有为 null（界面按成分类别映射一组默认元素，半径照旧按类别算）。主星恒为 null。
+   * 不从插件稿的 compositionItems 导入：那里元素、分子、材料混在一起，单挑出元素项不是这颗星的整体构成——
+   * 拿它推密度，读一遍旧稿行星就变大（2026-11-24 实测：聆箴的 O / Co / Si 三项推出 2.58，半径 1.59 → 2.04）。
+   */
   mix: PlanetMix | null;
 }
 
@@ -316,13 +298,11 @@ export interface PluginDesignFields {
   density: number | undefined;
   /** 插件稿里的一句故事 */
   story: string | undefined;
-  /** 插件稿 compositionItems 里的元素项 */
-  mix: PlanetMix | undefined;
 }
 
 /** 从插件设计稿里取界面要的几个字段；质量只认 M⊕ 单位（别的单位当没有） */
 export function pluginDesignFields(raw: unknown): PluginDesignFields {
-  if (!isRecord(raw)) return { name: undefined, massEarth: undefined, density: undefined, story: undefined, mix: undefined };
+  if (!isRecord(raw)) return { name: undefined, massEarth: undefined, density: undefined, story: undefined };
   const mass = isRecord(raw["mass"]) ? raw["mass"] : null;
   const unit = mass === null ? undefined : str(mass["unit"]);
   const massValue = mass === null ? undefined : num(mass["value"]);
@@ -332,7 +312,6 @@ export function pluginDesignFields(raw: unknown): PluginDesignFields {
     massEarth: massValue !== undefined && massValue > 0 && (unit === undefined || unit === "M⊕") ? massValue : undefined,
     density,
     story: str(raw["story"]),
-    mix: mixFromPluginItems(raw["compositionItems"], raw["seed"]),
   };
 }
 

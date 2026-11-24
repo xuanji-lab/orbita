@@ -107,7 +107,7 @@ export class PlanetStore {
         orbit: item.orbit ?? null,
         elements: item.elements ?? null,
         eyeStyle: item.eyeStyle ?? null,
-        mix: item.mix ?? subFields.mix ?? null,
+        mix: item.mix ?? null,
       });
     }
     return { main, planets, warnings };
