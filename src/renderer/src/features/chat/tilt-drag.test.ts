@@ -73,7 +73,8 @@ describe("星系转台手势（锁 z 轴、无极）", () => {
   });
 
   test("角落提示与复位", () => {
-    assert.equal(anglesLabel({ tilt: 40.2, azimuth: 119.7 }), "40° · 120°");
+    assert.equal(anglesLabel({ tilt: 40.2, azimuth: 119.7 }), "40° · 120° · 1×");
+    assert.equal(anglesLabel({ tilt: 40, azimuth: 120 }, 1.43), "40° · 120° · 1.4×");
     assert.deepEqual(VIEW_DEFAULT, { tilt: 40, azimuth: 0 });
     assert.equal(raisedTo(15, 18), 18);
     assert.equal(raisedTo(15, 15.4), null);

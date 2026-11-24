@@ -20,9 +20,11 @@ export function useGalaxyTilt(): number {
 export interface GalaxyView {
   azimuth: number;
   turntable: boolean;
+  /** 缩放（倍，设置里的 galaxyZoom） */
+  zoom: number;
 }
 
-export const GalaxyViewContext = createContext<GalaxyView>({ azimuth: 0, turntable: true });
+export const GalaxyViewContext = createContext<GalaxyView>({ azimuth: 0, turntable: true, zoom: 1 });
 
 export function useGalaxyView(): GalaxyView {
   return useContext(GalaxyViewContext);
@@ -32,7 +34,7 @@ export function useGalaxyView(): GalaxyView {
  * 改星系视角（写设置：倾角与设置 › 外观的滑块同一个字段，方位角另一个字段）：星系空白处拖动松手、方向键、双击复位时调它。
  * 没有提供者（测试、设置页的小预览）= null，星系就不接拖动。
  */
-export type GalaxyViewSetter = (view: { tilt?: number; azimuth?: number }) => void;
+export type GalaxyViewSetter = (view: { tilt?: number; azimuth?: number; zoom?: number }) => void;
 
 export const GalaxyTiltSetterContext = createContext<GalaxyViewSetter | null>(null);
 

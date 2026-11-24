@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, t
 import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
-import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf } from "@shared/settings";
+import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, galaxyZoomOf } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
 import { usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
@@ -214,13 +214,18 @@ export function App() {
   }, []);
   /** 星系空白处拖动 / 方向键改的俯角：写同一个设置字段（设置 › 外观 › 星系倾角），重启后还在 */
   const setGalaxyTilt = useCallback(
-    (view: { tilt?: number; azimuth?: number }) =>
-      changeSettings({ ...(view.tilt === undefined ? {} : { galaxyTilt: view.tilt }), ...(view.azimuth === undefined ? {} : { galaxyAzimuth: view.azimuth }) }),
+    (view: { tilt?: number; azimuth?: number; zoom?: number }) =>
+      changeSettings({
+        ...(view.tilt === undefined ? {} : { galaxyTilt: view.tilt }),
+        ...(view.azimuth === undefined ? {} : { galaxyAzimuth: view.azimuth }),
+        ...(view.zoom === undefined ? {} : { galaxyZoom: view.zoom }),
+      }),
     [changeSettings],
   );
   const galaxyAzimuth = galaxyAzimuthOf(settings);
   const galaxyTurntable = galaxyTurntableOf(settings);
-  const galaxyView = useMemo(() => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable }), [galaxyAzimuth, galaxyTurntable]);
+  const galaxyZoom = galaxyZoomOf(settings);
+  const galaxyView = useMemo(() => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable, zoom: galaxyZoom }), [galaxyAzimuth, galaxyTurntable, galaxyZoom]);
 
   /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
   const chatImageSize = useMemo(

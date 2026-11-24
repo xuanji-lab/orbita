@@ -7680,3 +7680,55 @@ button.turn-output-from.link:hover {
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
 }
+
+/*
+ * 星系角落那一列（HomeGalaxy 的 plan.spill）：在跑 / 等你 / 最近、但这一刻拉不出引线的会话（碎石块那一圈被收掉、或引线放不下）。
+ * 左下角，字号 sm、次级墨，等你那一行左边一道 warning 细线（状态色是第二信号，第一信号是字里的「等你」）；不挡星系的拖动。
+ */
+.galaxy-spill {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  display: grid;
+  gap: var(--space-0-5);
+  max-width: min(50%, 320px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: none;
+}
+.galaxy-spill li {
+  display: flex;
+  min-width: 0;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-border-subtle);
+}
+.galaxy-spill li[data-state="waiting"] {
+  border-left-color: var(--color-warning);
+}
+.galaxy-spill li[data-state="more"] {
+  border-left-color: transparent;
+}
+.galaxy-spill-row {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-align: left;
+  pointer-events: auto;
+}
+button.galaxy-spill-row {
+  cursor: pointer;
+}
+button.galaxy-spill-row:hover {
+  color: var(--color-text-primary);
+}
+.galaxy-spill li[data-state="recent"] .galaxy-spill-row {
+  color: var(--color-text-tertiary);
+}

@@ -76,10 +76,10 @@ export function keyAngles(current: ViewAngles, key: string, turntable: boolean):
   return null;
 }
 
-/** 角落的提示：「40° · 120°」（俯角 · 方位角，整数度） */
-export function anglesLabel(view: ViewAngles): string {
+/** 角落的提示：「40° · 120° · 1.4×」（俯角 · 方位角，整数度 · 缩放，一位小数） */
+export function anglesLabel(view: ViewAngles, zoom = 1): string {
   const saved = anglesForSave(view);
-  return `${saved.tilt}° · ${saved.azimuth}°`;
+  return `${saved.tilt}° · ${saved.azimuth}° · ${Number(zoom.toFixed(1))}×`;
 }
 
 /**

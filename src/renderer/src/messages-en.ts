@@ -3897,6 +3897,8 @@ export const en = {
     openPlanet: (name: string) => `${name} (planet): open in the designer`,
     openStar: (name: string) => `${name} (main star): open in the designer`,
     tiltValue: (deg: number) => `${deg}°`,
+    spillLabel: "Sessions without a callout in this view",
+    spillMore: (n: number) => `${n} more`,
     tiltRaised: (deg: number) => `Not every sub-agent fits; raised to ${deg}° here`,
     tiltHint: "Drag on empty space to turn the galaxy: up and down tilts it, left and right spins it round the vertical axis. Arrow keys work too; double-click empty space to reset",
     tiltHintVertical: "Drag up or down on empty space, or press the up and down arrow keys, to change the galaxy tilt; double-click empty space to reset",

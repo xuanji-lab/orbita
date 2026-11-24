@@ -3662,6 +3662,8 @@ export const zh: Messages = {
     openPlanet: (name) => `${name}（行星）：在设计面板里打开`,
     openStar: (name) => `${name}（主星）：在设计面板里打开`,
     tiltValue: (deg) => `${deg}°`,
+    spillLabel: "画面里放不下引线的会话",
+    spillMore: (n: number) => `另 ${n} 条`,
     tiltRaised: (deg) => `放不下全部子智能体，这里抬到 ${deg}°`,
     tiltHint: "在空白处按住拖动转动星系：上下改倾角，左右绕竖直轴转；也可用方向键，双击空白处复位",
     tiltHintVertical: "在空白处按住上下拖动，或按上下方向键，改星系倾角；双击空白处复位",

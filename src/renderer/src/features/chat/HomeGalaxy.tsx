@@ -82,7 +82,9 @@ import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
 import { reportElevation, useGalaxyTilt, useGalaxyTiltSetter, useGalaxyView, type GalaxySurface, type GalaxyViewSetter } from "./galaxy-tilt.ts";
 import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, raisedTo, VIEW_DEFAULT, type ViewAngles } from "./tilt-drag.ts";
-import { beltSplit, liveProjection, zoomOf, type FrozenScene, type LiveProjection } from "./turntable.ts";
+import { boxesOverlap, planOverlay } from "./overlay-plan.ts";
+import { beltSplit, liveProjection, type FrozenScene, type LiveProjection } from "./turntable.ts";
+import { USER_VIEW_DEFAULT, zoomAt, type UserView } from "./galaxy.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -127,7 +129,7 @@ function useBoxSize(target: RefObject<Element | null>): { width: number; height:
  * 写的东西：每串轨道 div 的轨道矩阵与逆矩阵、行星 / 碎石块在主星前 / 后哪一层、碎石带的矩阵与远近分界、
  * 主星的位置与大小（相对 React 画的那一份做变换）、轨道弧的远近两份 path。
  */
-function applyProjection(root: HTMLElement, proj: LiveProjection, movers: readonly Mover[], tSec: number): void {
+function applyProjection(root: HTMLElement, proj: LiveProjection, movers: readonly Mover[], tSec: number, bodyScale = 1): void {
   const byId = new Map(movers.map((mover) => [mover.id, mover]));
   for (const node of root.querySelectorAll<HTMLElement>("[data-orbit]")) {
     const mover = byId.get(node.dataset.orbit ?? "");
@@ -137,7 +139,9 @@ function applyProjection(root: HTMLElement, proj: LiveProjection, movers: readon
     const m = orbitMatrix(frame);
     node.style.transform = cssMatrix(m);
     const inv = node.querySelector<HTMLElement>("[data-orbit-inv]");
-    if (inv !== null) inv.style.transform = cssMatrix(inverseLinear(m));
+    // 缩放中天体本身也跟着放大缩小（行星在 far / near 两层；名字、锁定框那一层不放大字）
+    const grow = bodyScale !== 1 && node.dataset.layer !== "top" ? ` scale(${bodyScale.toFixed(4)})` : "";
+    if (inv !== null) inv.style.transform = cssMatrix(inverseLinear(m)) + grow;
   }
   // 远近分层每帧按新相机算：主星永远画在它挡住的天体前面
   const far = new Map<string, boolean>();
@@ -202,6 +206,8 @@ const SETTLE_MS = 160;
 interface SceneNow extends FrozenScene {
   elevation: number;
   azimuth: number;
+  /** 这一份布局用的缩放与平移（scene.viewport 已经套过它） */
+  view: UserView;
 }
 
 /**
@@ -225,9 +231,16 @@ interface TurntableOptions {
   replan: () => void;
   badge: RefObject<HTMLSpanElement | null>;
   raisedText: (deg: number) => string;
+  /** 这一刻的布局对象（scene 的 useMemo）：落位只在它换了之后做 */
+  sceneId: object | null;
+  /** 用户缩放与平移（本组件的）与改它的入口 */
+  zoomView: UserView;
+  setZoomView: (view: UserView) => void;
+  /** 普通滚轮也缩放（编排页、右栏）；false = 只认双指捏合 / ⌘ / Ctrl + 滚轮（单智能体首页：普通滚轮留给页面滚动） */
+  plainWheelZooms: boolean;
 }
 
-type TurntableGesture = { pointerId: number; x: number; y: number; start: ViewAngles; active: boolean; frozen: SceneNow | null; zoom: number };
+type TurntableGesture = { pointerId: number; x: number; y: number; start: ViewAngles; active: boolean; frozen: SceneNow | null };
 
 function reducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -242,7 +255,10 @@ function useTurntable(options: TurntableOptions) {
   const raf = useRef<number | null>(null);
   const swallowClick = useRef(false);
   const lastReplan = useRef(0);
-  const settlePending = useRef(false);
+  // 落位等的那一份布局：设置 / 缩放回填后 scene 换了才落位（期间别的重渲染不算）
+  const settlePending = useRef<object | null | false>(false);
+  const wheel = useRef<{ frozen: SceneNow; start: UserView; view: UserView; timer: number | null } | null>(null);
+  const wheelRaf = useRef<number | null>(null);
   const lastStar = useRef<{ x: number; y: number; r: number } | null>(null);
   const timers = useRef<{ badge: number | null; settle: number | null }>({ badge: null, settle: null });
 
@@ -268,11 +284,11 @@ function useTurntable(options: TurntableOptions) {
     if (g === null || !g.active || g.frozen === null || root === null) return;
     const next = dragAngles(g.start, latest.current.dx, latest.current.dy, opts.current.turntable);
     view.current = next;
-    const proj = liveProjection(g.frozen, next.tilt, next.azimuth, g.zoom);
+    const proj = liveProjection(g.frozen, next.tilt, next.azimuth);
     opts.current.live.current = proj;
     lastStar.current = proj.star;
     applyProjection(root, proj, opts.current.movers.current, opts.current.clock.now() / 1000);
-    showBadge(anglesLabel(next), null, true);
+    showBadge(anglesLabel(next, opts.current.zoomView.zoom), null, true);
     const now = performance.now();
     if (now - lastReplan.current > LIVE_FRAME_MS) {
       lastReplan.current = now;
@@ -297,27 +313,99 @@ function useTurntable(options: TurntableOptions) {
       for (const node of root.querySelectorAll<SVGGElement>("[data-star-wrap]")) node.style.transition = "";
     }
     if (animate) root.classList.add("gx-settling");
-    applyProjection(root, liveProjection(scene, scene.elevation, scene.azimuth, zoomOf(scene)), opts.current.movers.current, opts.current.clock.now() / 1000);
+    applyProjection(root, liveProjection(scene, scene.elevation, scene.azimuth), opts.current.movers.current, opts.current.clock.now() / 1000);
     lastStar.current = null;
     if (timers.current.settle !== null) window.clearTimeout(timers.current.settle);
     timers.current.settle = window.setTimeout(() => root.classList.remove("gx-settling"), SETTLE_MS + 40);
     opts.current.replan();
     const saved = anglesForSave({ tilt: opts.current.setting.tilt, azimuth: opts.current.setting.azimuth });
     const raised = raisedTo(saved.tilt, scene.elevation);
-    showBadge(anglesLabel(saved), raised === null ? null : opts.current.raisedText(raised), false);
+    showBadge(anglesLabel(saved, scene.view.zoom), raised === null ? null : opts.current.raisedText(raised), false);
   };
 
   // 新的布局画好之后（设置回填 → React 按新角度跑完屏幕安全布局）落位
   const sceneNow = options.scene.current;
+  const sceneId = options.sceneId;
   useLayoutEffect(() => {
-    if (!settlePending.current || sceneNow === null) return;
+    if (settlePending.current === false || sceneNow === null || sceneId === settlePending.current) return;
     settlePending.current = false;
     settle(sceneNow);
   });
 
+  // 滚轮 / 双指缩放：以指针为中心，无极、跟手；连续滚动时冻结布局只重新投影，停下 220ms 后存盘并重排落位
+  const zoomFrame = (): void => {
+    wheelRaf.current = null;
+    const w = wheel.current;
+    const root = opts.current.root.current;
+    if (w === null || root === null) return;
+    const vp = w.frozen.viewport;
+    const ratio = w.view.zoom / w.start.zoom;
+    const viewport = { ...vp, focal: vp.focal * ratio, cx: vp.cx - w.start.panX + w.view.panX, cy: vp.cy - w.start.panY + w.view.panY };
+    const proj = liveProjection(w.frozen, w.frozen.elevation, w.frozen.azimuth, viewport);
+    opts.current.live.current = proj;
+    lastStar.current = proj.star;
+    applyProjection(root, proj, opts.current.movers.current, opts.current.clock.now() / 1000, ratio);
+    showBadge(anglesLabel({ tilt: w.frozen.elevation, azimuth: w.frozen.azimuth }, w.view.zoom), null, true);
+    opts.current.replan();
+  };
+  const endWheel = (): void => {
+    const w = wheel.current;
+    const root = opts.current.root.current;
+    wheel.current = null;
+    if (wheelRaf.current !== null) {
+      cancelAnimationFrame(wheelRaf.current);
+      wheelRaf.current = null;
+    }
+    if (w === null || root === null) return;
+    zoomFrame();
+    const zoom = Math.round(w.view.zoom * 100) / 100;
+    const next: UserView = { zoom, panX: w.view.panX, panY: w.view.panY };
+    if (!reducedMotion()) root.classList.add("gx-settling");
+    const scene = opts.current.scene.current;
+    if (next.zoom === w.start.zoom && next.panX === w.start.panX && next.panY === w.start.panY) {
+      if (scene !== null) settle(scene);
+      return;
+    }
+    settlePending.current = opts.current.sceneId;
+    opts.current.setZoomView(next);
+    if (zoom !== w.start.zoom) opts.current.commit?.({ zoom });
+  };
+  const enabled = options.commit !== null;
+  useEffect(() => {
+    const root = opts.current.root.current;
+    if (!enabled || root === null) return;
+    const onWheel = (event: WheelEvent): void => {
+      const o = opts.current;
+      const pinch = event.ctrlKey || event.metaKey;
+      // 单智能体首页：普通滚轮交给页面（星系下面还有记录可滚），只认捏合 / ⌘ / Ctrl + 滚轮
+      if (!o.plainWheelZooms && !pinch) return;
+      const scene = o.scene.current;
+      if (scene === null || gesture.current?.active === true) return;
+      event.preventDefault();
+      let w = wheel.current;
+      if (w === null) {
+        root.classList.remove("gx-settling");
+        w = { frozen: scene, start: o.zoomView, view: o.zoomView, timer: null };
+        wheel.current = w;
+      }
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
+      const factor = Math.exp(-event.deltaY * unit * (pinch ? 0.01 : 0.0015));
+      const rect = root.getBoundingClientRect();
+      const base = { cx: w.frozen.viewport.cx - w.start.panX, cy: w.frozen.viewport.cy - w.start.panY };
+      w.view = zoomAt(w.view, base, event.clientX - rect.left, event.clientY - rect.top, w.view.zoom * factor);
+      if (wheelRaf.current === null) wheelRaf.current = requestAnimationFrame(zoomFrame);
+      if (w.timer !== null) window.clearTimeout(w.timer);
+      w.timer = window.setTimeout(endWheel, 220);
+    };
+    root.addEventListener("wheel", onWheel, { passive: false });
+    return () => root.removeEventListener("wheel", onWheel);
+  }, [enabled]);
+
   useEffect(
     () => () => {
       if (raf.current !== null) cancelAnimationFrame(raf.current);
+      if (wheelRaf.current !== null) cancelAnimationFrame(wheelRaf.current);
+      if (wheel.current?.timer != null) window.clearTimeout(wheel.current.timer);
       if (timers.current.badge !== null) window.clearTimeout(timers.current.badge);
       if (timers.current.settle !== null) window.clearTimeout(timers.current.settle);
     },
@@ -325,20 +413,23 @@ function useTurntable(options: TurntableOptions) {
   );
 
   /** 写设置；角度没变（设置不会回填）就直接落位 */
-  const commitView = (next: ViewAngles, root: HTMLElement): void => {
+  const commitView = (next: ViewAngles, root: HTMLElement, resetZoom = false): void => {
     const commit = opts.current.commit;
     const saved = anglesForSave(next);
     const current = opts.current.setting;
+    const zv = opts.current.zoomView;
+    const zoomChanges = resetZoom && (zv.zoom !== 1 || zv.panX !== 0 || zv.panY !== 0);
     if (!reducedMotion()) root.classList.add("gx-settling");
     // 方向键 / 双击没有拖动帧：主星从此刻画着的位置滑过去
     const scene = opts.current.scene.current;
-    if (lastStar.current === null && scene !== null) lastStar.current = liveProjection(scene, scene.elevation, scene.azimuth, zoomOf(scene)).star;
-    if (commit === null || (saved.tilt === current.tilt && saved.azimuth === current.azimuth)) {
+    if (lastStar.current === null && scene !== null) lastStar.current = liveProjection(scene, scene.elevation, scene.azimuth).star;
+    if (commit === null || (saved.tilt === current.tilt && saved.azimuth === current.azimuth && !zoomChanges)) {
       if (scene !== null) settle(scene);
       return;
     }
-    settlePending.current = true;
-    commit(saved);
+    settlePending.current = opts.current.sceneId;
+    if (zoomChanges) opts.current.setZoomView(USER_VIEW_DEFAULT);
+    commit(resetZoom ? { ...saved, zoom: 1 } : saved);
   };
 
   const finish = (event: ReactPointerEvent<HTMLDivElement>, keep: boolean): void => {
@@ -376,7 +467,7 @@ function useTurntable(options: TurntableOptions) {
     onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => {
       swallowClick.current = false;
       if (event.button !== 0 || !event.isPrimary) return;
-      gesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, start: currentView(), active: false, frozen: null, zoom: 1 };
+      gesture.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, start: currentView(), active: false, frozen: null };
     },
     onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => {
       const g = gesture.current;
@@ -388,7 +479,6 @@ function useTurntable(options: TurntableOptions) {
         g.active = true;
         // 冻结按下这一刻的布局：拖动中只重新投影
         g.frozen = opts.current.scene.current;
-        g.zoom = g.frozen === null ? 1 : zoomOf(g.frozen);
         event.currentTarget.dataset.tiltDragging = "true";
         event.currentTarget.classList.remove("gx-settling");
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -419,15 +509,15 @@ function useTurntable(options: TurntableOptions) {
     onDoubleClick: (event: ReactMouseEvent<HTMLDivElement>) => {
       if (interactive(event.target)) return;
       event.preventDefault();
-      showBadge(anglesLabel(VIEW_DEFAULT), null, false);
-      commitView(VIEW_DEFAULT, event.currentTarget);
+      showBadge(anglesLabel(VIEW_DEFAULT, 1), null, false);
+      commitView(VIEW_DEFAULT, event.currentTarget, true);
     },
     onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.target !== event.currentTarget) return;
       const next = keyAngles(currentView(), event.key, opts.current.turntable);
       if (next === null) return;
       event.preventDefault();
-      showBadge(anglesLabel(next), null, false);
+      showBadge(anglesLabel(next, opts.current.zoomView.zoom), null, false);
       commitView(next, event.currentTarget);
     },
   };
@@ -630,16 +720,18 @@ interface OverlayPlan {
   names: ReadonlyMap<string, { dx: number; dy: number; anchor: "start" | "middle" | "end" }>;
   /** 此刻落进禁区（avoid，标题与输入框那一块）的天体：星体本身也不画（淡出），不只是不画名字 */
   masked: ReadonlySet<string>;
+  /** 在跑 / 等你 / 最近、这一刻拉不出引线（或碎石块整圈没画）的：角落那一列（overlay-plan.ts） */
+  spill: readonly CalloutTarget[];
 }
 
-const EMPTY_PLAN: OverlayPlan = { key: "", hidden: new Set(), callouts: new Map(), names: new Map(), masked: new Set() };
+const EMPTY_PLAN: OverlayPlan = { key: "", hidden: new Set(), callouts: new Map(), names: new Map(), masked: new Set(), spill: [] };
+
+/** 角落那一列最多几行 */
+const SPILL_ROWS = 4;
 
 /** 禁区与主星外缘之间至少留的空（px） */
 const SAFE_AVOID_GAP = 12;
 
-function boxesOverlap(a: Box, b: Box): boolean {
-  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-}
 
 function usePlan(compute: ((tSec: number) => OverlayPlan) | null, clock: GalaxyClock, running: boolean, signature: string): { plan: OverlayPlan; replan: () => void } {
   const [plan, setPlan] = useState<OverlayPlan>(EMPTY_PLAN);
@@ -874,6 +966,12 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const tilt = useGalaxyTilt();
   const galaxyView = useGalaxyView();
   const azimuth = galaxyView.azimuth;
+  // 缩放：设置里存的倍数 + 本组件的平移（以指针为中心缩放带出来的，不存盘）。本组件改了先在这里生效，再写设置；
+  // 别处改了设置（另一块星系、双击复位）就跟过来
+  const [zoomView, setZoomView] = useState<UserView>(() => ({ zoom: galaxyView.zoom, panX: 0, panY: 0 }));
+  useEffect(() => {
+    setZoomView((current) => (current.zoom === galaxyView.zoom ? current : galaxyView.zoom === 1 ? USER_VIEW_DEFAULT : { ...current, zoom: galaxyView.zoom }));
+  }, [galaxyView.zoom]);
   const surface = props.surface === undefined ? (props.fill === true ? "page" : "home") : props.surface;
   // 设置页的小预览（surface = null）不接拖动：那里有滑块
   const setView = useGalaxyTiltSetter();
@@ -885,7 +983,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     // fill：编排 New Task 页（星系占输入框上方整块，高度封顶放宽）；不是 fill：单智能体首页输入框下面那条带子
     const box = galaxyBox(size.width, size.height, props.fill === true ? GALAXY_MAX_FILL : GALAXY_MAX);
     const readableMax = props.agents !== undefined && props.agents.size > 0 ? AGENT_READABLE_MAX : PLANET_READABLE_MAX;
-    const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax, azimuth);
+    const safe = fitScreenSafe(spec, size.width, size.height, box, tilt, readableMax, azimuth, zoomView);
     let viewport = safe.viewport;
     const avoid = props.avoid ?? null;
     if (avoid !== null) {
@@ -896,7 +994,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       if (delta > 0) viewport = { ...viewport, cy: viewport.cy + delta };
     }
     return { camera: safe.camera, viewport, layout: safe.layout, minPlanetPx: safe.minPlanetPx, elevation: safe.elevationDeg, box, size };
-  }, [size, spec, props.agents, props.fill, tilt, azimuth, props.avoid, props.starDesign]);
+  }, [size, spec, props.agents, props.fill, tilt, azimuth, props.avoid, props.starDesign, zoomView]);
   const actualElevation = scene?.elevation ?? null;
   useLayoutEffect(() => {
     if (surface === null) return;
@@ -951,68 +1049,23 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
       const camera = liveRef.current?.camera ?? scene.camera;
       const viewport = liveRef.current?.viewport ?? scene.viewport;
       const items = drawFrame({ ...layout, belt: null }, camera, viewport, [], tSec, scene.minPlanetPx);
-      const star = items.find((item) => item.kind === "star");
-      const starDisc = star === undefined ? null : { x: star.x, y: star.y, r: star.r * starExtent };
-      const planets = items.filter((item): item is PlanetItem => item.kind === "planet");
-      const rocks = items.filter((item): item is RockItem => item.kind === "rock");
-      const hidden = new Set<string>();
-      const masked = new Set<string>();
-      const avoid = props.avoid ?? null;
-      for (const body of [...planets, ...rocks]) {
-        const reach = body.kind === "rock" ? lockFrame(body.r).half : body.r;
-        if (starDisc !== null && star !== undefined && body.depth > star.depth && Math.hypot(body.x - starDisc.x, body.y - starDisc.y) < starDisc.r + reach) hidden.add(body.planetId);
-        // 走进禁区（标题与输入框那一块）：整颗淡出，名字、框、命中圈都不画
-        if (avoid !== null && boxesOverlap(avoid, { x0: body.x - reach, y0: body.y - reach, x1: body.x + reach, y1: body.y + reach })) {
-          masked.add(body.planetId);
-          hidden.add(body.planetId);
-        }
-      }
-      const visiblePlanets = planets.filter((planet) => !hidden.has(planet.planetId));
-      const visibleRocks = rocks.filter((rock) => !hidden.has(rock.planetId));
-      const names = new Map<string, { dx: number; dy: number; anchor: "start" | "middle" | "end" }>();
-      const tags =
-        agents === undefined
-          ? []
-          : placeNameTags({
-              planets: visiblePlanets.map((planet) => ({ id: planet.planetId, x: planet.x, y: planet.y, r: planet.r, name: agents.get(planet.planetId)?.name ?? "" })),
-              bodies: [...planets.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })), ...rocks.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: lockFrame(body.r).half }))],
-              star: starDisc,
-              width: scene.viewport.width,
-              height: scene.viewport.height,
-              glyphPx,
-            });
-      for (const tag of tags) {
-        if (avoid !== null && boxesOverlap(avoid, tag.box)) continue;
-        const planet = planets.find((p) => p.planetId === tag.id);
-        if (planet !== undefined) names.set(tag.id, { dx: Math.round((tag.x - planet.x) * 10) / 10, dy: Math.round((tag.y - planet.y) * 10) / 10, anchor: tag.anchor });
-      }
-      const callouts = new Map<string, { dir: CalloutDir; lift: number }>();
-      if (!starless) {
-        const bodies = agents === undefined ? visiblePlanets : [...visiblePlanets.map((planet) => ({ ...planet, label: null })), ...visibleRocks];
-        const targets: CalloutTarget[] = [];
-        for (const body of bodies) {
-          // recent（最近但没在做事的会话，只有碎石块有）也拉引线写名字，排在在做事的后面、样式轻一档
-          if (body.state !== "waiting" && body.state !== "running" && body.state !== "recent") continue;
-          if (body.label === null || body.label === "") continue;
-          const title = truncateLabel(body.label);
-          targets.push({ id: body.planetId, x: body.x, y: body.y, r: body.r, state: body.state, text: body.state === "waiting" ? `${t.agents.status.waiting} · ${title}` : title, rank: calloutRank(body.state, rankOf.get(body.planetId) ?? 0) });
-        }
-        const placed = placeCallouts({
-          targets,
-          bodies: bodies.map((body) => ({ id: body.planetId, x: body.x, y: body.y, r: body.r })),
-          star: starDisc,
-          width: scene.viewport.width,
-          height: scene.viewport.height,
-          glyphPx,
-          budget: calloutBudget(scene.viewport.width),
-          previous: previousCallouts.current,
-          reserved: avoid === null ? tags.map((tag) => tag.box) : [...tags.map((tag) => tag.box), avoid],
-        });
-        for (const item of placed) callouts.set(item.id, { dir: item.dir, lift: item.lift });
-        previousCallouts.current = new Map(callouts);
-      }
-      const key = JSON.stringify([[...hidden].sort(), [...masked].sort(), [...callouts].map(([id, c]) => `${id}:${c.dir}${c.lift}`), [...names].map(([id, n]) => `${id}:${n.anchor}`), glyphPx]);
-      return { key, hidden, callouts, names, masked };
+      const { hidden, masked, names, callouts, spill } = planOverlay({
+        items,
+        layout,
+        starExtent,
+        agentNames: agents === undefined ? null : new Map([...agents].map(([id, design]) => [id, design.name])),
+        starless,
+        avoid: props.avoid ?? null,
+        width: scene.viewport.width,
+        height: scene.viewport.height,
+        glyphPx,
+        waitingWord: t.agents.status.waiting,
+        rankOf,
+        previous: previousCallouts.current,
+      });
+      previousCallouts.current = new Map(callouts);
+      const key = JSON.stringify([[...hidden].sort(), [...masked].sort(), [...callouts].map(([id, c]) => `${id}:${c.dir}${c.lift}`), [...names].map(([id, n]) => `${id}:${n.anchor}`), spill.map((s) => s.id), glyphPx]);
+      return { key, hidden, callouts, names, masked, spill };
     },
     [scene, layout, starless, starExtent, agents, glyphPx, rankOf, t, props.avoid],
   );
@@ -1020,7 +1073,9 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   // 转台：拖动按下时冻结的那一份（布局 + 角度），与给 applyProjection 的 movers
   const sceneRef = useRef<SceneNow | null>(null);
   sceneRef.current =
-    scene === null ? null : { camera: scene.camera, viewport: scene.viewport, layout, width: scene.size.width, height: scene.size.height, box: scene.box, elevation: scene.elevation, azimuth };
+    scene === null
+      ? null
+      : { camera: scene.camera, viewport: scene.viewport, layout, width: scene.size.width, height: scene.size.height, box: scene.box, elevation: scene.elevation, azimuth, view: zoomView };
   const moversRef = useRef<readonly Mover[]>(movers);
   moversRef.current = movers;
   const badgeRef = useRef<HTMLSpanElement | null>(null);
@@ -1036,6 +1091,10 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
     replan,
     badge: badgeRef,
     raisedText: t.agents.tiltRaised,
+    sceneId: scene,
+    zoomView,
+    setZoomView,
+    plainWheelZooms: surface !== "home",
   });
   const hint = scene === null || props.emptyHint === undefined ? null : emptyHintAt(layout, scene.camera, scene.viewport);
   const starGradient = `${uid}-star`;
@@ -1297,6 +1356,36 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
           <span className="galaxy-tilt-value" />
           <span className="galaxy-tilt-raised" hidden />
         </span>
+      )}
+      {/*
+        角落那一列：在跑 / 等你 / 最近、但这一刻在画面上拉不出引线的会话（碎石块那一圈被收掉、或引线放不下），
+        不因为视角消失（overlay-plan.ts）。最多四行，多的写「另 N 条」去树状图
+      */}
+      {plan.spill.length > 0 && (
+        <ul className="galaxy-spill" aria-label={t.agents.spillLabel}>
+          {plan.spill.slice(0, SPILL_ROWS).map((target) => (
+            <li key={target.id} data-state={target.state}>
+              {live !== null ? (
+                <button type="button" className="galaxy-spill-row" onClick={() => live.actions.openSession(target.id)} title={t.agents.openRock(target.text)}>
+                  {target.text}
+                </button>
+              ) : (
+                <span className="galaxy-spill-row">{target.text}</span>
+              )}
+            </li>
+          ))}
+          {plan.spill.length > SPILL_ROWS && (
+            <li data-state="more">
+              {live !== null ? (
+                <button type="button" className="galaxy-spill-row" onClick={live.actions.openTree}>
+                  {t.agents.spillMore(plan.spill.length - SPILL_ROWS)}
+                </button>
+              ) : (
+                <span className="galaxy-spill-row">{t.agents.spillMore(plan.spill.length - SPILL_ROWS)}</span>
+              )}
+            </li>
+          )}
+        </ul>
       )}
       {live !== null && total > 0 && (
         <button type="button" className="galaxy-all" onClick={live.actions.openTree}>
