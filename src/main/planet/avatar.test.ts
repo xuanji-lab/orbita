@@ -149,6 +149,7 @@ describe("AvatarJobs：生成", () => {
     assert.match(text, /rust-red rocky globe, no face/);
     assert.ok(text.includes(join(dir, "candidates", "r1-s1-a1.png")));
     assert.match(text, /qwen_edit/);
+    assert.match(text, /OOM、超时或不可用/);
     assert.match(text, /那份 SVG 上改/);
     const history = await readJsonFile(join(dir, "avatar-history.json"));
     const entries = history["entries"] as Record<string, unknown>[];
