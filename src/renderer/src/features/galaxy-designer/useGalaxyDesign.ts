@@ -60,7 +60,14 @@ export function usePlanetFiles(workspaces: readonly Workspace[]): void {
     readAll();
     // 插件（或用户在文件夹里）改了设计稿：窗口回到前台时再读一遍，侧栏头像与星系跟上
     window.addEventListener("focus", readAll);
-    return () => window.removeEventListener("focus", readAll);
+    // 「生成形象」挑好了一张（面板里点的，或别的窗口）：重读那座星系，侧栏头像、页头、星系、右栏星系图、面板预览同一帧换上
+    const offAvatar = api.planet.onAvatarJob(({ job }) => {
+      if (job.state === "selected" && ids.includes(job.workspaceId)) void reloadAfterSubAgentChange(job.workspaceId);
+    });
+    return () => {
+      window.removeEventListener("focus", readAll);
+      offAvatar();
+    };
     // key 已覆盖 id 与路径；workspaces 引用每次渲染都可能新建
   }, [key]);
 }
