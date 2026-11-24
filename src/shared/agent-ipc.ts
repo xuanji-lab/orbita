@@ -390,10 +390,12 @@ export const ipcChannels = {
   subAgentDelete: "subagent:delete",
   /**
    * 「生成形象」（shared/planet-avatar.ts）：给一颗天体出地表候选（幕后会话跑插件 planet-render）、读当前这一轮、
-   * 挑一张写进 planet/、取消。进度经 planetAvatarEvent 推（载荷 AvatarJobEvent，带整份状态）。
+   * 按自然语言要求以旧候选为基础改、挑一张写进 planet/、取消。历史从 planet/ 里的原子写记录与插件账本合并读回。
+   * 进度经 planetAvatarEvent 推（载荷 AvatarJobEvent，带整份状态）。
    */
   planetAvatarGenerate: "planet:avatar-generate",
   planetAvatarGet: "planet:avatar-get",
+  planetAvatarHistory: "planet:avatar-history",
   planetAvatarSelect: "planet:avatar-select",
   planetAvatarCancel: "planet:avatar-cancel",
   planetAvatarEvent: "planet:avatar-event",

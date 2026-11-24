@@ -110,6 +110,10 @@ export interface AvatarGenerateRequest extends AvatarBodyRef {
   mix?: unknown;
   /** 面板里的名字（还没写回盘时也按它出图） */
   name?: string;
+  /** 用户这一轮用自然语言写的修改要求；没有 baseCandidateId 时当作附加要求重出一组 */
+  instruction?: string;
+  /** 以哪张旧候选为基础改（插件的 r<轮>-s<位>）；缺席 = 不以某张为基础 */
+  baseCandidateId?: string;
 }
 
 export interface AvatarSelectRequest extends AvatarBodyRef {
@@ -117,6 +121,31 @@ export interface AvatarSelectRequest extends AvatarBodyRef {
 }
 
 export type AvatarJobResult = { ok: true; job: AvatarJob | null } | { ok: false; error: string };
+
+/** 历史里的一张图：image 与候选格一样是给面板看的小图；文件仍留在 planet/ 的 candidates/ 里 */
+export interface AvatarHistoryCandidate {
+  candidateId: string;
+  backend: AvatarBackend;
+  image: string | null;
+}
+
+/** 一次出图请求及其那一轮交出的图；round 为 null = 请求已记下，但插件还没跑出 plan / 没能开始 */
+export interface AvatarHistoryEntry {
+  id: string;
+  round: number | null;
+  instruction: string | null;
+  baseCandidateId: string | null;
+  startedAt: number;
+  candidates: AvatarHistoryCandidate[];
+}
+
+export interface AvatarHistory {
+  entries: AvatarHistoryEntry[];
+  /** 此刻在用的候选（从 galaxy.json 的 surface 反推，旧轮次也能认出来） */
+  selected: string | null;
+}
+
+export type AvatarHistoryResult = { ok: true; history: AvatarHistory } | { ok: false; error: string };
 
 /** 主进程 → renderer 的进度推送（同一颗天体后一次覆盖前一次） */
 export interface AvatarJobEvent {
@@ -136,12 +165,22 @@ export function isAvatarBodyRef(raw: unknown): raw is AvatarBodyRef {
 export function isAvatarGenerateRequest(raw: unknown): raw is AvatarGenerateRequest {
   if (!isAvatarBodyRef(raw) || !isRecord(raw)) return false;
   const name = raw["name"];
-  return name === undefined || (typeof name === "string" && name.length <= 200);
+  const instruction = raw["instruction"];
+  const base = raw["baseCandidateId"];
+  return (
+    (name === undefined || (typeof name === "string" && name.length <= 200)) &&
+    (instruction === undefined || (typeof instruction === "string" && instruction.trim() !== "" && instruction.length <= AVATAR_INSTRUCTION_MAX)) &&
+    (base === undefined || (typeof base === "string" && CANDIDATE_ID.test(base)))
+  );
 }
 
 export function isAvatarSelectRequest(raw: unknown): raw is AvatarSelectRequest {
-  return isAvatarBodyRef(raw) && isRecord(raw) && typeof raw["candidateId"] === "string" && /^r\d{1,4}-s\d{1,2}$/.test(raw["candidateId"]);
+  return isAvatarBodyRef(raw) && isRecord(raw) && typeof raw["candidateId"] === "string" && CANDIDATE_ID.test(raw["candidateId"]);
 }
+
+/** 自然语言修改要求的上限（够写清几件事，也避免把整篇文档塞进出图提示词） */
+export const AVATAR_INSTRUCTION_MAX = 1000;
+const CANDIDATE_ID = /^r\d{1,4}-s\d{1,2}$/;
 
 /** 一轮最多几个候选位（插件原则里的 candidates；再多面板放不下，也没有挑的意义） */
 export const AVATAR_SLOTS_MAX = 4;

@@ -298,10 +298,11 @@ export interface SubAgentDeleteRequest {
 
 export type SubAgentMutationResult = { ok: true; id: string } | { ok: false; error: string };
 
-/** agent 工具（create_sub_agent / update_sub_agent / list_sub_agents）的请求 */
+/** agent 工具（create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents）的请求 */
 export type SubAgentToolRequest =
   | { action: "create"; input: SubAgentCreateInput }
   | { action: "update"; input: SubAgentUpdateInput }
+  | { action: "reviseAvatar"; input: { id: string; instruction: string } }
   | { action: "list" };
 
 /** 列表里的一行（给模型看的） */
@@ -319,11 +320,11 @@ export type SubAgentToolOutcome =
   | { ok: true; text: string; id?: string; agents?: SubAgentListItem[] }
   | { ok: false; error: string };
 
-/** 子智能体档案变了（主进程写完广播给 renderer）：界面重读这座星系；聊天里新建的还要弹出设计面板停在它上面 */
+/** 子智能体档案变了（主进程写完广播给 renderer）：界面重读这座星系；聊天里新建或要求改形象的还要弹出设计面板停在它上面 */
 export interface SubAgentsChanged {
   workspaceId: string;
   subAgentId: string;
-  action: "created" | "updated" | "deleted";
+  action: "created" | "updated" | "deleted" | "avatar";
   source: SubAgentSource;
   /** 聊天里建的：是哪条会话建的（renderer 只在正看着这条会话时弹面板） */
   sessionId?: string;
