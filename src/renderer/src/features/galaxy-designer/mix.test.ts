@@ -16,7 +16,11 @@ import {
   reseed,
   resolveMix,
   setShare,
+  shuffleMix,
+  starDefaultMix,
+  templateMix,
   toggleElement,
+  type BodyClass,
 } from "./mix.ts";
 import type { PlanetMix } from "@shared/planet-design";
 
@@ -167,5 +171,65 @@ describe("接到质量 + 成分 → 半径这条路上", () => {
     assert.ok(near(agentInputsOf([gassy])[0]?.density ?? 0, 1.3, 0.05));
     const request = planetsWriteOf("ws-a", { ...d, planet: gassy, planets: [gassy], planetIndex: 0 });
     assert.deepEqual(request.planets[0]?.mix, mix);
+  });
+});
+
+describe("随机一版（shuffle）", () => {
+  const sums = (mix: PlanetMix): number[] => resolveMix(mix).groups.map((g) => g.items.reduce((s, item) => s + (item.share ?? 0), 0));
+  const bulkOf = (mix: PlanetMix): Map<string, number> =>
+    new Map(mix.items.filter((item) => item.scope === "bulk" && item.basis === "mass_fraction").map((item) => [item.id, item.share ?? 0]));
+
+  test("同种子同结果；每点一次换种子、换一版；种子由上一个推出来", () => {
+    const base = legacyMix("rock", 123);
+    const a = shuffleMix(base, "rock");
+    const b = shuffleMix(base, "rock");
+    assert.deepEqual(a, b);
+    const c = shuffleMix(a, "rock");
+    assert.notEqual(c.seed, a.seed);
+    assert.notDeepEqual(c.items, a.items);
+  });
+
+  test("每种天体类型的结果合理，每组合计 ≤ 100%（且主组接近 100%），值的来源都是「随机」", () => {
+    for (const cls of ["rock", "ice", "gas", "star"] as BodyClass[]) {
+      for (let seed = 1; seed <= 40; seed++) {
+        const items = templateMix(cls, seed * 7919);
+        const mix: PlanetMix = { seed, items };
+        for (const total of sums(mix)) assert.ok(total <= 1 + 1e-9 && total > 0.99, `${cls} ${seed}: ${total}`);
+        assert.ok(items.every((item) => item.origin === "random" && item.share !== null));
+        const bulk = bulkOf(mix);
+        const top = [...bulk.entries()].sort((x, y) => y[1] - x[1]).slice(0, 2).map(([id]) => id).sort();
+        if (cls === "gas" || cls === "star") assert.deepEqual(top, ["H", "He"], `${cls} 以 H、He 为主`);
+        if (cls === "rock") {
+          assert.ok(["Fe", "O"].includes(top[0] ?? "") && ["Fe", "O"].includes(top[1] ?? ""), `岩质以 O、Fe 打头：${top}`);
+          for (const id of ["Si", "Mg"]) assert.ok((bulk.get(id) ?? 0) > 0.1, `岩质有 ${id}`);
+        }
+        if (cls === "ice") {
+          assert.equal([...bulk.entries()].sort((x, y) => y[1] - x[1])[0]?.[0], "O");
+          for (const id of ["H", "C", "N"]) assert.ok((bulk.get(id) ?? 0) > 0, `冰质含 ${id}`);
+        }
+        const physics = mixPhysics(mix);
+        if (cls !== "star") assert.equal(classOfDensity(physics?.density ?? 0), cls, `${cls} 推出来的密度归回同一类`);
+      }
+    }
+  });
+
+  test("你定的值原样保留（连层与口径），其余随机；同组合计仍 ≤ 100%；按住 ⌥ 全部重来", () => {
+    let mix = legacyMix("rock", 5);
+    mix = setShare(mix, 0, 0.5); // Fe 50%，你定的
+    mix = toggleElement(mix, "Xe", "rock", 24); // 加了没定数
+    const next = shuffleMix(mix, "rock");
+    const fe = next.items.find((item) => item.id === "Fe" && item.scope === "bulk");
+    assert.deepEqual(fe, mix.items[0]);
+    assert.ok(next.items.some((item) => item.id === "Xe" && item.origin === "random" && item.share !== null), "加了没定数的元素留着、给一个随机值");
+    for (const total of sums(next)) assert.ok(total <= 1 + 1e-9);
+    assert.ok(next.items.filter((item) => item !== fe).every((item) => item.origin === "random"));
+    const all = shuffleMix(mix, "rock", "all");
+    assert.ok(all.items.every((item) => item.origin === "random"));
+    assert.ok(!all.items.some((item) => item.id === "Xe"));
+  });
+
+  test("主星默认构成以 H、He 为主", () => {
+    const top = [...bulkOf(starDefaultMix(1)).entries()].sort((x, y) => y[1] - x[1]).slice(0, 2).map(([id]) => id);
+    assert.deepEqual(top, ["H", "He"]);
   });
 });

@@ -1,5 +1,7 @@
 import { DENSITY, type Composition } from "../chat/galaxy.ts";
 import type { MixBasis, MixScope, PlanetMix, PlanetMixItem } from "@shared/planet-design";
+// 值 import 走相对路径：node --test 解析不了 @shared 别名
+import { MIX_ITEMS_MAX } from "../../../../shared/planet-design.ts";
 import { ELEMENT_BY_SYMBOL } from "./elements.ts";
 
 /**
@@ -307,4 +309,179 @@ export function colorNameOf(hint: ColorHint): ColorName {
 /** CSS 颜色（给天体底色混色用）：数据驱动的颜色，不是界面配色 */
 export function cssColorOf(hint: ColorHint): string {
   return `oklch(${hint.l.toFixed(3)} ${Math.min(hint.c, 0.2).toFixed(3)} ${hint.h.toFixed(1)})`;
+}
+
+// ── 随机一版（shuffle）────────────────────────────────────────────────
+
+/** 天体类型：行星的三类，加主星（主星以 H、He 为主） */
+export type BodyClass = Composition | "star";
+
+interface ShufflePick {
+  id: string;
+  lo: number;
+  hi: number;
+}
+
+interface TemplateGroup {
+  scope: MixScope;
+  basis: MixBasis;
+  /** 这一组出现的概率（缺席 = 一定有） */
+  chance?: number;
+  /** 几套主成分里抽一套（比如类地大气：氮氧型 / 二氧化碳型） */
+  variants: readonly (readonly ShufflePick[])[];
+  /** 再从池子里抽几个微量元素 */
+  extras?: { pool: readonly string[]; count: readonly [number, number]; lo: number; hi: number };
+}
+
+/**
+ * 每种天体「物理上说得通」的构成模板。数是示意，量级照真实天体：
+ * 岩质照地球 / 火星（整体以 Fe、O、Si、Mg 为主；大气氮氧型或二氧化碳型；表面硅酸盐与铁锈），
+ * 冰质照木卫二 / 冥王星一类（整体一半是水冰的 O、H，加碳氮与岩石核；表面冰、大气以氮为主），
+ * 气态照木星（整体与大气都以 H、He 为主，痕量 C、O、N），主星照太阳（质量分数 H ~0.73、He ~0.25、金属 ~0.02）。
+ * 抽出来的每组先按区间抽、再归一到 100%。
+ */
+export const SHUFFLE_TEMPLATES: Readonly<Record<BodyClass, readonly TemplateGroup[]>> = {
+  rock: [
+    {
+      scope: "bulk",
+      basis: "mass_fraction",
+      variants: [[{ id: "Fe", lo: 0.25, hi: 0.35 }, { id: "O", lo: 0.28, hi: 0.33 }, { id: "Si", lo: 0.13, hi: 0.18 }, { id: "Mg", lo: 0.12, hi: 0.16 }]],
+      extras: { pool: ["S", "Ni", "Ca", "Al", "Na", "K", "Ti", "Cr", "Mn", "P"], count: [2, 4], lo: 0.005, hi: 0.03 },
+    },
+    {
+      scope: "atmosphere",
+      basis: "volume_fraction",
+      chance: 0.7,
+      variants: [
+        [{ id: "N", lo: 0.7, hi: 0.8 }, { id: "O", lo: 0.15, hi: 0.22 }, { id: "Ar", lo: 0.005, hi: 0.012 }],
+        [{ id: "C", lo: 0.3, hi: 0.33 }, { id: "O", lo: 0.62, hi: 0.66 }, { id: "N", lo: 0.02, hi: 0.035 }, { id: "Ar", lo: 0.01, hi: 0.02 }],
+      ],
+    },
+    {
+      scope: "surface",
+      basis: "volume_fraction",
+      chance: 0.5,
+      variants: [[{ id: "O", lo: 0.4, hi: 0.47 }, { id: "Si", lo: 0.2, hi: 0.28 }, { id: "Fe", lo: 0.05, hi: 0.25 }, { id: "Al", lo: 0.05, hi: 0.08 }]],
+      extras: { pool: ["S", "Ca", "Mg", "Na"], count: [0, 2], lo: 0.01, hi: 0.05 },
+    },
+  ],
+  ice: [
+    {
+      scope: "bulk",
+      basis: "mass_fraction",
+      variants: [
+        [
+          { id: "O", lo: 0.45, hi: 0.58 },
+          { id: "Fe", lo: 0.1, hi: 0.15 },
+          { id: "Si", lo: 0.08, hi: 0.12 },
+          { id: "Mg", lo: 0.07, hi: 0.1 },
+          { id: "H", lo: 0.05, hi: 0.08 },
+          { id: "C", lo: 0.03, hi: 0.08 },
+          { id: "N", lo: 0.01, hi: 0.03 },
+        ],
+      ],
+    },
+    { scope: "atmosphere", basis: "volume_fraction", chance: 0.5, variants: [[{ id: "N", lo: 0.9, hi: 0.98 }, { id: "C", lo: 0.01, hi: 0.05 }]], extras: { pool: ["Ar", "Ne"], count: [0, 1], lo: 0.001, hi: 0.01 } },
+    { scope: "surface", basis: "volume_fraction", chance: 0.6, variants: [[{ id: "O", lo: 0.55, hi: 0.65 }, { id: "H", lo: 0.07, hi: 0.09 }, { id: "C", lo: 0.05, hi: 0.15 }, { id: "N", lo: 0.02, hi: 0.08 }]] },
+  ],
+  gas: [
+    {
+      scope: "bulk",
+      basis: "mass_fraction",
+      variants: [[{ id: "H", lo: 0.7, hi: 0.76 }, { id: "He", lo: 0.22, hi: 0.27 }, { id: "O", lo: 0.004, hi: 0.012 }, { id: "C", lo: 0.002, hi: 0.006 }]],
+      extras: { pool: ["N", "Ne", "S", "Fe", "Si"], count: [1, 3], lo: 0.0005, hi: 0.003 },
+    },
+    {
+      scope: "atmosphere",
+      basis: "volume_fraction",
+      variants: [[{ id: "H", lo: 0.84, hi: 0.9 }, { id: "He", lo: 0.1, hi: 0.16 }, { id: "C", lo: 0.001, hi: 0.004 }]],
+      extras: { pool: ["N", "S", "O", "Ne"], count: [0, 2], lo: 0.0001, hi: 0.0005 },
+    },
+  ],
+  star: [
+    {
+      scope: "bulk",
+      basis: "mass_fraction",
+      variants: [[{ id: "H", lo: 0.7, hi: 0.75 }, { id: "He", lo: 0.24, hi: 0.28 }, { id: "O", lo: 0.006, hi: 0.01 }, { id: "C", lo: 0.002, hi: 0.004 }]],
+      extras: { pool: ["Ne", "Fe", "N", "Si", "Mg"], count: [2, 3], lo: 0.0005, hi: 0.0015 },
+    },
+  ],
+};
+
+function round4(value: number): number {
+  return Math.floor(value * 10000) / 10000;
+}
+
+/** 按种子从模板抽一版：每组按区间抽、归一到 1（四舍到万分位后向下取，合计 ≤ 1） */
+export function templateMix(cls: BodyClass, seed: number): PlanetMixItem[] {
+  const draw = rng(seed ^ seedOf(`shuffle:${cls}`));
+  const between = (lo: number, hi: number): number => lo + (hi - lo) * draw();
+  const out: PlanetMixItem[] = [];
+  for (const group of SHUFFLE_TEMPLATES[cls]) {
+    const roll = draw();
+    if (group.chance !== undefined && roll >= group.chance) continue;
+    const variant = group.variants[Math.floor(draw() * group.variants.length)] ?? group.variants[0] ?? [];
+    const picks = variant.map((pick) => ({ id: pick.id, share: between(pick.lo, pick.hi) }));
+    if (group.extras !== undefined) {
+      const pool = group.extras.pool.filter((id) => !picks.some((pick) => pick.id === id));
+      const [min, max] = group.extras.count;
+      const n = Math.min(pool.length, min + Math.floor(draw() * (max - min + 1)));
+      for (let i = 0; i < n; i++) {
+        const at = Math.floor(draw() * pool.length);
+        const id = pool.splice(at, 1)[0];
+        if (id !== undefined) picks.push({ id, share: between(group.extras.lo, group.extras.hi) });
+      }
+    }
+    const total = picks.reduce((sum, pick) => sum + pick.share, 0);
+    for (const pick of picks) {
+      out.push({ id: pick.id, kind: "element", scope: group.scope, basis: group.basis, share: round4(pick.share / total), origin: "random" });
+    }
+  }
+  return out;
+}
+
+/**
+ * 「随机一版」：换一个种子，按天体类型的模板给一组构成，值的来源都标「随机」。
+ * - keep（默认）：你定的值（origin = user，连同它的层与口径）原样保留；模板里同组同元素的跳过；
+ *   你加了但没定数的元素留着、按种子给一个小比例；每组里随机的那些按比例缩到「100% − 你定的合计」。
+ * - all（按住 ⌥ / Alt）：全部重来，只留模板。
+ * 同一份构成 + 同一个种子 → 同一个结果（种子由上一个种子推出来，显示在面板上）。
+ */
+export function shuffleMix(mix: PlanetMix, cls: BodyClass, mode: "keep" | "all" = "keep"): PlanetMix {
+  const seed = reseed(mix).seed;
+  const template = templateMix(cls, seed);
+  if (mode === "all") return { seed, items: template.slice(0, MIX_ITEMS_MAX) };
+  const kept = mix.items.filter((item) => item.origin === "user" && item.share !== null);
+  const has = (list: readonly PlanetMixItem[], it: PlanetMixItem): boolean => list.some((x) => x.id === it.id && x.scope === it.scope && x.basis === it.basis);
+  const draw = rng(seed ^ 0x5bd1e995);
+  const extra = mix.items
+    .filter((item) => !has(kept, item) && !has(template, item))
+    .map((item): PlanetMixItem => ({ ...item, share: 0.01 + 0.07 * draw(), origin: "random" }));
+  const randoms = [...template.filter((item) => !has(kept, item)), ...extra];
+  const items: PlanetMixItem[] = [...kept];
+  const keys = new Set([...kept, ...randoms].map(groupKey));
+  for (const key of keys) {
+    const userSum = kept.filter((item) => groupKey(item) === key).reduce((sum, item) => sum + (item.share ?? 0), 0);
+    const group = randoms.filter((item) => groupKey(item) === key);
+    const sum = group.reduce((s, item) => s + (item.share ?? 0), 0);
+    const room = Math.max(0, 1 - userSum);
+    const scale = sum > 0 ? room / sum : 0;
+    for (const item of group) items.push({ ...item, share: round4((item.share ?? 0) * scale) });
+  }
+  return { seed, items: items.slice(0, MIX_ITEMS_MAX) };
+}
+
+/** 主星的默认构成（太阳的量级，质量分数） */
+export function starDefaultMix(seed: number): PlanetMix {
+  return {
+    seed,
+    items: [
+      ["H", 0.73],
+      ["He", 0.25],
+      ["O", 0.009],
+      ["C", 0.003],
+      ["Ne", 0.002],
+      ["Fe", 0.0015],
+    ].map(([id, share]) => ({ id: String(id), kind: "element" as const, scope: "bulk" as const, basis: "mass_fraction" as const, share: Number(share), origin: "default" as const })),
+  };
 }
