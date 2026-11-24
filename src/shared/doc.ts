@@ -75,10 +75,18 @@ export interface DocCreated extends DocFile {
   path: string;
 }
 
-/** `doc:list`：工作区里的 .md 文件（打开已有文档用） */
+/**
+ * `doc:list`：工作区里的文档 / 演示文稿（右栏「文档」「演示文稿」入口挑选用）。
+ * 同类里**最近改的在前**，只回 `limit` 份；缺省 `kind` = 两类都要、`limit` = DOC_LIST_LIMIT。
+ */
 export interface DocListRequest {
   sessionId: string | null;
   workspaceId: string | null;
+  /** 只要这一类（先按类筛、再取前 limit 份——不会被另一类占满名额） */
+  kind?: DocKind;
+  limit?: number;
+  /** 面板记着的「上次打开的那份」：回执里说它还在不在（它可能比 limit 份里最老的那份还老，列表里看不出来） */
+  remembered?: string;
 }
 
 export interface DocListEntry {
@@ -91,8 +99,20 @@ export interface DocListEntry {
   modifiedAt: number;
 }
 
+export interface DocListing {
+  /** 「新建」会放进的目录（工作区根，realpath 之后——新建回执里的 path 就在它下面）；工作区目录不在 = null */
+  root: string | null;
+  entries: DocListEntry[];
+  /** 同类里还有更早的没列出来 */
+  more: boolean;
+  /** 请求里的 `remembered` 还在、是这一类、在可写根之内 */
+  rememberedExists: boolean;
+}
+
 /** 列表的体量闸：工作区里 .md 再多也只回这么多（最近改的在前） */
 export const DOC_LIST_LIMIT = 200;
+/** 右栏入口的挑选列表只露最近这么多份，其余去文件面板找 */
+export const DOC_PICKER_LIMIT = 8;
 /** 列表扫描的目录深度（工作区根 = 0） */
 export const DOC_LIST_DEPTH = 3;
 
