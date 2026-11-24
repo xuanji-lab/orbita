@@ -41,6 +41,7 @@ import {
   scrollIntentDirection,
   type FollowTracker,
 } from "./scroll-follow.ts";
+import { createScrollMemory, decideRestore, positionToRecord } from "./scroll-memory.ts";
 // 历史段 / 实时尾段的切分与派生复用（纯模块，可与整段一次性计算等价）
 import { deriveHistorySegment, type HistoryCache } from "./history-segment.ts";
 import { splitAtLastUser } from "./transcript-split.ts";
@@ -708,6 +709,9 @@ interface HistoryVirtualController {
   scrollTopForAnchor(key: string, offsetTop: number): number | null;
 }
 
+/** 各会话离开时的阅读位置（仅内存，重启不保留；见 scroll-memory.ts） */
+const scrollMemory = createScrollMemory();
+
 function ChatViewBody(props: {
   /** 有文件正拖在这个面板上方：输入框亮起落点虚线（拖放本身由外层 ChatView 接） */
   dropActive?: boolean;
@@ -944,6 +948,12 @@ function ChatViewBody(props: {
   const historyControllerRef = useRef<HistoryVirtualController | null>(null);
   /** 前插锚点落定窗口：窗口内虚拟器的逐行补偿关闭，由按 key 的重算统一接管 */
   const pageSettleRef = useRef<{ key: string; offsetTop: number; until: number } | null>(null);
+  /** 切回会话时要恢复的行还不在已加载窗口：翻页找它（attemptedAt = 上次翻页发出时的 olderPages） */
+  const restorePendingRef = useRef<{
+    startPages: number;
+    attemptedAt: number;
+    sawLoading: boolean;
+  } | null>(null);
 
   // 跟随态（Latest | Reading）：显式状态机在 scroll-follow.ts。只有用户意图窗口内的
   // 滚动能改状态；离底后任何程序化贴底 / 测高 / 内容长高都不会把 Reading 拉回底部。
@@ -1047,6 +1057,15 @@ function ChatViewBody(props: {
       );
     }
     syncScrollToEnd();
+    // 记阅读位置：恢复定位还没落定时不记（此刻的 scrollTop 不是用户读到的位置）
+    if (el !== null && openId !== "" && restorePendingRef.current === null) {
+      const next = positionToRecord(
+        isFollowing(followTrackerRef.current),
+        historyControllerRef.current?.captureAnchor(el.scrollTop) ?? null,
+      );
+      if (next === null) scrollMemory.forget(openId);
+      else scrollMemory.record(openId, next);
+    }
     // 触顶就拉更早的一页（源侧分页）。**先记滚动几何再发请求**：回执并进窗口后
     // 靠它把 scrollTop 补回来（见下面的锚定 effect）。守卫在这里做——`loadOlder`
     // 自己也会 no-op，但锚点不能为一个没发出去的请求留着（那会把下一次真拉回来的
@@ -1210,19 +1229,95 @@ function ChatViewBody(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [homeActive]);
 
-  // 打开/切换会话无条件跳到底并恢复跟随：后台会话的事件一直进自己的槽，切回时转录已是最新
-  useLayoutEffect(() => {
+  // 打开/切换会话：记的是「在底部」或没有记录 → 跳到底并恢复跟随（后台会话的事件一直进自己的槽，
+  // 切回时转录已是最新）；记的是某一行 → 回到那一行那个偏移、不跟随（用户读长回复是从上往下读的）。
+  // 行不在已加载的页里先翻页（见下面的 pending effect），找不到再跳底。
+  const pinToBottomNow = () => {
     forceFollowLatest(followTrackerRef.current);
-    // 换会话即作废分页锚点：在途回执并的是**旧会话**的窗口，拿它去补新会话的
-    // scrollTop 就是错位（锚点里存的是旧会话的 scrollHeight）
-    olderAnchorRef.current = null;
     const el = scrollRef.current;
     if (el !== null) {
       el.scrollTop = el.scrollHeight;
       notePinnedScroll(followTrackerRef.current, followNow());
     }
+  };
+  const resolveRestore = (pagesLoaded: number) => {
+    const controller = historyControllerRef.current;
+    return decideRestore(
+      scrollMemory.get(openId),
+      (key, offsetTop) => controller?.scrollTopForAnchor(key, offsetTop) ?? null,
+      session.hasMoreHistory,
+      pagesLoaded,
+    );
+  };
+  const applyRestoreScroll = (top: number, key: string, offsetTop: number) => {
+    const el = scrollRef.current;
+    if (el === null) return;
+    forceReading(followTrackerRef.current);
+    // 行高从估值变实测会逐帧改 start：复用前插锚点的落定窗口按同一 key 反复校正
+    pageSettleRef.current = { key, offsetTop, until: followNow() + 1500 };
+    el.scrollTop = top;
+    notePinnedScroll(followTrackerRef.current, followNow());
+  };
+  useLayoutEffect(() => {
+    // 换会话即作废分页锚点：在途回执并的是**旧会话**的窗口，拿它去补新会话的
+    // scrollTop 就是错位（锚点里存的是旧会话的 scrollHeight）
+    olderAnchorRef.current = null;
+    pageSettleRef.current = null;
+    restorePendingRef.current = null;
+    const decision = resolveRestore(0);
+    if (decision.action === "scroll") {
+      applyRestoreScroll(decision.top, decision.key, decision.offsetTop);
+    } else if (decision.action === "load") {
+      forceReading(followTrackerRef.current);
+      const pending = { startPages: session.olderPages, attemptedAt: session.olderPages, sawLoading: false };
+      restorePendingRef.current = pending;
+      session.loadOlder();
+      // 兜底：请求没发出去（槽里还没种窗口）或迟迟不回，不让阅读位置的恢复永远悬着
+      window.setTimeout(() => {
+        if (restorePendingRef.current !== pending) return;
+        restorePendingRef.current = null;
+        pinToBottomNow();
+        syncScrollToEnd();
+      }, 8000);
+    } else {
+      pinToBottomNow();
+    }
     syncScrollToEnd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openId]);
+
+  // 恢复定位的翻页等待：每次 commit 看一眼——行进窗口了就定位；还没有就继续翻；
+  // 翻页没带来新记录（到头 / 失败）或超上限就跳底
+  useLayoutEffect(() => {
+    const pending = restorePendingRef.current;
+    if (pending === null) return;
+    if (session.loadingOlder) {
+      pending.sawLoading = true;
+      return;
+    }
+    if (pending.attemptedAt === session.olderPages) {
+      // 刚发出请求、回执还没到：等下一次 commit；已见过 loading 又落定而页数没变 = 空页 / 失败
+      if (pending.sawLoading) {
+        restorePendingRef.current = null;
+        pinToBottomNow();
+        syncScrollToEnd();
+      }
+      return;
+    }
+    const decision = resolveRestore(session.olderPages - pending.startPages);
+    if (decision.action === "scroll") {
+      restorePendingRef.current = null;
+      applyRestoreScroll(decision.top, decision.key, decision.offsetTop);
+    } else if (decision.action === "load") {
+      pending.attemptedAt = session.olderPages;
+      pending.sawLoading = false;
+      session.loadOlder();
+    } else {
+      restorePendingRef.current = null;
+      pinToBottomNow();
+    }
+    syncScrollToEnd();
+  });
 
   // 一键回底：smooth 滚到底（reduced-motion 瞬时）。这是显式用户动作——直接恢复跟随，
   // 动画窗口内锁住状态（途中的 scroll 事件不把它判回 Reading）。
