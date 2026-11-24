@@ -18,10 +18,11 @@ import {
   type CompanionPlanet,
   type GalaxyCompanion,
 } from "../../shared/planet-design.ts";
+import { LEGACY_ORBIT_OMEGA_DEG } from "../../shared/orbit-physics.ts";
 import {
   checkCreate,
   checkUpdate,
-  defaultSubAgentOrbit,
+  findSubAgentOrbit,
   SUB_AGENT_VERSION,
   SUB_AGENTS_DIR,
   type Checked,
@@ -36,11 +37,6 @@ import { insidePlanetDir, profilePath, readJson, readProfile, withPlanetLock } f
 export const SURFACE_MAX_BYTES = 20 * 1024 * 1024;
 /** 删掉的子智能体挪到这里（可恢复），不直接 rm：档案与地表图是用户和主智能体一起磨出来的 */
 export const DELETED_DIR = ".deleted";
-
-/** 没给轨道的第 i 颗的默认轨道：与界面 design.ts 的 defaultAgentOrbit 同一个起点与步长 */
-function indexOrbit(index: number): number {
-  return 19 + 12 * index;
-}
 
 interface Galaxy {
   companion: GalaxyCompanion;
@@ -129,6 +125,8 @@ export class SubAgentStore {
       const checked = checkCreate(raw, galaxy.context);
       if (!checked.ok) return checked;
       const input = checked.value;
+      const orbit = findSubAgentOrbit(galaxy.context.starMassEarth, galaxy.agents.map((agent) => ({ massEarth: agent.massEarth, orbit: agent.planet.orbit ?? null, ...(agent.planet.eccentricity === undefined ? {} : { eccentricity: agent.planet.eccentricity }), ...(agent.planet.periapsisDeg === undefined ? {} : { periapsisDeg: agent.planet.periapsisDeg }) })), input.massEarth);
+      if (orbit === null) return { ok: false, error: "这组轨道排不下：请增加主星质量，或把相邻行星调远。当前质量下没有合法空轨，子智能体尚未创建。" };
       const id = this.uniqueId(galaxy);
       const surface = input.surfacePath === undefined ? null : await this.copySurface(workspacePath, id, input.surfacePath);
       if (surface !== null && !surface.ok) return surface;
@@ -143,13 +141,15 @@ export class SubAgentStore {
         ...(input.modelId === undefined ? {} : { modelId: input.modelId }),
       };
       await writeJsonAtomic(profilePath(workspacePath, id), { version: SUB_AGENT_VERSION, ...profile });
-      const orbit = defaultSubAgentOrbit(galaxy.companion.planets.map((planet, index) => planet.orbit ?? indexOrbit(index)));
       const planet: CompanionPlanet = {
         id,
         name: input.name,
         massEarth: input.massEarth,
         composition: input.composition,
         orbit,
+        // 新行星从圆轨道出生，之后可在专业版里独立调扁；不为了找空位放宽希尔间距
+        eccentricity: 0,
+        periapsisDeg: LEGACY_ORBIT_OMEGA_DEG,
         elements: { eyes: true },
         ...(surface === null ? {} : { surface: surface.value }),
       };

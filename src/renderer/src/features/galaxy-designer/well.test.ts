@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { STAR_MASS } from "../chat/galaxy.ts";
-import { defaultDesign, displayRadius, minOrbit, PREVIEW_FRAME, radiusOf, ZOOM_DEFAULT, type CompleteDesign } from "./design.ts";
+import { defaultDesign, displayRadius, maxOrbit, minOrbit, PREVIEW_FRAME, radiusOf, ZOOM_DEFAULT, type CompleteDesign } from "./design.ts";
 import {
   flatStage,
   gridLines,
@@ -148,7 +148,7 @@ describe("行星页：轨道场景", () => {
   test("场景有界：最大合法轨道、最重的主星都装在 260 × 140 的小画布里；行星至少有几个像素大（不退成一个点）", () => {
     const d = design();
     const heavy = { ...d, star: { ...d.star, mass: STAR_MASS.max }, planet: { ...d.planet, orbitRadius: 52 } };
-    const stage = orbitStage(heavy);
+    const stage = orbitStage({ ...heavy, planet: { ...heavy.planet, orbitRadius: maxOrbit(heavy) } });
     assert.ok(stage !== null && stage.planet !== null);
     for (const p of stage.planet.orbit.points) {
       assert.ok(p.x >= ORBIT_BOX.x && p.x <= ORBIT_BOX.x + ORBIT_BOX.w, `x ${p.x}`);

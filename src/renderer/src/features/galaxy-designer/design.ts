@@ -15,6 +15,8 @@ import type { EyeStyle, PlanetMix, PlanetWriteBody, PlanetWriteRequest, Workspac
 import { classOfDensity, legacyMix, mixPhysics, planetDensity, seedOf, starDefaultMix } from "./mix.ts";
 // 值 import 走相对路径：node --test 解析不了 @shared 别名
 import { EYE_STYLE_DEFAULT } from "../../../../shared/planet-design.ts";
+import { subAgentMassCap } from "../../../../shared/sub-agent.ts";
+import { checkSystem, LEGACY_ORBIT_E, LEGACY_ORBIT_OMEGA_DEG, ORBIT_ECC_MAX, type OrbitSpec } from "../../../../shared/orbit-physics.ts";
 
 /**
  * 星系设计面板（原型，proto/planet-designer）的纯内核：参数、校验、半径、2D 形象的几何、
@@ -87,7 +89,12 @@ export interface BodyDesign {
 export interface PlanetDesign extends BodyDesign {
   /** 成分类别（纹理与只认三类的读者用）：有元素构成时由构成推出的密度归类（withMix），不再单独选 */
   composition: Composition;
+  /** 半长轴 a（世界单位） */
   orbitRadius: number;
+  /** 每颗自己的偏心率 e；旧稿缺席时按 LEGACY_ORBIT_E 迁移 */
+  eccentricity?: number;
+  /** 近日点方向 ω（度）；Ω 固定、M₀ 由 id 哈希取 */
+  periapsisDeg?: number;
   /** 子智能体的 id（伴随文件 planet/galaxy.json 里的）；面板里新加、还没落盘的没有 */
   id?: string;
   /** 子智能体档案（planet/agents/<id>/agent.json：职能提示词等）；没有 / 读坏了为 null，缺席 = 没读过盘 */
@@ -125,8 +132,28 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-export function massRange(kind: BodyKind): { min: number; max: number } {
-  return kind === "star" ? STAR_MASS : PLANET_MASS;
+export function massRange(kind: BodyKind, starMass: number = STAR_MASS.max): { min: number; max: number } {
+  return kind === "star" ? STAR_MASS : { min: PLANET_MASS.min, max: planetMassCap(starMass) };
+}
+
+/**
+ * 行星质量上限 = 主星 × 10%，再夹绝对上限。取 10% 是与新建子智能体共用的既有比例：
+ * 最轻主星仍比行星重 10 倍，界面上能看清质量层级；主星变轻时上限立即收紧。
+ */
+export function planetMassCap(starMass: number): number {
+  return subAgentMassCap(starMass / MASS_UNIT_PER_EARTH) * MASS_UNIT_PER_EARTH;
+}
+
+export function orbitEccentricityOf(planet: Pick<PlanetDesign, "eccentricity">): number {
+  return planet.eccentricity ?? LEGACY_ORBIT_E;
+}
+
+export function periapsisOf(planet: Pick<PlanetDesign, "periapsisDeg">): number {
+  return planet.periapsisDeg ?? LEGACY_ORBIT_OMEGA_DEG;
+}
+
+export function orbitSpecOf(planet: PlanetDesign): OrbitSpec {
+  return { mass: planet.mass, a: planet.orbitRadius, e: orbitEccentricityOf(planet), omegaDeg: periapsisOf(planet) };
 }
 
 export function densityOf(kind: BodyKind, composition: Composition): number {
@@ -161,14 +188,16 @@ export function radiusOf(design: GalaxyDesign, kind: BodyKind): number {
   return design.planet === null ? Number.NaN : planetRadius({ ...design.planet, density: planetDensity(design.planet) });
 }
 
-/** 行星轨道的合法下限：两颗天体的半径和 + 间距——再近就相撞 */
+/** 半长轴的合法下限：近日距 a(1−e) 至少放下两颗天体与间距 */
 export function minOrbit(design: GalaxyDesign): number {
-  return radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE;
+  const e = design.planet === null ? 0 : orbitEccentricityOf(design.planet);
+  return (radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE) / Math.max(1 - e, 1e-9);
 }
 
-/** 轨道的合法上限：行星整颗留在行星区里 */
+/** 半长轴的合法上限：远日距 a(1+e) 连同行星半径留在行星区里 */
 export function maxOrbit(design: GalaxyDesign): number {
-  return PLANET_ZONE - radiusOf(design, "planet");
+  const e = design.planet === null ? 0 : orbitEccentricityOf(design.planet);
+  return (PLANET_ZONE - radiusOf(design, "planet")) / (1 + e);
 }
 
 // ── 校验 ─────────────────────────────────────────────────────────────
@@ -195,7 +224,7 @@ export function validateDesign(design: GalaxyDesign): DesignError[] {
   for (const body of ["star", "planet"] as const) {
     const it = design[body];
     if (it === null) continue;
-    const { min, max } = massRange(body);
+    const { min, max } = massRange(body, design.star?.mass ?? STAR_MASS.max);
     const value = it.mass;
     if (!Number.isFinite(value) || value < min || value > max) errors.push({ kind: "mass-range", body, min, max, value });
     const length = nameLength(it.name);
@@ -203,10 +232,12 @@ export function validateDesign(design: GalaxyDesign): DesignError[] {
   }
   if (design.star === null || design.planet === null) return errors;
   const orbit = design.planet.orbitRadius;
+  const e = orbitEccentricityOf(design.planet);
   const near = minOrbit(design);
   const far = maxOrbit(design);
-  if (!Number.isFinite(orbit) || orbit < near) errors.push({ kind: "orbit-collision", min: near, value: orbit });
-  else if (orbit > far) errors.push({ kind: "orbit-far", max: far, value: orbit });
+  if (!Number.isFinite(orbit) || !Number.isFinite(e) || e < 0 || e > ORBIT_ECC_MAX || orbit * (1 - e) < radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE) {
+    errors.push({ kind: "orbit-collision", min: near, value: orbit });
+  } else if (orbit * (1 + e) + radiusOf(design, "planet") > PLANET_ZONE) errors.push({ kind: "orbit-far", max: far, value: orbit });
   return errors;
 }
 
@@ -494,9 +525,9 @@ const ALL_ON: Readonly<Record<ElementKey, boolean>> = { eyes: true, ring: true, 
 
 /** 三个行星预设：工作区 id 的哈希挑一个。不同工作区一眼不一样，同一个工作区每次一样 */
 const PLANET_PRESETS: readonly Omit<PlanetDesign, "name" | "elements" | "zoom">[] = [
-  { mass: 6, composition: "rock", orbitRadius: 22 },
-  { mass: 14, composition: "gas", orbitRadius: 30 },
-  { mass: 3, composition: "ice", orbitRadius: 18 },
+  { mass: 6, composition: "rock", orbitRadius: 22, eccentricity: 0.15, periapsisDeg: 20 },
+  { mass: 14, composition: "gas", orbitRadius: 30, eccentricity: 0.3, periapsisDeg: 140 },
+  { mass: 3, composition: "ice", orbitRadius: 18, eccentricity: 0.1, periapsisDeg: 260 },
 ];
 const ELEMENT_PRESETS: readonly Readonly<Record<ElementKey, boolean>>[] = [
   { ...ALL_OFF, eyes: true, clouds: true },
@@ -546,7 +577,7 @@ export function defaultDesign(workspaceId: string, level: Exclude<DesignLevel, "
     return {
       ...base,
       star: { name: LONG_NAME, mass: STAR_MASS.max, elements: ALL_ON, zoom: ZOOM_DEFAULT.star },
-      planet: { name: LONG_NAME, mass: PLANET_MASS.max, composition: "gas", orbitRadius: 9, elements: ALL_ON, zoom: ZOOM_DEFAULT.planet },
+      planet: { name: LONG_NAME, mass: PLANET_MASS.max, composition: "gas", orbitRadius: 9, eccentricity: 0.45, periapsisDeg: 130, elements: ALL_ON, zoom: ZOOM_DEFAULT.planet },
     };
   }
   return base;
@@ -561,7 +592,7 @@ export function planetFaceDesign(composition: Composition, surface: SurfaceImage
   return {
     editing: "planet",
     star: defaultStar(),
-    planet: { name: "", mass: 6, composition, orbitRadius: 22, zoom: ZOOM_DEFAULT.planet, elements: { ...ALL_OFF, eyes: true }, surface, ...(eyeStyle === undefined ? {} : { eyeStyle }) },
+    planet: { name: "", mass: 6, composition, orbitRadius: 22, eccentricity: LEGACY_ORBIT_E, periapsisDeg: LEGACY_ORBIT_OMEGA_DEG, zoom: ZOOM_DEFAULT.planet, elements: { ...ALL_OFF, eyes: true }, surface, ...(eyeStyle === undefined ? {} : { eyeStyle }) },
     backdrop: "muted",
   };
 }
@@ -626,7 +657,7 @@ export function commitPlanet(design: GalaxyDesign): GalaxyDesign {
 }
 
 /** 星系数据层要的子智能体行星（galaxy-data 的 AgentPlanetInput）：没有 id 的按次序起一个 */
-export function agentInputsOf(planets: readonly PlanetDesign[]): { id: string; mass: number; composition: Composition; density?: number; orbitRadius: number }[] {
+export function agentInputsOf(planets: readonly PlanetDesign[]): { id: string; mass: number; composition: Composition; density?: number; orbitRadius: number; eccentricity: number; periapsisDeg: number }[] {
   return planets.map((planet, index) => ({
     id: planet.id ?? `planet-${index + 1}`,
     mass: Number.isFinite(planet.mass) ? planet.mass : 6,
@@ -634,6 +665,8 @@ export function agentInputsOf(planets: readonly PlanetDesign[]): { id: string; m
     // 只有面板里改过构成的才带密度；旧稿照旧按成分类别（推出来的差 < 0.5%，不让老星系的轨道因此挪一下）
     ...(planet.mix === undefined ? {} : { density: planetDensity(planet) }),
     orbitRadius: Number.isFinite(planet.orbitRadius) ? planet.orbitRadius : defaultAgentOrbit(index),
+    eccentricity: orbitEccentricityOf(planet),
+    periapsisDeg: periapsisOf(planet),
   }));
 }
 
@@ -677,10 +710,12 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
   const planets: PlanetDesign[] = data.planets.map((body, index) => ({
     id: body.id,
     name: body.name,
-    mass: body.massEarth === null ? 6 : body.massEarth * MASS_UNIT_PER_EARTH,
+    mass: Math.min(body.massEarth === null ? 6 : body.massEarth * MASS_UNIT_PER_EARTH, planetMassCap(star.mass)),
     composition: body.composition ?? "rock",
     ...(body.mix === null ? {} : { mix: body.mix }),
     orbitRadius: body.orbit ?? defaultAgentOrbit(index),
+    eccentricity: body.eccentricity ?? LEGACY_ORBIT_E,
+    periapsisDeg: body.periapsisDeg ?? LEGACY_ORBIT_OMEGA_DEG,
     elements: { ...ALL_OFF, eyes: true, ...(body.elements ?? {}) },
     zoom: ZOOM_DEFAULT.planet,
     surface: body.surface === null ? null : { src: body.surface, flip: body.flip },
@@ -691,7 +726,7 @@ export function designFromPlanets(data: WorkspacePlanets, fallback: GalaxyDesign
   return { editing: "star", star, planet: planets[0] ?? null, planets, planetIndex: 0, backdrop: fallback.backdrop };
 }
 
-function writeBody(id: string, body: BodyDesign, composition: Composition | null, orbit: number | null, mix?: PlanetMix): PlanetWriteBody {
+function writeBody(id: string, body: BodyDesign, composition: Composition | null, orbit: number | null, mix?: PlanetMix, orbitSpec?: OrbitSpec): PlanetWriteBody {
   return {
     ...(mix === undefined ? {} : { mix }),
     id,
@@ -699,15 +734,32 @@ function writeBody(id: string, body: BodyDesign, composition: Composition | null
     massEarth: Math.round((body.mass / MASS_UNIT_PER_EARTH) * 1000) / 1000,
     composition,
     orbit,
+    ...(orbitSpec === undefined ? {} : { eccentricity: orbitSpec.e, periapsisDeg: orbitSpec.omegaDeg }),
     elements: { ...body.elements },
     ...(body.eyeStyle === undefined ? {} : { eyeStyle: body.eyeStyle }),
   };
 }
 
-/** 写回不合法的数（质量清空 = NaN）时不写：等它改回合法再写，盘上永远是一份读得回来的稿 */
+/** 非法质量、轨道形状、主星碰撞、出界或行星间红区都不落盘；黄区允许 */
 export function writableDesign(design: GalaxyDesign): boolean {
-  const all = [design.star, ...(design.planets ?? (design.planet === null ? [] : [design.planet]))];
-  return all.every((body) => body === null || (Number.isFinite(body.mass) && body.mass > 0));
+  const bodies = [design.star, ...(design.planets ?? (design.planet === null ? [] : [design.planet]))];
+  const massesOk = bodies.every((body) => body !== null && Number.isFinite(body.mass) && body.mass > 0);
+  if (!massesOk || design.star === null) return massesOk;
+  const planets = design.planets ?? (design.planet === null ? [] : [design.planet]);
+  const rangesOk = planets.every((planet) => {
+    const cap = planetMassCap(design.star?.mass ?? STAR_MASS.max);
+    const e = orbitEccentricityOf(planet);
+    return planet.mass >= PLANET_MASS.min && planet.mass <= cap && Number.isFinite(planet.orbitRadius) && e >= 0 && e <= ORBIT_ECC_MAX;
+  });
+  if (!rangesOk) return false;
+  if (design.planet !== null) {
+    const physicalOk = planets.every((planet, index) => {
+      const selected = { ...design, planet, planetIndex: index };
+      return planet.orbitRadius >= minOrbit(selected) && planet.orbitRadius <= maxOrbit(selected);
+    });
+    if (!physicalOk) return false;
+  }
+  return checkSystem({ mass: design.star.mass }, planets.map(orbitSpecOf)).ok;
 }
 
 /** 面板的设计稿 → 写回请求（没有 id 的新行星按次序起一个 planet-N） */
@@ -717,13 +769,32 @@ export function planetsWriteOf(workspaceId: string, design: GalaxyDesign): Plane
   return {
     workspaceId,
     main: design.star === null ? null : writeBody("main", design.star, null, null, design.star.mix),
-    planets: list.map((planet, index) => writeBody(planet.id ?? `planet-${index + 1}`, planet, planet.composition, planet.orbitRadius, planet.mix)),
+    planets: list.map((planet, index) => writeBody(planet.id ?? `planet-${index + 1}`, planet, planet.composition, planet.orbitRadius, planet.mix, orbitSpecOf(planet))),
   };
 }
 
 /** 创建主星（已有就原样返回），并切到主星页 */
 export function createStar(design: GalaxyDesign): GalaxyDesign {
   return design.star === null ? { ...design, star: defaultStar(), editing: "star" } : { ...design, editing: "star" };
+}
+
+/** 主星变轻：所有行星质量同步收进新的 10% 上限；返回哪些行星被收了，面板据此提示 */
+export function withStarMass(design: GalaxyDesign, mass: number): { design: GalaxyDesign; clamped: string[] } {
+  if (design.star === null) return { design, clamped: [] };
+  const cap = planetMassCap(mass);
+  const clamped: string[] = [];
+  const planets = design.planets?.map((planet, index) => {
+    if (!(planet.mass > cap)) return planet;
+    clamped.push(planet.id ?? `planet-${index + 1}`);
+    return { ...planet, mass: cap };
+  });
+  const current = design.planet !== null && design.planet.mass > cap ? { ...design.planet, mass: cap } : design.planet;
+  if (current !== design.planet) {
+    const index = design.planetIndex ?? 0;
+    const id = current?.id ?? `planet-${index + 1}`;
+    if (!clamped.includes(id)) clamped.push(id);
+  }
+  return { design: normalizeDesign({ ...design, star: { ...design.star, mass }, planet: current, ...(planets === undefined ? {} : { planets }) }), clamped };
 }
 
 export type AddPlanetResult = { ok: true; design: GalaxyDesign } | { ok: false; reason: "no-star" };

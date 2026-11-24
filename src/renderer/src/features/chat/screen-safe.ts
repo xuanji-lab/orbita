@@ -30,6 +30,7 @@ import {
   inFarWindow,
   orbitFrame,
   eccOf,
+  hasIndependentOrbits,
   starRadius,
   type Camera,
   type GalaxyLayout,
@@ -414,13 +415,37 @@ function cachedLayout(spec: GalaxySpec, width: number, height: number, box: { wi
     layoutCache.set(key, hit);
     return hit;
   }
-  const scene = layoutOnce(spec, width, height, box, readableMax);
+  const scene = hasIndependentOrbits(spec) ? layoutIndependent(spec, width, height, box, readableMax) : layoutOnce(spec, width, height, box, readableMax);
   layoutCache.set(key, scene);
   if (layoutCache.size > LAYOUT_CACHE_MAX) {
     const oldest = layoutCache.keys().next().value;
     if (oldest !== undefined) layoutCache.delete(oldest);
   }
   return scene;
+}
+
+/**
+ * 独立轨道：a/e/ω 全是用户设计，不为屏幕投影暗改半长轴、不把不同的 e 退成同一档。
+ * 默认视角用统一的圆形包络取景，保证远日点也完整可见；转台只换相机，比例尺与布局照旧冻结。
+ */
+function layoutIndependent(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, readableMax: number): SafeScene {
+  const layout = layoutGalaxy(spec);
+  const camera = makeCamera(FRAME_EXTENT, VIEW_REF_ELEVATION);
+  const viewport = frameViewport(camera, width, height, box, 0);
+  const readable = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax, readableMax > PLANET_READABLE_MAX ? AGENT_READABLE_GAP : PLANET_READABLE_GAP);
+  const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
+  const starPx = (viewport.focal * starRadius(spec.starMass)) / starDepth;
+  const preferred = readableMax > PLANET_READABLE_MAX ? Math.min(Math.max(readable, AGENT_READABLE_FLOOR), starPx / (STAR_OVER_PLANET * WAITING_SCALE)) : readable;
+  return {
+    camera,
+    viewport,
+    layout,
+    elevationDeg: VIEW_REF_ELEVATION,
+    minPlanetPx: Math.max(2.5, preferred),
+    dropped: 0,
+    layoutElevationDeg: VIEW_REF_ELEVATION,
+    preferredPx: Math.max(2.5, preferred),
+  };
 }
 
 /**

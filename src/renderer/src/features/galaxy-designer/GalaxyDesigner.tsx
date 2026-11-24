@@ -17,19 +17,20 @@ import { MASS_UNIT_PER_EARTH,
   mixOf,
   starMixOf,
   withMix,
+  withStarMass,
   displayRadius,
   ELEMENTS_OF,
   errorsAt,
   formatNumber,
   massRange,
-  maxOrbit,
-  minOrbit,
   ORBIT_RANGE,
   parseNumberInput,
   PREVIEW_FRAME,
   previewFrame,
   radiusOf,
   selectPlanet,
+  orbitEccentricityOf,
+  planetMassCap,
   validateDesign,
   ZOOM,
   type BodyArt,
@@ -56,6 +57,8 @@ import type { PlanetMix } from "@shared/planet-design";
 import { cssColorOf, mixColor } from "./mix.ts";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
 import { DETAIL_GAP, detailScale, externalTangents, LOUPE_DEFAULT_WIDTH, LOUPE_VIEW, loupeFrame, MARK_GAP, type LoupeFrame } from "./loupe.ts";
+import { bounceOrbit, designPlanets, eccentricityLevel, omegaOf, orbitTrackStops, orbitUiStatus, withOrbitValue, type OrbitField } from "./orbit.ts";
+import type { OrbitLevel } from "../../../../shared/orbit-physics.ts";
 
 /**
  * 星系设计（原型，proto/planet-designer）：侧栏工作区行悬停出现的画笔键打开它，住在右栏面板位里。
@@ -95,10 +98,10 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
   const tg = t.galaxyDesigner;
   const id = props.workspace.id;
   const [design, setDesignState] = useState<GalaxyDesign>(() => store.get(id));
-  const setDesign = (next: GalaxyDesign): void => {
+  const setDesign = (next: GalaxyDesign, persist = true): void => {
     store.set(id, next);
     setDesignState(store.get(id));
-    persistDesign(id);
+    if (persist) persistDesign(id);
   };
   const planets = design.planets ?? [];
   // 仓库里的这一份被别处换了（聊天里建 / 改了子智能体，App 重读了盘）：跟上，不留着旧名单
@@ -134,11 +137,16 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
   const names = nameOrderOf(variants.agentName, props.workspace.name, design.star?.name ?? "");
   const kind = design.editing;
   const body: BodyDesign | PlanetDesign | null = kind === "star" ? design.star : design.planet;
+  const [massNotice, setMassNotice] = useState<string | null>(null);
   const patchBody = (patch: Partial<PlanetDesign>): void => {
     if (kind === "star") {
       if (design.star === null) return;
       const { composition: _c, orbitRadius: _o, ...rest } = patch;
-      setDesign({ ...design, star: { ...design.star, ...rest } });
+      if (patch.mass !== undefined) {
+        const next = withStarMass(design, patch.mass);
+        setDesign(next.design);
+        setMassNotice(next.clamped.length > 0 ? tg.massClampNotice(formatNumber(earth(planetMassCap(patch.mass)))) : null);
+      } else setDesign({ ...design, star: { ...design.star, ...rest } });
     } else {
       if (design.planet === null) return;
       // 在行星页改了它 = 用户要这颗行星：草稿进名单（之后才画、才写盘）
@@ -147,7 +155,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
   };
   const errors = validateDesign(design);
   const radius = radiusOf(design, kind);
-  const range = massRange(kind);
+  const range = massRange(kind, design.star?.mass ?? undefined);
   const nameFallback = kind === "star" ? props.workspace.name : tg.unnamedPlanet;
 
   return (
@@ -313,6 +321,12 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 onChange={(mass) => patchBody({ mass: mass * MASS_UNIT_PER_EARTH })}
               />
             </Row>
+            {massNotice !== null && kind === "star" && (
+              <p className="gd-orbit-notice" role="status" data-notice="mass-clamp">
+                <Icon name="info" size={12} strokeWidth={1.8} />
+                <span>{massNotice}</span>
+              </p>
+            )}
             {kind === "planet" && design.planet !== null ? (
               // 成分 = 元素构成（周期表），替掉原来的岩石 / 冰质 / 气态三选一；类别由构成推出的密度归（withMix）
               <Row name={tg.composition} desc={tg.mix.desc} wide>
@@ -335,33 +349,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
               )
             )}
             {kind === "planet" && design.planet !== null && (
-              <Row
-                name={tg.orbit}
-                desc={tg.orbitDesc(formatNumber(minOrbit(design)), formatNumber(maxOrbit(design)))}
-                errors={errorsAt(errors, "planet", "orbit")}
-                t={t}
-                slider={
-                  <input
-                    type="range"
-                    className="gd-range"
-                    min={ORBIT_RANGE.min}
-                    max={ORBIT_RANGE.max}
-                    step={ORBIT_RANGE.step}
-                    value={Number.isFinite(design.planet.orbitRadius) ? clampValue(design.planet.orbitRadius, ORBIT_RANGE.min, ORBIT_RANGE.max) : ORBIT_RANGE.min}
-                    aria-label={tg.orbit}
-                    data-field="orbit"
-                    onChange={(event) => patchBody({ orbitRadius: Number(event.target.value) })}
-                  />
-                }
-              >
-                <NumberField
-                  value={design.planet.orbitRadius}
-                  label={tg.orbit}
-                  field="orbit"
-                  invalid={errorsAt(errors, "planet", "orbit").length > 0}
-                  onChange={(orbitRadius) => patchBody({ orbitRadius })}
-                />
-              </Row>
+              <OrbitSection design={design} setDesign={setDesign} />
             )}
 
             {/* 形象：选完元素的下一步——按插件的出图原则出候选、挑一张（AvatarSection.tsx） */}
@@ -545,6 +533,145 @@ function NumberField(props: { value: number; label: string; field: string; inval
   );
 }
 
+/** 轨道（专业版）：三颗滑块共用一套弹回与落盘闸门；临时红区只预览，不写进 planet/ */
+function OrbitSection(props: { design: GalaxyDesign; setDesign: (design: GalaxyDesign, persist?: boolean) => void }) {
+  const t = useT();
+  const tg = t.galaxyDesigner;
+  const { design } = props;
+  const planet = design.planet;
+  const [notice, setNotice] = useState<string | null>(null);
+  const drag = useRef<{ field: OrbitField; previous: GalaxyDesign } | null>(null);
+  if (planet === null) return null;
+  const status = orbitUiStatus(design);
+  const single = designPlanets(design).length <= 1;
+  const e = orbitEccentricityOf(planet);
+  const eLevel = eccentricityLevel(status, e, single);
+  const update = (field: OrbitField, value: number): void => {
+    drag.current ??= { field, previous: design };
+    setNotice(null);
+    props.setDesign(withOrbitValue(design, field, value), false);
+  };
+  const finish = (): void => {
+    const active = drag.current;
+    if (active === null) return;
+    drag.current = null;
+    const result = bounceOrbit(design, active.previous, active.field);
+    props.setDesign(result.design, true);
+    if (result.kind === "a-min" || result.kind === "a-max") setNotice(tg.orbitBounceA(result.kind === "a-min" ? "min" : "max", formatNumber(result.value)));
+    else if (result.kind === "e-max") setNotice(tg.orbitBounceE(formatNumber(result.value)));
+    else if (result.kind === "no-room") setNotice(tg.orbitNoRoom);
+  };
+  const rangeProps = (field: OrbitField) => ({
+    onPointerUp: finish,
+    onPointerCancel: finish,
+    onKeyUp: finish,
+    onBlur: finish,
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) => update(field, Number(event.target.value)),
+  });
+  const colors: Readonly<Record<OrbitLevel, string>> = { red: "var(--color-danger)", yellow: "var(--color-warning)", green: "var(--color-success)" };
+  const aTrack = orbitTrackStops(status, ORBIT_RANGE.min, ORBIT_RANGE.max).map((stop) => `${colors[stop.color]} ${stop.at.toFixed(3)}%`).join(", ");
+  const ePct = (value: number): string => `${(clampValue(value / 0.6, 0, 1) * 100).toFixed(3)}%`;
+  const eTrack = [
+    `${colors.green} 0%`,
+    `${colors.green} ${ePct(status.comfortMaxE)}`,
+    `${colors.yellow} ${ePct(status.comfortMaxE)}`,
+    `${colors.yellow} ${ePct(status.maxE)}`,
+    `${colors.red} ${ePct(status.maxE)}`,
+    `${colors.red} 100%`,
+  ].join(", ");
+  const statusText = status.level === "red" && status.closestGap < 0
+    ? tg.orbitCross
+    : Number.isFinite(status.closestGap)
+      ? tg.orbitGap(status.level, formatNumber(status.closestGap))
+      : status.level === "green"
+        ? tg.orbitComfort
+        : tg.orbitBodyLimit;
+  return (
+    <section className="gd-orbit-section" data-professional="orbit" aria-label={tg.orbitGroup}>
+      <PanelGroupHead label={tg.orbitGroup} />
+      <Row
+        name={tg.semiMajor}
+        desc={tg.semiMajorDesc(formatNumber(status.minA), formatNumber(status.maxA))}
+        errors={errorsAt(validateDesign(design), "planet", "orbit")}
+        t={t}
+        slider={
+          <input
+            type="range"
+            className="gd-range gd-orbit-range"
+            style={{ "--gd-orbit-track": `linear-gradient(to right, ${aTrack})` } as React.CSSProperties}
+            min={ORBIT_RANGE.min}
+            max={ORBIT_RANGE.max}
+            step={ORBIT_RANGE.step}
+            value={Number.isFinite(planet.orbitRadius) ? clampValue(planet.orbitRadius, ORBIT_RANGE.min, ORBIT_RANGE.max) : ORBIT_RANGE.min}
+            aria-label={tg.semiMajor}
+            aria-valuetext={statusText}
+            data-field="orbit-a"
+            data-level={status.level}
+            data-min-a={Number.isFinite(status.minA) ? status.minA.toFixed(4) : undefined}
+            data-max-a={Number.isFinite(status.maxA) ? status.maxA.toFixed(4) : undefined}
+            {...rangeProps("a")}
+          />
+        }
+      >
+        <NumberField
+          value={planet.orbitRadius}
+          label={tg.semiMajor}
+          field="orbit-a-number"
+          invalid={status.level === "red"}
+          onChange={(value) => props.setDesign(withOrbitValue(design, "a", value))}
+        />
+      </Row>
+      <p className="gd-orbit-status" data-level={status.level} data-orbit-status="a" role="status">
+        <Icon name={status.level === "red" ? "triangle-alert" : status.level === "yellow" ? "info" : "circle-check"} size={12} strokeWidth={1.8} />
+        <span>{statusText}</span>
+      </p>
+      <Row
+        name={tg.eccentricity}
+        desc={tg.eccentricityDesc(formatNumber(status.maxE))}
+        slider={
+          <input
+            type="range"
+            className="gd-range gd-orbit-range"
+            style={{ "--gd-orbit-track": `linear-gradient(to right, ${eTrack})` } as React.CSSProperties}
+            min={0}
+            max={0.6}
+            step={0.01}
+            value={e}
+            aria-label={tg.eccentricity}
+            data-field="orbit-e"
+            data-level={eLevel}
+            data-max-e={Number.isFinite(status.maxE) ? status.maxE.toFixed(4) : undefined}
+            {...rangeProps("e")}
+          />
+        }
+      >
+        <span className="gd-value" data-value="orbit-e">{e.toFixed(2)}</span>
+      </Row>
+      <Row name={tg.periapsis} desc={tg.periapsisDesc} slider={
+        <input
+          type="range"
+          className="gd-range"
+          min={0}
+          max={360}
+          step={1}
+          value={omegaOf(design)}
+          aria-label={tg.periapsis}
+          data-field="orbit-omega"
+          {...rangeProps("omega")}
+        />
+      }>
+        <span className="gd-value" data-value="orbit-omega">{formatNumber(omegaOf(design))}°</span>
+      </Row>
+      {notice !== null && (
+        <p className="gd-orbit-notice" role="status" data-notice="orbit-bounce">
+          <Icon name="info" size={12} strokeWidth={1.8} />
+          <span>{notice}</span>
+        </p>
+      )}
+    </section>
+  );
+}
+
 /** 预览：主星页是网格布上的主星；行星页是大头像 + 轨道小场景；没有主星时是一张平的布 */
 function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: boolean }) {
   const t = useT();
@@ -676,6 +803,8 @@ function OrbitScene(props: { design: GalaxyDesign; uid: string; label: string })
       data-depth={stage.depth.toFixed(2)}
       data-star-r={stage.star.r.toFixed(2)}
       data-orbit-a={p === null ? undefined : p.a.toFixed(2)}
+      data-orbit-e={p === null ? undefined : p.ecc.toFixed(2)}
+      data-orbit-omega={p === null ? undefined : p.periapsis.toFixed(4)}
       data-planet-x={p === null ? undefined : p.x.toFixed(2)}
       data-planet-r={p === null ? undefined : p.r.toFixed(2)}
       data-collide={p?.collide || undefined}
@@ -779,6 +908,8 @@ function PlanetLoupe(props: {
         data-depth={stage?.depth.toFixed(2)}
         data-star-r={stage?.star.r.toFixed(2)}
         data-orbit-a={p?.a.toFixed(2)}
+        data-orbit-e={p?.ecc.toFixed(2)}
+        data-orbit-omega={p?.periapsis.toFixed(4)}
         data-planet-x={p?.x.toFixed(2)}
         data-planet-y={p?.y.toFixed(2)}
         data-planet-r={p?.r.toFixed(2)}

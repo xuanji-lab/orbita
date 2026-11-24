@@ -133,8 +133,12 @@ export interface PlanetBody {
   surface: string | null;
   /** 地表上下翻转（地表上的椭圆风暴落在眼睛下方会被读成嘴，翻上去） */
   flip: boolean;
-  /** 轨道半径（界面星系单位）；主星与没指定的为 null */
+  /** 轨道半长轴 a（界面星系单位）；主星与没指定的为 null */
   orbit: number | null;
+  /** 这颗自己的偏心率 e；旧稿没有为 null，renderer 按旧的共用值迁移 */
+  eccentricity: number | null;
+  /** 近日点方向 ω（度）；旧稿没有为 null，按 +x 方向迁移 */
+  periapsisDeg: number | null;
   elements: PlanetElements | null;
   /** 眼睛样式；没设过为 null（界面取 EYE_STYLE_DEFAULT） */
   eyeStyle: EyeStyle | null;
@@ -168,6 +172,9 @@ export interface PlanetWriteBody {
   massEarth: number;
   composition: PlanetComposition | null;
   orbit: number | null;
+  /** 每颗自己的轨道根数；缺席 = 不动伴随文件里原有的 */
+  eccentricity?: number;
+  periapsisDeg?: number;
   elements: PlanetElements;
   /** 眼睛样式；缺席 = 没设过（伴随文件里原有的值不动） */
   eyeStyle?: EyeStyle;
@@ -204,7 +211,10 @@ export interface CompanionPlanet extends CompanionBody {
   /** 这颗行星的插件格式设计稿，相对 planet/ */
   design?: string;
   composition?: PlanetComposition;
+  /** 半长轴 a；e / ω 与 a 分字段存，旧稿只认 orbit 也不会丢 */
   orbit?: number;
+  eccentricity?: number;
+  periapsisDeg?: number;
 }
 
 export interface GalaxyCompanion {
@@ -287,6 +297,10 @@ export function parseCompanion(raw: unknown): GalaxyCompanion {
     if (isComposition(item["composition"])) planet.composition = item["composition"];
     const orbit = num(item["orbit"]);
     if (orbit !== undefined && orbit > 0) planet.orbit = orbit;
+    const eccentricity = num(item["eccentricity"]);
+    if (eccentricity !== undefined && eccentricity >= 0 && eccentricity <= 0.6) planet.eccentricity = eccentricity;
+    const periapsisDeg = num(item["periapsisDeg"]);
+    if (periapsisDeg !== undefined && periapsisDeg >= 0 && periapsisDeg <= 360) planet.periapsisDeg = periapsisDeg;
     planets.push(planet);
     if (planets.length >= PLANET_AGENTS_MAX) break;
   }
@@ -409,6 +423,8 @@ export function mergeCompanion(
     const next: CompanionPlanet = { ...(old ?? { id: body.id }), ...writeBody(old, body, hasDesign.planets.has(body.id)), id: body.id };
     if (body.composition !== null) next.composition = body.composition;
     if (body.orbit !== null) next.orbit = body.orbit;
+    if (body.eccentricity !== undefined) next.eccentricity = body.eccentricity;
+    if (body.periapsisDeg !== undefined) next.periapsisDeg = body.periapsisDeg;
     return next;
   };
   const byId = new Map(request.planets.map((body) => [body.id, body]));
@@ -439,6 +455,8 @@ export function isPlanetWriteBody(raw: unknown): raw is PlanetWriteBody {
     raw["massEarth"] > 0 &&
     (raw["composition"] === null || isComposition(raw["composition"])) &&
     (raw["orbit"] === null || (typeof raw["orbit"] === "number" && Number.isFinite(raw["orbit"]))) &&
+    (raw["eccentricity"] === undefined || (typeof raw["eccentricity"] === "number" && Number.isFinite(raw["eccentricity"]) && raw["eccentricity"] >= 0 && raw["eccentricity"] <= 0.6)) &&
+    (raw["periapsisDeg"] === undefined || (typeof raw["periapsisDeg"] === "number" && Number.isFinite(raw["periapsisDeg"]) && raw["periapsisDeg"] >= 0 && raw["periapsisDeg"] <= 360)) &&
     parseElements(raw["elements"]) !== undefined &&
     (raw["eyeStyle"] === undefined || isEyeStyle(raw["eyeStyle"])) &&
     (raw["mix"] === undefined || isWritableMix(raw["mix"]))

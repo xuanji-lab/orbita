@@ -1,5 +1,5 @@
-import { STAR_MASS, makeCamera, project, type Camera, type Vec3 } from "../chat/galaxy.ts";
-import { minOrbit, ORBIT_RANGE, radiusOf, type GalaxyDesign } from "./design.ts";
+import { STAR_MASS, farWindow, inFarWindow, makeCamera, project, type Camera, type Vec3 } from "../chat/galaxy.ts";
+import { minOrbit, maxOrbit, ORBIT_RANGE, orbitEccentricityOf, periapsisOf, radiusOf, type GalaxyDesign } from "./design.ts";
 
 /**
  * 星系设计面板的「引力井」网格：科普里常见的「重物压在橡胶膜上」画法——一张网格布，主星压在中央，
@@ -154,27 +154,38 @@ export function wellBottom(scene: WellScene, depth: number): ScenePoint {
   return toScreen(scene, { x: 0, y: 0, z: wellZ(0, depth) });
 }
 
-/** 轨道上角度 theta 处的点：贴着布面（z 取该半径处的下沉） */
-export function orbitPointOnWell(scene: WellScene, radius: number, depth: number, theta: number): ScenePoint {
-  return toScreen(scene, { x: radius * Math.cos(theta), y: radius * Math.sin(theta), z: wellZ(radius, depth) });
+/** 轨道上偏近点角 theta 处的点：椭圆在面内先转 ω，z 取实际矢径处的下沉 */
+export function orbitPointOnWell(scene: WellScene, radius: number, depth: number, theta: number, ecc = 0, periapsis = 0): ScenePoint {
+  const c = Math.cos(theta) - ecc;
+  const s = Math.sin(theta) * Math.sqrt(1 - ecc * ecc);
+  const x0 = radius * (c * Math.cos(periapsis) - s * Math.sin(periapsis));
+  const y0 = radius * (c * Math.sin(periapsis) + s * Math.cos(periapsis));
+  return toScreen(scene, { x: x0, y: y0, z: wellZ(Math.hypot(x0, y0), depth) });
 }
 
-/**
- * 贴着布面的一圈轨道，拆成远半圈（画在主星后面）与近半圈（画在主星前面）。
- * 远近按世界坐标 y 分：y > 0 在主星后面。
- */
-export function orbitOnWell(scene: WellScene, radius: number, depth: number, samples = 96): { back: string; front: string; points: ScenePoint[] } {
-  const back: ScenePoint[] = [];
-  const front: ScenePoint[] = [];
+/** 一条椭圆轨道按实际远侧区间拆成主星后 / 前两组路径；朝向不同时不再固定从 0 / π 切 */
+export function orbitOnWell(scene: WellScene, radius: number, depth: number, samples = 96, ecc = 0, periapsis = 0): { back: string; front: string; points: ScenePoint[] } {
   const all: ScenePoint[] = [];
-  for (let i = 0; i <= samples; i++) {
-    const theta = (i / samples) * Math.PI * 2;
-    all.push(orbitPointOnWell(scene, radius, depth, theta));
+  for (let i = 0; i <= samples; i++) all.push(orbitPointOnWell(scene, radius, depth, (i / samples) * Math.PI * 2, ecc, periapsis));
+  const far = farWindow(ecc, periapsis);
+  let back = "";
+  let front = "";
+  let current: "back" | "front" | null = null;
+  for (let i = 0; i < samples; i++) {
+    const a = all[i];
+    const b = all[i + 1];
+    if (a === undefined || b === undefined) continue;
+    const side = inFarWindow((i / samples) * Math.PI * 2, far) ? "back" : "front";
+    if (side !== current) {
+      if (side === "back") back += `M${round1(a.x)} ${round1(a.y)}`;
+      else front += `M${round1(a.x)} ${round1(a.y)}`;
+      current = side;
+    }
+    const segment = `L${round1(b.x)} ${round1(b.y)}`;
+    if (side === "back") back += segment;
+    else front += segment;
   }
-  // 0..π：y ≥ 0 远半圈；π..2π：近半圈
-  for (let i = 0; i <= samples / 2; i++) back.push(all[i] as ScenePoint);
-  for (let i = samples / 2; i <= samples; i++) front.push(all[i] as ScenePoint);
-  return { back: pathOf(back), front: pathOf(front), points: all };
+  return { back, front, points: all };
 }
 
 /** 面板里行星在轨道场景中的固定位置：右前方（近侧），从主星前面看得见，不被主星挡 */
@@ -241,8 +252,10 @@ export interface OrbitStage {
   grid: GridLine[];
   star: { x: number; y: number; r: number };
   planet: {
-    /** 轨道半径（世界单位）；数字框清空时按 0 画 */
+    /** 半长轴、偏心率、近日点方向（rad） */
     a: number;
+    ecc: number;
+    periapsis: number;
     orbit: { back: string; front: string; points: ScenePoint[] };
     /** 最近的合法轨道（虚线）：比它近就会撞上主星 */
     nearest: { back: string; front: string };
@@ -274,17 +287,22 @@ export function orbitStage(
   if (design.planet !== null) {
     const raw = design.planet.orbitRadius;
     const a = Number.isFinite(raw) ? Math.max(raw, 0) : 0;
+    const ecc = orbitEccentricityOf(design.planet);
+    const periapsis = (periapsisOf(design.planet) * Math.PI) / 180;
     const near = minOrbit(design);
-    const at = orbitPointOnWell(scene, a, depth, PLANET_THETA);
+    const far = maxOrbit(design);
+    const at = orbitPointOnWell(scene, a, depth, PLANET_THETA, ecc, periapsis);
     const r = Math.max(radiusOf(design, "planet") * pixelsPerUnit(scene, at), SCENE_PLANET_MIN);
     planet = {
       a,
-      orbit: orbitOnWell(scene, a, depth),
-      nearest: orbitOnWell(scene, Number.isFinite(near) ? near : 0, depth),
+      ecc,
+      periapsis,
+      orbit: orbitOnWell(scene, a, depth, 96, ecc, periapsis),
+      nearest: orbitOnWell(scene, Number.isFinite(near) ? near : 0, depth, 96, ecc, periapsis),
       x: at.x,
       y: at.y - SIT * r,
       r,
-      collide: !(raw >= near),
+      collide: !(raw >= near && raw <= far),
     };
   }
   return { scene, depth, grid: gridLines(scene, depth), star, planet };
