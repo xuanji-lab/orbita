@@ -167,6 +167,13 @@
   stroke-opacity: 0.5;
   paint-order: stroke;
 }
+/* 白眼（候选 eyes=xl-white，规则外，只供讨论）：受光色填充，外描一圈很淡的井色边，浅色地表上也认得出轮廓 */
+.gd-eyes[data-white] .gd-eye {
+  fill: var(--gd-light);
+  stroke: var(--gd-shade);
+  stroke-opacity: 0.35;
+  paint-order: stroke;
+}
 .gd-ring {
   fill: none;
   stroke: var(--color-text-tertiary);

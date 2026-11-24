@@ -21,6 +21,8 @@ import { storyLineOf,
   errorsAt,
   EYE_MIN,
   EYES,
+  eyeRimWidth,
+  withEyeSize,
   tiltedCenter,
   keepDesignerAcrossSessions,
   LONG_NAME,
@@ -229,6 +231,43 @@ describe("元素组合与 2D 形象", () => {
       const lift = tiltedCenter(right, art.eyesTilt).y - tiltedCenter(left, art.eyesTilt).y;
       assert.ok(lift > 0 && lift <= 0.12 * r, `r=${r} 左眼比右眼高 ${lift}`);
     }
+  });
+
+  test("眼睛四档（s 现在 → xl）：一档比一档大；l 档眼高约直径的 30%、两眼间距约一只眼宽；各档都守 2.2–2.8 的长宽比、在天体里、左眼略高", () => {
+    const design = legal();
+    const heights: number[] = [];
+    for (const size of ["s", "m", "l", "xl"] as const) {
+      for (const r of [8, 12, 30, 48]) {
+        const art = withEyeSize(bodyArt(design, "planet", r), size);
+        assert.ok(art.eyes !== null);
+        const [left, right] = art.eyes;
+        for (const eye of art.eyes) {
+          const aspect = eye.h / eye.w;
+          assert.ok(aspect >= 2.2 && aspect <= 2.8, `${size} r=${r} 纵横比 ${aspect}`);
+          const c = tiltedCenter(eye, art.eyesTilt);
+          // 胶囊四角（转过之后）都在天体里
+          for (const [dx, dy] of [[-eye.w / 2, -eye.h / 2 + eye.w / 2], [eye.w / 2, -eye.h / 2 + eye.w / 2], [-eye.w / 2, eye.h / 2 - eye.w / 2], [eye.w / 2, eye.h / 2 - eye.w / 2]] as const) {
+            assert.ok(Math.hypot(c.x + dx, c.y + dy) + eye.w / 2 < r * 0.92, `${size} r=${r} 眼睛贴到球缘`);
+          }
+        }
+        const lift = tiltedCenter(right, art.eyesTilt).y - tiltedCenter(left, art.eyesTilt).y;
+        assert.ok(lift > 0, `${size} 左眼不比右眼高`);
+        if (r === 48) {
+          heights.push(left.h / (2 * r));
+          if (size === "l") {
+            assert.ok(Math.abs(left.h / (2 * r) - 0.3) < 0.02, `l 档眼高占直径 ${(left.h / (2 * r)).toFixed(3)}`);
+            const gap = right.x - left.x - left.w;
+            assert.ok(Math.abs(gap / left.w - 1) < 0.15, `l 档眼距 / 眼宽 = ${(gap / left.w).toFixed(2)}`);
+          }
+        }
+      }
+    }
+    for (let i = 1; i < heights.length; i++) assert.ok((heights[i] ?? 0) > (heights[i - 1] ?? 0));
+    // s 档原样（默认不变）；没开眼睛的形象原样；亮边：s 照旧 0.45 眼宽，放大档封顶不描粗圈
+    const plain = bodyArt(design, "planet", 30);
+    assert.equal(withEyeSize(plain, "s"), plain);
+    assert.equal(eyeRimWidth(2, 30, "s"), 0.9);
+    assert.ok(eyeRimWidth(0.28 * 48, 48, "xl") <= 48 * 0.045 + 1e-9);
   });
 
   test("任何天体、成分、元素组合都没有嘴：形象里只有眼睛，没有 mouth / nose / blush / 四肢之类的图形", () => {

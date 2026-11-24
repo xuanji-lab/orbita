@@ -254,6 +254,45 @@ export const RING = { rx: 1.7, ry: 0.3, tiltDeg: -8, width: 0.07 } as const;
  */
 export const EYES = { x: 0.2, y: -0.1, w: 0.11, aspect: 2.5, tiltDeg: 12 } as const;
 
+/**
+ * 眼睛尺寸的四档候选（2026-11-24 用户：「眼睛太小了，感觉不可爱。你看看 grok bot 的」）：s = 现在（眼高约直径的 14%），
+ * 往 grok bot 的方向放大——l 档眼高约直径的 30%、两眼间距约一只眼宽；长宽比守提示词的 2.2–2.8。
+ * 眼睛越大，整双眼的中心越往下挪一点（不顶到天体上缘），歪头的倾角收一点（大眼睛转 12° 两眼高低差太明显）。
+ * 「白眼」（xl 的几何 + 浅色填充）在规则外，只供讨论。
+ */
+export type EyeSize = "s" | "m" | "l" | "xl";
+export const EYE_SIZES: Readonly<Record<EyeSize, { x: number; y: number; w: number; aspect: number; tiltDeg: number }>> = {
+  s: EYES,
+  m: { x: 0.2, y: -0.09, w: 0.17, aspect: 2.5, tiltDeg: 10 },
+  l: { x: 0.24, y: -0.08, w: 0.24, aspect: 2.5, tiltDeg: 8 },
+  xl: { x: 0.27, y: -0.06, w: 0.28, aspect: 2.5, tiltDeg: 8 },
+};
+
+/** 换眼睛尺寸（只动 eyes / eyesTilt；没开眼睛的形象原样返回）。s 返回原对象 */
+export function withEyeSize(art: BodyArt, size: EyeSize): BodyArt {
+  if (art.eyes === null || size === "s") return art;
+  const geo = EYE_SIZES[size];
+  const w = Math.max(geo.w * art.r, EYE_MIN);
+  const h = w * geo.aspect;
+  return {
+    ...art,
+    eyes: [
+      { x: -geo.x * art.r, y: geo.y * art.r, w, h },
+      { x: geo.x * art.r, y: geo.y * art.r, w, h },
+    ],
+    eyesTilt: geo.tiltDeg,
+  };
+}
+
+/**
+ * 深色地表上眼睛外描的亮边宽（描在填色外面，外露一半）：s 档照旧是眼宽的 0.45；放大的档按天体半径给、封顶，
+ * 不让大眼睛在 96px 头像上描出一道粗白圈
+ */
+export function eyeRimWidth(eyeW: number, r: number, size: EyeSize): number {
+  if (size === "s") return eyeW * 0.45;
+  return Math.min(eyeW * 0.45, Math.max(0.8, r * 0.045));
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
