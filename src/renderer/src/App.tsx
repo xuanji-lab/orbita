@@ -952,7 +952,12 @@ export function App() {
   useEffect(() => {
     const next = designerFollow(designerStateRef.current, session.workspaceId);
     if (next.target !== designerStateRef.current.target) setGalaxyTarget(next.target);
+    if (next.panel !== designerStateRef.current.panel) setRightPanel(next.panel);
   }, [session.workspaceId]);
+  // 换到别的页面（设置、插件、归档……整页盖住主槽）：星系设计面板收起，回来时不再挂着上一个工作区的设计
+  useEffect(() => {
+    if (overlay !== null && designerStateRef.current.panel === "galaxy") setRightPanel(null);
+  }, [overlay]);
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */

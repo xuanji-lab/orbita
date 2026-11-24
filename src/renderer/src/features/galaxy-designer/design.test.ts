@@ -581,10 +581,10 @@ describe("面板开合与切工作区", () => {
     assert.deepEqual(designerClick({ panel: "files", target: WS_A }, WS_A), { panel: "galaxy", target: WS_A });
   });
 
-  test("主槽换工作区：面板开着就跟过去；关着不动；换到无工作区的任务不跟", () => {
+  test("主槽换工作区：面板开着就跟过去；关着不动；换到无工作区的任务收起", () => {
     const open = { panel: "galaxy" as const, target: WS_A };
     assert.deepEqual(designerFollow(open, WS_B), { panel: "galaxy", target: WS_B });
-    assert.equal(designerFollow(open, null), open);
+    assert.deepEqual(designerFollow(open, null), { panel: null, target: WS_A }, "换到星际空间：收起");
     assert.equal(designerFollow(open, WS_A), open);
     const closed = { panel: null, target: WS_A };
     assert.equal(designerFollow(closed, WS_B), closed);

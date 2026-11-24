@@ -786,10 +786,12 @@ export function designerClick(state: DesignerPanelState, workspaceId: string): D
 
 /**
  * 主槽换了工作区（打开别的工作区里的会话、在别的工作区新建任务）：面板开着就跟过去，换成那个工作区的设计稿；
- * 换到不属于任何工作区的任务时不跟（没有星系可设计，面板仍写着它在设计哪个工作区）。面板关着不动。
+ * 换到不属于任何工作区的任务（星际空间）时收起——那里没有星系可设计，留着上一个工作区的面板会让人以为在改眼前这座
+ * （2026-11-24 Windows 验收：设计面板开着时切到别的工作区或页面，面板不跟着收起或换）。面板关着不动。
  */
 export function designerFollow(state: DesignerPanelState, workspaceId: string | null): DesignerPanelState {
-  if (state.panel !== "galaxy" || workspaceId === null || workspaceId === state.target) return state;
+  if (state.panel !== "galaxy" || workspaceId === state.target) return state;
+  if (workspaceId === null) return { panel: null, target: state.target };
   return { panel: "galaxy", target: workspaceId };
 }
 
