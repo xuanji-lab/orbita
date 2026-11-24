@@ -118,6 +118,7 @@ export class PlanetStore {
         orbit: null,
         elements: companion.main?.elements ?? null,
         eyeStyle: companion.main?.eyeStyle ?? null,
+        mix: companion.main?.mix ?? null,
       };
     }
     const planets: PlanetBody[] = [];
@@ -141,6 +142,7 @@ export class PlanetStore {
         elements: item.elements ?? null,
         eyeStyle: item.eyeStyle ?? null,
         profile: profile ?? null,
+        mix: item.mix ?? null,
       });
     }
     return { main, planets, warnings };

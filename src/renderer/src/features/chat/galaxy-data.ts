@@ -166,6 +166,8 @@ export interface AgentPlanetInput {
   id: string;
   mass: number;
   composition: Composition;
+  /** 按元素构成推出来的密度（g/cm³）；缺席按成分类别 */
+  density?: number;
   orbitRadius: number;
 }
 
@@ -291,6 +293,7 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
       id: agent.id,
       mass: agent.mass,
       composition: agent.composition,
+      ...(agent.density === undefined ? {} : { density: agent.density }),
       orbitRadius: agent.orbitRadius,
       inclinationDeg: ((hash >>> 3) % 11) - 5,
       nodeDeg: (hash >>> 7) % 360,

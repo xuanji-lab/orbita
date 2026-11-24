@@ -112,6 +112,43 @@ describe("PlanetStore：写回", () => {
     await rm(dir, { recursive: true });
   });
 
+  it("元素构成：写进 planet/galaxy.json 再读回；写回不带 mix 时原值保留；伴随文件没有时为 null，不从插件稿的元素项导入", async () => {
+    const dir = await workspace();
+    const store = new PlanetStore(fakeSurface);
+    await mkdir(join(dir, "planet", "agents", "gas"), { recursive: true });
+    await writeFile(
+      join(dir, "planet", "agents", "gas", "design.json"),
+      JSON.stringify({
+        name: "银珀",
+        seed: 897642,
+        compositionItems: [
+          { id: "H", kindKey: "element", scope: "大气", basis: "volume_fraction", share: 0.287 },
+          { id: "H2", kindKey: "molecule", scope: "大气", basis: "volume_fraction", share: 0.9 },
+          { id: "Fe", kindKey: "element", scope: "整体", basis: "mass_fraction", share: null },
+        ],
+      }),
+    );
+    await writeFile(join(dir, "planet", "galaxy.json"), JSON.stringify({ version: 1, main: {}, planets: [{ id: "gas", design: "agents/gas/design.json" }] }));
+    let read = await store.read(dir);
+    assert.equal(read?.planets[0]?.mix, null, "插件稿的元素项只是一部分，不当整体构成");
+    const main = { id: "main", name: "", massEarth: 62, composition: null, orbit: null, elements: { eyes: true } };
+    const mix = { seed: 7, items: [{ id: "O", kind: "element" as const, scope: "bulk" as const, basis: "mass_fraction" as const, share: 0.4, origin: "user" as const, placed: true as const }] };
+    const gas = { id: "gas", name: "银珀", massEarth: 1.6, composition: "ice" as const, orbit: 30, elements: { eyes: true } };
+    await store.write(dir, { main, planets: [{ ...gas, mix }] });
+    const raw = JSON.parse(await readFile(join(dir, "planet", "galaxy.json"), "utf8")) as { planets: { mix?: unknown }[] };
+    assert.deepEqual(raw.planets[0]?.mix, mix);
+    await store.write(dir, { main, planets: [gas] });
+    read = await store.read(dir);
+    assert.deepEqual(read?.planets[0]?.mix, mix, "不带 mix 的写回不抹掉原来的构成");
+    // 主星也存构成；「随机一版」给的值来源记 random
+    const starMix = { seed: 9, items: [{ id: "H", kind: "element" as const, scope: "bulk" as const, basis: "mass_fraction" as const, share: 0.73, origin: "random" as const }] };
+    await store.write(dir, { main: { ...main, mix: starMix }, planets: [gas] });
+    read = await store.read(dir);
+    assert.deepEqual(read?.main?.mix, starMix);
+    assert.deepEqual(read?.planets[0]?.mix, mix);
+    await rm(dir, { recursive: true });
+  });
+
     it("路径越界判定", () => {
     assert.equal(insidePlanetDir("/w", "a/b.png"), "/w/planet/a/b.png");
     assert.equal(insidePlanetDir("/w", "../x.png"), null);

@@ -38,6 +38,86 @@ export function isEyeStyle(value: unknown): value is EyeStyle {
   return typeof value === "string" && (EYE_STYLES as readonly string[]).includes(value);
 }
 
+// ── 成分构成项（元素周期表，2026-11-24）────────────────────────────────
+
+/**
+ * 一颗行星的元素构成：每选一个元素就是一条构成项。比例只在「同一层 + 同一口径」里相加（合计 ≤ 100%），
+ * 不同层 / 口径之间不能相加——大气体积分数和整体质量分数加在一起没有意义（插件流程实测里出过「大气 180%」）。
+ *
+ * 与插件 planet-forge 的 compositionItems 同一套形状，只是键名换成英文：
+ * - scope：bulk / atmosphere / surface ↔ 插件的「整体 / 大气 / 表面」（MIX_SCOPE_PLUGIN）；
+ * - basis：mass_fraction / volume_fraction 与插件同名；
+ * - share：0–1 的分数，与插件相同；null = 留空，交给种子随机（不是 0%）。
+ * 以后插件出 elements.json、改读写这份伴随文件时，按这两张对照表换算即可同源，不需要第二种格式。
+ * 分子 / 材料 / 核幔壳层（插件的 molecule / material）这一版不收，只收元素（kind 恒为 "element"）。
+ */
+export type MixScope = "bulk" | "atmosphere" | "surface";
+export const MIX_SCOPES: readonly MixScope[] = ["bulk", "atmosphere", "surface"];
+export type MixBasis = "mass_fraction" | "volume_fraction";
+export const MIX_BASES: readonly MixBasis[] = ["mass_fraction", "volume_fraction"];
+/** 插件稿里 scope 写的是中文 */
+export const MIX_SCOPE_PLUGIN: Readonly<Record<MixScope, string>> = { bulk: "整体", atmosphere: "大气", surface: "表面" };
+/**
+ * 值从哪来：user = 用户在面板里定的；default = 按天体类型给的默认（旧稿映射）；random = 「随机一版」按种子给的。
+ * 留空的值（share = null）也显示为「随机」，但它是现算的，不落盘。
+ */
+export type MixOrigin = "user" | "default" | "random";
+/** 一颗行星最多几条构成项 */
+export const MIX_ITEMS_MAX = 24;
+
+export interface PlanetMixItem {
+  /** 元素符号（Fe、O、He……） */
+  id: string;
+  kind: "element";
+  scope: MixScope;
+  basis: MixBasis;
+  /** 0–1；null = 留空（交给种子） */
+  share: number | null;
+  /** share 的来源 */
+  origin: MixOrigin;
+  /** scope / basis 是用户挑的（true）还是按默认放的（缺席） */
+  placed?: true;
+}
+
+export interface PlanetMix {
+  /** 留空项按它随机：同一份构成 + 同一个种子 = 同一个结果；「换一版」只换种子 */
+  seed: number;
+  items: PlanetMixItem[];
+}
+
+function isMixItem(raw: unknown): raw is PlanetMixItem {
+  if (!isRecord(raw)) return false;
+  const share = raw["share"];
+  return (
+    typeof raw["id"] === "string" &&
+    /^[A-Z][a-z]?$/.test(raw["id"]) &&
+    raw["kind"] === "element" &&
+    (MIX_SCOPES as readonly unknown[]).includes(raw["scope"]) &&
+    (MIX_BASES as readonly unknown[]).includes(raw["basis"]) &&
+    (share === null || (typeof share === "number" && Number.isFinite(share) && share >= 0 && share <= 1)) &&
+    (raw["origin"] === "user" || raw["origin"] === "default" || raw["origin"] === "random") &&
+    (raw["placed"] === undefined || raw["placed"] === true)
+  );
+}
+
+/** 盘上 / IPC 里的构成：坏条目丢掉，同一元素同一层同一口径只留第一条，超出上限截掉；种子不合法整份作废 */
+export function parseMix(raw: unknown): PlanetMix | undefined {
+  if (!isRecord(raw)) return undefined;
+  const seed = raw["seed"];
+  if (typeof seed !== "number" || !Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) return undefined;
+  const items: PlanetMixItem[] = [];
+  const seen = new Set<string>();
+  for (const item of Array.isArray(raw["items"]) ? raw["items"] : []) {
+    if (!isMixItem(item)) continue;
+    const key = `${item.id}|${item.scope}|${item.basis}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ id: item.id, kind: "element", scope: item.scope, basis: item.basis, share: item.share, origin: item.origin, ...(item.placed === true ? { placed: true as const } : {}) });
+    if (items.length >= MIX_ITEMS_MAX) break;
+  }
+  return { seed, items };
+}
+
 /** 读回来的一颗天体（主星或一颗子智能体行星） */
 export interface PlanetBody {
   /** 主星恒为 "main"；行星是伴随文件里的 id */
@@ -63,6 +143,13 @@ export interface PlanetBody {
    * 星系照画，只是没有职能、不能被指名派活。主星恒为 null。
    */
   profile?: SubAgentProfile | null;
+  /**
+   * 元素构成：伴随文件里的；没有为 null（界面按天体类型映射一组默认元素，半径照旧按类别算）。
+   * 主星也有（只影响颜色提示与科普，主星密度固定）。
+   * 不从插件稿的 compositionItems 导入：那里元素、分子、材料混在一起，单挑出元素项不是这颗星的整体构成——
+   * 拿它推密度，读一遍旧稿行星就变大（2026-11-24 实测：聆箴的 O / Co / Si 三项推出 2.58，半径 1.59 → 2.04）。
+   */
+  mix: PlanetMix | null;
 }
 
 export interface WorkspacePlanets {
@@ -84,6 +171,8 @@ export interface PlanetWriteBody {
   elements: PlanetElements;
   /** 眼睛样式；缺席 = 没设过（伴随文件里原有的值不动） */
   eyeStyle?: EyeStyle;
+  /** 元素构成（主星、行星都可以有）；缺席 = 不动伴随文件里原有的 */
+  mix?: PlanetMix;
 }
 
 export interface PlanetWriteRequest {
@@ -106,6 +195,8 @@ export interface CompanionBody {
   name?: string;
   massEarth?: number;
   note?: string;
+  /** 元素构成（成分类别 composition 由它推出来，行星上一并写着，给只认三类的读者用） */
+  mix?: PlanetMix;
 }
 
 export interface CompanionPlanet extends CompanionBody {
@@ -173,6 +264,8 @@ function parseBody(raw: Record<string, unknown>): CompanionBody {
   if (mass !== undefined && mass > 0) body.massEarth = mass;
   const note = str(raw["note"]);
   if (note !== undefined) body.note = note;
+  const mix = parseMix(raw["mix"]);
+  if (mix !== undefined) body.mix = mix;
   return body;
 }
 
@@ -301,6 +394,7 @@ export function mergeCompanion(
   const writeBody = (old: CompanionBody | null, body: PlanetWriteBody, designed: boolean): CompanionBody => {
     const next: CompanionBody = { ...(old ?? {}), elements: body.elements };
     if (body.eyeStyle !== undefined) next.eyeStyle = body.eyeStyle;
+    if (body.mix !== undefined) next.mix = body.mix;
     if (designed) {
       delete next.name;
       delete next.massEarth;
@@ -327,6 +421,12 @@ export function mergeCompanion(
   return { version: PLANET_GALAXY_VERSION, main, planets: [...kept, ...added].slice(0, PLANET_AGENTS_MAX) };
 }
 
+/** 写回请求里的构成必须原样合法（不静默丢条目）：parseMix 后条数不变 */
+function isWritableMix(raw: unknown): boolean {
+  const mix = parseMix(raw);
+  return mix !== undefined && isRecord(raw) && Array.isArray(raw["items"]) && raw["items"].length === mix.items.length;
+}
+
 export function isPlanetWriteBody(raw: unknown): raw is PlanetWriteBody {
   if (!isRecord(raw)) return false;
   return (
@@ -340,7 +440,8 @@ export function isPlanetWriteBody(raw: unknown): raw is PlanetWriteBody {
     (raw["composition"] === null || isComposition(raw["composition"])) &&
     (raw["orbit"] === null || (typeof raw["orbit"] === "number" && Number.isFinite(raw["orbit"]))) &&
     parseElements(raw["elements"]) !== undefined &&
-    (raw["eyeStyle"] === undefined || isEyeStyle(raw["eyeStyle"]))
+    (raw["eyeStyle"] === undefined || isEyeStyle(raw["eyeStyle"])) &&
+    (raw["mix"] === undefined || isWritableMix(raw["mix"]))
   );
 }
 

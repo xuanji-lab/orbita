@@ -1,7 +1,6 @@
 import "./galaxy-designer.css";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { Workspace } from "@shared/workspace";
-import type { Composition } from "../chat/galaxy.ts";
 import { Icon } from "../../shell/Icon";
 import { PanelButton, PanelGroupHead, PanelHelp, PanelLine, PanelTitle, RightPanelFrame } from "../../shell/RightPanel";
 import { PanelEmpty } from "../../shell/PanelEmpty";
@@ -13,8 +12,11 @@ import { MASS_UNIT_PER_EARTH,
   BACKDROPS,
   bodyArt,
   clampValue,
+  bodyDensity,
   createStar,
-  densityOf,
+  mixOf,
+  starMixOf,
+  withMix,
   displayRadius,
   ELEMENTS_OF,
   errorsAt,
@@ -48,7 +50,11 @@ import { EYE_STYLES, type EyeStyle } from "@shared/planet-design";
 import { BodyFigure } from "./StarFigure.tsx";
 import { NewSubAgentForm, RoleSection } from "./SubAgentRole.tsx";
 import { PLANET_AGENTS_MAX } from "@shared/planet-design";
+import { MixSection } from "./MixSection.tsx";
+import type { PlanetMix } from "@shared/planet-design";
+import { cssColorOf, mixColor } from "./mix.ts";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
+import { DETAIL_GAP, detailScale, externalTangents, LOUPE_DEFAULT_WIDTH, LOUPE_VIEW, loupeFrame, MARK_GAP, type LoupeFrame } from "./loupe.ts";
 
 /**
  * 星系设计（原型，proto/planet-designer）：侧栏工作区行悬停出现的画笔键打开它，住在右栏面板位里。
@@ -177,7 +183,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                 {tg.readout.radius}<b data-radius={radius.toFixed(4)}>{formatNumber(radius)}</b>
               </span>
               <span>
-                {tg.readout.density}<b>{formatNumber(densityOf(kind, design.planet?.composition ?? "rock"))}</b>
+                {tg.readout.density}<b>{formatNumber(Math.round(bodyDensity(design, kind) * 100) / 100)}</b>
               </span>
               <span>
                 {tg.readout.mass}<b>{`${formatNumber(earth(body.mass))} M⊕`}</b>
@@ -307,22 +313,25 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
               />
             </Row>
             {kind === "planet" && design.planet !== null ? (
-              <Row name={tg.composition} desc={tg.compositionDesc}>
-                <Segmented<Composition>
-                  label={tg.composition}
-                  value={design.planet.composition}
-                  options={[
-                    { value: "rock", label: tg.rock },
-                    { value: "ice", label: tg.ice },
-                    { value: "gas", label: tg.gas },
-                  ]}
-                  onChange={(composition) => patchBody({ composition })}
+              // 成分 = 元素构成（周期表），替掉原来的岩石 / 冰质 / 气态三选一；类别由构成推出的密度归（withMix）
+              <Row name={tg.composition} desc={tg.mix.desc} wide>
+                <MixSection
+                  mix={mixOf(design.planet)}
+                  cls={design.planet.composition}
+                  onChange={(mix) => {
+                    if (design.planet === null) return;
+                    const next = withMix(design.planet, mix);
+                    patchBody({ mix: next.mix, composition: next.composition });
+                  }}
                 />
               </Row>
             ) : (
-              <Row name={tg.composition} desc={tg.starComposition}>
-                <span className="gd-fixed">{tg.plasma}</span>
-              </Row>
+              // 主星：构成只影响颜色提示与科普，密度照旧固定（规则：主星是等离子，只能调质量定大小）
+              design.star !== null && (
+                <Row name={tg.composition} desc={tg.starComposition} wide>
+                  <MixSection mix={starMixOf(design.star, id)} cls="star" onChange={(mix) => patchBody({ mix })} />
+                </Row>
+              )
             )}
             {kind === "planet" && design.planet !== null && (
               <Row
@@ -569,7 +578,11 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
           data-star-cy={stage.star.y.toFixed(2)}
         >
           <GridLayer lines={stage.grid} box={box} id={`${uid}-fade`} depth={stage.depth} />
-          <g transform={`translate(${stage.star.x.toFixed(2)} ${stage.star.y.toFixed(2)}) scale(${s})`}>
+          <g
+            className={star.mix === undefined ? undefined : "gd-tinted"}
+            style={tintOf(star.mix)}
+            transform={`translate(${stage.star.x.toFixed(2)} ${stage.star.y.toFixed(2)}) scale(${s})`}
+          >
             <BodyFigure art={art} uid={uid} />
           </g>
         </svg>
@@ -580,17 +593,24 @@ function Preview(props: { design: GalaxyDesign; workspaceName: string; invalid: 
     );
   }
   const planet = design.planet;
+  if (planet !== null) {
+    return <PlanetLoupe design={design} planet={planet} uid={uid} name={planet.name || tg.unnamedPlanet} common={common} />;
+  }
+  // 有主星、还没有行星：只有轨道场景里的主星（没有可放大的东西，不画引线）
   return (
-    <figure className="gd-stage" data-body="planet" data-empty={planet === null ? "no-planet" : undefined} {...common}>
-      {planet !== null && <PlanetAvatar design={design} planet={planet} uid={uid} name={planet.name || tg.unnamedPlanet} />}
-      <OrbitScene design={design} uid={`${uid}-o`} label={tg.orbitFigure(planet === null ? props.workspaceName : planet.name || tg.unnamedPlanet)} />
-      {planet !== null && (
-        <figcaption className="gd-stage-name" title={planet.name || tg.unnamedPlanet}>
-          {planet.name || tg.unnamedPlanet}
-        </figcaption>
-      )}
+    <figure className="gd-stage" data-body="planet" data-empty="no-planet" {...common}>
+      <OrbitScene design={design} uid={`${uid}-o`} label={tg.orbitFigure(props.workspaceName)} />
     </figure>
   );
+}
+
+/**
+ * 颜色提示：只给面板里改过构成的天体上色（没改过的照旧墨色，与页面星系、侧栏头像一致）；
+ * 有地表图时图盖在上面，提示只在代码画的球上看得到。
+ */
+function tintOf(mix: PlanetMix | undefined): React.CSSProperties | undefined {
+  const hint = mix === undefined ? null : mixColor(mix);
+  return hint === null ? undefined : ({ "--gd-tint": cssColorOf(hint) } as React.CSSProperties);
 }
 
 function frameBox(frame: { halfW: number; halfH: number }): WellBox {
@@ -603,33 +623,6 @@ function viewBoxOf(box: WellBox): string {
 
 function onElements(body: BodyDesign, kind: BodyKind): ElementKey[] {
   return ELEMENTS_OF[kind].filter((key: ElementKey) => body.elements[key]);
-}
-
-/** 行星自己的大头像：居中、按预览缩放放大（与轨道场景分开：头像管「它长什么样」，场景管「它绕着谁转」） */
-function PlanetAvatar(props: { design: GalaxyDesign; planet: PlanetDesign; uid: string; name: string }) {
-  const t = useT();
-  const { design, planet } = props;
-  const r = displayRadius(radiusOf(design, "planet"));
-  const art = bodyArt(design, "planet", r);
-  const frame = previewFrame(art);
-  return (
-    <svg
-      className="gd-preview"
-      viewBox={viewBoxOf(frameBox(frame))}
-      data-frame-scale={frame.scale.toFixed(3)}
-      role="img"
-      aria-label={t.galaxyDesigner.figure(props.name)}
-      data-body="planet"
-      data-surface={art.surface}
-      data-display-r={r.toFixed(2)}
-      data-zoom={planet.zoom}
-      data-elements={onElements(planet, "planet").join(" ")}
-    >
-      <g transform={`scale(${planet.zoom / 100})`}>
-        <BodyFigure art={art} uid={props.uid} />
-      </g>
-    </svg>
-  );
 }
 
 /**
@@ -687,6 +680,152 @@ function OrbitScene(props: { design: GalaxyDesign; uid: string; label: string })
         </g>
       )}
     </svg>
+  );
+}
+
+/**
+ * 量画框的内容宽（CSS px）：ResizeObserver 只在面板宽度变了时回调，整数宽不变 React 不重画。
+ * 公转 / 拖滑块都不经过这里——它们只改设计稿，几何在渲染里重算成 SVG 属性，不读布局、不触发重排。
+ */
+function useContentWidth(ref: React.RefObject<HTMLElement | null>): number {
+  const [width, setWidth] = useState(LOUPE_DEFAULT_WIDTH);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el === null) return;
+    setWidth(Math.round(el.clientWidth) || LOUPE_DEFAULT_WIDTH);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (entry !== undefined && entry.contentRect.width > 0) setWidth(Math.round(entry.contentRect.width));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return width;
+}
+
+/** 网格淡出带：从场景块的 70% 处到分隔线那一边（左右排沿 x、上下排沿 y） */
+function edgeFade(frame: LoupeFrame): { x1: number; y1: number; x2: number; y2: number } {
+  const b = frame.scene;
+  return frame.layout === "side"
+    ? { x1: b.x + b.w * 0.7, y1: 0, x2: b.x + b.w, y2: 0 }
+    : { x1: 0, y1: b.y + b.h * 0.7, x2: 0, y2: b.y + b.h };
+}
+
+/**
+ * 行星页：一张卡里画「引力场里的这颗行星」和「这颗行星的大形象」，两根虚线引线把场景里的小身影连到大形象
+ * （技术图纸的局部放大，2026-11-24 用户草图）。宽时左右排、窄时上下排（loupe.ts 定阈值与几何）。
+ * 引力场：主星压出的坑随主星质量变深；行星在轨道上的位置随轨道半径走。大形象随行星质量变大变小。
+ * 三样都只改 SVG 属性：引线端点跟着重算，不经过 DOM 布局。
+ */
+function PlanetLoupe(props: {
+  design: GalaxyDesign;
+  planet: PlanetDesign;
+  uid: string;
+  name: string;
+  common: Record<string, string | boolean | undefined>;
+}) {
+  const t = useT();
+  const tg = t.galaxyDesigner;
+  const { design, planet, uid } = props;
+  const figureRef = useRef<HTMLElement | null>(null);
+  const width = useContentWidth(figureRef);
+  const tilt = useGalaxyTilt();
+  const frame = loupeFrame(width);
+  const stage = orbitStage(design, tilt, { box: frame.scene, ...LOUPE_VIEW[frame.layout] });
+  const p = stage?.planet ?? null;
+  // 大形象：与原来的大头像同一个形象、同一套缩放规矩（质量变 → 大小变；预览缩放乘在上面）
+  const r = displayRadius(radiusOf(design, "planet"));
+  const art = bodyArt(design, "planet", r);
+  const k = detailScale(frame.detail, art.extent, planet.zoom);
+  const big = { x: frame.detail.x + frame.detail.w / 2, y: frame.detail.y + frame.detail.h / 2 };
+  const small = stage === null ? null : sceneDesign(design, stage.star.r, p?.r ?? 0);
+  const starArt = stage === null || small === null ? null : bodyArt(small, "star", stage.star.r);
+  const planetArt = p === null || small === null ? null : bodyArt(small, "planet", p.r);
+  const mark = p === null || planetArt === null ? null : { x: p.x, y: p.y, r: planetArt.r + MARK_GAP };
+  const leaders = mark === null ? null : externalTangents(mark, { ...big, r: art.r * k + DETAIL_GAP });
+  const clip = `${uid}-scene`;
+  const fixed = (value: number): string => value.toFixed(1);
+  const tintHint = planet.mix === undefined ? null : mixColor(planet.mix);
+  const tint = tintOf(planet.mix);
+  const tintClass = tint === undefined ? "" : " gd-tinted";
+  return (
+    <figure ref={figureRef} className="gd-stage gd-loupe-stage" data-body="planet" data-layout={frame.layout} {...props.common}>
+      <svg
+        className="gd-loupe"
+        viewBox={`0 0 ${frame.w} ${frame.h}`}
+        role="img"
+        aria-label={`${tg.figure(props.name)} · ${tg.orbitFigure(props.name)}`}
+        data-layout={frame.layout}
+        data-width={frame.w}
+        data-body="planet"
+        data-surface={art.surface}
+        data-display-r={r.toFixed(2)}
+        data-zoom={planet.zoom}
+        data-elements={onElements(planet, "planet").join(" ")}
+        data-depth={stage?.depth.toFixed(2)}
+        data-star-r={stage?.star.r.toFixed(2)}
+        data-orbit-a={p?.a.toFixed(2)}
+        data-planet-x={p?.x.toFixed(2)}
+        data-planet-y={p?.y.toFixed(2)}
+        data-planet-r={p?.r.toFixed(2)}
+        data-detail-scale={k.toFixed(3)}
+        data-collide={p?.collide || undefined}
+      >
+        <defs>
+          <clipPath id={clip}>
+            <rect x={frame.scene.x} y={frame.scene.y} width={frame.scene.w} height={frame.scene.h} />
+          </clipPath>
+          {/* 网格朝分隔线那一侧淡出（左右排往右、上下排往下）：两幅视图之间靠留白与一道发丝线分开，不是网格的硬边 */}
+          <linearGradient id={`${uid}-edge`} gradientUnits="userSpaceOnUse" {...edgeFade(frame)}>
+            <stop offset="0" className="gd-loupe-edge-stop" stopOpacity={1} />
+            <stop offset="1" className="gd-loupe-edge-stop" stopOpacity={0} />
+          </linearGradient>
+          <mask id={`${uid}-edge-mask`} className="gd-loupe-edge-mask" maskUnits="userSpaceOnUse" x={frame.scene.x} y={frame.scene.y} width={frame.scene.w} height={frame.scene.h}>
+            <rect x={frame.scene.x} y={frame.scene.y} width={frame.scene.w} height={frame.scene.h} fill={`url(#${uid}-edge)`} />
+          </mask>
+        </defs>
+        {stage !== null && starArt !== null && (
+          <g className="gd-loupe-scene" clipPath={`url(#${clip})`}>
+            <g mask={`url(#${uid}-edge-mask)`}>
+              <GridLayer lines={stage.grid} box={frame.scene} id={`${uid}-fade`} depth={stage.depth} />
+            </g>
+            {p !== null && <path className="gd-orbit-nearest" d={p.nearest.back} />}
+            {p !== null && <path className="gd-orbit-path" data-collide={p.collide || undefined} d={p.orbit.back} />}
+            <g transform={`translate(${fixed(stage.star.x)} ${fixed(stage.star.y)})`}>
+              <BodyFigure art={starArt} uid={`${uid}-s`} />
+            </g>
+            {p !== null && <path className="gd-orbit-nearest" d={p.nearest.front} />}
+            {p !== null && <path className="gd-orbit-path" data-collide={p.collide || undefined} d={p.orbit.front} />}
+            {p !== null && planetArt !== null && (
+              <g className={`gd-orbit-planet${tintClass}`} style={tint} data-collide={p.collide || undefined} transform={`translate(${fixed(p.x)} ${fixed(p.y)})`}>
+                <BodyFigure art={planetArt} uid={`${uid}-p`} />
+              </g>
+            )}
+            {/* 被放大的那一颗：球外描一圈与引线同样的虚线，小到 5px 也找得到 */}
+            {mark !== null && <circle className="gd-loupe-mark" cx={fixed(mark.x)} cy={fixed(mark.y)} r={fixed(mark.r)} />}
+          </g>
+        )}
+        <line className="gd-loupe-divider" x1={frame.divider.x1} y1={frame.divider.y1} x2={frame.divider.x2} y2={frame.divider.y2} />
+        {leaders !== null &&
+          leaders.map((line, index) => (
+            <line
+              key={index === 0 ? "a" : "b"}
+              className="gd-loupe-leader"
+              data-leader={index === 0 ? "a" : "b"}
+              x1={fixed(line.x1)}
+              y1={fixed(line.y1)}
+              x2={fixed(line.x2)}
+              y2={fixed(line.y2)}
+            />
+          ))}
+        <g className={`gd-loupe-detail${tintClass}`} style={tint} data-tint={tintHint === null ? undefined : cssColorOf(tintHint)} transform={`translate(${fixed(big.x)} ${fixed(big.y)}) scale(${k.toFixed(4)})`}>
+          <BodyFigure art={art} uid={uid} />
+        </g>
+      </svg>
+      <figcaption className="gd-stage-name" title={props.name}>
+        {props.name}
+      </figcaption>
+    </figure>
   );
 }
 

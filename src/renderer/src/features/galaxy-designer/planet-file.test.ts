@@ -21,11 +21,11 @@ import { isPlanetWriteRequest } from "../../../../shared/planet-design.ts";
 
 /** 意图系统的样子：主星烛霓 60 M⊕ + 三颗子智能体（地表都是插件出的无脸图） */
 const INTENT: WorkspacePlanets = {
-  main: { id: "main", name: "烛霓", massEarth: 60, composition: null, note: "故事", surface: "data:image/png;base64,AAA", flip: true, orbit: null, elements: null, eyeStyle: null },
+  main: { id: "main", name: "烛霓", massEarth: 60, composition: null, note: "故事", surface: "data:image/png;base64,AAA", flip: true, orbit: null, elements: null, eyeStyle: null, mix: null },
   planets: [
-    { id: "rec", name: "聆箴", massEarth: 2.2, composition: "rock", note: "会议", surface: "data:image/png;base64,BBB", flip: false, orbit: 19, elements: null, eyeStyle: "xl-white" },
-    { id: "eval", name: "衡璨", massEarth: 3, composition: "rock", note: null, surface: null, flip: false, orbit: 31, elements: { ring: true }, eyeStyle: "s" },
-    { id: "mem", name: "银珀", massEarth: 1.6, composition: null, note: null, surface: null, flip: false, orbit: null, elements: null, eyeStyle: null },
+    { id: "rec", name: "聆箴", massEarth: 2.2, composition: "rock", note: "会议", surface: "data:image/png;base64,BBB", flip: false, orbit: 19, elements: null, eyeStyle: "xl-white", mix: null },
+    { id: "eval", name: "衡璨", massEarth: 3, composition: "rock", note: null, surface: null, flip: false, orbit: 31, elements: { ring: true }, eyeStyle: "s", mix: null },
+    { id: "mem", name: "银珀", massEarth: 1.6, composition: null, note: null, surface: null, flip: false, orbit: null, elements: null, eyeStyle: null, mix: null },
   ],
   warnings: [],
 };
@@ -228,5 +228,21 @@ describe("子智能体档案进设计稿（面板「职能」一节读它）", (
     const request = planetsWriteOf("ws-intent", design);
     assert.equal(isPlanetWriteRequest(request), true);
     assert.equal(JSON.stringify(request).includes("没有标准答案"), false);
+  });
+});
+
+describe("写回请求里的元素构成", () => {
+  const body = { id: "rec", name: "聆箴", massEarth: 2, composition: "rock", orbit: 19, elements: { eyes: true } };
+  const req = (mix: unknown) => ({ workspaceId: "ws", main: null, planets: [{ ...body, mix }] });
+  test("合法的构成放行；留空（null）与 0 都合法", () => {
+    assert.ok(isPlanetWriteRequest(req({ seed: 1, items: [{ id: "Fe", kind: "element", scope: "bulk", basis: "mass_fraction", share: 0, origin: "user" }, { id: "O", kind: "element", scope: "bulk", basis: "mass_fraction", share: null, origin: "default" }] })));
+  });
+  test("越界的比例、不认识的层、坏符号、坏种子一律拒绝（不静默丢条目）", () => {
+    const item = { id: "Fe", kind: "element", scope: "bulk", basis: "mass_fraction", share: 0.3, origin: "user" };
+    assert.ok(!isPlanetWriteRequest(req({ seed: 1, items: [{ ...item, share: 1.2 }] })));
+    assert.ok(!isPlanetWriteRequest(req({ seed: 1, items: [{ ...item, scope: "core" }] })));
+    assert.ok(!isPlanetWriteRequest(req({ seed: 1, items: [{ ...item, id: "fe" }] })));
+    assert.ok(!isPlanetWriteRequest(req({ seed: -1, items: [item] })));
+    assert.ok(!isPlanetWriteRequest(req({ seed: 1, items: [item, item] })), "重复条目");
   });
 });
