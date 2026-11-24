@@ -28,23 +28,11 @@ function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<ty
     try {
       contents.setBackgroundThrottling(false);
       contents.invalidate();
-      // 主路用 CDP：原生 capturePage 实测会偶发只回局部像素（840×400@2 变成 1112×496）
+      // 只用 CDP 区域截图：原生 capturePage 实测既会回局部像素，也会把视口改成矩形大小
       const png = await captureRegion(contents, { ...rect, scale });
-      if (png !== null) {
-        const size = nativeImage.createFromBuffer(png).getSize();
-        return { base64: png.toString("base64"), width: size.width, height: size.height };
-      }
-    } catch {
-      // 换原生补路
-    }
-    try {
-      const image = await contents.capturePage(rect);
-      if (image.isEmpty()) return null;
-      const size = image.getSize();
-      const factor = image.getScaleFactors()[0] ?? scale;
-      // 原生补路也只接受完整矩形；局部图宁可没有位图，不能贴成错位的一帧
-      if (size.width !== Math.round(rect.width * factor) || size.height !== Math.round(rect.height * factor)) return null;
-      return { base64: image.toPNG().toString("base64"), width: size.width, height: size.height };
+      if (png === null) return null;
+      const size = nativeImage.createFromBuffer(png).getSize();
+      return { base64: png.toString("base64"), width: size.width, height: size.height };
     } catch {
       return null;
     }
