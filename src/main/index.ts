@@ -1218,7 +1218,7 @@ void app.whenReady().then(async () => {
   // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
   const mediaTokens = new MediaTokens();
   installMediaProtocol(mediaTokens, (url) => isOwnRendererPage(url, ownRendererOrigin()));
-  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots), mediaTokens);
+  registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path), mediaTokens);
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
   registerSlidesIpc(workspaces, sessions);
