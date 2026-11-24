@@ -21,6 +21,8 @@ import {
   beltOuterOf,
   BELT_OVERSHOOT,
   framePoint,
+  farWindow,
+  inFarWindow,
   orbitFrame,
   eccOf,
   starRadius,
@@ -78,6 +80,8 @@ export interface SafeScene {
   minPlanetPx: number;
   /** 因为装不下而少画的行星数（已计进 layout.hidden） */
   dropped: number;
+  /** 这块画布上行星本该画多大（px，可读半径）：minPlanetPx 比它小 = 走了「行星缩到可读下限」那一步 */
+  preferredPx: number;
 }
 
 interface Body {
@@ -150,11 +154,13 @@ function orbitGap(ecc: number, a: OrbitFrame, aScale: number, b: OrbitFrame, bSc
  * 画在主星前面的那一段（不在远层：偏近点角不在 (FAR_MARGIN, π − FAR_MARGIN) 里）离主星中心最近多远。
  * 正圆轨道就是近侧短轴端点；开普勒椭圆上最近的一点偏向近日点那一侧，取样量。
  */
-function frontDistance(frame: OrbitFrame, star: { x: number; y: number }): number {
+function frontDistance(frame: OrbitFrame, star: { x: number; y: number }, camera: Camera, ecc: number): number {
+  // 远侧区间随方位角转（方位角 0 时就是 (FAR_MARGIN, π − FAR_MARGIN)）
+  const far = farWindow(ecc, camera.azimuth, FAR_MARGIN);
   let best = Infinity;
   for (let i = 0; i < 144; i++) {
     const theta = (i / 144) * Math.PI * 2;
-    if (theta > FAR_MARGIN && theta < Math.PI - FAR_MARGIN) continue;
+    if (inFarWindow(theta, far)) continue;
     const p = framePoint(frame, theta);
     best = Math.min(best, Math.hypot(p.x - star.x, p.y - star.y));
   }
@@ -162,11 +168,12 @@ function frontDistance(frame: OrbitFrame, star: { x: number; y: number }): numbe
 }
 
 /** 碎石带（以中间那一圈的 frame 按比例缩放）画在主星前面那一段到主星的最近距离 */
-function frontDistanceScaled(frame: OrbitFrame, scale: number, star: { x: number; y: number }): number {
+function frontDistanceScaled(frame: OrbitFrame, scale: number, star: { x: number; y: number }, camera: Camera, ecc: number): number {
+  const far = farWindow(ecc, camera.azimuth);
   let best = Infinity;
   for (let i = 0; i < 144; i++) {
     const theta = (i / 144) * Math.PI * 2;
-    if (Math.sin(theta) > 0) continue;
+    if (camera.azimuth === 0 ? Math.sin(theta) > 0 : inFarWindow(theta, far)) continue;
     const p = framePoint(frame, theta, scale);
     best = Math.min(best, Math.hypot(p.x - star.x, p.y - star.y));
   }
@@ -179,7 +186,7 @@ function starDistance(camera: Camera, vp: Viewport, a: number, ecc: number, star
     const near = screenOf(camera, vp, a, NEAR);
     return Math.hypot(near.x - star.x, near.y - star.y);
   }
-  return frontDistance(orbitFrame(a, 0, 0, camera, vp, ecc), star);
+  return frontDistance(orbitFrame(a, 0, 0, camera, vp, ecc), star, camera, ecc);
 }
 
 /**
@@ -243,6 +250,15 @@ export function bodyGapOf(minPx: number): number {
 
 /** 半径 a 的轨道（放平）连同上面半径 r 的天体，整圈都在画布里（留 EDGE_PX）。椭圆的四个极点仍在参数角 0 / π / ±π/2 上 */
 function orbitInside(camera: Camera, vp: Viewport, a: number, r: number, ecc = 0): boolean {
+  if (camera.azimuth !== 0 && ecc !== 0) {
+    // 转过方位角的椭圆：屏幕上的极点不再在参数角 0 / π / ±π/2 上，取样量
+    const frame = orbitFrame(a, 0, 0, camera, vp, ecc);
+    for (let i = 0; i < 72; i++) {
+      const p = framePoint(frame, (i / 72) * Math.PI * 2);
+      if (p.x - r < EDGE_PX || p.x + r > vp.width - EDGE_PX || p.y - r < EDGE_PX || p.y + r > vp.height - EDGE_PX) return false;
+    }
+    return true;
+  }
   const at = (theta: number) => (ecc === 0 ? screenOf(camera, vp, a, theta) : framePoint(orbitFrame(a, 0, 0, camera, vp, ecc), theta));
   const near = at(NEAR);
   const far = at(FAR);
@@ -305,7 +321,7 @@ function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, last
     const mid = (inner + beltOuterOf(inner, belt.count)) / 2;
     const midFrame = orbitFrame(mid, 0, 0, camera, vp, ecc);
     // 低俯角时碎石带近侧会横过主星：内沿画在主星前面的那一段也要让开主星
-    const clearStar = frontDistanceScaled(midFrame, inner / mid, star) >= starPx + dustPx + SCREEN_GAP;
+    const clearStar = frontDistanceScaled(midFrame, inner / mid, star, camera, ecc) >= starPx + dustPx + SCREEN_GAP;
     if (clearStar && (planetFrame === null || orbitGap(ecc, planetFrame, 1, midFrame, inner / mid) >= lastPx + dustPx + gap)) break;
     inner += ORBIT_NUDGE;
   }
@@ -330,15 +346,20 @@ export function fitScreenSafe(
   /** 相机俯角（度）：设置 › 外观 › 星系倾角 */
   baseElevationDeg: number,
   readableMax: number = PLANET_READABLE_MAX,
+  /** 方位角（度，转台）：星系绕 z 轴转多少 */
+  azimuthDeg = 0,
 ): SafeScene {
   const ecc = eccOf(spec.eccentricity);
   const candidates = ecc === 0 ? [0] : [ecc, (ecc * 2) / 3, ecc / 3, 0];
-  // 好坏：少画了行星最差，其次是行星缩到可读下限以下，再其次是俯角抬得多
+  // 好坏：少画了行星最差，其次是行星缩到可读下限以下，再其次是行星被缩小（比这块画布上本该画的小），再其次是俯角抬得多。
+  // 「被缩小」排在偏心率之前（2026-11-24 转台：近日点朝向镜头时近侧挤，原来会把行星从 20px 缩到 10px；
+  // 现在先把椭圆放圆一档，表情照旧看得清，近日点的朝向照样跟着转）
   const floor = readableMax > PLANET_READABLE_MAX ? AGENT_READABLE_FLOOR : PLANET_READABLE_MIN;
-  const cost = (scene: SafeScene) => scene.dropped * 10_000 + (scene.minPlanetPx < floor - 1e-6 ? 1_000 : 0) + (scene.elevationDeg - baseElevationDeg);
+  const cost = (scene: SafeScene) =>
+    scene.dropped * 10_000 + (scene.minPlanetPx < floor - 1e-6 ? 1_000 : 0) + (scene.minPlanetPx < scene.preferredPx - 1e-6 ? 100 : 0) + (scene.elevationDeg - baseElevationDeg);
   let best: SafeScene | null = null;
   for (const e of candidates) {
-    const scene = fitAll({ ...spec, eccentricity: e }, width, height, box, baseElevationDeg, readableMax);
+    const scene = fitAll({ ...spec, eccentricity: e }, width, height, box, baseElevationDeg, readableMax, azimuthDeg);
     if (cost(scene) === 0) return scene;
     if (best === null || cost(scene) < cost(best)) best = scene;
   }
@@ -350,12 +371,12 @@ const ELEVATION_LIMIT = 85;
 const PACKS = ["given", "tight", "small"] as const;
 type Pack = (typeof PACKS)[number];
 
-function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, tilt: number, readableMax: number): SafeScene {
+function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: number; height: number }, tilt: number, readableMax: number, azimuthDeg: number): SafeScene {
   const flat: GalaxySpec = { ...spec, planets: spec.planets.map((planet) => ({ ...planet, inclinationDeg: 0 })) };
   const base = layoutGalaxy(flat);
   const tryAt = (e: number): SafeScene | null => {
     for (const pack of PACKS) {
-      const scene = placeAt(flat, base, width, height, box, e, readableMax, pack, base.planets);
+      const scene = placeAt(flat, base, width, height, box, e, readableMax, pack, base.planets, undefined, false, azimuthDeg);
       if (scene !== null) return scene;
     }
     return null;
@@ -378,12 +399,12 @@ function fitAll(spec: GalaxySpec, width: number, height: number, box: { width: n
   // 最后的退路（抬到 ELEVATION_LIMIT 都装不下：子智能体多、画布又小）：就在这个俯角上把行星缩到可读下限以下
   // （每次 ×0.85，最小 2.5px）。子智能体永远不藏——小一点总比没有好；「表情可读」只保证到这之前（见测试）
   for (let px = AGENT_READABLE_FLOOR * 0.85; px >= 2.5; px *= 0.85) {
-    const scene = placeAt(flat, base, width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, px);
+    const scene = placeAt(flat, base, width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, px, false, azimuthDeg);
     if (scene !== null) return scene;
   }
   // 正圆轨道上间距随半径单调变大，最后一搏一定排得开（偏心时不一定）
   const round: GalaxySpec = { ...flat, eccentricity: 0 };
-  const scene = placeAt(round, layoutGalaxy(round), width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, 4, true);
+  const scene = placeAt(round, layoutGalaxy(round), width, height, box, ELEVATION_LIMIT, readableMax, "small", base.planets, 4, true, azimuthDeg);
   return scene as SafeScene;
 }
 
@@ -402,11 +423,13 @@ export function placeAt(
   forcedPx?: number,
   /** 最后一搏：不管装不装得下都给一个结果（轨道按最小间距、越出画框也画） */
   force = false,
+  /** 方位角（度）。正圆轨道绕 z 轴转是对称的：排布用方位角 0 的相机算（正圆的量法按短轴两端，只在 0 时成立），结果相机再转过去 */
+  azimuthDeg = 0,
 ): SafeScene | null {
   const ecc = eccOf(flat.eccentricity);
   const starExtent = Math.max(starRadius(flat.starMass), flat.starExtent ?? 0);
   const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
-  const camera = makeCamera(FRAME_EXTENT, e);
+  const camera = makeCamera(FRAME_EXTENT, e, undefined, ecc === 0 ? 0 : azimuthDeg);
   let viewport = frameViewport(camera, width, height, box, ecc);
   const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
   let starPx = (viewport.focal * starExtent) / starDepth;
@@ -475,5 +498,7 @@ export function placeAt(
   };
   // 碎石块那一圈让不开（最外一颗行星或主星）就整圈不画：碎石先收，不为它少画行星
   const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed);
-  return { camera, viewport, layout: { ...layout, rockOrbit: rock.cramped ? null : rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped: 0 };
+  // 正圆：排布在方位角 0 上算完，换成转过去的相机（画框是圆，视口不变）
+  const viewCamera = ecc === 0 && azimuthDeg !== 0 ? makeCamera(FRAME_EXTENT, e, undefined, azimuthDeg) : camera;
+  return { camera: viewCamera, viewport, layout: { ...layout, rockOrbit: rock.cramped ? null : rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped: 0, preferredPx: preferred };
 }

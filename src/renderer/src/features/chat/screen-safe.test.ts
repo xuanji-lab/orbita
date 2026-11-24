@@ -136,10 +136,10 @@ const AGENT_SPECS: [string, GalaxySpec][] = [
   ["3000 条会话（碎石带铺到画框外沿）", agentSpec(620, [[40, "gas", 19], [34, "rock", 25], [11, "ice", 31], [22, "rock", 37], [16, "ice", 43], [30, "gas", 49]], 8, 3, 3000)],
 ];
 
-function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX, tilt: number = TILT, tStep = 3.7): string[] {
+function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX, tilt: number = TILT, tStep = 3.7, azimuth = 0): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
   // 与 HomeGalaxy 的工作区页一样：每条会话都是一颗碎石（不封顶）
-  const scene = fitScreenSafe({ ...spec }, w, h, box, tilt, readableMax);
+  const scene = fitScreenSafe({ ...spec }, w, h, box, tilt, readableMax, azimuth);
   const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
   const extent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass);
   const problems: string[] = [];
@@ -452,7 +452,8 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
  * 星系倾角是设置项（10°–60°，步长 5°，2026-11-24）：每一档都要守「不相撞、不压主星」——宽窗、窄窗、右栏三块画布 × 偏心率三档 × 编排星系各形状。
  * 布局不改用户选的俯角，装不下就少画外圈。
  */
-const TILTS = Array.from({ length: (GALAXY_TILT.max - GALAXY_TILT.min) / GALAXY_TILT.step + 1 }, (_, i) => GALAXY_TILT.min + i * GALAXY_TILT.step);
+// 存盘精度是 1°（拖动无极），这里每 5° 取样（与原来的档位同一组，测试时长不变）
+const TILTS = Array.from({ length: (GALAXY_TILT.max - GALAXY_TILT.min) / 5 + 1 }, (_, i) => GALAXY_TILT.min + i * 5);
 const TILT_CANVASES = [
   ["宽窗页面", 1088, 726],
   ["单智能体首页那条带子", 1000, 330],
@@ -495,5 +496,42 @@ describe("极端输入下布局有界、够快", () => {
     assert.ok(ms < 50, `${ms.toFixed(1)}ms`);
     assert.equal(scene.layout.planets.length, 6);
     assert.deepEqual(sweepProblems(spec, 196, 214, 0.45, 10, 90).slice(0, 3), []);
+  });
+});
+
+describe("转台（方位角）：转到任何方向、松手后的屏幕安全布局里天体照样不相撞", () => {
+  const canvases = [
+    ["页面", 1088, 726],
+    ["单智能体带子", 1000, 330],
+    ["右栏宽", 416, 333],
+  ] as const;
+  for (const [specName, spec] of AGENT_SPECS.slice(0, 4)) {
+    for (const [canvasName, w, h] of canvases) {
+      test(`${specName} × ${canvasName}`, () => {
+        const problems: string[] = [];
+        for (const tilt of [10, 25, 40, 60]) {
+          for (const azimuth of [45, 90, 135, 200, 300]) {
+            for (const eccentricity of [0, 0.3, 0.45]) {
+              const found = collisions({ ...spec, eccentricity }, w, h, AGENT_READABLE_MAX, tilt, 11.3, azimuth);
+              if (found.length > 0) problems.push(`俯角 ${tilt}° 方位 ${azimuth}° e=${eccentricity}：${found[0]}（共 ${found.length} 处）`);
+            }
+          }
+        }
+        assert.deepEqual(problems.slice(0, 5), [], `${problems.length} 种组合有相交`);
+      });
+    }
+  }
+});
+
+describe("转台：转方位角不把行星缩小（近日点朝向镜头时先把椭圆放圆一档）", () => {
+  test("意图系统 · 编排页宽窗 1040×722 · 俯角 40°：每 15° 一个方位，行星屏幕半径都与方位 0 时一样大", () => {
+    const spec = { ...(AGENT_SPECS[0]?.[1] as GalaxySpec), eccentricity: 0.3 };
+    const box = galaxyBox(1040, 722, GALAXY_MAX_FILL);
+    const base = fitScreenSafe(spec, 1040, 722, box, 40, AGENT_READABLE_MAX, 0);
+    for (let azimuth = 0; azimuth < 360; azimuth += 15) {
+      const scene = fitScreenSafe(spec, 1040, 722, box, 40, AGENT_READABLE_MAX, azimuth);
+      assert.ok(scene.minPlanetPx >= base.minPlanetPx - 0.75, `方位 ${azimuth}°：${scene.minPlanetPx.toFixed(1)}px < ${base.minPlanetPx.toFixed(1)}px`);
+      assert.ok(scene.layout.ecc > 0, `方位 ${azimuth}°：椭圆放圆了也不该变成正圆（${scene.layout.ecc}）`);
+    }
   });
 });

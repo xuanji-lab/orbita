@@ -456,25 +456,64 @@ export function orbitPoint(a: number, inclination: number, node: number, theta: 
 /**
  * 相机：在 y 轴负方向、抬高 elevation 俯看原点。世界坐标 z 朝上、y 朝远处。
  * 近处（y < 0）的轨道段投在下方且更大——这就是透视，不是把圆压扁成椭圆。
+ *
+ * azimuth（方位角，转台 turntable）：相当于整座星系绕竖直的 z 轴（过主星）逆时针（从上往下看）转 azimuth——
+ * 实现上是相机绕 z 轴反向转同样的角度；z 永远朝上，不翻滚（2026-11-24 用户：「blender or rhino 里那种 3d 视图的拖动，
+ * 只不过是锁 z 轴的视角」）。azimuth = 0 时与原来逐位相同。
  */
 export interface Camera {
   elevation: number;
+  /** 方位角（rad）：星系绕 z 轴转了多少 */
+  azimuth: number;
   distance: number;
   position: Vec3;
   forward: Vec3;
   up: Vec3;
+  /** 屏幕向右的方向（azimuth = 0 时就是世界 x） */
+  right: Vec3;
 }
 
-export function makeCamera(extent: number, elevationDeg = CAMERA_ELEVATION_DEG, distanceFactor = CAMERA_DISTANCE_FACTOR): Camera {
+export function makeCamera(extent: number, elevationDeg = CAMERA_ELEVATION_DEG, distanceFactor = CAMERA_DISTANCE_FACTOR, azimuthDeg = 0): Camera {
   const e = elevationDeg * DEG;
+  const phi = azimuthDeg * DEG;
   const distance = Math.max(extent, 1) * distanceFactor;
+  // 相机绕 z 轴转 −φ：(x, y) → (x cosφ + y sinφ, −x sinφ + y cosφ)
+  const c = Math.cos(phi);
+  const s = Math.sin(phi);
+  const turn = (v: Vec3): Vec3 => ({ x: v.x * c + v.y * s, y: -v.x * s + v.y * c, z: v.z });
   return {
     elevation: e,
+    azimuth: phi,
     distance,
-    position: { x: 0, y: -distance * Math.cos(e), z: distance * Math.sin(e) },
-    forward: { x: 0, y: Math.cos(e), z: -Math.sin(e) },
-    up: { x: 0, y: Math.sin(e), z: Math.cos(e) },
+    position: turn({ x: 0, y: -distance * Math.cos(e), z: distance * Math.sin(e) }),
+    forward: turn({ x: 0, y: Math.cos(e), z: -Math.sin(e) }),
+    up: turn({ x: 0, y: Math.sin(e), z: Math.cos(e) }),
+    right: turn({ x: 1, y: 0, z: 0 }),
   };
+}
+
+/**
+ * 平放的开普勒轨道上「画在主星背后」那一段（偏近点角 E 的区间，lo < hi，跨 2π 时 lo 可为负）：
+ * 轨道上的点在相机水平朝向上的分量 > 0 就是远侧。方位角 φ 下：sinφ·(cosE − e) + cosφ·√(1−e²)·sinE > 0
+ * ⇔ sin(E + χ) > k（χ、k 见下），两头各收 margin。φ = 0 时就是原来的 (margin, π − margin)。
+ */
+export function farWindow(ecc: number, azimuth: number, margin = 0): { lo: number; hi: number } {
+  const A = Math.sin(azimuth);
+  const B = Math.cos(azimuth) * Math.sqrt(1 - ecc * ecc);
+  const R = Math.hypot(A, B);
+  const chi = Math.atan2(A, B);
+  const k = Math.max(-1, Math.min(1, (ecc * Math.sin(azimuth)) / Math.max(R, 1e-9)));
+  const edge = Math.asin(k);
+  return { lo: edge - chi + margin, hi: Math.PI - edge - chi - margin };
+}
+
+/** 偏近点角 E 在不在远侧区间里（区间按 2π 取模） */
+export function inFarWindow(E: number, window: { lo: number; hi: number }): boolean {
+  const twoPi = Math.PI * 2;
+  const span = window.hi - window.lo;
+  if (span <= 0) return false;
+  const d = (((E - window.lo) % twoPi) + twoPi) % twoPi;
+  return d < span;
 }
 
 export interface Projected {
@@ -491,7 +530,8 @@ export function project(p: Vec3, camera: Camera): Projected {
   const rz = p.z - camera.position.z;
   const depth = rx * camera.forward.x + ry * camera.forward.y + rz * camera.forward.z;
   const up = rx * camera.up.x + ry * camera.up.y + rz * camera.up.z;
-  return { sx: rx / depth, sy: -up / depth, depth };
+  const right = rx * camera.right.x + ry * camera.right.y + rz * camera.right.z;
+  return { sx: right / depth, sy: -up / depth, depth };
 }
 
 export interface Viewport {
@@ -537,7 +577,8 @@ export function frameViewport(
   ecc = 0,
 ): Viewport {
   const pts: Projected[] = [];
-  for (let i = 0; i < 144; i++) pts.push(project(orbitPoint(FRAME_EXTENT, 0, 0, (i / 144) * Math.PI * 2, ecc), camera));
+  // 取样从「对着镜头」的参数角起（与 orbitFrame 同一个 s0）：正圆画框转方位角时取到的是同一组屏幕点，视口逐位不变
+  for (let i = 0; i < 144; i++) pts.push(project(orbitPoint(FRAME_EXTENT, 0, 0, (i / 144) * Math.PI * 2 - camera.azimuth, ecc), camera));
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
@@ -580,18 +621,29 @@ export interface OrbitFrame {
 
 export function orbitFrame(a: number, inclination: number, node: number, camera: Camera, vp: Viewport, ecc = 0): OrbitFrame {
   // 椭圆按偏近点角参数化之后仍是「中心 + 两个半轴向量」，仿射模型照样精确（中心在 −a·e，主星在焦点）
-  const at = (theta: number) => toScreen(project(orbitPoint(a, inclination, node, theta, ecc), camera), vp);
+  // 转过方位角时取「对着镜头」的四个参数角（s = −方位角）：远近两点仍是屏幕上的短轴两端（透视下最准、屏幕安全布局在这里量），
+  // 再换回原参数的 cos / sin 基。正圆轨道因此与方位角 0 时是同一个屏幕椭圆（只差相位）。方位角 0 时 s = 0，与原来逐位相同。
+  const s0 = -camera.azimuth;
+  const at = (theta: number) => toScreen(project(orbitPoint(a, inclination, node, theta + s0, ecc), camera), vp);
   const right = at(0);
   const left = at(Math.PI);
   const far = at(Math.PI / 2);
   const near = at(-Math.PI / 2);
+  const M1x = (right.x - left.x) / 2;
+  const M1y = (right.y - left.y) / 2;
+  const M2x = (far.x - near.x) / 2;
+  const M2y = (far.y - near.y) / 2;
+  if (s0 === 0) return { cx: (far.x + near.x) / 2, cy: (far.y + near.y) / 2, m1x: M1x, m1y: M1y, m2x: M2x, m2y: M2y };
+  // c + M1·cos(θ − s0) + M2·sin(θ − s0) = c + (M1 cos s0 − M2 sin s0)·cosθ + (M1 sin s0 + M2 cos s0)·sinθ
+  const c = Math.cos(s0);
+  const sn = Math.sin(s0);
   return {
     cx: (far.x + near.x) / 2,
     cy: (far.y + near.y) / 2,
-    m1x: (right.x - left.x) / 2,
-    m1y: (right.y - left.y) / 2,
-    m2x: (far.x - near.x) / 2,
-    m2y: (far.y - near.y) / 2,
+    m1x: M1x * c - M2x * sn,
+    m1y: M1y * c - M2y * sn,
+    m2x: M1x * sn + M2x * c,
+    m2y: M1y * sn + M2y * c,
   };
 }
 
@@ -607,9 +659,10 @@ export function beltFrame(belt: Belt, camera: Camera, vp: Viewport): OrbitFrame 
   return orbitFrame((belt.inner + belt.outer) / 2, 0, 0, camera, vp, belt.ecc);
 }
 
-/** 远半圈（θ ∈ (0, π)，主星背后）：画在主星之前；近半圈画在主星之后 */
-export function isFarSide(theta: number): boolean {
-  return Math.sin(theta) > 0;
+/** 远半圈（θ ∈ (0, π)，主星背后）：画在主星之前；近半圈画在主星之后。给了相机与偏心率时按方位角算（farWindow） */
+export function isFarSide(theta: number, camera?: Camera, ecc = 0): boolean {
+  if (camera === undefined || camera.azimuth === 0) return Math.sin(theta) > 0;
+  return inFarWindow(theta, farWindow(ecc, camera.azimuth));
 }
 
 /**
@@ -627,7 +680,7 @@ export function dustPoints(belt: Belt, camera: Camera, vp: Viewport, t: number):
   const mid = (belt.inner + belt.outer) / 2;
   return belt.particles.map((particle) => {
     const theta = particle.theta0 + belt.omega * t;
-    return { id: particle.id, ...framePoint(frame, theta, particle.r / mid), far: isFarSide(theta) };
+    return { id: particle.id, ...framePoint(frame, theta, particle.r / mid), far: isFarSide(theta, camera, belt.ecc) };
   });
 }
 

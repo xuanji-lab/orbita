@@ -1,4 +1,4 @@
-import { angularSpeed, ARCS_PER_ORBIT, eccentricAnomaly, meanAnomalyOf, orbitFrame, planetPx, type Belt, type Camera, type GalaxyLayout, type OrbitFrame, type Viewport } from "./galaxy.ts";
+import { angularSpeed, ARCS_PER_ORBIT, eccentricAnomaly, farWindow, inFarWindow, meanAnomalyOf, orbitFrame, planetPx, type Belt, type Camera, type GalaxyLayout, type OrbitFrame, type Viewport } from "./galaxy.ts";
 
 /**
  * 星系公转交给合成器（纯计算，可被 node --test 直接加载；HomeGalaxy 按这里算出的矩阵与关键帧搭 DOM）。
@@ -131,9 +131,12 @@ export interface Mover {
   /** 屏幕半径（px），公转中不变 */
   r: number;
   waiting: boolean;
+  /** 画在主星背后那一层的偏近点角区间（已收 FAR_MARGIN）：随方位角转（galaxy.farWindow） */
+  far: { lo: number; hi: number };
 }
 
 export function moversOf(layout: GalaxyLayout, camera: Camera, vp: Viewport, minPlanetPx: number, rockPx: number): Mover[] {
+  const far = farWindow(layout.ecc, camera.azimuth, FAR_MARGIN);
   const movers: Mover[] = layout.planets.map((planet) => ({
     id: planet.id,
     kind: "planet",
@@ -143,12 +146,13 @@ export function moversOf(layout: GalaxyLayout, camera: Camera, vp: Viewport, min
     omega: planet.omega,
     r: planetPx(planet.radius, planet.state === "waiting", camera, vp, minPlanetPx),
     waiting: planet.state === "waiting",
+    far,
   }));
   if (layout.rockOrbit !== null) {
     const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, vp, layout.ecc);
     const omega = angularSpeed(layout.rockOrbit);
     for (const rock of layout.rocks) {
-      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, ecc: layout.ecc, omega, r: rockPx, waiting: rock.state === "waiting" });
+      movers.push({ id: rock.id, kind: "rock", frame, phase: rock.theta0, ecc: layout.ecc, omega, r: rockPx, waiting: rock.state === "waiting", far });
     }
   }
   return movers;
@@ -166,19 +170,18 @@ function wrap(theta: number): number {
   return ((theta % twoPi) + twoPi) % twoPi;
 }
 
-/** 此刻在不在远半圈那一层（主星背后）：θ ∈ (FAR_MARGIN, π − FAR_MARGIN) */
+/** 此刻在不在远半圈那一层（主星背后）：方位角 0 时 θ ∈ (FAR_MARGIN, π − FAR_MARGIN)，转过之后按 mover.far */
 export function moverFar(mover: Mover, tSec: number): boolean {
-  // 远近按轨道上的位置（偏近点角）分：椭圆上 sin E > 0 就是主星背后那半圈
-  const theta = wrap(eccentricAnomaly(mover.phase + mover.omega * tSec, mover.ecc));
-  return theta > FAR_MARGIN && theta < Math.PI - FAR_MARGIN;
+  // 远近按轨道上的位置（偏近点角）分
+  return inFarWindow(eccentricAnomaly(mover.phase + mover.omega * tSec, mover.ecc), mover.far);
 }
 
 /** 离下一次换层（偏近点角走到 FAR_MARGIN 或 π − FAR_MARGIN）还有多少毫秒：边界换成平近点角，时间与它成正比 */
 export function msToNextSide(mover: Mover, tSec: number): number {
   const mean = wrap(mover.phase + mover.omega * tSec);
   let best = Infinity;
-  for (const edge of [FAR_MARGIN, Math.PI - FAR_MARGIN]) {
-    const ahead = wrap(meanAnomalyOf(edge, mover.ecc) - mean);
+  for (const edge of [mover.far.lo, mover.far.hi]) {
+    const ahead = wrap(meanAnomalyOf(wrap(edge), mover.ecc) - mean);
     best = Math.min(best, ahead < 1e-6 ? Math.PI * 2 : ahead);
   }
   return (best / Math.max(mover.omega, 1e-9)) * 1000;
