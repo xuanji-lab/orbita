@@ -14,6 +14,7 @@ import { AgentRow } from "./AgentRow.tsx";
 import { useScrollEdges } from "./scroll-inset.ts";
 import { orderAgentRows } from "../features/chat/agent-status.ts";
 import { NO_STATES, scopeSummary, stateIndexOf } from "../features/chat/galaxy-data.ts";
+import { rowActivityOf } from "./sidebar-activity.ts";
 import {
   EMPTY_SELECTION,
   nextSelection,
@@ -742,14 +743,16 @@ export function Sidebar(props: {
               orderAgentRows(
                 [null, ...session.workspaces].map((workspace) => {
                   const summary = scopeSummary(session.sessions, workspace?.id ?? null, agentStates ?? NO_STATES, openId);
-                  return { workspace, summary };
+                  const activity = agentStates === null ? undefined : rowActivityOf(session.sessions, workspace?.id ?? null, agentStates);
+                  return { workspace, summary, activity };
                 }),
                 (row) => ({ pinned: row.workspace === null, waiting: row.summary.waiting, lastActive: row.summary.lastActive }),
-              ).map(({ workspace, summary }) => (
+              ).map(({ workspace, summary, activity }) => (
                 <AgentRow
                   key={workspace?.id ?? "home"}
                   workspace={workspace}
                   summary={summary}
+                  activity={activity}
                   active={activeAgentId === (workspace?.id ?? null)}
                   designing={props.designingWorkspaceId === (workspace?.id ?? null) && workspace !== null}
                   now={now}

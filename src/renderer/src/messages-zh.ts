@@ -3630,6 +3630,10 @@ export const zh: Messages = {
     /** 「空闲」之后接最近一件事时的前缀 */
     recent: "最近",
     unread: "跑完了，还没看",
+    subAgentUnnamed: "未命名的子智能体",
+    subAgentWorking: (name) => `${name} 在干活（演示数据）`,
+    subAgentWaiting: (name) => `${name} 在等你（演示数据）`,
+    sessionsRunning: (n) => `${n} 条会话在跑`,
     rowOpenTip: (name) => `打开 ${name} 的新任务页`,
     statusWaitingTip: "打开等你确认的那件任务",
     sessionsMenu: "会话",
