@@ -1,4 +1,4 @@
-import { deepStrictEqual } from "node:assert/strict";
+import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   BOARD_DAYS_DEFAULT,
@@ -615,9 +615,19 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
 
   it("逐项只认布尔；已删除与不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": false } })
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "intent-system": false } })
         .experimentalFeatures,
-      { "pdf-citations": false },
+      { "intent-system": false },
+    );
+    // 转正的项（PDF 引用，2026-11-22）：盘上残留的旧键解析时丢掉、不报错
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": true } })
+        .experimentalFeatures,
+      undefined,
+    );
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "pdf-citations": true } }).experimentalFeatures,
+      undefined,
     );
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "made-up": true } }).experimentalFeatures,
@@ -643,8 +653,8 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
   it("转正的 session-lifecycle：盘上残留的键开着关着都丢掉，不产生任何效果", () => {
     deepStrictEqual(parseSettings({ experimentalFeatures: { "session-lifecycle": true } }).experimentalFeatures, undefined);
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "pdf-citations": true } }).experimentalFeatures,
-      { "pdf-citations": true },
+      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "intent-system": true } }).experimentalFeatures,
+      { "intent-system": true },
     );
   });
 

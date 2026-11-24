@@ -19,7 +19,6 @@ import { MediaView } from "./MediaView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
 import type { TextQuote } from "@shared/quote";
-import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
 /** 用文档视图（阅读 / 编辑 / 源码）打开的文件：md / markdown / txt；.slides.json 由 DocEditPane 路由到演示文稿编辑器 */
@@ -67,10 +66,8 @@ export function FilePreviewPane(props: {
   const extraWorkspaceId = props.extraWorkspaceId ?? null;
   const extra = extraWorkspaceId === null ? {} : { extraWorkspaceId };
   const sentImage = props.sentImage;
-  // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
-  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF
-  const pdfCitations = useExperimentalFeature("pdf-citations");
-  const pdf = sentImage === undefined && pdfCitations && isPdfFile(path);
+  // 附图走 session.attachment，不会是 PDF
+  const pdf = sentImage === undefined && isPdfFile(path);
   const [pdfReload, setPdfReload] = useState(0);
   // 音视频走播放器（流式读，不过 fs:read）；附图不是媒体文件
   const mediaKind = sentImage === undefined ? mediaKindOf(path) : null;

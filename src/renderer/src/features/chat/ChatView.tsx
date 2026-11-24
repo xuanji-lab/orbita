@@ -320,7 +320,7 @@ export function ChatView(props: ChatViewProps) {
     },
     [session.transcript],
   );
-  // PDF 引用表（实验功能「PDF 引用」）：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
+  // PDF 引用表：本会话 cite_pdf 核验过的引用，正文里的编号据此可点
   const citations = useMemo(() => collectCitations(session.transcript), [session.transcript]);
   // 摘抄与跳回原文按「正在看的会话」算：纯浏览的旧会话不起 runtime session（sessionId 为
   // null、opened 里拿得到），但它的文字照样能摘、摘过的照样能跳回来

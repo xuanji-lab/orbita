@@ -81,7 +81,7 @@ export function FilesPanel(props: {
    */
   escapeRef: { current: (() => boolean) | null };
   /**
-   * PDF 引用跳转请求（实验功能「PDF 引用」）：点了正文里的引用编号，App 打开本面板并
+   * PDF 引用跳转请求：点了正文里的引用编号，App 打开本面板并
    * 递进来。token 单调递增，同一条引用连点也会重新定位；请求带着出生会话戳，
    * 换会话后由 cite-focus.ts 判作废。null = 没有请求
    */
@@ -363,7 +363,7 @@ export function FilesPanel(props: {
     if (narrowRef.current) setTreeOn(false);
   };
 
-  // 引用跳转（实验功能「PDF 引用」）：怎么处理一条请求由 cite-focus.ts 的纯函数
+  // 引用跳转：怎么处理一条请求由 cite-focus.ts 的纯函数
   // 裁决（含「请求属于别的会话 → 作废」——面板重挂后旧会话的请求不会拿新会话的
   // 根重判、报出无关的 citeOutside，2026-10-18 修），这里只按结论改 state；
   // 已消费的 token 不重放（同一条引用连点两次，每次都是新 token）

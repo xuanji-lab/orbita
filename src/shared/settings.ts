@@ -102,10 +102,7 @@ export interface ModelPair {
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
  * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
  */
-export const EXPERIMENTAL_FEATURE_IDS = [
-  "pdf-citations",
-  "intent-system",
-] as const;
+export const EXPERIMENTAL_FEATURE_IDS = ["intent-system"] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
 /**
@@ -332,19 +329,15 @@ export interface AppSettings {
    * 不动数据——已存的主题照常应用、已星标 / 已完成的会话与遗留事项原样在盘上，
    * 开了就回来。
    *
-   * 各项的语义：
-   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
-   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
-   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
-   *
    * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
    * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
    * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
    * 解析时直接丢，下一次写入从盘上带走。2026-11-24 删除的 `paper-themes` 与旧总开关
    * `experimental` 也同样忽略，不影响其它仍在表的实验项。
    *
-   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻）：盘上残留的 `session-lifecycle`
-   * 不在表里，解析时丢掉，开着关着都不再有任何效果。
+   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻；2026-11-22 PDF 引用转正，
+   * cite_pdf 常注册、PDF 预览与引用编号常开）：盘上残留的 `session-lifecycle` /
+   * `pdf-citations` 不在表里，解析时丢掉，开着关着都不再有任何效果。
    */
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }

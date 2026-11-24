@@ -551,7 +551,7 @@ export function App() {
     if (rightPanel !== "review") setMemoryFocus(null);
   }, [rightPanel]);
   /**
-   * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
+   * PDF 引用的一次性跳转请求（正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
    * PDF 所在的根、打开预览、滚到原文并高亮。
    */

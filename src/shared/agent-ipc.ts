@@ -911,12 +911,6 @@ export type AgentCommand =
        * 单语主题说了算，双语主题听语言设置），runtime 只收数据。缺席 = "en"。
        */
       attributionLanguage?: Language;
-      /**
-       * 实验功能「PDF 引用」的开关（settings.experimentalFeatures["pdf-citations"]）。
-       * **主进程从设置装配**（同 gitAttribution）。开着时 runtime 才注册 cite_pdf
-       * 并讲它的用法；缺席 = 关
-       */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /**
@@ -1058,8 +1052,6 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
-      /** 实验功能「PDF 引用」的开关，语义同 submit */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1127,8 +1119,6 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
-      /** 实验功能「PDF 引用」的开关，语义同 submit */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */

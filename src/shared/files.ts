@@ -256,7 +256,7 @@ export interface FsEntryFact {
 }
 
 /**
- * PDF 预览（`fs:read-pdf` 的回执，实验功能「PDF 引用」）。字节原样过 IPC
+ * PDF 预览（`fs:read-pdf` 的回执，PDF 引用）。字节原样过 IPC
  * （Uint8Array 走结构化克隆，不转 base64），renderer 交给 pdf.js 渲染。白名单与
  * fs:read 同一道。上限与外部附件的复制上限同值：再大的 PDF 本来也不会被复制进会话。
  */

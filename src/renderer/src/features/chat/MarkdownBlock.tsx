@@ -26,7 +26,6 @@ import { chipIconName, type ChipKind } from "../../shell/composer-chips.ts";
 import { pluginChipName } from "../plugins/plugin-names.ts";
 import { usePluginNames } from "../plugins/usePluginNames.ts";
 import { useT } from "../../locale.ts";
-import { useExperimentalFeature } from "../../experimental.ts";
 import { localMediaPathOfHref } from "../files/media-view.ts";
 import { openLocalMedia } from "../files/open-media-link.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
@@ -115,7 +114,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   streaming?: boolean;
 }) {
   const bubble = variant === "bubble";
-  const citations = useExperimentalFeature("pdf-citations") && !bubble;
+  const citations = !bubble;
 
   // 两个 pre 覆写 + 两份 components 映射：**身份稳定**是分块 memo 能命中的前提。
   // react-markdown 不把自定义 prop 交给 components 映射里的组件，只能在这里闭住
@@ -141,7 +140,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
     [baseComponents, prePlain],
   );
 
-  // PDF 引用标记（实验功能「PDF 引用」）只在 assistant 正文里认：用户气泡里打出来的
+  // PDF 引用标记只在 assistant 正文里认：用户气泡里打出来的
   // `[^c4k2]` 是用户的字，不是 agent 核验过的引用；开关关着时标记退回纯文本
   const remarkPlugins = useMemo(
     () =>
