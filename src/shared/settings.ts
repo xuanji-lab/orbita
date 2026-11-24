@@ -227,6 +227,13 @@ export interface AppSettings {
   /** 左右拖动旋转星系（转台）：缺席 = 开；关掉后左右拖动与左右方向键不改方位角，只能上下改倾角 */
   galaxyTurntable?: boolean;
   /**
+   * 离电时省电（设置 › 外观）：缺席 = 开。开着时用电池就进省电档——星系停转、碎石带隐藏、眼睛不跟指针；插上电恢复。
+   * （2026-11-24 用户：「能离电就默认关掉吗？」）
+   */
+  galaxyBatterySaver?: boolean;
+  /** 「已切到省电」那条轻提示出过了（只提示一次） */
+  galaxyBatteryNoticeSeen?: boolean;
+  /**
    * 星系缩放（倍，GALAXY_ZOOM 区间，两位小数）：星系上滚轮 / 双指缩放，与倾角、方位一起全局存。缺席 = 1。
    * 平移（以指针为中心缩放带出来的）不存：它按像素算，换一块画布就没意义；重开回到主星居中
    */
@@ -722,6 +729,10 @@ export function galaxyZoomOf(settings: Pick<AppSettings, "galaxyZoom">): number 
   return settings.galaxyZoom ?? GALAXY_ZOOM.default;
 }
 
+export function galaxyBatterySaverOf(settings: Pick<AppSettings, "galaxyBatterySaver">): boolean {
+  return settings.galaxyBatterySaver ?? true;
+}
+
 export function galaxyTurntableOf(settings: Pick<AppSettings, "galaxyTurntable">): boolean {
   return settings.galaxyTurntable ?? true;
 }
@@ -745,6 +756,8 @@ export function parseSettings(raw: unknown): AppSettings {
     galaxyTilt?: unknown;
     galaxyAzimuth?: unknown;
     galaxyTurntable?: unknown;
+    galaxyBatterySaver?: unknown;
+    galaxyBatteryNoticeSeen?: unknown;
     galaxyZoom?: unknown;
     galaxyDustDensity?: unknown;
     compaction?: unknown;
@@ -831,6 +844,8 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
     ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
     ...(typeof record.galaxyTurntable === "boolean" ? { galaxyTurntable: record.galaxyTurntable } : {}),
+    ...(typeof record.galaxyBatterySaver === "boolean" ? { galaxyBatterySaver: record.galaxyBatterySaver } : {}),
+    ...(record.galaxyBatteryNoticeSeen === true ? { galaxyBatteryNoticeSeen: true } : {}),
     ...(isGalaxyZoom(record.galaxyZoom) ? { galaxyZoom: record.galaxyZoom } : {}),
     ...(isGalaxyDustDensity(record.galaxyDustDensity) ? { galaxyDustDensity: record.galaxyDustDensity } : {}),
     drawer: parseDrawer(record.drawer),

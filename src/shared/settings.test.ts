@@ -1,6 +1,6 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { GALAXY_TILT, galaxyZoomOf, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
+import { GALAXY_TILT, galaxyBatterySaverOf, galaxyZoomOf, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
   APP_MODE_DEFAULT,
   ORCHESTRA_VIEW_DEFAULT,
   ORCHESTRA_ENTRY_DEFAULT,
@@ -873,5 +873,15 @@ describe("parseSettings 的 galaxyZoom（星系缩放）", () => {
     deepStrictEqual(galaxyZoomOf(parseSettings({})), 1);
     for (const ok of [0.5, 0.57, 1, 1.25, 2.4, 3]) deepStrictEqual(parseSettings({ galaxyZoom: ok }).galaxyZoom, ok);
     for (const bad of [0.49, 3.01, 1.234, "1.2", null, Number.NaN, Number.POSITIVE_INFINITY]) deepStrictEqual(parseSettings({ galaxyZoom: bad }).galaxyZoom, undefined, String(bad));
+  });
+});
+
+describe("parseSettings 的 galaxyBatterySaver / galaxyBatteryNoticeSeen（离电省电）", () => {
+  it("开关缺席 = 开，只认布尔；提示只记「出过了」", () => {
+    deepStrictEqual(galaxyBatterySaverOf(parseSettings({})), true);
+    deepStrictEqual(galaxyBatterySaverOf(parseSettings({ galaxyBatterySaver: false })), false);
+    deepStrictEqual(parseSettings({ galaxyBatterySaver: "no" }).galaxyBatterySaver, undefined);
+    deepStrictEqual(parseSettings({ galaxyBatteryNoticeSeen: true }).galaxyBatteryNoticeSeen, true);
+    deepStrictEqual(parseSettings({ galaxyBatteryNoticeSeen: "yes" }).galaxyBatteryNoticeSeen, undefined);
   });
 });
