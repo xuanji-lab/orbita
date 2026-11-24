@@ -2071,6 +2071,7 @@ export const en = {
     thinkingTip: "Thinking · applies from the next message",
     compactConfirm: "Compress the conversation so far into a summary?",
     compactShort: "This conversation is still short — compacting now saves little. Compact anyway?",
+    compactGo: "Compact",
     compactAnyway: "Compact anyway",
     compactNow: "Compact context now",
     compactReadOnly: "this task can't be continued",
