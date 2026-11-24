@@ -253,10 +253,11 @@ export const BELT_OMEGA = angularSpeed(BELT_SPIN_RADIUS);
  */
 export function dustLookOf(count: number, starless = false): { px: number; alpha: number } {
   const n = Math.max(1, count);
-  const base = clamp(2.4 - 0.55 * Math.log10(n), 0.7, 2.4);
+  // 几条时 ~2.8px、看得清；40 条 ~2px；450 条 ~1.2px 的尘埃；几千条封底 0.8px（盘面把它压扁一半，画出来是一粒横向的点）
+  const base = clamp(3.2 - 0.75 * Math.log10(n), 0.8, 3.2);
   return {
-    px: starless ? clamp(base * 1.6, DEBRIS_PX[0], DEBRIS_PX[1]) : base,
-    alpha: clamp(0.92 - 0.17 * Math.log10(n), 0.38, 0.92),
+    px: starless ? clamp(base * 1.4, DEBRIS_PX[0], DEBRIS_PX[1]) : base,
+    alpha: clamp(0.95 - 0.17 * Math.log10(n), 0.38, 0.95),
   };
 }
 
