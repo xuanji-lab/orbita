@@ -534,10 +534,12 @@ export function useVoiceCall(input: {
     };
   }, [phase === null]);
 
-  // 切到别的会话：通话绑定的是开始时那条，自动挂断
+  // 切到别的会话：通话绑定的是开始时那条，自动挂断；上一条会话留下的提示（如「通话缺配置」）一并收起——
+  // 它说的是那一次点通话，离开会话再回来还挂着就成了无头的旧消息（2026-11-24 Windows 验收）
   useEffect(() => {
     const live = liveRef.current;
     if (live !== null && input.sessionId !== live.sessionId) dispatchRef.current(live, { type: "hangUp" });
+    if (live === null) setProblem(null);
   }, [input.sessionId]);
 
   // 卸载（关窗、离开对话页）：挂断
