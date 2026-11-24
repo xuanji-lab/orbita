@@ -514,3 +514,41 @@ describe("WorkspaceStore", () => {
     assert.deepEqual(await new WorkspaceStore(dir).attachedDirsOf(null), ["/a", "/b"]);
   });
 });
+
+describe("WorkspaceStore：联星配对落盘", () => {
+  test("结成：两边一次写好，换一个 store 读回两边一致；解除：两边一起拿掉", async () => {
+    const a = await store.add("/repo/a");
+    const b = await store.add("/repo/b");
+    const listed = await store.setBinary(a.id, b.id);
+    assert.equal(listed.find((w) => w.id === a.id)?.binaryWith, b.id);
+    const reread = await new WorkspaceStore(dir).list();
+    assert.equal(reread.find((w) => w.id === a.id)?.binaryWith, b.id);
+    assert.equal(reread.find((w) => w.id === b.id)?.binaryWith, a.id);
+    // 从另一边解除
+    await store.setBinary(b.id, null);
+    const after = await new WorkspaceStore(dir).list();
+    assert.deepEqual(after.map((w) => w.binaryWith ?? null), [null, null]);
+    const disk = (await readDisk())["workspaces"] as Record<string, unknown>[];
+    assert.ok(disk.every((w) => !("binaryWith" in w)));
+  });
+
+  test("移除一个工作区：伴星那一边不留悬空的 binaryWith", async () => {
+    const a = await store.add("/repo/a");
+    const b = await store.add("/repo/b");
+    await store.setBinary(a.id, b.id);
+    await store.remove(a.id);
+    const disk = (await readDisk())["workspaces"] as Record<string, unknown>[];
+    assert.equal(disk.length, 1);
+    assert.equal("binaryWith" in (disk[0] as object), false);
+  });
+
+  test("手改出来的单边配对：读回时不认", async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "workspaces.json"),
+      JSON.stringify({ version: 3, workspaces: [{ id: "a", name: "a", path: "/a", createdAt: 1, attachedDirs: [], binaryWith: "b" }, { id: "b", name: "b", path: "/b", createdAt: 1, attachedDirs: [] }] }),
+      "utf8",
+    );
+    assert.deepEqual((await store.list()).map((w) => w.binaryWith ?? null), [null, null]);
+  });
+});

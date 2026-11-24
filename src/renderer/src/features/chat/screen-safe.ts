@@ -523,13 +523,14 @@ export function placeAt(
   // 只在默认视角上排（方位 0）：布局与视角分离之后，别的视角不再进这里
   const azimuthDeg = 0;
   const ecc = eccOf(flat.eccentricity);
-  const starExtent = Math.max(starRadius(flat.starMass), flat.starExtent ?? 0);
+  // 主星密度（红矮星）跟着 spec 走：缺席 = 默认密度，与原来逐位相同（gravity-scan 分支加的唯一一处语义改动在这两行）
+  const starExtent = Math.max(starRadius(flat.starMass, flat.starDensity), flat.starExtent ?? 0);
   const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
   const camera = makeCamera(FRAME_EXTENT, e, undefined, ecc === 0 ? 0 : azimuthDeg);
   let viewport = frameViewport(camera, width, height, box, ecc);
   const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
   let starPx = (viewport.focal * starExtent) / starDepth;
-  let starBodyPx = (viewport.focal * starRadius(flat.starMass)) / starDepth;
+  let starBodyPx = (viewport.focal * starRadius(flat.starMass, flat.starDensity)) / starDepth;
   // 行星再大也要比主星明显小（等你放大一档之后也是）
   const agentMode = readableMax > PLANET_READABLE_MAX;
   // 窄画布：主星小到容不下一颗看得清的行星（AGENT_READABLE_FLOOR × 主星倍数）就把画面放大，主星与行星一起变大

@@ -482,7 +482,7 @@ export function homeGalaxyOf(input: {
     ...(input.ownStateOf === undefined ? {} : { ownStateOf: input.ownStateOf }),
     now: input.now,
     starMass: star.mass,
-    starExtent: starRadius(star.mass) * starExtentRatio(input.design),
+    starExtent: starRadius(star.mass, star.density) * starExtentRatio(input.design),
     designedPlanet: null,
     ...(input.recent === undefined ? {} : { recent: input.recent }),
     ...(input.labels === undefined ? {} : { labels: input.labels }),
@@ -493,5 +493,7 @@ export function homeGalaxyOf(input: {
     // 星际空间：没有主智能体就没有主星与行星，原来算成行星的那几条也是碎石
     return { spec: { ...data.spec, planets: [], sessions: data.spec.sessions + data.spec.planets.length }, starless: true, agents: new Map() };
   }
-  return { spec: data.spec, starless: false, agents: agentMapOf(planets) };
+  // 主星密度（红矮星）：缺席不写字段，现有星系的 spec 逐位不变
+  const spec = star.density === undefined ? data.spec : { ...data.spec, starDensity: star.density };
+  return { spec, starless: false, agents: agentMapOf(planets) };
 }

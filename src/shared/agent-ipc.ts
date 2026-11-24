@@ -96,6 +96,11 @@ export const ipcChannels = {
   workspaceAttachDir: "workspace:attach-dir",
   /** 从 attachedDirs 移除一条；不在列表里不报错 */
   workspaceDetachDir: "workspace:detach-dir",
+  /**
+   * 结成 / 解除联星：请求 (id, partnerId | null)，两边一次改好（同一次原子写），返回更新后的工作区列表。
+   * 两边原来各自的伴星一并解除；配自己 / 配不存在的工作区当解除（shared/workspace.ts 的 pairBinary）
+   */
+  workspaceSetBinary: "workspace:set-binary",
   providerBuiltins: "provider:builtins",
   /**
    * 「添加」页点开一张还没保存的服务商卡片：现拉一次这家的目录（节流内不拉），

@@ -19,6 +19,7 @@ import { useProtoVariants } from "./proto-variants-store.ts";
 import { nameOrderOf } from "./proto-variants.ts";
 import type { SessionRunState } from "../notify/completion-notice.ts";
 import { headerStatusOf } from "./agent-status.ts";
+import { useBinaryOf } from "./useBinary.ts";
 import { HomeGalaxy } from "./HomeGalaxy.tsx";
 import { starRadius } from "./galaxy.ts";
 import { RECENT_ROCKS, scopeGalaxy, scopeSummary, stateIndexOf } from "./galaxy-data.ts";
@@ -325,6 +326,7 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
   const { design } = useGalaxyDesign(props.workspaceId ?? "");
   const agents = useMemo(() => agentPlanetsOf(design), [design]);
   const agentMap = useMemo(() => agentMapOf(agents), [agents]);
+  const binary = useBinaryOf(props.workspaceId, props.session.workspaces);
   if (props.width < GALAXY_MIN_WIDTH) {
     return (
       <div className="orch-pad">
@@ -343,7 +345,7 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
     ownStateOf: states.own,
     now: Date.now(),
     starMass: star.mass,
-    starExtent: starRadius(star.mass) * starExtentRatio(design),
+    starExtent: starRadius(star.mass, star.density) * starExtentRatio(design),
     designedPlanet: null,
     ...(props.workspaceId === null ? {} : { agents: agentInputsOf(agents) }),
     // 与入口页同一套标注：在做事的 + 最近几条（虚线框），常驻对话写「常驻对话」
@@ -353,7 +355,7 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
   return (
     <div className="orch-galaxy" data-view="galaxy">
       <HomeGalaxy
-        spec={data.spec}
+        spec={star.density === undefined ? data.spec : { ...data.spec, starDensity: star.density }}
         label={to.galaxyFigure(props.name)}
         starDesign={design}
         agents={agentMap}
@@ -362,6 +364,7 @@ function GalaxyView(props: { session: ChatSession; workspaceId: string | null; n
         emptyHint={t.agents.emptyHint}
         workspaceId={props.workspaceId}
         starName={props.name}
+        binary={binary}
       />
     </div>
   );

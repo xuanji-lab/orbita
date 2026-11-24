@@ -1941,7 +1941,7 @@ export function App() {
                   mainId={mainSessionOf(session.sessions, orchestraWsId, settings.orchestraMain)?.id ?? null}
                 />
               ) : shownPanel === "galaxy" ? (
-                <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} focus={designerFocus} />
+                <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} focus={designerFocus} workspaces={session.workspaces} onWorkspacesChanged={session.reloadWorkspaces} />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
