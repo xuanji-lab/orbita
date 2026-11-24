@@ -79,7 +79,6 @@ import {
   type CalloutTarget,
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
-import { useProtoVariants } from "./proto-variants-store.ts";
 import { useGalaxyTilt, useGalaxyTiltSetter, useGalaxyView, type GalaxySurface, type GalaxyViewSetter } from "./galaxy-tilt.ts";
 import { anglesForSave, anglesLabel, dragAngles, isDragMove, keyAngles, VIEW_DEFAULT, type ViewAngles } from "./tilt-drag.ts";
 import { boxesOverlap, planOverlay } from "./overlay-plan.ts";
@@ -164,7 +163,7 @@ function applyProjection(root: HTMLElement, proj: LiveProjection, movers: readon
   }
   // 远近分层每帧按新相机算：主星永远画在它挡住的天体前面
   const far = new Map<string, boolean>();
-  for (const mover of movers) far.set(mover.id, moverFar({ ...mover, far: mover.id.startsWith(BINARY_ID) ? farWindow(0, proj.camera.azimuth, FAR_MARGIN) : proj.far }, tSec));
+  for (const mover of movers) far.set(mover.id, moverFar({ ...mover, far: mover.id.startsWith(BINARY_ID) ? farWindow(0, proj.camera.azimuth, FAR_MARGIN) : mover.kind === "planet" ? (proj.planetFar.get(mover.id) ?? proj.far) : proj.far }, tSec));
   for (const node of root.querySelectorAll<HTMLElement>("[data-body]")) {
     const isFar = far.get(node.dataset.body ?? "");
     if (isFar === undefined) continue;
@@ -820,6 +819,8 @@ function OrbitChain(props: {
       className={props.className === undefined ? "gx-node" : `gx-node ${props.className}`}
       style={{ transform: cssMatrix(m) }}
       data-orbit={mover.id}
+      data-ecc={mover.ecc}
+      data-periapsis={mover.periapsis}
       data-body={props.layer === "top" || props.binary?.centered === true ? undefined : mover.id}
       data-layer={props.layer}
       data-binary-a={props.binary?.a}
@@ -1020,8 +1021,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useBoxSize(rootRef);
   const starless = props.starless === true;
-  // 轨道是开普勒椭圆（偏心率候选见 proto-variants），俯角是设置里的星系倾角（单智能体首页与编排页同一套）
-  const orbitE = Number(useProtoVariants().orbitE);
+  // 每颗行星的 a/e/ω 都在 spec 里；俯角与碎石密度是全局视图设置
   const tilt = useGalaxyTilt();
   const galaxyView = useGalaxyView();
   const azimuth = galaxyView.azimuth;
@@ -1035,7 +1035,7 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   // 设置页的小预览（surface = null）不接拖动：那里有滑块
   const setView = useGalaxyTiltSetter();
   // 碎石密度（设置 › 外观）：只删减碎石带里的普通会话，在跑 / 等你 / 最近的碎石块不受影响
-  const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE, dustKeep: galaxyView.dustKeep }), [props.spec, orbitE, galaxyView.dustKeep]);
+  const spec = useMemo(() => ({ ...props.spec, dustKeep: galaxyView.dustKeep }), [props.spec, galaxyView.dustKeep]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   // 联星：间距、质心、画面要缩多少（binary.ts）。只在有工作区、有主星时成立
   const binary = starless || props.workspaceId == null ? null : (props.binary ?? null);
@@ -1080,11 +1080,11 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const companionMover = useMemo<Mover | null>(() => {
     if (scene === null || geo === null || companionId === null) return null;
     const far = farWindow(0, scene.camera.azimuth, FAR_MARGIN);
-    return { id: companionId, kind: "planet", frame: binaryFrame(geo.sep, scene.camera, scene.viewport, false), phase: binaryPhase0, ecc: 0, omega: geo.omega, r: Math.max(companionR * pxPerUnit, 6), waiting: false, far };
+    return { id: companionId, kind: "planet", frame: binaryFrame(geo.sep, scene.camera, scene.viewport, false), phase: binaryPhase0, ecc: 0, periapsis: 0, omega: geo.omega, r: Math.max(companionR * pxPerUnit, 6), waiting: false, far };
   }, [scene, geo, companionId, binaryPhase0, companionR, pxPerUnit]);
   const selfMover = useMemo<Mover | null>(() => {
     if (scene === null || geo === null) return null;
-    return { id: `${BINARY_ID}self`, kind: "planet", frame: binaryFrame(geo.r1, scene.camera, scene.viewport, true), phase: binaryPhase0 + Math.PI, ecc: 0, omega: geo.omega, r: 0, waiting: false, far: farWindow(0, scene.camera.azimuth, FAR_MARGIN) };
+    return { id: `${BINARY_ID}self`, kind: "planet", frame: binaryFrame(geo.r1, scene.camera, scene.viewport, true), phase: binaryPhase0 + Math.PI, ecc: 0, periapsis: 0, omega: geo.omega, r: 0, waiting: false, far: farWindow(0, scene.camera.azimuth, FAR_MARGIN) };
   }, [scene, geo, binaryPhase0]);
   const movers = useMemo(() => (companionMover === null ? baseMovers : [...baseMovers, companionMover]), [baseMovers, companionMover]);
   const look = layout.belt === null ? null : dustLookOf(layout.belt.count, starless);

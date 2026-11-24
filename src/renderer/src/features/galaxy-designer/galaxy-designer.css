@@ -363,6 +363,63 @@
   /* 滑块是参数，不是主操作：中性墨，不用 accent */
   accent-color: var(--color-text-secondary);
 }
+/* 轨道滑块：颜色只表示判据，滑块下方同时写文字，不让颜色独自承担含义 */
+.gd-orbit-range {
+  height: var(--control-height-sm);
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.gd-orbit-range::-webkit-slider-runnable-track {
+  height: var(--space-1);
+  border-radius: 999px;
+  background: var(--gd-orbit-track);
+}
+.gd-orbit-range::-webkit-slider-thumb {
+  width: var(--space-3);
+  height: var(--space-3);
+  margin-top: calc((var(--space-1) - var(--space-3)) / 2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--color-bg-panel);
+}
+.gd-orbit-range::-moz-range-track {
+  height: var(--space-1);
+  border-radius: 999px;
+  background: var(--gd-orbit-track);
+}
+.gd-orbit-range::-moz-range-thumb {
+  width: var(--space-3);
+  height: var(--space-3);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: var(--color-bg-panel);
+}
+.gd-orbit-range[data-level="red"] { color: var(--color-danger); }
+.gd-orbit-range[data-level="yellow"] { color: var(--color-warning); }
+.gd-orbit-range[data-level="green"] { color: var(--color-success); }
+.gd-orbit-status,
+.gd-orbit-notice {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-1-5);
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.gd-orbit-status .orbita-icon,
+.gd-orbit-notice .orbita-icon {
+  margin-top: var(--space-0-5);
+}
+.gd-orbit-status[data-level="red"] { color: var(--color-danger); }
+.gd-orbit-status[data-level="yellow"] { color: var(--color-warning); }
+.gd-orbit-status[data-level="green"] { color: var(--color-success); }
 .gd-error {
   grid-column: 1 / -1;
   display: grid;

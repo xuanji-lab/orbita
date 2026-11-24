@@ -169,6 +169,9 @@ export interface AgentPlanetInput {
   /** 按元素构成推出来的密度（g/cm³）；缺席按成分类别 */
   density?: number;
   orbitRadius: number;
+  /** 每颗自己的轨道根数；旧数据缺席时 renderer 按旧共用值迁移 */
+  eccentricity?: number;
+  periapsisDeg?: number;
 }
 
 export interface ScopeGalaxy {
@@ -289,14 +292,17 @@ function agentGalaxy(input: ScopeGalaxyInput, agents: readonly AgentPlanetInput[
   }));
   const planets: PlanetSpec[] = agents.map((agent) => {
     const hash = workspaceHash(agent.id);
+    const independent = agent.eccentricity !== undefined || agent.periapsisDeg !== undefined;
     return {
       id: agent.id,
       mass: agent.mass,
       composition: agent.composition,
       ...(agent.density === undefined ? {} : { density: agent.density }),
       orbitRadius: agent.orbitRadius,
-      inclinationDeg: ((hash >>> 3) % 11) - 5,
-      nodeDeg: (hash >>> 7) % 360,
+      ...(agent.eccentricity === undefined ? {} : { eccentricity: agent.eccentricity }),
+      ...(agent.periapsisDeg === undefined ? {} : { periapsisDeg: agent.periapsisDeg }),
+      inclinationDeg: independent ? 0 : ((hash >>> 3) % 11) - 5,
+      nodeDeg: independent ? 0 : (hash >>> 7) % 360,
       phaseDeg: (hash >>> 13) % 360,
       state: null,
     };

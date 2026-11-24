@@ -22,7 +22,7 @@ const wait = (ms: number): Promise<void> => new Promise((done) => setTimeout(don
 async function fixture(): Promise<{ ws: Workspace; root: string }> {
   const path = await mkdtemp(join(tmpdir(), "orbita-avatar-"));
   await mkdir(join(path, "planet", "agents", "rec"), { recursive: true });
-  await writeFile(join(path, "planet", "design.json"), JSON.stringify({ name: "烛霓", mass: { value: 60, unit: "M⊕" } }));
+  await writeFile(join(path, "planet", "design.json"), JSON.stringify({ name: "烛霓", mass: { value: 600, unit: "M⊕" } }));
   await writeFile(
     join(path, "planet", "galaxy.json"),
     JSON.stringify({ version: 1, main: { flip: true }, planets: [{ id: "rec", name: "聆箴", composition: "rock", orbit: 19, mix: { seed: 7, items: [{ id: "Fe", kind: "element", scope: "bulk", basis: "mass_fraction", share: 0.3, origin: "user" }] } }] }),
