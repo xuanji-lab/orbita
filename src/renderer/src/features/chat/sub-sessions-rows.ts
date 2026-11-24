@@ -7,7 +7,7 @@
  * 纯模块：不 import React、不 import `@shared/*` 的值（只用类型），可被
  * `node --test` 直接加载。
  */
-import type { ChannelMessage, ChannelStatus } from "@shared/channel";
+import type { ChannelEndInfo, ChannelMessage, ChannelStatus } from "@shared/channel";
 import type { Messages } from "../../messages-en.ts";
 
 /**
@@ -20,6 +20,7 @@ import type { Messages } from "../../messages-en.ts";
  *     用户的裁决压过审批 / 在跑这些瞬时态：停都停了，不该再引导用户去批一个死轮
  *   done     = 通道 closed 于 done（success）
  *   failed   = 通道 closed 于 failed（danger）
+ *   interrupted = 主进程确认轮没有收尾（danger；与 failed 一样需要恢复动作）
  *   idle     = 都不是（tertiary）——子会话建了但通道还没有除 task 外的往来，也没在跑
  */
 export type SubSessionRowStatus =
@@ -28,6 +29,7 @@ export type SubSessionRowStatus =
   | "approval"
   | "done"
   | "failed"
+  | "interrupted"
   | "stopped"
   | "idle";
 
@@ -50,6 +52,7 @@ export function subSessionRowStatus(input: {
   if (input.running) return "running";
   if (input.channelStatus === "done") return "done";
   if (input.channelStatus === "failed") return "failed";
+  if (input.channelStatus === "interrupted") return "interrupted";
   return "idle";
 }
 
@@ -153,8 +156,8 @@ export const STUCK_MS = 10 * 60_000;
 export type PanelRowState = SubSessionRowStatus | "stuck";
 
 /**
- * 一行此刻的状态。running 的来源有二：引擎说它在跑；或通道还开着、转录尾巴有一次在跑的调用（重开应用后
- * 引擎槽是空的，只有转录尾巴知道它在跑什么——同状态卡 childStateOf）。在跑且同一个调用超过 STUCK_MS = stuck。
+ * 一行此刻的状态。**running 只认引擎活 phase**：转录尾巴只负责说明这次在跑什么，
+ * 不能因为昨夜留下一个 running 工具 / 未答 toolCall，就在重启后复活一轮早已不存在的运行。
  */
 export function panelRowState(input: {
   channelStatus: ChannelStatus | undefined;
@@ -163,11 +166,10 @@ export function panelRowState(input: {
   activity: ChildActivity | null;
   now: number;
 }): PanelRowState {
-  const open = input.channelStatus === undefined || input.channelStatus === "running";
   const status = subSessionRowStatus({
     channelStatus: input.channelStatus,
     needsApproval: input.needsApproval,
-    running: input.enginePhaseRunning || (open && input.activity !== null),
+    running: input.enginePhaseRunning,
   });
   if (status === "running" && input.activity !== null && input.now - input.activity.since > STUCK_MS) return "stuck";
   return status;
@@ -189,6 +191,7 @@ export function panelGroupOf(state: PanelRowState): PanelGroup {
     case "waiting":
     case "approval":
     case "failed":
+    case "interrupted":
       return "attention";
     case "running":
     case "stuck":
@@ -205,6 +208,7 @@ const IN_GROUP_ORDER: Record<PanelRowState, number> = {
   waiting: 0,
   approval: 0,
   failed: 1,
+  interrupted: 1,
   stuck: 0,
   running: 1,
   done: 0,
@@ -247,6 +251,35 @@ export interface PanelSecondLine {
   /** 机器内容（命令 / 路径）用等宽 */
   mono: boolean;
   tone: "default" | "warning" | "danger" | "quiet";
+}
+
+/** 系统收尾的分类是主信号；厂商原文留在 title / 通道正文里，不用一长串英文替换可读原因。 */
+export function channelEndText(
+  end: Pick<ChannelEndInfo, "text" | "endCause"> | undefined,
+  t: Messages,
+  fallback: string,
+): string {
+  if (end === undefined) return fallback;
+  if (end.endCause !== undefined) return t.subSessions.endCauses[end.endCause];
+  return firstLineOf(end.text) || fallback;
+}
+
+function endInfoOf(message: ChannelMessage | undefined, kind: ChannelEndInfo["kind"]): ChannelEndInfo | undefined {
+  if (message === undefined) return undefined;
+  return {
+    messageId: message.id,
+    kind,
+    text: message.text,
+    ...(message.endCause === undefined ? {} : { endCause: message.endCause }),
+  };
+}
+
+/** 给状态卡 / 派出卡复用：从一份通道消息里取对应终局。 */
+export function channelEndOf(
+  messages: readonly ChannelMessage[] | undefined,
+  kind: ChannelEndInfo["kind"],
+): ChannelEndInfo | undefined {
+  return endInfoOf([...(messages ?? [])].reverse().find((message) => message.kind === kind), kind);
 }
 
 /**
@@ -306,10 +339,30 @@ export function panelSecondLine(
         mono: false,
         tone: "default",
       };
-    case "failed":
-      return { text: lastOf("failed") ?? t.subSessions.rowStatus.failed, lead: null, since: null, mono: false, tone: "danger" };
-    case "done":
-      return quiet(lastOf("done") ?? t.subSessions.rowStatus.done);
+    case "failed": {
+      const end = channelEndOf(input.messages, "failed");
+      return {
+        text: channelEndText(end, t, t.subSessions.rowStatus.failed),
+        lead: null,
+        since: null,
+        mono: false,
+        tone: "danger",
+      };
+    }
+    case "interrupted": {
+      const end = channelEndOf(input.messages, "interrupted");
+      return {
+        text: channelEndText(end, t, t.subSessions.rowStatus.interrupted),
+        lead: null,
+        since: null,
+        mono: false,
+        tone: "danger",
+      };
+    }
+    case "done": {
+      const end = channelEndOf(input.messages, "done");
+      return quiet(channelEndText(end, t, t.subSessions.rowStatus.done));
+    }
     case "stopped":
       return quiet(t.subSessions.stoppedByYou);
     default:

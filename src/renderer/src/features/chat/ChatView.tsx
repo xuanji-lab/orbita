@@ -188,6 +188,7 @@ import { Icon, type IconName } from "../../shell/Icon";
 import { ImageRefCountContext, MarkdownBlock, TaskTitlesContext } from "./MarkdownBlock";
 import { NebulaPet } from "../../shell/UsageMeter";
 import { childRunSettled, sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
+import { subSessionRowStatus } from "./sub-sessions-rows.ts";
 import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, useChatRoots, type ChatFileScope } from "./chat-file-scope.ts";
 import { isReadablePath } from "./chat-paths.ts";
 import { onRevealBoardRequest, requestOpenPanel, requestOpenPluginBoard } from "../../shell/open-panel.ts";
@@ -1422,6 +1423,13 @@ function ChatViewBody(props: {
   //   - 根会话视图：拉**全部子通道**的合并——问询胶囊按 messageId 取正文首行。
   // 两个 hook 都在分支外无条件调用（首页让位给聊天页时 hooks 数量不变）。
   const ownChildren = ownSide === "parent" && openId !== "" ? childSessions(session.sessions, openId) : [];
+  // phaseOf 是稳定 ref 查询；只把函数塞进 memo 会让派出卡永远停在摘要变化那一帧。
+  // 这里把活 phase 的值本身做成 key / 快照，面板与派出卡看到同一拍引擎状态。
+  const childPhaseKey = ownChildren.map((meta) => `${meta.id}:${session.phaseOf(meta.id)}`).join("|");
+  const childPhases = useMemo(
+    () => new Map(ownChildren.map((meta) => [meta.id, session.phaseOf(meta.id)])),
+    [childPhaseKey, session.phaseOf],
+  );
   const taskChannelKey =
     ownSide === "child" && ownParentId !== null && openId !== "" ? { parentId: ownParentId, childId: openId } : null;
   const taskChannel = useChannelMessages(taskChannelKey);
@@ -1442,6 +1450,7 @@ function ChatViewBody(props: {
   const channelError = ownSide === "child" ? taskChannel.error : null;
   const channel = useMemo<ChannelViewContext>(
     () => ({
+      ownSessionId: openId,
       ownSide,
       ownParentId,
       titles,
@@ -1449,7 +1458,7 @@ function ChatViewBody(props: {
       modelNameOf: modelDisplayNameOf,
       ownModelName: session.model === null ? null : modelDisplayNameOf(session.model.modelId),
       channelSummaries,
-      childPhaseOf: session.phaseOf,
+      childPhases,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -1457,6 +1466,7 @@ function ChatViewBody(props: {
       channelMessagesError: channelError,
     }),
     [
+      openId,
       ownSide,
       ownParentId,
       titles,
@@ -1464,7 +1474,7 @@ function ChatViewBody(props: {
       modelDisplayNameOf,
       session.model,
       channelSummaries,
-      session.phaseOf,
+      childPhases,
       openSubSession,
       litSubSessionId,
       channelMessages,
@@ -5361,7 +5371,7 @@ function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResul
   const t = useT();
   const { channel } = props;
   const mine = allOutputs(props.unit.calls, props.toolResults, props.unit.docs, props.unit.web, props.unit.media);
-  const childOutputs = useChildrenOutputs(props.unit.children, props.unit.children.map((child) => (channel.childPhaseOf(child.peerId) === "idle" ? "1" : "0")).join(""));
+  const childOutputs = useChildrenOutputs(props.unit.children, props.unit.children.map((child) => (channel.childPhases.get(child.peerId) ?? "idle") === "idle" ? "1" : "0").join(""));
   // 子会话交回的产物和主会话自己的摆进同一摞：每张带上「来自子会话…」（标题 + 型号名）
   const fromChildren = props.unit.children.flatMap((child) => {
     const loaded = childOutputs.get(child.messageId);
@@ -5509,7 +5519,7 @@ function ChildReportCard(props: { mark: { peerId: string; messageId: string; kin
   const title = peerTitleOf(channel, mark.peerId, t);
   const message = channel.channelMessages.get(mark.messageId);
   const first = (message?.text ?? "").split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
-  const outputs = useChildOutputs(mark.peerId, mark.messageId, channel.childPhaseOf(mark.peerId) === "idle");
+  const outputs = useChildOutputs(mark.peerId, mark.messageId, (channel.childPhases.get(mark.peerId) ?? "idle") === "idle");
   const open = channel.openSubSession;
   const edited = outputs === undefined || outputs === null ? 0 : outputs.edited.length;
   // 一行：「「标题」交回了 · 型号名 · 报告第一行 ［看它的会话］」。它做出来的东西不再包在这里，摆进这一轮结尾的产物摞（TurnOutputsBlock）
@@ -6430,24 +6440,23 @@ function DelegateToolLine(props: {
     );
   }
   const summary = props.channel.channelSummaries.get(card.childId);
-  // 状态优先读通道摘要的终态（done/failed/waiting/stopped）；否则看子会话在 renderer
-  // 会话槽里的 phase——不为 idle 就是还在跑（子会话 PR4a 的「状态从哪来」）。
-  // stopped 不读的话，用户终止过的子会话在派出卡上会退回「空闲」（验收发现）
-  const status: DelegateCardStatus =
-    summary?.status === "done" ||
-    summary?.status === "failed" ||
-    summary?.status === "waiting" ||
-    summary?.status === "stopped"
-      ? summary.status
-      : props.channel.childPhaseOf(card.childId) !== "idle"
-        ? "running"
-        : "idle";
+  // 与右栏 / 状态卡共用同一份推导：只有活 phase 能让卡进入 running。
+  const derived = subSessionRowStatus({
+    channelStatus: summary?.status,
+    needsApproval: false,
+    running: (props.channel.childPhases.get(card.childId) ?? "idle") !== "idle",
+  });
+  const status: DelegateCardStatus = derived === "approval" ? "running" : derived;
   const openSubSession = props.channel.openSubSession;
   return (
     <DelegateCardView
       card={card}
       status={status}
       taskPreview={taskPreview}
+      {...(summary?.end === undefined ? {} : { end: summary.end })}
+      {...((status === "failed" || status === "interrupted") && openSubSession !== null
+        ? { recovery: { parentId: props.channel.ownSessionId, childId: card.childId } }
+        : {})}
       onClick={openSubSession === null ? undefined : () => openSubSession(card.childId)}
       lit={props.channel.litSubSessionId === card.childId}
       modelName={props.channel.modelNameOf(card.modelId)}

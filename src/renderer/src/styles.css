@@ -1825,6 +1825,28 @@ button.ssp-group-toggle:hover {
   padding: 0;
 }
 
+/* 失败 / 中断的恢复动作：沿用卡片的描边小按钮，颜色只给错误文字。 */
+.subsession-recovery {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.subsession-recovery-error {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
 /* 收起的组：一行「15 个已交回 ›」，与组卡同一张白卡的语言，点开展开成组 */
 .ssp-fold {
   display: flex;

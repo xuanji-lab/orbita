@@ -55,6 +55,8 @@ export function ExitCard(props: {
   below?: React.ReactNode;
   /** 窄容器响应式只改布局，不改 token；由调用方给容器查询一个类名 */
   className?: string;
+  /** 卡内第二行动作（失败子会话的重试 / 终止），避免右侧动作挤没标题。 */
+  footer?: React.ReactNode;
   lit?: boolean;
 }) {
   const style: React.CSSProperties = {
@@ -62,9 +64,10 @@ export function ExitCard(props: {
     ...(props.lit === true ? LIT_STYLE : {}),
     ...(props.below !== undefined ? { flexWrap: "wrap" } : {}),
     ...(props.onClick !== undefined ? { width: "100%", textAlign: "left", cursor: "pointer", font: "inherit" } : {}),
+    ...(props.footer !== undefined ? { display: "grid" as const } : {}),
   };
   const sub = [props.preview ?? ""].filter((part) => part !== "");
-  const content = (
+  const head = (
     <>
       <span className="exit-card-icon">
         <Icon name={props.icon ?? "arrow-up-right"} size={18} strokeWidth={1.6} />
@@ -99,7 +102,26 @@ export function ExitCard(props: {
       )}
     </>
   );
-  if (props.onClick === undefined || props.actions !== undefined) {
+  const content =
+    props.footer === undefined ? (
+      head
+    ) : (
+      <>
+        <span style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", width: "100%", minWidth: 0 }}>
+          {head}
+        </span>
+        <span
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            paddingLeft: "calc(18px + var(--space-3))",
+          }}
+        >
+          {props.footer}
+        </span>
+      </>
+    );
+  if (props.onClick === undefined || props.actions !== undefined || props.footer !== undefined) {
     return (
       <div className={props.className} style={style}>
         {content}
