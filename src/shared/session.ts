@@ -454,6 +454,12 @@ export interface SessionMeta {
    */
   promoted?: boolean;
   /**
+   * 幕后会话：界面替用户派的一轮活（这一版只有 "avatar" = 星系设计面板的「生成形象」，shared/planet-avatar.ts）。
+   * 不进左栏、首页、编排图，不响完成提示、不写记忆、不起标题、不注册子智能体 / 自动化工具；
+   * 结果由发起它的界面自己读（出图读插件账本），会话只留作排查。缺席 = 普通会话。
+   */
+  backstage?: "avatar";
+  /**
    * 上一次跑完时的用量快照（A1-Q1，2026-09-03 裁决）。
    * **null = 没有账本**（本字段之前存的会话，或还没跑过一轮）。
    *
@@ -728,6 +734,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     ...(automationId === null ? null : { automationId }),
     ...(automationId === null || automationRun === null ? null : { automationRun }),
     ...(automationId !== null && value["promoted"] === true ? { promoted: true } : null),
+    ...(value["backstage"] === "avatar" ? { backstage: "avatar" as const } : null),
     // 意图召回的会话级开关（实验功能 intent-system）：缺席 = 跟随设置里的
     // 新会话默认。只认布尔，坏值丢掉
     ...(value["intentEnabled"] === true || value["intentEnabled"] === false
@@ -762,7 +769,7 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
  */
 export function rootSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
   return sessions.filter(
-    (meta) => meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true),
+    (meta) => meta.parentId === undefined && meta.backstage === undefined && (meta.automationId === undefined || meta.promoted === true),
   );
 }
 

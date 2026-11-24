@@ -75,7 +75,7 @@ export function stateOfIndex(source: RunStateSource): (meta: SessionMeta) => Ses
 
 /** 一条会话算不算在这座星系里：归档的、自动化开出来还没转正的都不算（侧栏也不列它们） */
 function listed(meta: SessionMeta): boolean {
-  return !meta.archived && (meta.automationId === undefined || meta.promoted === true);
+  return !meta.archived && meta.backstage === undefined && (meta.automationId === undefined || meta.promoted === true);
 }
 
 const STATE_RANK: Readonly<Record<Exclude<SessionRunState, null>, number>> = {

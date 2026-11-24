@@ -950,3 +950,140 @@
   font: inherit;
   font-size: var(--font-size-base);
 }
+
+/* ── 形象（AvatarSection.tsx）：候选一排 2–4 张，球 + 后端 + 状态；没出来的写原因 ── */
+.gd-avatar {
+  display: grid;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+.gd-avatar-desc {
+  margin: 0;
+}
+.gd-avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.gd-avatar-cell {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.gd-avatar-tile {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-0-5);
+  width: 100%;
+  padding: var(--space-2) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-hover);
+}
+.gd-avatar-tile:disabled {
+  cursor: default;
+}
+.gd-avatar-tile:not(:disabled):hover {
+  background: var(--color-bg-hover);
+}
+/* 选中：一种容器一种语言——底色不变，只换成 accent 内描边（不叠第二层底） */
+.gd-avatar-tile[data-picked],
+.gd-avatar-tile[data-in-use] {
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+.gd-avatar-tile:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.gd-avatar-figure {
+  width: 72px;
+  height: 72px;
+  overflow: visible;
+}
+.gd-avatar-slot {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+.gd-avatar-slot[data-state="working"] {
+  animation: gd-avatar-breathe 1.6s var(--ease-in-out) infinite;
+}
+@keyframes gd-avatar-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gd-avatar-slot[data-state="working"] {
+    animation: none;
+  }
+}
+.gd-avatar-backend {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.gd-avatar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.gd-avatar-status[data-state="failed"] {
+  color: var(--color-danger);
+}
+.gd-avatar-reason {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.gd-avatar-reason[data-kind="failed"] {
+  color: var(--color-danger);
+}
+.gd-avatar-pending {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.gd-avatar-pending-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.gd-avatar-acts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.gd-avatar-model {
+  margin-right: auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.gd .gd-avatar-generate,
+.gd .gd-avatar-use {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-base);
+}

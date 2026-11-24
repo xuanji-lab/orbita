@@ -5,6 +5,7 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { PlanetReadResult, PlanetWriteRequest, PlanetWriteResult } from "../../shared/planet-design.ts";
+import type { AvatarBodyRef, AvatarGenerateRequest, AvatarJobEvent, AvatarJobResult, AvatarSelectRequest } from "../../shared/planet-avatar.ts";
 import type { SubAgentCreateRequest, SubAgentDeleteRequest, SubAgentMutationResult, SubAgentUpdateRequest } from "../../shared/sub-agent.ts";
 
 export const planetApi = {
@@ -18,4 +19,17 @@ export const planetApi = {
   updateSubAgent: (request: SubAgentUpdateRequest): Promise<SubAgentMutationResult> => ipcRenderer.invoke(ipcChannels.subAgentUpdate, request),
   /** 删（用户在面板里确认过）：名单拿掉，档案目录挪进 planet/agents/.deleted/ */
   deleteSubAgent: (request: SubAgentDeleteRequest): Promise<SubAgentMutationResult> => ipcRenderer.invoke(ipcChannels.subAgentDelete, request),
+  /** 「生成形象」：开一组候选（幕后会话跑插件 planet-render）；同一颗正在出图时回错误 */
+  generateAvatar: (request: AvatarGenerateRequest): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarGenerate, request),
+  /** 这颗天体当前这一轮（活任务，或按盘上账本重建）；从没出过图为 null */
+  avatarJob: (request: AvatarBodyRef): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarGet, request),
+  /** 挑一张写进 planet/ */
+  selectAvatar: (request: AvatarSelectRequest): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarSelect, request),
+  cancelAvatar: (request: AvatarBodyRef): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarCancel, request),
+  /** 进度推送；返回退订函数 */
+  onAvatarJob: (listener: (event: AvatarJobEvent) => void): (() => void) => {
+    const handler = (_e: unknown, event: AvatarJobEvent) => listener(event);
+    ipcRenderer.on(ipcChannels.planetAvatarEvent, handler);
+    return () => ipcRenderer.removeListener(ipcChannels.planetAvatarEvent, handler);
+  },
 };

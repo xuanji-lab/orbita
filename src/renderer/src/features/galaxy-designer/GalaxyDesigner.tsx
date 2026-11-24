@@ -51,6 +51,7 @@ import { BodyFigure } from "./StarFigure.tsx";
 import { NewSubAgentForm, RoleSection } from "./SubAgentRole.tsx";
 import { PLANET_AGENTS_MAX } from "@shared/planet-design";
 import { MixSection } from "./MixSection.tsx";
+import { AvatarSection } from "./AvatarSection.tsx";
 import type { PlanetMix } from "@shared/planet-design";
 import { cssColorOf, mixColor } from "./mix.ts";
 import { flatStage, ORBIT_BOX, orbitStage, previewPlan, starStage, type GridLine, type WellBox } from "./well.ts";
@@ -361,6 +362,19 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null }) 
                   onChange={(orbitRadius) => patchBody({ orbitRadius })}
                 />
               </Row>
+            )}
+
+            {/* 形象：选完元素的下一步——按插件的出图原则出候选、挑一张（AvatarSection.tsx） */}
+            {design.star !== null && (
+              <AvatarSection
+                workspaceId={id}
+                bodyId={kind === "star" ? "main" : (design.planet?.id ?? null)}
+                kind={kind}
+                design={design}
+                name={(body.name.trim() || nameFallback).slice(0, 200)}
+                mix={kind === "planet" && design.planet !== null ? mixOf(design.planet) : starMixOf(design.star, id)}
+                hasSurface={body.surface !== null && body.surface !== undefined}
+              />
             )}
 
             <PanelGroupHead label={tg.elementsGroup} />
