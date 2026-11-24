@@ -29,6 +29,7 @@ const meta = (over: { id: string; updatedAt: number } & Partial<SessionMeta>): S
   ...over,
 });
 
+
 describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
   const text: HomeCardLineText = {
     thinking: "在想",
@@ -130,7 +131,7 @@ describe("selectHomeLog", () => {
     (m: SessionMeta): SessionRunState =>
       map[m.id] ?? null;
 
-  test("按运行态分三组：等你（含出错）> 进行中 > 最近（含跑完没看），组内保持列表序", () => {
+  test("按运行态分两组：等你（含出错）> 进行中，组内保持列表序；闲置与跑完没看的不进首页", () => {
     const sessions = [
       meta({ id: "idle1", updatedAt: 90 }),
       meta({ id: "run", updatedAt: 80 }),
@@ -145,21 +146,17 @@ describe("selectHomeLog", () => {
       [
         ["waiting", ["wait", "fail"]],
         ["running", ["run"]],
-        ["recent", ["idle1", "done", "idle2"]],
       ],
     );
   });
 
-  test("没有行的组不返回；全是闲置会话只剩「最近」", () => {
+  test("没有行的组不返回；全是闲置会话就一组都没有（首页输入框下面留白）", () => {
     const groups = selectHomeLog([meta({ id: "a", updatedAt: 2 }), meta({ id: "b", updatedAt: 1 })], stateById({}));
-    assert.deepEqual(
-      groups.map((g) => g.group),
-      ["recent"],
-    );
+    assert.deepEqual(groups, []);
     assert.deepEqual(selectHomeLog([], stateById({})), []);
   });
 
-  test("子会话 / 归档 / 无标题不进记录；每组各有上限（等你 4、进行中 4、最近 5）", () => {
+  test("子会话 / 归档 / 无标题不进记录；每组各有上限（等你 4、进行中 4）", () => {
     const many = (prefix: string, n: number, base: number): SessionMeta[] =>
       Array.from({ length: n }, (_, i) => meta({ id: `${prefix}${i}`, updatedAt: base - i }));
     const sessions = [
@@ -174,7 +171,7 @@ describe("selectHomeLog", () => {
       m.id.startsWith("w") ? "waiting" : m.id.startsWith("r") ? "running" : null;
     const groups = selectHomeLog(sessions, state);
     const sizes = Object.fromEntries(groups.map((g) => [g.group, g.rows.length]));
-    assert.deepEqual(sizes, { waiting: 4, running: 4, recent: 5 });
+    assert.deepEqual(sizes, { waiting: 4, running: 4 });
     const ids = groups.flatMap((g) => g.rows.map((r) => r.sessionId));
     for (const bad of ["child", "arch", "blank"]) assert.ok(!ids.includes(bad), `${bad} 不该出现`);
   });

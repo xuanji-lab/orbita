@@ -11,18 +11,26 @@ import { firstLine, processLive } from "./turn-process.ts";
 
 /**
  * 首页记录的选行与「此刻在干什么」那一句（纯函数，ChatView 首页唯一消费者）。
- * 已归档、无标题与子会话不进首页；输入已按 sortSessions 排好，这里不重排。
- * node --test 直接加载本文件，值导入因此走相对路径带 `.ts` 后缀。
+ *
+ * 规则：
+ * - **候选**：已归档、从未发过消息（无标题）的会话不进——归档是用户明确说「别翻出来」；
+ *   子会话也不进（子会话 PR4c，2.3）：`session.sessions` 是全量列表，首页与左栏一样只列根会话，
+ *   子会话唯一的入口是母会话的右栏 Sub-sessions 面板。
+ * - **只列要你注意的**：等你（含出错）与进行中。闲置的、跑完的会话不上首页（2026-11-22 删掉「最近」组：
+ *   侧栏已经按最近活跃列了一遍会话，首页再列一遍是重复；跑完没看的靠侧栏的未读标记）。
+ *
+ * 前置条件：`sessions` 已按 `sortSessions` 排序（ChatView 吃的 `session.sessions` 由主进程 `list()`
+ * 排好）。函数不再排一次——排法必须只有 `sortSessions` 一份，这里重排迟早漂移。
+ * node --test 直接加载本文件，`rootSessions` 这个值导入因此走相对路径带 `.ts` 后缀。
  */
 
 /**
- * 首页「记录」的三组上限（2026-11-07 方向 N：首页从三张等重的卡改成按状态分组的记录行）。
- * 等你 / 进行中各留 4 行：多于此说明同时在跑的活已经超出一眼能读的量，再多只是堆；最近 5 行。
- * 合计最多 13 行，一屏放得下（行高 32）。
+ * 首页「记录」的两组上限：等你 / 进行中各留 4 行——多于此说明同时在跑的活已经超出一眼能读的量，再多只是堆。
+ * 原来还有第三组「最近」（5 行，含跑完没看的），2026-11-22 用户裁决删掉。
  */
-const HOME_LOG_LIMITS = { waiting: 4, running: 4, recent: 5 } as const;
+const HOME_LOG_LIMITS = { waiting: 4, running: 4 } as const;
 
-/** 首页记录的三个组：等你（含出错——它也在等你处置）> 进行中 > 最近（含跑完没看的） */
+/** 首页记录的两个组：等你（含出错——它也在等你处置）> 进行中 */
 export type HomeLogGroupId = keyof typeof HOME_LOG_LIMITS;
 
 /** 记录里的一行：只给会话 id 与标题，其余（状态 / 那一句 / 时间）由调用方按槽里的实况现算 */
@@ -40,7 +48,7 @@ export interface HomeLogGroup {
  * 首页记录的选行与分组。
  *
  * 候选排除子会话、归档、无标题。顺序沿用列表序（sortSessions：置顶优先 + 最近活跃）。
- * 分组按运行态：waiting / failed → 「等你」，running → 「进行中」，其余（没在跑、跑完没看）→ 「最近」。
+ * 分组按运行态：waiting / failed → 「等你」，running → 「进行中」；其余（没在跑、跑完没看）不进首页。
  * 没有行的组不返回——空组只会在边栏里留一个无所指的组名。
  */
 export function selectHomeLog(
@@ -48,15 +56,15 @@ export function selectHomeLog(
   stateOf: (meta: SessionMeta) => SessionRunState,
 ): HomeLogGroup[] {
   const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
-  const buckets: Record<HomeLogGroupId, HomeLogRow[]> = { waiting: [], running: [], recent: [] };
+  const buckets: Record<HomeLogGroupId, HomeLogRow[]> = { waiting: [], running: [] };
   for (const meta of eligible) {
     const state = stateOf(meta);
-    const group: HomeLogGroupId =
-      state === "waiting" || state === "failed" ? "waiting" : state === "running" ? "running" : "recent";
-    if (buckets[group].length >= HOME_LOG_LIMITS[group]) continue;
+    const group: HomeLogGroupId | null =
+      state === "waiting" || state === "failed" ? "waiting" : state === "running" ? "running" : null;
+    if (group === null || buckets[group].length >= HOME_LOG_LIMITS[group]) continue;
     buckets[group].push({ sessionId: meta.id, title: meta.title });
   }
-  return (["waiting", "running", "recent"] as const)
+  return (["waiting", "running"] as const)
     .filter((group) => buckets[group].length > 0)
     .map((group) => ({ group, rows: buckets[group] }));
 }

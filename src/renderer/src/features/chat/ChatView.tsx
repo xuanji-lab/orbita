@@ -1460,9 +1460,9 @@ function ChatViewBody(props: {
         </div>
       );
     }
-    // 首页记录（选行与那一句的推导在 home-cards.ts 纯函数，测试覆盖；这里只接线）：
-    // 行上说「此刻在干什么」：运行态 + 槽里这一轮的过程 + 计划现算，不另存。不用 useMemo——
-    // 运行态每个事件都可能变，而这里只在首页这一支跑、O(n)（子会话表先建好，不按会话各扫一遍全表）。
+    // 首页记录（选行与那一句的推导在 home-cards.ts 纯函数，测试覆盖；这里只接线）：只列等你 / 进行中，
+    // 行上说「此刻在干什么」：运行态 + 槽里这一轮的过程 + 计划现算，不另存。不用 useMemo——运行态
+    // 每个事件都可能变，而这里只在首页这一支跑、O(n)（子会话表先建好，不按会话各扫一遍全表）。
     const childrenOf = new Map<string, SessionMeta[]>();
     for (const meta of session.sessions) {
       if (meta.parentId === undefined) continue;
@@ -1570,10 +1570,13 @@ function ChatViewBody(props: {
             {notices}
             {composer}
           </div>
-          {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出 */}
-          <div className="home-fade home-fade-log">
-            <HomeLog groups={logGroups} loading={!session.sessionsLoaded} onOpen={openFromHome} />
-          </div>
+          {/* 记录组：在输入框下面（先写，再读别的活的进展），随 slogan 一起淡出。没有等你 / 进行中的
+              活就整组不渲染——输入框下面留白，不留组名、子午线或空容器（2026-11-22 删掉「最近」组后的常态） */}
+          {logGroups.length > 0 && (
+            <div className="home-fade home-fade-log">
+              <HomeLog groups={logGroups} onOpen={openFromHome} />
+            </div>
+          )}
         </div>
       </div>
     );

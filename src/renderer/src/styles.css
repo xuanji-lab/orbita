@@ -5887,11 +5887,6 @@ mark.intent-mark {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  .log-skel {
-    height: 10px;
-    border-radius: var(--radius-xs);
-    background: var(--color-bg-hover);
-  }
 }
 
 /*
