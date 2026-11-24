@@ -8,8 +8,6 @@ import {
   galaxyBox,
   GALAXY_MAX,
   GALAXY_MAX_FILL,
-  CAMERA_ELEVATION_DEG,
-  ORCH_TILT_DEG,
   LIVE_FRAME_MS,
   layoutGalaxy,
   makeCamera,
@@ -65,6 +63,7 @@ import {
 } from "./callouts.ts";
 import { useGalaxyActions, type GalaxyActions } from "./galaxy-actions.ts";
 import { useProtoVariants } from "./proto-variants-store.ts";
+import { useGalaxyTilt } from "./galaxy-tilt.ts";
 
 /** 碎石块的轮廓：七个顶点、半径按 id 抖一点（同一条会话永远同一块石头），不是圆点——它是会话，不是天体 */
 export function rockPath(x: number, y: number, r: number, id: string): string {
@@ -495,10 +494,9 @@ const GalaxyScene = memo(function GalaxyScene(props: HomeGalaxyProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const size = useBoxSize(rootRef);
   const starless = props.starless === true;
-  // 轨道是开普勒椭圆，偏心率与俯角两个候选见 proto-variants（单智能体首页与编排页同一套）
-  const variants = useProtoVariants();
-  const orbitE = Number(variants.orbitE);
-  const tilt = variants.tilt === "classic" ? CAMERA_ELEVATION_DEG : ORCH_TILT_DEG;
+  // 轨道是开普勒椭圆（偏心率候选见 proto-variants），俯角是设置里的星系倾角（单智能体首页与编排页同一套）
+  const orbitE = Number(useProtoVariants().orbitE);
+  const tilt = useGalaxyTilt();
   const spec = useMemo(() => ({ ...props.spec, eccentricity: orbitE }), [props.spec, orbitE]);
   const baseLayout = useMemo(() => layoutGalaxy(spec), [spec]);
   const scene = useMemo(() => {

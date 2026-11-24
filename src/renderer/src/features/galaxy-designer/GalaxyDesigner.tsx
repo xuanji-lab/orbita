@@ -40,6 +40,7 @@ import { MASS_UNIT_PER_EARTH,
 } from "./design.ts";
 import { galaxyDesigns, persistDesign } from "./useGalaxyDesign.ts";
 import type { DesignerFocus } from "../chat/galaxy-actions.ts";
+import { useGalaxyTilt } from "../chat/galaxy-tilt.ts";
 import { useProtoVariants } from "../chat/proto-variants-store.ts";
 import { nameOrderOf } from "../chat/proto-variants.ts";
 import { storyLineOf } from "./design.ts";
@@ -593,7 +594,8 @@ function sceneDesign(design: GalaxyDesign, starR: number, planetR: number): Gala
 
 /** 轨道小场景：同一张网格布上，主星压在坑里，这颗行星的轨道贴着布面；最近的合法轨道画虚线，撞上时标红 */
 function OrbitScene(props: { design: GalaxyDesign; uid: string; label: string }) {
-  const stage = orbitStage(props.design);
+  // 与页面星系同一个俯角（设置 › 外观 › 星系倾角）
+  const stage = orbitStage(props.design, useGalaxyTilt());
   if (stage === null) return null;
   const small = sceneDesign(props.design, stage.star.r, stage.planet?.r ?? 0);
   const starArt = bodyArt(small, "star", stage.star.r);

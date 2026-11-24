@@ -1,6 +1,6 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
+import { GALAXY_TILT, galaxyTiltOf,
   APP_MODE_DEFAULT,
   ORCHESTRA_VIEW_DEFAULT,
   BOARD_DAYS_DEFAULT,
@@ -811,5 +811,16 @@ describe("parseSettings 的 processView（三档：按块 / 铺开 / 逐步铺�
   });
   it("processLayout 不再写回：解析结果里没有这个字段", () => {
     ok(!("processLayout" in parseSettings({ processView: "turn", processLayout: "flat" })));
+  });
+});
+
+describe("parseSettings 的 galaxyTilt（设置 › 外观 › 星系倾角）", () => {
+  it("缺席 = 默认 40°；区间 10–60、步长 5 的整数才留下，别的丢掉", () => {
+    deepStrictEqual(parseSettings({}).galaxyTilt, undefined);
+    deepStrictEqual(galaxyTiltOf(parseSettings({})), GALAXY_TILT.default);
+    deepStrictEqual(GALAXY_TILT.default, 40);
+    for (const ok of [10, 15, 40, 60]) deepStrictEqual(parseSettings({ galaxyTilt: ok }).galaxyTilt, ok);
+    for (const bad of [5, 12, 37, 65, "40", null, Number.NaN, 40.5]) deepStrictEqual(parseSettings({ galaxyTilt: bad }).galaxyTilt, undefined, String(bad));
+    deepStrictEqual(galaxyTiltOf(parseSettings({ galaxyTilt: 25 })), 25);
   });
 });

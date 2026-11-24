@@ -512,14 +512,6 @@ export const GALAXY_MAX = { width: 1280, height: 460 } as const;
 /** 工作区页（星系占输入框上方整块）的封顶：高度放宽，窗口一高星系跟着长，不留大块死白；宽度同上 */
 export const GALAXY_MAX_FILL = { width: 1280, height: 720 } as const;
 
-/**
- * 星系的相机俯角（单智能体首页与编排页同一个值，2026-11-24 用户：「他的这个倾角和编排模式的倾角不一样。两个要 consistent」）。
- * 候选（proto-variants 的 tilt）：orch = ORCH_TILT_DEG（编排 New Task 页在常用窗口下原来按画框形状算出的那个值，约 37°），
- * classic = CAMERA_ELEVATION_DEG（单智能体首页原来的 20°）。不再按画框形状变：同一座星系在两个首页上同一个俯角。
- * 屏幕安全布局在窄画布里装不下时仍会往上抬（screen-safe.ts），那是「不相撞」的规矩，不是风格。
- */
-export const ORCH_TILT_DEG = 37;
-
 export function galaxyBox(
   width: number,
   height: number,

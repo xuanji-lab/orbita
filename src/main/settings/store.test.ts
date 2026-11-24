@@ -132,6 +132,16 @@ describe("SettingsStore", () => {
     assert.deepEqual((await new SettingsStore(dir).read()).choreModel, { providerId: "kimi", modelId: "kimi-k3" });
   });
 
+  test("星系倾角：写进去重开还在；改别的设置不抹它；坏值不落盘", async () => {
+    await store.write({ galaxyTilt: 25 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
+    await store.write({ sidebarWidth: 300 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
+    await store.write({ galaxyTilt: 37 });
+    const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("galaxyTilt" in raw, false, "不在 5° 网格上的值丢掉，回到默认");
+  });
+
   test("lastUsed 的部分更新按键合并——切档不抹已记的模型", async () => {
     await store.write({ lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
     await store.write({ lastUsed: { mode: "skip" } });

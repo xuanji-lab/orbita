@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { GALAXY_TILT } from "../../../../shared/settings.ts";
+
+const TILT: number = GALAXY_TILT.default;
 import {
   drawFrame,
   dustLookOf,
   dustPoints,
-  ORCH_TILT_DEG,
   galaxyBox,
   GALAXY_MAX_FILL,
   orbitArcs,
@@ -22,7 +24,7 @@ import {
   type StarItem,
 } from "./galaxy.ts";
 import { orbitRadiusOf } from "./galaxy-data.ts";
-import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, fitScreenSafe, SAFE_ELEVATION_MAX } from "./screen-safe.ts";
+import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, fitScreenSafe } from "./screen-safe.ts";
 import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { lockFrame } from "./callouts.ts";
 
@@ -122,10 +124,10 @@ const AGENT_SPECS: [string, GalaxySpec][] = [
   ["3000 条会话（碎石带铺到画框外沿）", agentSpec(620, [[40, "gas", 19], [34, "rock", 25], [11, "ice", 31], [22, "rock", 37], [16, "ice", 43], [30, "gas", 49]], 8, 3, 3000)],
 ];
 
-function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX): string[] {
+function collisions(spec: GalaxySpec, w: number, h: number, readableMax: number = PLANET_READABLE_MAX, tilt: number = TILT): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
   // 与 HomeGalaxy 的工作区页一样：每条会话都是一颗碎石（不封顶）
-  const scene = fitScreenSafe({ ...spec }, w, h, box, ORCH_TILT_DEG, readableMax);
+  const scene = fitScreenSafe({ ...spec }, w, h, box, tilt, readableMax);
   const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
   const extent = Math.max(starRadius(spec.starMass), spec.starExtent ?? 0) / starRadius(spec.starMass);
   const problems: string[] = [];
@@ -199,8 +201,8 @@ describe("屏幕安全布局：任何公转相位上，没有两个天体在屏�
   test("轨道一律放平、只往外推不往里收；俯角不超过上限；装不下就少画最外一圈（计进 hidden）", () => {
     const spec = realistic(9, 3);
     const box = galaxyBox(336, 269, GALAXY_MAX_FILL);
-    const scene = fitScreenSafe(spec, 336, 269, box, ORCH_TILT_DEG);
-    assert.ok(scene.elevationDeg <= SAFE_ELEVATION_MAX);
+    const scene = fitScreenSafe(spec, 336, 269, box, TILT);
+    assert.equal(scene.elevationDeg, TILT, "俯角是设置里选的，布局不改它");
     for (const planet of scene.layout.planets) assert.equal(planet.inclination, 0);
     const radii = scene.layout.planets.map((planet) => planet.orbitRadius);
     for (let i = 1; i < radii.length; i++) assert.ok((radii[i] ?? 0) > (radii[i - 1] ?? 0));
@@ -222,7 +224,7 @@ describe("编排星系（行星 = 子智能体、会话 = 碎石）：屏幕上�
     for (const [, spec] of AGENT_SPECS) {
       for (const [canvasName, w, h] of CANVASES) {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-        const scene = fitScreenSafe(spec, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        const scene = fitScreenSafe(spec, w, h, box, TILT, AGENT_READABLE_MAX);
         const items = drawFrame(scene.layout, scene.camera, scene.viewport, orbitArcs(scene.layout, scene.camera, scene.viewport), 0, scene.minPlanetPx);
         const star = items.find((item): item is StarItem => item.kind === "star");
         const biggest = Math.max(...items.filter((item): item is PlanetItem => item.kind === "planet").map((p) => p.r), 0);
@@ -251,7 +253,7 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
     for (const [canvasName, w, h] of NARROW_CANVASES) {
       test(`${specName} × ${canvasName}（${w}×${h}）`, () => {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-        const scene = fitScreenSafe(spec, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        const scene = fitScreenSafe(spec, w, h, box, TILT, AGENT_READABLE_MAX);
         const arcs = orbitArcs(scene.layout, scene.camera, scene.viewport);
         const problems: string[] = [];
         for (let t = 0; t <= 600; t += 7.3) {
@@ -291,7 +293,7 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
     const [, spec] = AGENT_SPECS[3] as [string, GalaxySpec];
     const box = galaxyBox(196, 214, GALAXY_MAX_FILL);
     for (const eccentricity of [0, 0.3]) {
-      const scene = fitScreenSafe({ ...spec, eccentricity }, 196, 214, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+      const scene = fitScreenSafe({ ...spec, eccentricity }, 196, 214, box, TILT, AGENT_READABLE_MAX);
       assert.ok(scene.layout.planets.length >= 1, `e=${eccentricity} 只剩 ${scene.layout.planets.length} 颗`);
       assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR - 0.01, `e=${eccentricity} 行星 ${scene.minPlanetPx.toFixed(1)}px`);
     }
@@ -306,9 +308,9 @@ describe("编排星系 · 窄窗：行星可读、碎石小于行星、锁定框
 const ECCS = [0.15, 0.3, 0.45] as const;
 const PHASES = 240;
 
-function sweepProblems(spec: GalaxySpec, w: number, h: number, ecc: number): string[] {
+function sweepProblems(spec: GalaxySpec, w: number, h: number, ecc: number, tilt: number = TILT, phases: number = PHASES): string[] {
   const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-  const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+  const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, w, h, box, tilt, AGENT_READABLE_MAX);
   const { layout, camera, viewport } = scene;
   const problems: string[] = [];
   if (layout.ecc > ecc || layout.ecc < 0) problems.push(`偏心率不对：${layout.ecc}`);
@@ -319,16 +321,16 @@ function sweepProblems(spec: GalaxySpec, w: number, h: number, ecc: number): str
   const rings = layout.planets.map((planet) => {
     const frame = orbitFrame(planet.orbitRadius, 0, 0, camera, viewport, layout.ecc);
     const r = planetPx(planet.radius, planet.state === "waiting", camera, viewport, scene.minPlanetPx);
-    return { id: planet.id, r, points: Array.from({ length: PHASES }, (_, i) => framePoint(frame, (i / PHASES) * Math.PI * 2)) };
+    return { id: planet.id, r, points: Array.from({ length: phases }, (_, i) => framePoint(frame, (i / phases) * Math.PI * 2)) };
   });
   if (layout.rockOrbit !== null && layout.rocks.length > 0) {
     const frame = orbitFrame(layout.rockOrbit, 0, 0, camera, viewport, layout.ecc);
-    rings.push({ id: "碎石块", r: ROCK_CLEAR_PX, points: Array.from({ length: PHASES }, (_, i) => framePoint(frame, (i / PHASES) * Math.PI * 2)) });
+    rings.push({ id: "碎石块", r: ROCK_CLEAR_PX, points: Array.from({ length: phases }, (_, i) => framePoint(frame, (i / phases) * Math.PI * 2)) });
   }
   for (const ring of rings) {
     // 画在主星前面那一段（不在远层）不碰主星
     ring.points.forEach((p, i) => {
-      const theta = (i / PHASES) * Math.PI * 2;
+      const theta = (i / phases) * Math.PI * 2;
       if (theta > FAR_MARGIN && theta < Math.PI - FAR_MARGIN) return;
       const d = Math.hypot(p.x - star.x, p.y - star.y);
       if (d < starReach + ring.r) problems.push(`${ring.id} 在相位 ${((theta * 180) / Math.PI).toFixed(0)}° 压在主星上（${d.toFixed(1)} < ${(starReach + ring.r).toFixed(1)}）`);
@@ -341,14 +343,14 @@ function sweepProblems(spec: GalaxySpec, w: number, h: number, ecc: number): str
     if (a === undefined || b === undefined) continue;
     let best = Infinity;
     let at = "";
-    for (let i = 0; i < PHASES; i++) {
+    for (let i = 0; i < phases; i++) {
       const p = a.points[i] as { x: number; y: number };
-      for (let j = 0; j < PHASES; j++) {
+      for (let j = 0; j < phases; j++) {
         const q = b.points[j] as { x: number; y: number };
         const d = Math.hypot(p.x - q.x, p.y - q.y);
         if (d < best) {
           best = d;
-          at = `${((i / PHASES) * 360).toFixed(0)}°/${((j / PHASES) * 360).toFixed(0)}°`;
+          at = `${((i / phases) * 360).toFixed(0)}°/${((j / phases) * 360).toFixed(0)}°`;
         }
       }
     }
@@ -375,8 +377,8 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
     for (const [, spec] of AGENT_SPECS) {
       for (const [canvasName, w, h] of [...CANVASES, ...NARROW_CANVASES]) {
         const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-        const round = fitScreenSafe(spec, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
-        const kepler = fitScreenSafe({ ...spec, eccentricity: 0.3 }, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        const round = fitScreenSafe(spec, w, h, box, TILT, AGENT_READABLE_MAX);
+        const kepler = fitScreenSafe({ ...spec, eccentricity: 0.3 }, w, h, box, TILT, AGENT_READABLE_MAX);
         assert.ok(kepler.layout.planets.length >= round.layout.planets.length, `${canvasName}: 椭圆 ${kepler.layout.planets.length} 颗 < 正圆 ${round.layout.planets.length} 颗`);
         if (round.layout.rockOrbit !== null) assert.ok(kepler.layout.rockOrbit !== null, `${canvasName}: 椭圆丢了碎石块`);
         if (canvasName === "页面" && spec !== AGENT_SPECS[4]?.[1]) assert.equal(kepler.layout.ecc, 0.3, "宽画布上偏心率被退了");
@@ -387,7 +389,7 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
   test("近日点那一侧确实是最挤的：相邻两圈的最近距离出现在近日点附近（|相位| < 90°），且比正圆时的同一对更近", () => {
     const [, spec] = AGENT_SPECS[3] as [string, GalaxySpec];
     const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
-    const scene = fitScreenSafe({ ...spec, eccentricity: 0.45 }, 1088, 726, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+    const scene = fitScreenSafe({ ...spec, eccentricity: 0.45 }, 1088, 726, box, TILT, AGENT_READABLE_MAX);
     const [inner, outer] = scene.layout.planets;
     assert.ok(inner !== undefined && outer !== undefined);
     const fa = orbitFrame(inner.orbitRadius, 0, 0, scene.camera, scene.viewport, 0.45);
@@ -415,7 +417,7 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
       const scenes = [AGENT_SPECS[2], AGENT_SPECS[0], AGENT_SPECS[3]].map((entry) => {
         const [, spec] = entry as [string, GalaxySpec];
         const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
-        const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, 1088, 726, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+        const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, 1088, 726, box, TILT, AGENT_READABLE_MAX);
         const star = drawFrame({ ...scene.layout, belt: null }, scene.camera, scene.viewport, [], 0, scene.minPlanetPx).find((item): item is StarItem => item.kind === "star");
         return star?.x ?? 0;
       });
@@ -426,4 +428,35 @@ describe("开普勒椭圆：主星在焦点上，三档偏心率下任何一对�
     assert.ok((xs[0]?.[0] ?? 0) < (xs[1]?.[0] ?? 0) && (xs[1]?.[0] ?? 0) <= (xs[2]?.[0] ?? 0));
     for (const row of xs.slice(0, 2)) assert.ok(Math.max(...row) - Math.min(...row) < 0.5, `空 / 平常 / 满载主星不同位：${row.map((x) => x.toFixed(1)).join(" ")}`);
   });
+});
+
+/**
+ * 星系倾角是设置项（10°–60°，步长 5°，2026-11-24）：每一档都要守「不相撞、不压主星」——宽窗、窄窗、右栏三块画布 × 偏心率三档 × 编排星系各形状。
+ * 布局不改用户选的俯角，装不下就少画外圈。
+ */
+const TILTS = Array.from({ length: (GALAXY_TILT.max - GALAXY_TILT.min) / GALAXY_TILT.step + 1 }, (_, i) => GALAXY_TILT.min + i * GALAXY_TILT.step);
+const TILT_CANVASES = [
+  ["宽窗页面", 1088, 726],
+  ["窄窗页面", 560, 420],
+  ["右栏", 416, 333],
+] as const;
+
+describe("星系倾角 10°–60°（每 5° 一档）× 三块画布 × 偏心率三档：不相撞、不压主星，俯角原样", () => {
+  for (const tilt of TILTS) {
+    for (const ecc of ECCS) {
+      test(`${tilt}° · e=${ecc}`, () => {
+        const problems: string[] = [];
+        for (const [specName, spec] of AGENT_SPECS) {
+          for (const [canvasName, w, h] of TILT_CANVASES) {
+            const box = galaxyBox(w, h, GALAXY_MAX_FILL);
+            const scene = fitScreenSafe({ ...spec, eccentricity: ecc }, w, h, box, tilt, AGENT_READABLE_MAX);
+            if (scene.elevationDeg !== tilt) problems.push(`${specName} × ${canvasName}：俯角被改成 ${scene.elevationDeg}`);
+            for (const p of sweepProblems(spec, w, h, ecc, tilt, 120).slice(0, 2)) problems.push(`${specName} × ${canvasName}：${p}`);
+            for (const p of collisions({ ...spec, eccentricity: ecc }, w, h, AGENT_READABLE_MAX, tilt).slice(0, 2)) problems.push(`${specName} × ${canvasName}：${p}`);
+          }
+        }
+        assert.deepEqual(problems.slice(0, 6), [], `${problems.length} 处`);
+      });
+    }
+  }
 });

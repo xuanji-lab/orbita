@@ -213,6 +213,12 @@ export interface AppSettings {
    * 拖动中不落盘，松手才写。
    */
   sidebarWidth?: number;
+  /**
+   * 星系的相机俯角（度，设置 › 外观 › 星系倾角）：单智能体首页、编排 New Task 页、右栏星系图、设计面板的轨道预览同一个值
+   * （2026-11-24 用户：「可以多给我几种倾斜角度的星系吗，我来选一个舒服的，或者我们也可以直接 provide 这个 option」）。
+   * 只认 GALAXY_TILT 区间内、步长整数倍的值，别的丢掉；缺席 = GALAXY_TILT.default
+   */
+  galaxyTilt?: number;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -598,6 +604,26 @@ function parseProvidersPage(raw: unknown, legacyCardSize: unknown): ProvidersPag
 }
 
 /**
+ * 星系倾角的区间与默认（度）：10° 几乎贴着盘面看，60° 接近俯视；默认 40° 是编排页改成可调之前在常用窗口下实际画出来的俯角
+ * （New Task 页 39–41°，屏幕安全布局按画框抬过的值）
+ */
+export const GALAXY_TILT = { min: 10, max: 60, step: 5, default: 40 } as const;
+
+export function isGalaxyTilt(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= GALAXY_TILT.min &&
+    value <= GALAXY_TILT.max &&
+    (value - GALAXY_TILT.min) % GALAXY_TILT.step === 0
+  );
+}
+
+export function galaxyTiltOf(settings: Pick<AppSettings, "galaxyTilt">): number {
+  return settings.galaxyTilt ?? GALAXY_TILT.default;
+}
+
+/**
  * 从磁盘上的任意 JSON 解出设置。
  *
  * **只认识的字段留下，别的一律丢掉**，坏值退回默认。理由是这个文件在用户目录里、
@@ -613,6 +639,7 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     docPanelWidth?: unknown;
     sidebarWidth?: unknown;
+    galaxyTilt?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     chatImageSize?: unknown;
@@ -690,6 +717,7 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
       : {}),
+    ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),

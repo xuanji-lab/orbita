@@ -906,3 +906,23 @@ a.exp-pr:hover {
     }
   }
 }
+
+/* 外观 › 星系倾角：滑块 + 读数；下面一小块同一个星系组件的预览，拖滑块时跟着变 */
+.set-galaxy-tilt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 220px;
+}
+.set-galaxy-tilt-value {
+  flex: 0 0 auto;
+  min-width: 3ch;
+  text-align: right;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.set-galaxy-preview {
+  grid-column: 1 / -1;
+  height: 180px;
+}

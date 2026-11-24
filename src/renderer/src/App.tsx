@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, t
 import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
-import { effectiveIntentSettings } from "@shared/settings";
+import { effectiveIntentSettings, galaxyTiltOf } from "@shared/settings";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
 import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
 import { usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
@@ -41,6 +41,7 @@ import { OrchestraPanel } from "./features/chat/OrchestraPanel.tsx";
 import { headerStatusOf } from "./features/chat/agent-status.ts";
 import { latestWorkspaceId, scopeRecent, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
 import { GalaxyActionsContext, type DesignerFocus, type GalaxyActions } from "./features/chat/galaxy-actions.ts";
+import { GalaxyTiltContext } from "./features/chat/galaxy-tilt.ts";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
@@ -1543,6 +1544,7 @@ export function App() {
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
     <CitationOpenContext.Provider value={openCitation}>
     <GalaxyActionsContext.Provider value={galaxyActions}>
+    <GalaxyTiltContext.Provider value={galaxyTiltOf(settings)}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
       <div className="layer">
@@ -1892,6 +1894,7 @@ export function App() {
       {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
+    </GalaxyTiltContext.Provider>
     </GalaxyActionsContext.Provider>
     </CitationOpenContext.Provider>
     </PastedTextCollapseContext.Provider>

@@ -52,7 +52,20 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
+import { effectiveLanguage, GALAXY_TILT, galaxyTiltOf, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
+import { HomeGalaxy } from "../chat/HomeGalaxy.tsx";
+import type { GalaxySpec } from "../chat/galaxy.ts";
+
+/** 星系倾角的小预览：一颗主星、三颗行星、三十来颗碎石（演示形状，不是哪个工作区的真数据） */
+const TILT_PREVIEW_SPEC: GalaxySpec = {
+  starMass: 620,
+  sessions: 36,
+  planets: [
+    { id: "p1", mass: 14, composition: "rock", orbitRadius: 19, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 200 },
+    { id: "p2", mass: 22, composition: "gas", orbitRadius: 31, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 320 },
+    { id: "p3", mass: 9, composition: "ice", orbitRadius: 43, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 70 },
+  ],
+};
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
@@ -402,6 +415,30 @@ function General(props: {
               {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
             </span>
           )}
+        </SettingRow>
+        <SettingRow
+          name={t.settings.galaxyTilt}
+          info={t.settings.galaxyTiltInfo}
+          below={
+            // 小预览：同一个星系组件、同一个俯角（App 发下来的设置值），拖滑块时跟着变
+            <div className="set-galaxy-preview">
+              <HomeGalaxy spec={TILT_PREVIEW_SPEC} label={t.settings.galaxyTiltPreview} />
+            </div>
+          }
+        >
+          <span className="set-galaxy-tilt">
+            <input
+              type="range"
+              className="gd-range"
+              min={GALAXY_TILT.min}
+              max={GALAXY_TILT.max}
+              step={GALAXY_TILT.step}
+              value={galaxyTiltOf(props.settings)}
+              aria-label={t.settings.galaxyTilt}
+              onChange={(event) => props.onChange({ galaxyTilt: Number(event.target.value) })}
+            />
+            <span className="set-galaxy-tilt-value">{t.settings.galaxyTiltValue(galaxyTiltOf(props.settings))}</span>
+          </span>
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；

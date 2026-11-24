@@ -1283,6 +1283,10 @@ export const zh: Messages = {
       "浅色、暗色、黑色主题中英都有；小学作业只有中文、打字稿只有英文——格子是照着那门文字画的。提交与 PR 署名跟着界面语言走。",
     languageLockedZh: "这个主题只有中文",
     languageLockedEn: "这个主题只有英文",
+    galaxyTilt: "星系倾角",
+    galaxyTiltInfo: "看星系的角度：小了像贴着盘面平视，大了像从上往下看。单智能体首页、编排页、右栏星系图和设计面板一起换。",
+    galaxyTiltValue: (deg: number) => `${deg}°`,
+    galaxyTiltPreview: "星系倾角预览",
     /** 「新手引导」页签：顶上一句说明 + 「从头看」，下面整张章节目录 */
     guideLead: "拿一个研究课题从头走到尾，看 Orbita 能帮你做什么。点下面任意一章，直接翻到那一章。",
     guideStart: "从头看",

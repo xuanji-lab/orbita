@@ -1383,6 +1383,10 @@ export const en = {
       "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
     languageLockedZh: "This theme is Chinese-only",
     languageLockedEn: "This theme is English-only",
+    galaxyTilt: "Galaxy tilt",
+    galaxyTiltInfo: "The angle you view the galaxy from: low looks across the disc, high looks down on it. Applies to the home page, the workspace page, the side-panel galaxy and the designer.",
+    galaxyTiltValue: (deg: number) => `${deg}°`,
+    galaxyTiltPreview: "Galaxy tilt preview",
     /** The "Guide" tab: one line of intro + "Start from the top", then the whole chapter list */
     guideLead: "One research project from start to finish — what Orbita can do. Pick any chapter below to jump straight to it.",
     guideStart: "Start from the top",

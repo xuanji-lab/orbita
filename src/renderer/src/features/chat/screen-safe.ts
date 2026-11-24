@@ -1,5 +1,4 @@
 import {
-  CAMERA_ELEVATION_DEG,
   FRAME_EXTENT,
   PLANET_ZONE,
   PLANET_READABLE_MAX,
@@ -47,8 +46,9 @@ import { LOCK_GAP } from "./callouts.ts";
  *   远侧（主星背后）允许被主星挡住，但画家算法保证它在主星**后面**画，绝不画在主星上面；
  * - 相邻两圈：近侧与远侧短轴端点的竖向间距都 ≥ 两颗行星屏幕半径之和 + SCREEN_GAP（同心椭圆之间最窄的地方就在短轴上）；
  * - 轨道面一律放平（倾角 0）：倾斜的两圈投影后会交叉，这里要的是画面上一圈套一圈；
- * - 排不下（行星区外沿装不下）就把俯角抬高一档再排（椭圆变圆、短轴变长），到 SAFE_ELEVATION_MAX 还装不下，
- *   就少画最外一圈（那颗计进 hidden，与 6 圈上限同一种退场），不缩小行星到看不清表情。
+ * - 俯角是用户在设置里选的（星系倾角，10°–60°），这里不改它；排不下（行星区外沿装不下）就少画最外一圈
+ *   （那颗计进 hidden，与 6 圈上限同一种退场），不缩小行星到看不清表情。2026-11-24 之前是先自动抬俯角再少画，
+ *   俯角成了用户可调的设置之后，抬俯角会让设置看上去不生效，所以去掉了。
  */
 
 /** 两个天体轮廓之间至少留的屏幕间距（px）：能分辨是两颗 */
@@ -62,10 +62,6 @@ export const AGENT_READABLE_FLOOR = 10;
 export const ROCK_CLEAR_PX = ROCK_PX + LOCK_GAP;
 /** 放大后的画面里，天体（连锁定框）离画布边至少留这么多 */
 const EDGE_PX = 6;
-/** 俯角上限：再高就成了俯视的靶心，读不出「绕着转」 */
-export const SAFE_ELEVATION_MAX = 66;
-/** 抬俯角的步长 */
-const ELEVATION_STEP = 2;
 /** 推轨道半径的步长（世界单位） */
 const ORBIT_NUDGE = 0.2;
 
@@ -161,6 +157,18 @@ function frontDistance(frame: OrbitFrame, star: { x: number; y: number }): numbe
   return best;
 }
 
+/** 碎石带（以中间那一圈的 frame 按比例缩放）画在主星前面那一段到主星的最近距离 */
+function frontDistanceScaled(frame: OrbitFrame, scale: number, star: { x: number; y: number }): number {
+  let best = Infinity;
+  for (let i = 0; i < 144; i++) {
+    const theta = (i / 144) * Math.PI * 2;
+    if (Math.sin(theta) > 0) continue;
+    const p = framePoint(frame, theta, scale);
+    best = Math.min(best, Math.hypot(p.x - star.x, p.y - star.y));
+  }
+  return best;
+}
+
 /** 某圈轨道上「画在主星前面」那一段到主星的最近距离 */
 function starDistance(camera: Camera, vp: Viewport, a: number, ecc: number, star: { x: number; y: number }): number {
   if (ecc === 0) {
@@ -240,6 +248,8 @@ function orbitInside(camera: Camera, vp: Viewport, a: number, r: number, ecc = 0
  * 两者屏幕半径之和 + SCREEN_GAP，近侧离主星同理。最多推到画框外沿。碎石块彼此同一圈等角排开，永远不相撞。
  */
 function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minPx: number, starPx: number, inside = false): { orbit: number | null; cramped: boolean } {
+  // cramped = 让得开主星、但到画框边上还让不开最外一颗行星（少画一圈行星能解决）；
+  // 连主星都让不开（很低的俯角下近侧几乎贴着主星横过）就整圈不画碎石块（orbit = null），不为它少画行星
   const ecc = layout.ecc;
   if (layout.rockOrbit === null) return { orbit: null, cramped: false };
   const star = screenOf(camera, vp, 0, 0);
@@ -249,8 +259,10 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
   const cap = ecc === 0 ? FRAME_EXTENT : FRAME_EXTENT * BELT_OVERSHOOT;
   let a = layout.rockOrbit;
   let ok = false;
+  let clearOfStar = false;
   for (; a < cap; a += ORBIT_NUDGE) {
     ok = starDistance(camera, vp, a, ecc, star) >= starPx + ROCK_CLEAR_PX + SCREEN_GAP;
+    clearOfStar = clearOfStar || ok;
     if (ok && last !== undefined && lastBody !== null) {
       ok = orbitGap(ecc, orbitFrame(last.orbitRadius, 0, 0, camera, vp, ecc), 1, orbitFrame(a, 0, 0, camera, vp, ecc), 1) >= ROCK_CLEAR_PX + bodyPx(lastBody, camera, vp, minPx) + SCREEN_GAP;
     }
@@ -259,6 +271,7 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
   const placed = Math.min(a, cap);
   // 放大过的窄画面：碎石块那一圈出画就整圈不画（它们仍是碎石带里的碎石，键盘从「全部 N 条会话」去树状图）
   if (inside && !orbitInside(camera, vp, placed, ROCK_CLEAR_PX, ecc)) return { orbit: null, cramped: false };
+  if (!clearOfStar) return { orbit: null, cramped: false };
   return { orbit: placed, cramped: !ok };
 }
 
@@ -267,16 +280,20 @@ function placeRockOrbit(camera: Camera, vp: Viewport, layout: GalaxyLayout, minP
  * 内沿的碎石在近侧 / 远侧短轴端点上与最外一颗行星竖向留出「行星半径 + 碎石半径 + 间距」。
  * 几百颗碎石铺满带宽之后，内沿那几颗不再贴着最外的行星（2026-11-24：每条会话都是一颗碎石）。
  */
-function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, lastOrbit: number, lastPx: number, gap: number): number | undefined {
+function placeBeltInner(camera: Camera, vp: Viewport, layout: GalaxyLayout, lastOrbit: number | null, lastPx: number, gap: number, starPx: number): number | undefined {
   const belt = layout.belt;
   if (belt === null) return undefined;
   const dustPx = dustLookOf(belt.count).px;
   const ecc = layout.ecc;
-  const planetFrame = orbitFrame(lastOrbit, 0, 0, camera, vp, ecc);
+  const star = screenOf(camera, vp, 0, 0);
+  const planetFrame = lastOrbit === null ? null : orbitFrame(lastOrbit, 0, 0, camera, vp, ecc);
   let inner = belt.inner;
   for (let i = 0; i < 400; i++) {
     const mid = (inner + beltOuterOf(inner, belt.count)) / 2;
-    if (orbitGap(ecc, planetFrame, 1, orbitFrame(mid, 0, 0, camera, vp, ecc), inner / mid) >= lastPx + dustPx + gap) break;
+    const midFrame = orbitFrame(mid, 0, 0, camera, vp, ecc);
+    // 低俯角时碎石带近侧会横过主星：内沿画在主星前面的那一段也要让开主星
+    const clearStar = frontDistanceScaled(midFrame, inner / mid, star) >= starPx + dustPx + SCREEN_GAP;
+    if (clearStar && (planetFrame === null || orbitGap(ecc, planetFrame, 1, midFrame, inner / mid) >= lastPx + dustPx + gap)) break;
     inner += ORBIT_NUDGE;
   }
   return inner;
@@ -292,7 +309,8 @@ export function fitScreenSafe(
   width: number,
   height: number,
   box: { width: number; height: number },
-  baseElevationDeg: number = CAMERA_ELEVATION_DEG,
+  /** 相机俯角（度）：设置 › 外观 › 星系倾角 */
+  baseElevationDeg: number,
   readableMax: number = PLANET_READABLE_MAX,
 ): SafeScene {
   const ecc = eccOf(spec.eccentricity);
@@ -314,7 +332,8 @@ function fitAt(
   width: number,
   height: number,
   box: { width: number; height: number },
-  baseElevationDeg: number = CAMERA_ELEVATION_DEG,
+  /** 相机俯角（度）：设置 › 外观 › 星系倾角 */
+  baseElevationDeg: number,
   /** 行星可读半径的上限（px）：子智能体行星传 AGENT_READABLE_MAX */
   readableMax: number = PLANET_READABLE_MAX,
 ): SafeScene {
@@ -326,7 +345,8 @@ function fitAt(
   let dropped = 0;
   for (;;) {
     const bodies: Body[] = shown.map((planet) => ({ radius: planet.radius, waiting: planet.state === "waiting" }));
-    for (let e = Math.max(baseElevationDeg, CAMERA_ELEVATION_DEG); e <= SAFE_ELEVATION_MAX; e += ELEVATION_STEP) {
+    // 只在用户选的这一个俯角上排（循环体里的 continue = 这个俯角装不下，少画一圈再来）
+    for (const e of [baseElevationDeg]) {
       const camera = makeCamera(FRAME_EXTENT, e);
       let viewport = frameViewport(camera, width, height, box, ecc);
       const starDepth = project({ x: 0, y: 0, z: 0 }, camera).depth;
@@ -365,7 +385,15 @@ function fitAt(
       const firstPass = layoutGalaxy(placedSpec);
       const lastPlaced = planets[planets.length - 1];
       const beltInner =
-        lastPlaced === undefined ? undefined : placeBeltInner(camera, viewport, firstPass, lastPlaced.orbitRadius, bodyPx({ radius: lastPlaced.radius, waiting: lastPlaced.state === "waiting" }, camera, viewport, minPx), agentMode ? bodyGapOf(minPx) : SCREEN_GAP);
+        placeBeltInner(
+          camera,
+          viewport,
+          firstPass,
+          lastPlaced === undefined ? null : lastPlaced.orbitRadius,
+          lastPlaced === undefined ? 0 : bodyPx({ radius: lastPlaced.radius, waiting: lastPlaced.state === "waiting" }, camera, viewport, minPx),
+          agentMode ? bodyGapOf(minPx) : SCREEN_GAP,
+          starPx,
+        );
       const relaid = beltInner === undefined ? firstPass : layoutGalaxy({ ...placedSpec, beltInner });
       const layout: GalaxyLayout = {
         ...relaid,
@@ -378,8 +406,8 @@ function fitAt(
         expectedOrbit: base.expectedOrbit,
       };
       const rock = placeRockOrbit(camera, viewport, layout, minPx, starPx, zoomed);
-      // 碎石块那一圈让不开最外一颗行星（只在开普勒椭圆的近日点一侧会发生）：当作装不下，抬俯角或少画最外一圈
-      if (rock.cramped && ecc > 0) continue;
+      // 碎石块那一圈到画框边上还让不开最外一颗行星（偏心、低俯角时会发生）：当作装不下，少画最外一圈
+      if (rock.cramped) continue;
       return { camera, viewport, layout: { ...layout, rockOrbit: rock.orbit }, elevationDeg: e, minPlanetPx: minPx, dropped };
     }
     if (shown.length === 0) {
@@ -387,7 +415,10 @@ function fitAt(
       const viewport = frameViewport(camera, width, height, box, ecc);
       const minPx = readablePlanetPx(camera, viewport, ORBIT_STEP, readableMax);
       const starPx = (viewport.focal * starExtent) / project({ x: 0, y: 0, z: 0 }, camera).depth;
-      return { camera, viewport, layout: { ...base, rockOrbit: placeRockOrbit(camera, viewport, base, minPx, starPx).orbit }, elevationDeg: baseElevationDeg, minPlanetPx: minPx, dropped };
+      // 一颗行星都不画了（只在极端俯角 + 小画布下）：行星全部计进 hidden，碎石块那一圈让不开就不画
+      const bare: GalaxyLayout = { ...base, planets: [], hidden: base.hidden + dropped };
+      const rock = placeRockOrbit(camera, viewport, bare, minPx, starPx);
+      return { camera, viewport, layout: { ...bare, rockOrbit: rock.cramped ? null : rock.orbit }, elevationDeg: baseElevationDeg, minPlanetPx: minPx, dropped };
     }
     shown = shown.slice(0, -1);
     dropped += 1;

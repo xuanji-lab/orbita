@@ -253,10 +253,13 @@ export interface OrbitStage {
   } | null;
 }
 
-/** 轨道场景：真比例（主星、行星半径与轨道同一单位，同一张布），太小时按最小像素画 */
-export function orbitStage(design: GalaxyDesign): OrbitStage | null {
+/**
+ * 轨道场景：真比例（主星、行星半径与轨道同一单位，同一张布），太小时按最小像素画。
+ * elevationDeg = 设置里的星系倾角（与页面星系同一个值）；缺席按 ORBIT_VIEW 的 34°
+ */
+export function orbitStage(design: GalaxyDesign, elevationDeg: number = ORBIT_VIEW.elevationDeg): OrbitStage | null {
   if (design.star === null) return null;
-  const scene = wellScene(ORBIT_BOX, ORBIT_VIEW);
+  const scene = wellScene(ORBIT_BOX, { ...ORBIT_VIEW, elevationDeg });
   const depth = wellDepth(design.star.mass);
   const bottom = wellBottom(scene, depth);
   const starR = Math.max(radiusOf(design, "star") * pixelsPerUnit(scene, bottom), SCENE_STAR_MIN);

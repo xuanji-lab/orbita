@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { beltFrame, dustPoints, eccentricAnomaly, orbitPoint, ORCH_TILT_DEG, framePoint, frameViewport, FRAME_EXTENT, galaxyBox, GALAXY_MAX_FILL, layoutGalaxy, makeCamera, orbitFrame, type GalaxySpec } from "./galaxy.ts";
+import { GALAXY_TILT } from "../../../../shared/settings.ts";
+
+const TILT: number = GALAXY_TILT.default;
+import { beltFrame, dustPoints, eccentricAnomaly, orbitPoint, framePoint, frameViewport, FRAME_EXTENT, galaxyBox, GALAXY_MAX_FILL, layoutGalaxy, makeCamera, orbitFrame, type GalaxySpec } from "./galaxy.ts";
 import {
   FAR_MARGIN,
   R0,
@@ -32,7 +35,7 @@ function angleAt(frames: { from: number; to: number }, omega: number, tSec: numb
   return frames.from + (frames.to - frames.from) * progress;
 }
 
-const camera = makeCamera(FRAME_EXTENT, ORCH_TILT_DEG);
+const camera = makeCamera(FRAME_EXTENT, TILT);
 const vp = frameViewport(camera, 1400, 760, galaxyBox(1400, 760, GALAXY_MAX_FILL));
 
 describe("合成器的那串 transform 正好把星体送到 framePoint（行星永远压在 orbitArcs 画的线上）", () => {

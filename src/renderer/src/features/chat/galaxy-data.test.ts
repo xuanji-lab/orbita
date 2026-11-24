@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { GALAXY_TILT } from "../../../../shared/settings.ts";
+
+const TILT: number = GALAXY_TILT.default;
 import type { SessionMeta } from "@shared/session";
 import { runStateOf, type RunStateSource, type SessionRunState } from "../notify/completion-notice.ts";
-import { AGENT_READABLE_MAX, BELT_OVERSHOOT, FRAME_EXTENT, GALAXY_MAX_FILL, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, ORCH_TILT_DEG, galaxyBox, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
+import { AGENT_READABLE_MAX, BELT_OVERSHOOT, FRAME_EXTENT, GALAXY_MAX_FILL, PLANET_MASS, PLANET_ZONE, STAR_MASS, VISIBLE_ORBIT_CAP, galaxyBox, layoutGalaxy, planetRadius, starRadius } from "./galaxy.ts";
 import { fitScreenSafe } from "./screen-safe.ts";
 import { orchestraTree } from "./orchestra-data.ts";
 import { defaultDesign, type GalaxyDesign } from "../galaxy-designer/design.ts";
@@ -401,7 +404,7 @@ describe("每条根会话都是一颗碎石，与右栏树主卡同源：碎石 
   ] as const) {
     test(`${name}（${w}×${h}）：碎石带颗粒 + 根会话碎石块 = 总数；子会话碎石块不在里面`, () => {
       const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-      const scene = fitScreenSafe({ ...galaxy.spec }, w, h, box, ORCH_TILT_DEG, AGENT_READABLE_MAX);
+      const scene = fitScreenSafe({ ...galaxy.spec }, w, h, box, TILT, AGENT_READABLE_MAX);
       const layout = scene.layout;
       const dust = layout.belt?.particles ?? [];
       const rootRocks = layout.rocks.filter((rock) => rock.child !== true);
@@ -450,14 +453,18 @@ describe("首页星系：作用域 → 星系（单智能体首页与编排页�
     assert.equal(n.spec.sessions, 3);
   });
 
-  test("同一作用域在两个首页上画同一座星系：输入里没有「哪个首页」，两种画框下排出的天体（行星、碎石块、碎石）一样", () => {
+  test("同一作用域在两个首页上画同一座星系：输入里没有「哪个首页」，两种画框下是同一串天体（行星同序、碎石同一批、同一偏心率与俯角）", () => {
     const g = at("A", designOf("A", ["烛霓-1", "烛霓-2", "烛霓-3"], 600));
     const spec = { ...g.spec, eccentricity: 0.3 };
-    const single = fitScreenSafe(spec, 1000, 330, galaxyBox(1000, 330), ORCH_TILT_DEG, AGENT_READABLE_MAX);
-    const orch = fitScreenSafe(spec, 1000, 700, galaxyBox(1000, 700, GALAXY_MAX_FILL), ORCH_TILT_DEG, AGENT_READABLE_MAX);
-    assert.deepEqual(single.layout.planets.map((p) => [p.id, p.composition]), orch.layout.planets.map((p) => [p.id, p.composition]));
+    const single = fitScreenSafe(spec, 1000, 330, galaxyBox(1000, 330), TILT, AGENT_READABLE_MAX);
+    const orch = fitScreenSafe(spec, 1000, 700, galaxyBox(1000, 700, GALAXY_MAX_FILL), TILT, AGENT_READABLE_MAX);
+    // 画框大小不同，装得下的圈数可能不同（矮的那条带子少画外圈）：画出来的是同一串的前缀，其余计进 hidden
+    const orchPlanets = orch.layout.planets.map((p) => [p.id, p.composition]);
+    assert.deepEqual(single.layout.planets.map((p) => [p.id, p.composition]), orchPlanets.slice(0, single.layout.planets.length));
+    assert.equal(single.layout.planets.length + single.layout.hidden, orch.layout.planets.length + orch.layout.hidden);
     assert.deepEqual(single.layout.belt?.particles.map((p) => p.id), orch.layout.belt?.particles.map((p) => p.id));
     assert.equal(single.layout.ecc, orch.layout.ecc);
-    assert.equal(single.elevationDeg >= ORCH_TILT_DEG && orch.elevationDeg >= ORCH_TILT_DEG, true);
+    assert.equal(single.elevationDeg, TILT);
+    assert.equal(orch.elevationDeg, TILT);
   });
 });

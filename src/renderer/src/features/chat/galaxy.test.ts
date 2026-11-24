@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { GALAXY_TILT } from "../../../../shared/settings.ts";
+
+const TILT: number = GALAXY_TILT.default;
 import {
   angularSpeed,
   CAMERA_ELEVATION_DEG,
@@ -47,7 +50,6 @@ import {
   PLANET_READABLE_MIN,
   PLANET_READABLE_GAP,
   galaxyBox,
-  ORCH_TILT_DEG,
   GALAXY_MAX_FILL,
 } from "./galaxy.ts";
 import { ORBIT_STEP } from "./galaxy-data.ts";
@@ -320,7 +322,7 @@ describe("画面上轨道不交叉", () => {
       sessions: 0,
     };
     // 两档俯角候选（classic 20° / orch）：同样一圈套一圈
-    for (const elevation of [CAMERA_ELEVATION_DEG, ORCH_TILT_DEG]) {
+    for (const elevation of [CAMERA_ELEVATION_DEG, TILT]) {
       for (const spec of [galaxySpecOf("typical"), galaxySpecOf("full"), steep]) {
         const radii = screenRadii(spec, elevation);
         for (let o = 1; o < radii.length; o++) {
@@ -334,10 +336,6 @@ describe("画面上轨道不交叉", () => {
     }
   });
 
-  test("俯角两档：orch 是编排页原来在常用窗口下的约 37°，classic 是单智能体原来的 20°；不再随画框形状变", () => {
-    assert.equal(CAMERA_ELEVATION_DEG, 20);
-    assert.ok(ORCH_TILT_DEG > 35 && ORCH_TILT_DEG < 39);
-  });
 });
 
 describe("画框封顶：默认带子 vs 工作区页（fill）", () => {
@@ -421,7 +419,7 @@ describe("行星表情可读（星系规则：大小差距缩小到行星表情�
   // 与 HomeGalaxy 的工作区页同一套取景：画框按画布形状抬俯角
   const scene = (w: number, h: number) => {
     const box = galaxyBox(w, h, GALAXY_MAX_FILL);
-    const camera = makeCamera(FRAME_EXTENT, ORCH_TILT_DEG);
+    const camera = makeCamera(FRAME_EXTENT, TILT);
     return { camera, vp: frameViewport(camera, w, h, box) };
   };
   test("最小可读半径夹在 [MIN, MAX]，且不超过相邻轨道间距的 GAP 倍（窄右栏里放大的行星不压隔壁轨道）", () => {
