@@ -86,6 +86,13 @@ async function writeManifest(dir: string, slots: unknown[], candidates: unknown[
 
 const slot = (n: number, wanted: string, backend: string, status: string, attempts: unknown[] = [], extra: Record<string, unknown> = {}) => ({ slot: n, wanted, backend, chain: [backend], status, attempts, ...extra });
 
+async function appendManifestRound(dir: string, round: number, slots: unknown[], candidates: unknown[]): Promise<void> {
+  const path = join(dir, "manifest.json");
+  const manifest = await readJsonFile(path);
+  (manifest["rounds"] as unknown[]).push({ round, policy: { preset: "image_first", label: "Qwen 2 张 + SVG 1 张" }, notes: [], slots, candidates });
+  await writeFile(path, JSON.stringify(manifest));
+}
+
 describe("AvatarJobs：生成", () => {
   it("备好输入、开一条幕后会话（skip 档、不进列表），候选位先按原则占位", async () => {
     const { ws, root } = await fixture();
@@ -127,6 +134,34 @@ describe("AvatarJobs：生成", () => {
     assert.equal(raw["bodyType"], "star");
     assert.equal(raw["name"], "烛霓");
     assert.equal((raw["mix"] as { seed: number }).seed, 42);
+    await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+  });
+
+  it("修改要求连同基础图与上一版提示词一起交给幕后会话；没有基础时作为附加要求", async () => {
+    const { ws, root } = await fixture();
+    const h = harness(ws, root);
+    const dir = join(ws.path, "planet", "surfaces");
+    await writeManifest(dir, [slot(1, "image_model", "image_model", "done")], [{ id: "r1-s1", slot: 1, backend: "image_model", file: "candidates/r1-s1-a1.png", prompt: "rust-red rocky globe, no face" }]);
+    await writeFile(join(dir, "candidates", "r1-s1-a1.png"), "png");
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main", instruction: "再暖一点，表面多些环形山", baseCandidateId: "r1-s1" });
+    const text = h.submitted[0]?.text ?? "";
+    assert.match(text, /再暖一点，表面多些环形山/);
+    assert.match(text, /rust-red rocky globe, no face/);
+    assert.ok(text.includes(join(dir, "candidates", "r1-s1-a1.png")));
+    assert.match(text, /qwen_edit/);
+    assert.match(text, /那份 SVG 上改/);
+    const history = await readJsonFile(join(dir, "avatar-history.json"));
+    const entries = history["entries"] as Record<string, unknown>[];
+    assert.equal(entries[0]?.["instruction"], "再暖一点，表面多些环形山");
+    assert.equal(entries[0]?.["baseCandidateId"], "r1-s1");
+    assert.equal(entries[0]?.["plannedRound"], 2);
+    await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main", instruction: "像木星那样有条带" });
+    const fresh = h.submitted[1]?.text ?? "";
+    assert.match(fresh, /像木星那样有条带/);
+    assert.match(fresh, /没有指定基础候选/);
+    assert.match(fresh, /附加条件/);
     await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
   });
 
@@ -272,6 +307,50 @@ describe("AvatarJobs：挑选与重建", () => {
     const planet = (galaxy["planets"] as Record<string, unknown>[])[0];
     assert.equal(planet?.["surface"], "agents/rec/surfaces/candidates/r1-s1-a1.png");
     assert.equal(planet?.["orbit"], 19);
+  });
+});
+
+describe("AvatarJobs：历史", () => {
+  it("每一轮的要求和候选都能读回；选回旧图后重启仍认得出", async () => {
+    const { ws, root } = await fixture();
+    const h = harness(ws, root);
+    const dir = join(ws.path, "planet", "surfaces");
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    await writeManifest(dir, [slot(1, "image_model", "image_model", "done")], [{ id: "r1-s1", slot: 1, backend: "image_model", file: "candidates/r1-s1-a1.png", prompt: "old prompt" }]);
+    await writeFile(join(dir, "candidates", "r1-s1-a1.png"), "one");
+    await wait(40);
+    assert.equal((await h.jobs.select({ workspaceId: "w1", bodyId: "main", candidateId: "r1-s1" })).ok, true);
+
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main", instruction: "再暖一点", baseCandidateId: "r1-s1" });
+    const pending = await h.jobs.history({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(pending.ok, true);
+    if (pending.ok) {
+      assert.equal(pending.history.entries.length, 2);
+      assert.equal(pending.history.entries[1]?.round, null);
+      assert.equal(pending.history.entries[1]?.instruction, "再暖一点");
+    }
+    await appendManifestRound(dir, 2, [slot(1, "image_model", "image_model", "done")], [{ id: "r2-s1", slot: 1, backend: "image_model", file: "candidates/r2-s1-a1.png", prompt: "old prompt, warmer" }]);
+    await writeFile(join(dir, "candidates", "r2-s1-a1.png"), "two");
+    await wait(40);
+    const ready = await h.jobs.history({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(ready.ok, true);
+    if (ready.ok) {
+      assert.equal(ready.history.entries[1]?.round, 2);
+      assert.equal(ready.history.entries[1]?.candidates[0]?.candidateId, "r2-s1");
+      assert.equal(ready.history.entries[1]?.candidates[0]?.image, "data:r2-s1-a1.png");
+      assert.equal(ready.history.entries[1]?.baseCandidateId, "r1-s1");
+    }
+
+    // 选回第一轮，而不是刚出的第二轮；历史与重启后的当前任务都按 galaxy.json 的 surface 认出旧图
+    assert.equal((await h.jobs.select({ workspaceId: "w1", bodyId: "main", candidateId: "r1-s1" })).ok, true);
+    const reverted = await h.jobs.history({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(reverted.ok && reverted.history.selected, "r1-s1");
+    const fresh = harness(ws, root);
+    const current = await fresh.jobs.get({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(current.ok && current.job?.selected, "r1-s1");
+    const restored = await fresh.jobs.history({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(restored.ok && restored.history.selected, "r1-s1");
+    assert.equal(restored.ok && restored.history.entries.length, 2);
   });
 });
 

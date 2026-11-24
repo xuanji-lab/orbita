@@ -15,6 +15,7 @@ import { writeJsonAtomic } from "../atomic-write.ts";
 import type { AgentEvent, SubmitAgentInput } from "../../shared/agent-ipc.ts";
 import {
   AVATAR_JOB_TIMEOUT_MS,
+  AVATAR_INSTRUCTION_MAX,
   AVATAR_SLOTS_MAX,
   isAvatarBackend,
   isAvatarJobLive,
@@ -22,6 +23,8 @@ import {
   type AvatarBackend,
   type AvatarBodyRef,
   type AvatarGenerateRequest,
+  type AvatarHistory,
+  type AvatarHistoryResult,
   type AvatarJob,
   type AvatarJobResult,
   type AvatarSelectRequest,
@@ -42,6 +45,8 @@ export const AVATAR_SCRIPT = join("scripts", "render_surface.py");
 export const AVATAR_POLICY = join("data", "render-policy.json");
 /** 候选目录名（主星在 planet/ 下，行星在 planet/agents/<id>/ 下）——与插件技能「planet/surfaces/」一致 */
 export const SURFACES_DIR = "surfaces";
+/** 每一轮的自然语言要求与它所对应的插件轮次；候选图本身仍在插件 manifest 里，这里不重复抄一份 */
+export const AVATAR_HISTORY_FILE = "avatar-history.json";
 /** 幕后会话的权限档：没有人在场审批，脚本与出图工具都要直接跑（提示词把它限定在插件脚本与候选目录里） */
 export const AVATAR_MODE: PermissionMode = "skip";
 const POLL_MS = 1000;
@@ -104,6 +109,8 @@ interface ManifestCandidate {
   slot: number;
   backend: AvatarBackend;
   file: string;
+  /** 图像模型这次实际用的合并提示词（含后续修改）；老账本 / SVG 可能没有 */
+  prompt: string | null;
 }
 
 interface ManifestSlot {
@@ -156,7 +163,7 @@ export function parseManifest(raw: unknown): ManifestRound[] {
     const candidates: ManifestCandidate[] = [];
     for (const cand of Array.isArray(item["candidates"]) ? item["candidates"] : []) {
       if (!isRecord(cand) || typeof cand["id"] !== "string" || typeof cand["slot"] !== "number" || typeof cand["file"] !== "string" || !isAvatarBackend(cand["backend"])) continue;
-      candidates.push({ id: cand["id"], slot: cand["slot"], backend: cand["backend"], file: cand["file"] });
+      candidates.push({ id: cand["id"], slot: cand["slot"], backend: cand["backend"], file: cand["file"], prompt: typeof cand["prompt"] === "string" ? cand["prompt"] : null });
     }
     const policy = isRecord(item["policy"]) && typeof item["policy"]["label"] === "string" ? item["policy"]["label"] : null;
     rounds.push({ round: item["round"], slots: slots.slice(0, AVATAR_SLOTS_MAX), candidates, notes: strings(item["notes"]), policy });
@@ -209,10 +216,140 @@ function planetRelative(workspacePath: string, full: string): string | null {
   return relative(root, target).split(sep).join("/");
 }
 
+// ── 修改基础与历史（planet/ 内原子写） ─────────────────────────────────
+
+interface AvatarPromptBase {
+  candidateId: string;
+  path: string;
+  backend: AvatarBackend;
+  prompt: string | null;
+}
+
+interface AvatarHistoryRecord {
+  /** 幕后会话 id：把请求和之后出现的插件轮次接起来 */
+  id: string;
+  /** 开请求时预计的插件轮次；重启后靠它把还没绑定的请求补绑到账本 */
+  plannedRound: number;
+  round: number | null;
+  instruction: string | null;
+  baseCandidateId: string | null;
+  startedAt: number;
+}
+
+function parseHistoryRecords(raw: unknown): AvatarHistoryRecord[] {
+  if (!isRecord(raw) || !Array.isArray(raw["entries"])) return [];
+  const entries: AvatarHistoryRecord[] = [];
+  for (const item of raw["entries"]) {
+    if (!isRecord(item) || typeof item["id"] !== "string" || typeof item["startedAt"] !== "number") continue;
+    const plannedRound = item["plannedRound"];
+    const round = item["round"];
+    if (typeof plannedRound !== "number" || !Number.isInteger(plannedRound) || plannedRound < 1) continue;
+    if (round !== null && (typeof round !== "number" || !Number.isInteger(round) || round < 1)) continue;
+    const instruction = item["instruction"];
+    const base = item["baseCandidateId"];
+    entries.push({
+      id: item["id"],
+      plannedRound,
+      round: round ?? null,
+      instruction: typeof instruction === "string" && instruction.trim() !== "" ? instruction.slice(0, AVATAR_INSTRUCTION_MAX) : null,
+      baseCandidateId: typeof base === "string" ? base : null,
+      startedAt: item["startedAt"],
+    });
+  }
+  return entries;
+}
+
+async function writeHistoryRecords(dir: string, entries: AvatarHistoryRecord[]): Promise<void> {
+  await writeJsonAtomic(join(dir, AVATAR_HISTORY_FILE), { version: 1, entries });
+}
+
+async function appendHistoryRecord(dir: string, record: AvatarHistoryRecord): Promise<void> {
+  const path = join(dir, AVATAR_HISTORY_FILE);
+  const entries = parseHistoryRecords(await readJson(path));
+  entries.push(record);
+  await writeHistoryRecords(dir, entries);
+}
+
+async function bindHistoryRound(dir: string, id: string, round: number): Promise<void> {
+  const path = join(dir, AVATAR_HISTORY_FILE);
+  const entries = parseHistoryRecords(await readJson(path));
+  const entry = entries.find((each) => each.id === id);
+  if (entry === undefined || entry.round !== null) return;
+  entry.round = round;
+  await writeHistoryRecords(dir, entries);
+}
+
+/** 重启后补绑：一个插件轮次只认最新一条还没绑定的请求；更早没跑到 plan 的请求保持无图，不会冒领后一轮的候选 */
+function reconcileHistoryRounds(entries: AvatarHistoryRecord[], rounds: ManifestRound[]): boolean {
+  let changed = false;
+  for (const round of rounds) {
+    if (entries.some((entry) => entry.round === round.round)) continue;
+    const pending = [...entries].reverse().find((entry) => entry.round === null && entry.plannedRound === round.round);
+    if (pending === undefined) continue;
+    pending.round = round.round;
+    changed = true;
+  }
+  return changed;
+}
+
+/** 账本里的路径只能落在这一颗天体自己的 surfaces/ 里，不能借候选 id 指到别的行星或 planet/ 外 */
+function candidateFullPath(place: BodyPlace, candidate: ManifestCandidate): string | null {
+  const root = resolve(place.dir);
+  const full = resolve(place.dir, candidate.file);
+  return full.startsWith(root + sep) ? full : null;
+}
+
+function selectedCandidate(place: BodyPlace, rounds: ManifestRound[]): ManifestCandidate | null {
+  for (const round of rounds) {
+    for (const candidate of round.candidates) {
+      const full = candidateFullPath(place, candidate);
+      if (full !== null && planetRelative(place.workspace.path, full) === place.surface) return candidate;
+    }
+  }
+  return null;
+}
+
+async function resolvePromptBase(place: BodyPlace, candidateId: string, rounds: ManifestRound[]): Promise<{ ok: true; base: AvatarPromptBase } | { ok: false; error: string }> {
+  for (const round of rounds) {
+    const candidate = round.candidates.find((each) => each.id === candidateId);
+    if (candidate === undefined) continue;
+    const path = candidateFullPath(place, candidate);
+    if (path === null) return { ok: false, error: "基础候选不在这颗天体的 surfaces/ 里" };
+    let prompt = candidate.prompt;
+    if (prompt === null) {
+      const plan = await readJson(join(place.dir, `plan-r${round.round}.json`));
+      if (isRecord(plan) && isRecord(plan["imagePrompt"]) && typeof plan["imagePrompt"]["prompt"] === "string") prompt = plan["imagePrompt"]["prompt"];
+    }
+    return { ok: true, base: { candidateId, path, backend: candidate.backend, prompt } };
+  }
+  return { ok: false, error: `没有基础候选 ${candidateId}` };
+}
+
 // ── 提示词 ────────────────────────────────────────────────────────────
 
-export function avatarPrompt(input: { root: string; input: string; dir: string; name: string }): string {
+export function avatarPrompt(input: { root: string; input: string; dir: string; name: string; instruction?: string; base?: AvatarPromptBase }): string {
   const rs = `python3 "${join(input.root, AVATAR_SCRIPT)}"`;
+  const instruction = input.instruction?.trim() ?? "";
+  const revision: string[] = [];
+  if (instruction !== "") {
+    revision.push(
+      "",
+      "这一轮有用户写下的修改要求。只做这次形象修改，不改成别的任务；每个候选位都要体现要求，其余构图与风格尽量延续：",
+      `<用户修改要求>\n${instruction}\n</用户修改要求>`,
+    );
+    if (input.base === undefined) {
+      revision.push("这次没有指定基础候选：把要求作为附加条件，合并进 plan 给出的每个图像提示词与 SVG brief，重新出一组。");
+    } else {
+      const base = input.base;
+      revision.push(
+        `这次以旧候选 ${base.candidateId} 为基础，文件：${base.path}（后端 ${base.backend}）。`,
+        `上一版提示词如下；没有就留空，不能编造：\n<上一版提示词>\n${base.prompt ?? ""}\n</上一版提示词>`,
+        "- image_model：基础候选是位图时，除技能第 1 步认出的文生图工具外，再认一个能「输入图片 + 文本提示词改图」的工具（如 qwen_edit；状态工具不算）。有就对每个图像候选位优先调它，images 只放上面的基础候选绝对路径，编辑指令同时带上一版提示词中与本次不冲突的约束和这次要求；没有改图工具就用文生图工具，把上一版提示词与这次要求合并后出图。基础候选是 SVG 时不要假装能位图改图，改用上一版提示词 + 这次要求文生图。",
+        "- model_svg：基础候选是 SVG 时先 read 它的源码，保留原来的构图与图形，在那份 SVG 上改，另存到本轮 work/ 文件；基础候选是位图时先 read 亲眼看它，再照它改画。",
+        "- 每次 submit 都要把你实际合并后的提示词写到本轮 work/ 的一个文本文件，并用 --prompt-file 指向它；不要拿未加入这次要求的 image-prompt-rN.txt 充数。不同候选位要分别出图，不能重复提交同一张。",
+      );
+    }
+  }
   return [
     `[星系设计面板 · 生成形象 · ${input.name}] 这一轮是界面在后台替用户派的出图任务：没有人在对话里看着，不要提问、不要等确认、不要寒暄，做完就结束。`,
     "",
@@ -225,6 +362,7 @@ export function avatarPrompt(input: { root: string; input: string; dir: string; 
     "   - image_model：用 plan 输出的 imagePrompt / negativePrompt 调 imageTool（Qwen 用 turbo 档出候选），每一位换一个种子；出图后亲眼看一遍，有字、水印、眼睛、嘴就 fail 掉重出。",
     `   - model_svg：读 plan 写的 svg-brief，照骨架写一个完整 SVG，存到 ${join(input.dir, "work")}/ 下（如 r<轮>-s<位>.svg）再 submit。`,
     "   - 工具报错或超时：RS fail --reason \"<原话>\"；工具根本不可用加 --unavailable。",
+    ...revision,
     "4. 不要跑 preview、select、policy；不要改设计稿、galaxy.json 或插件里的文件；不要调 show_plugin_board——挑哪一张由用户在面板里定。",
     "最后用一两句话说每一位的结局。",
   ].join("\n");
@@ -236,6 +374,8 @@ interface Live {
   job: AvatarJob;
   place: BodyPlace;
   roundsBefore: number;
+  /** 这一轮请求是否已绑到插件账本轮次（绑过一次就不在每秒轮询里重复写历史） */
+  historyBound: boolean;
   timer: ReturnType<typeof setInterval> | null;
   deadline: ReturnType<typeof setTimeout> | null;
   /** 正在读账本（一次只读一份，慢的那次没读完不叠下一次） */
@@ -309,10 +449,13 @@ export class AvatarJobs {
     };
   }
 
-  /** 面板点「生成形象」/「再来一组」：开一轮；同一颗正在出图时拒绝 */
+  /** 面板点「生成形象」/「再来一组」/「按这个改」：开一轮；同一颗正在出图时拒绝 */
   async generate(request: AvatarGenerateRequest): Promise<AvatarJobResult> {
     const key = keyOf(request);
     if (isAvatarJobLive(this.live.get(key)?.job ?? null)) return { ok: false, error: "这颗星正在出图，等这一组出完或先取消" };
+    const instruction = request.instruction?.trim() ?? null;
+    if (request.instruction !== undefined && instruction === "") return { ok: false, error: "修改要求不能为空" };
+    if (instruction !== null && instruction.length > AVATAR_INSTRUCTION_MAX) return { ok: false, error: `修改要求最多 ${AVATAR_INSTRUCTION_MAX} 字` };
     const located = await this.place(request);
     if (!located.ok) return located;
     const place = located.place;
@@ -321,6 +464,15 @@ export class AvatarJobs {
     const model = await this.deps.resolveModel();
     if (!model.ok) return { ok: false, error: model.error };
 
+    const rounds = parseManifest(await readJson(join(place.dir, "manifest.json")));
+    let base: AvatarPromptBase | undefined;
+    if (request.baseCandidateId !== undefined) {
+      const resolved = await resolvePromptBase(place, request.baseCandidateId, rounds);
+      if (!resolved.ok) return resolved;
+      const exists = await stat(resolved.base.path).then((info) => info.isFile(), () => false);
+      if (!exists) return { ok: false, error: `基础候选图不见了：${request.baseCandidateId}` };
+      base = resolved.base;
+    }
     const mix = request.mix === undefined ? place.mix : (parseMix(request.mix) ?? place.mix);
     const name = request.name !== undefined && request.name.trim() !== "" ? request.name.trim() : place.name;
     const now = this.deps.now();
@@ -334,9 +486,14 @@ export class AvatarJobs {
       ...(place.bodyType === null ? {} : { bodyType: place.bodyType }),
       source: "orbita-galaxy-designer",
     });
-    const roundsBefore = parseManifest(await readJson(join(place.dir, "manifest.json"))).length;
+    const roundsBefore = rounds.length;
     const policy = policySlots(await readJson(join(root, AVATAR_POLICY)));
     const sessionId = this.deps.newId();
+    try {
+      await appendHistoryRecord(place.dir, { id: sessionId, plannedRound: roundsBefore + 1, round: null, instruction, baseCandidateId: base?.candidateId ?? null, startedAt: now });
+    } catch (cause) {
+      return { ok: false, error: `修改要求没能记进 planet/：${cause instanceof Error ? cause.message : String(cause)}` };
+    }
     const job: AvatarJob = {
       workspaceId: request.workspaceId,
       bodyId: request.bodyId,
@@ -352,11 +509,11 @@ export class AvatarJobs {
       startedAt: now,
       finishedAt: null,
     };
-    const live: Live = { job, place, roundsBefore, timer: null, deadline: null, busy: false };
+    const live: Live = { job, place, roundsBefore, historyBound: false, timer: null, deadline: null, busy: false };
     this.live.set(key, live);
     await this.deps.sessions.ensureSession({
       id: sessionId,
-      title: `生成形象 · ${name}`,
+      title: `${instruction === null ? "生成" : "修改"}形象 · ${name}`,
       titleSource: "user",
       cwd: place.workspace.path,
       workspaceId: place.workspace.id,
@@ -385,7 +542,7 @@ export class AvatarJobs {
         modelId: model.modelId,
         mode: AVATAR_MODE,
         thinkingLevel: model.thinkingLevel,
-        text: avatarPrompt({ root, input: inputPath, dir: place.dir, name }),
+        text: avatarPrompt({ root, input: inputPath, dir: place.dir, name, ...(instruction === null ? {} : { instruction }), ...(base === undefined ? {} : { base }) }),
       });
     } catch (cause) {
       await this.deps.sessions.remove(sessionId).catch(() => undefined);
@@ -412,7 +569,7 @@ export class AvatarJobs {
     const last = rounds[rounds.length - 1];
     if (last === undefined) return { ok: true, job: null };
     const slots = await this.slotsWithImages(place, last, "上次没出完（应用退出或中断了），这一位没交图");
-    const chosen = last.candidates.find((cand) => planetRelative(place.workspace.path, join(place.dir, cand.file)) === place.surface) ?? null;
+    const chosen = selectedCandidate(place, rounds);
     const at = await stat(join(place.dir, "manifest.json")).then((info) => info.mtimeMs, () => 0);
     return {
       ok: true,
@@ -434,6 +591,30 @@ export class AvatarJobs {
     };
   }
 
+  /** 每一轮的要求与它交出的候选：请求记录和插件 manifest 都留在 planet/，小图现读并缓存 */
+  async history(ref: AvatarBodyRef): Promise<AvatarHistoryResult> {
+    const located = await this.place(ref);
+    if (!located.ok) return located;
+    const place = located.place;
+    const historyPath = join(place.dir, AVATAR_HISTORY_FILE);
+    const records = parseHistoryRecords(await readJson(historyPath));
+    const rounds = parseManifest(await readJson(join(place.dir, "manifest.json")));
+    if (reconcileHistoryRounds(records, rounds)) await writeHistoryRecords(place.dir, records);
+    const entries: AvatarHistory["entries"] = [];
+    for (const record of records) {
+      const round = record.round === null ? undefined : rounds.find((each) => each.round === record.round);
+      const candidates: AvatarHistory["entries"][number]["candidates"] = [];
+      for (const candidate of round?.candidates ?? []) {
+        const full = candidateFullPath(place, candidate);
+        if (full === null) continue;
+        if (!this.images.has(full)) this.images.set(full, await this.deps.loadImage(full));
+        candidates.push({ candidateId: candidate.id, backend: candidate.backend, image: this.images.get(full) ?? null });
+      }
+      entries.push({ id: record.id, round: record.round, instruction: record.instruction, baseCandidateId: record.baseCandidateId, startedAt: record.startedAt, candidates });
+    }
+    return { ok: true, history: { entries, selected: selectedCandidate(place, rounds)?.id ?? null } };
+  }
+
   /** 用户挑一张：写进 galaxy.json（相对 planet/）；有插件稿时跑插件的 select 写稿 */
   async select(request: AvatarSelectRequest): Promise<AvatarJobResult> {
     const key = keyOf(request);
@@ -444,7 +625,8 @@ export class AvatarJobs {
     const rounds = parseManifest(await readJson(join(place.dir, "manifest.json")));
     const cand = rounds.flatMap((round) => round.candidates).find((each) => each.id === request.candidateId);
     if (cand === undefined) return { ok: false, error: `没有候选 ${request.candidateId}` };
-    const full = join(place.dir, cand.file);
+    const full = candidateFullPath(place, cand);
+    if (full === null) return { ok: false, error: "候选图不在这颗天体的 surfaces/ 里" };
     const surface = planetRelative(place.workspace.path, full);
     if (surface === null) return { ok: false, error: "候选图不在 planet/ 里" };
     const exists = await stat(full).then((info) => info.isFile(), () => false);
@@ -531,6 +713,10 @@ export class AvatarJobs {
         error: cancelled ? null : "智能体没有跑插件的 plan，这一组没有开始出图",
         finishedAt: this.deps.now(),
       };
+    }
+    if (!live.historyBound) {
+      await bindHistoryRound(live.place.dir, live.job.sessionId ?? "", round.round);
+      live.historyBound = true;
     }
     const slots = await this.slotsWithImages(live.place, round, ended);
     const finished = ended !== null || slots.every((slot) => slot.state !== "working");
