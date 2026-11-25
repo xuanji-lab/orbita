@@ -9,9 +9,10 @@
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
  * **启动建 meta 索引只需读 N 个小 meta 文件，完全不碰日志；之后列会话走内存索引**。
  */
-import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
+import { appendFile, copyFile, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import type { FileHandle } from "node:fs/promises";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { writeBytesAtomic, writeJsonAtomic, writeTextAtomic } from "../atomic-write.ts";
 import {
@@ -1117,41 +1118,81 @@ export class SessionStore {
     const records: SessionRecord[] = [];
     for (const line of raw.split("\n")) {
       if (line.trim() === "") continue;
-      try {
-        const parsed: unknown = JSON.parse(line);
-        // 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——
-        // 半截摘要当消息渲染，比少渲染一行更糟
-        if (isCompactedRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
-        // 半截标记被当成消息强转，下游访问 content 就是 undefined
-        if (isChannelMarkRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
-        if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        const suspect = parsed as { role?: unknown } | null;
-        if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") continue;
-        if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") continue;
-        if (
-          suspect !== null &&
-          typeof suspect === "object" &&
-          (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo")
-        ) {
-          continue;
-        }
-        records.push(parsed as TranscriptItem);
-      } catch {
-        // 半截行：跳过它，前面读到的照常返回
-      }
+      const record = parseRecordLine(line);
+      if (record !== null) records.push(record);
     }
     return records;
+  }
+
+  /**
+   * 从文件尾**按字节倒读**一小段转录（给手机用）。`loadWindow` 是全量读盘再切尾窗，大会话一次
+   * 0.1–0.3 秒；这里只读最后 `maxBytes` 个字节、只解码最后 `maxRecords` 条，文件没读完就停。
+   *
+   * 窗口的第一行可能被起点截在中间——起点不是文件头时丢掉它。最后一行没有换行符时，解得出就收
+   * （与全量读取一致：正常写入都以换行收尾），解不出就当半截行跳过。坏行一律跳过，不丢后面的。
+   * 解析规则与 `readLogEntries` 是同一个函数，所以这里的结果恒为全量读取结果的尾部子序列
+   * （不折叠回退界碑——尾部折叠由读者按需做，界碑本身在结果里）。
+   *
+   * 返回按文件顺序。文件不存在回空数组。
+   */
+  async tailRecords(id: string, options: TailReadOptions = {}): Promise<SessionRecord[]> {
+    return (await this.tailWindow(id, options))?.records ?? [];
+  }
+
+  /**
+   * `tailRecords` 的底层：把窗口覆盖的字节范围一并报出来。往更早翻页时以上一个窗口的 `next` 作下一个的
+   * `endByte` 接着读——**不是 `start`**：`start` 多半落在一行中间，从它接着读会让那一行两头都不完整、
+   * 整行丢失；`next` 是这个窗口收下的第一条完整记录的起点，下一窗口的最后一行正好是本窗口丢掉的那一行。
+   * 窗口里一条完整行都没有（有一行比窗口还大）时 `next` 不小于这次的 `endByte`——没有前进，调用方要
+   * 加大窗口，否则原地打转。文件不存在返回 null。
+   */
+  async tailWindow(id: string, options: TailReadOptions = {}): Promise<TailWindow | null> {
+    const maxBytes = Math.max(1, Math.floor(options.maxBytes ?? TAIL_READ_BYTES));
+    const maxRecords = options.maxRecords ?? TAIL_READ_RECORDS;
+    const path = this.logPath(id);
+    let handle: FileHandle;
+    try {
+      handle = await open(path, "r");
+    } catch (cause) {
+      if (isNotFound(cause)) return null;
+      throw cause;
+    }
+    try {
+      const { size } = await handle.stat();
+      const end = Math.max(0, Math.min(size, Math.floor(options.endByte ?? size)));
+      const start = Math.max(0, end - maxBytes);
+      const buffer = Buffer.allocUnsafe(end - start);
+      let filled = 0;
+      while (filled < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, start + filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      // 起点不在文件头：到第一个换行为止是不完整的一行。窗口里一个换行都没有 = 整窗是一行的一段，
+      // 一条完整行都没有（headOffset 落到窗口末尾，下面的循环不收任何东西，next 等于 end）。
+      let headOffset = 0;
+      if (start !== 0) {
+        const newline = buffer.subarray(0, filled).indexOf(NEWLINE);
+        headOffset = newline === -1 ? filled : newline + 1;
+      }
+      const records: SessionRecord[] = [];
+      let cursor = filled;
+      // 以换行收尾的文件：最后一行在它之前
+      if (cursor > headOffset && buffer[cursor - 1] === NEWLINE) cursor -= 1;
+      while (cursor > headOffset && records.length < maxRecords) {
+        const lineStart = lastIndexOf(buffer, headOffset, cursor, NEWLINE);
+        const line = buffer.subarray(Math.max(headOffset, lineStart + 1), cursor);
+        if (line.length > 0) {
+          const record = parseRecordLine(line.toString("utf8"));
+          if (record !== null) records.push(record);
+        }
+        cursor = lineStart;
+      }
+      records.reverse();
+      return { records, start, next: start + headOffset, end: size };
+    } finally {
+      await handle.close();
+    }
   }
 
   /**
@@ -1170,6 +1211,68 @@ export class SessionStore {
     }
     return effective;
   }
+}
+
+/** 尾部倒读的默认窗口：字节数与条数（给手机用的那一档） */
+export const TAIL_READ_BYTES = 256 * 1024;
+export const TAIL_READ_RECORDS = 80;
+
+export interface TailReadOptions {
+  /** 至多读多少字节（从 `endByte` 往前）；默认 256 KB */
+  maxBytes?: number;
+  /** 至多收多少条记录（从尾往前数可解析的行）；默认 80，`Infinity` = 不卡 */
+  maxRecords?: number;
+  /** 读到文件的哪个字节为止；默认文件尾 */
+  endByte?: number;
+}
+
+/** `tailWindow` 的结果：`[start, end)` 是这次实际打算覆盖的字节范围 */
+export interface TailWindow {
+  /** 按文件顺序；窗口的第一行不完整时已丢掉 */
+  records: SessionRecord[];
+  /** 窗口的起点字节。大于 0 说明窗口之前还有内容 */
+  start: number;
+  /**
+   * 往更早续读时的 `endByte`：这个窗口收下的第一条完整记录的起点（到文件头了就是 0）。
+   * 不小于这次的 `endByte` 说明窗口里一条完整行都没有——有一行比窗口还大，得加大窗口。
+   */
+  next: number;
+  /** 文件此刻的大小（读之前 stat 的值），不是这次窗口读到哪里为止 */
+  end: number;
+}
+
+const NEWLINE = 0x0a;
+
+/** 在 buffer 的 `[from, to)` 里从后往前找 `byte`；找不到返回 `from - 1` */
+function lastIndexOf(buffer: Buffer, from: number, to: number, byte: number): number {
+  for (let i = to - 1; i >= from; i -= 1) if (buffer[i] === byte) return i;
+  return from - 1;
+}
+
+/**
+ * 转录的一行 → 记录。全量读取与尾部倒读共用：两处对「什么算一行合法记录」必须是同一个答案，
+ * 否则从尾部读到的会与整份读出来的对不上。
+ *
+ * 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——半截摘要当消息渲染，比少渲染一行更糟。
+ * 坏行（解不出 JSON）返回 null。
+ */
+function parseRecordLine(line: string): SessionRecord | null {
+  if (line.trim() === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null; // 半截行
+  }
+  // `null`、数字、数组都不是记录：以前全量读取会把它们原样塞进数组，下游一碰 .role 就炸
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  if (isCompactedRecord(parsed) || isChannelMarkRecord(parsed)) return parsed;
+  if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) return parsed;
+  const suspect = parsed as { role?: unknown };
+  // 字段不齐的界碑：跳过（见上）
+  if (suspect.role === "compacted" || suspect.role === "channel-mark") return null;
+  if (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo") return null;
+  return parsed as TranscriptItem;
 }
 
 /** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
