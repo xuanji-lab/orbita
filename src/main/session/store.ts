@@ -22,7 +22,7 @@ import {
   type SentImage,
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
-import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
+import { forEachBufferLine, headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
@@ -1105,51 +1105,26 @@ export class SessionStore {
     return this.foldReverts(await this.readLogEntries(id));
   }
 
-  /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
+  /**
+   * 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环；逐行判定收敛在 parseLogLine。
+   *
+   * 切行按换行字节切 Buffer、每行再解码（forEachBufferLine），不做「整份 toString 再
+   * split("\n")」——194 MB 会话实测 split 段 107ms / 同步段 289ms，逐行切把这一段省掉，
+   * 也不再产生整份大字符串与装着全部行的数组。行切法与 split 逐行一致（见函数注释），
+   * 新旧实现对同一批输入的结果逐条相等（store.test.ts 的对照测试把关）。
+   */
   private async readLogEntries(id: string): Promise<SessionRecord[]> {
-    let raw: string;
+    let raw: Buffer;
     try {
-      raw = await readFile(this.logPath(id), "utf8");
+      raw = await readFile(this.logPath(id));
     } catch {
       return [];
     }
     const records: SessionRecord[] = [];
-    for (const line of raw.split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        const parsed: unknown = JSON.parse(line);
-        // 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——
-        // 半截摘要当消息渲染，比少渲染一行更糟
-        if (isCompactedRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
-        // 半截标记被当成消息强转，下游访问 content 就是 undefined
-        if (isChannelMarkRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
-        if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        const suspect = parsed as { role?: unknown } | null;
-        if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") continue;
-        if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") continue;
-        if (
-          suspect !== null &&
-          typeof suspect === "object" &&
-          (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo")
-        ) {
-          continue;
-        }
-        records.push(parsed as TranscriptItem);
-      } catch {
-        // 半截行：跳过它，前面读到的照常返回
-      }
-    }
+    forEachBufferLine(raw, (line) => {
+      const record = parseLogLine(line);
+      if (record !== undefined) records.push(record);
+    });
     return records;
   }
 
@@ -1169,6 +1144,44 @@ export class SessionStore {
     }
     return effective;
   }
+}
+
+/**
+ * 一行日志 → 一条记录：JSON 解析 + 逐字段校验，不落地返回 undefined。
+ * 坏行（半截 JSON、长着特殊记录的脸但字段不齐）跳过——只追加的文件最后一行
+ * 可能因断电只写了一半，为此丢掉整条会话不划算。
+ *
+ * 「这行落不落地」的判定只有这一份：readLogEntries 的行循环、行切分的新旧对照
+ * 测试（store.test.ts）都从它过，谁也不许另抄一份判定链。
+ */
+export function parseLogLine(line: string): SessionRecord | undefined {
+  if (line.trim() === "") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    // 半截行：跳过它，前面读到的照常返回
+    return undefined;
+  }
+  // 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——
+  // 半截摘要当消息渲染，比少渲染一行更糟
+  if (isCompactedRecord(parsed)) return parsed;
+  // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
+  // 半截标记被当成消息强转，下游访问 content 就是 undefined
+  if (isChannelMarkRecord(parsed)) return parsed;
+  // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
+  if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) return parsed;
+  const suspect = parsed as { role?: unknown } | null;
+  if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") return undefined;
+  if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") return undefined;
+  if (
+    suspect !== null &&
+    typeof suspect === "object" &&
+    (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo")
+  ) {
+    return undefined;
+  }
+  return parsed as TranscriptItem;
 }
 
 /** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
