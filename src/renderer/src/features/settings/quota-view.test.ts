@@ -8,9 +8,9 @@ import {
   formatDuration,
   formatMoney,
   progressOf,
+  quotaExhaustedText,
   quotaMenuItems,
   quotaProblemText,
-  resetLabel,
   usedPercent,
   windowLabel,
   windowValueText,
@@ -78,11 +78,6 @@ describe("窗口的展示", () => {
     assert.equal(windowValueText(window(), now, zh), "62% 已用");
   });
 
-  test("重置行：有将来时间才写", () => {
-    assert.equal(resetLabel(window({ resetsAt: now + 41 * 60_000 }), now, en), "resets in 41m");
-    assert.equal(resetLabel(window(), now, en), null);
-    assert.equal(resetLabel(window({ resetsAt: now }), now, en), null);
-  });
 });
 
 describe("页脚的时间说法", () => {
@@ -146,9 +141,6 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
     assert.notEqual(windowLabel(window({ kind: "mcp" }), zh), windowLabel(window({ kind: "monthly" }), zh));
   });
 
-  test("OpenCode Go 的滚动窗：不是 5 小时，也不是每月", () => {
-  });
-
   test("custom / 没有 kind（旧快照、余额类）→ 厂商原文", () => {
     assert.equal(windowLabel(window({ kind: "custom", label: "TOKENS_LIMIT" }), zh), "TOKENS_LIMIT");
     assert.equal(windowLabel(window({ label: "45m" }), zh), "45m");
@@ -171,6 +163,12 @@ describe("窗口名 —— 已知语义类别就本地化", () => {
 });
 
 describe("失败文案——「没订阅」与「团队账号」是两句话", () => {
+  test("console-only 说「只能在网页控制台查看」，不冒充钥匙错", () => {
+    assert.match(quotaProblemText("console-only", zh), /控制台/);
+    assert.match(quotaProblemText("console-only", en), /console/i);
+    assert.notEqual(quotaProblemText("console-only", zh), quotaProblemText("auth", zh));
+  });
+
   test("no-plan 走 noPlan，不混进 teamUnsupported", () => {
     assert.equal(quotaProblemText("no-plan", zh), "这个账号没有订阅套餐。");
     assert.equal(quotaProblemText("no-plan", en), "This account has no subscription.");
@@ -245,5 +243,33 @@ describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
     );
     assert.equal(items.at(-1)?.label, "Couldn't refresh (unexpected response) · 12 min ago");
     assert.equal(items[1]?.label, "Balance");
+  });
+});
+
+// ── 额度用尽导致的失败：人话在 renderer 组（主进程只给事实） ──
+
+describe("quotaExhaustedText —— 账户额度那句副行（不是失败原因）", () => {
+  const HOUR = 60 * 60 * 1000;
+  const now = Date.UTC(2026, 9, 23, 9, 0, 0);
+  const hint = { kind: "5h" as const, label: "5-hour window", resetsAt: now + 2 * HOUR + 14 * 60_000 };
+
+  test("中文：带账户额度前缀，窗口名本地化 + 时长走机器口径", () => {
+    assert.equal(quotaExhaustedText(hint, now, zh), "账户额度：5 小时窗口已用尽 · 2h 14m 后重置");
+  });
+
+  test("英文：同一份事实，同一份时长", () => {
+    assert.equal(quotaExhaustedText(hint, now, en), "Account quota: 5-hour window exhausted · resets in 2h 14m");
+  });
+
+  test("custom 名字用厂商原文，不硬翻", () => {
+    assert.equal(
+      quotaExhaustedText({ ...hint, kind: "custom", label: "TOKENS_LIMIT" }, now, zh),
+      "账户额度：TOKENS_LIMIT窗口已用尽 · 2h 14m 后重置",
+    );
+  });
+
+  test("渲染时已经过点：不说时间（「0s 后重置」是句假话）", () => {
+    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, zh), "账户额度：5 小时窗口已用尽");
+    assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, en), "Account quota: 5-hour window exhausted");
   });
 });

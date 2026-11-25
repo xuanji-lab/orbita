@@ -507,6 +507,12 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     // 聚合网关：它自家目录收窄了型号能力（哪个型号开哪种协议、思考恒开与否），型号口径以它为准
     catalogAuthoritative: true,
     note: "聚合网关，一个 key 调用多家模型；型号清单与参数跟着它自己的目录走，计费按各厂官方美元单价",
+    /*
+     * 余额：只有控制台接口 `GET /api/me` 疑似带余额（对无效 Bearer 回 401，说明要凭据）；
+     * 官方文档没写余额 API（只说「调用次数与用量出现在用户中心」）。先按余额接，
+     * 真实响应待用 key 验证后收紧解析。
+     */
+    quota: "balance",
   },
   {
     id: "anthropic-compatible",
@@ -652,7 +658,8 @@ export function endpointHintsOf(
 export interface ProviderKindSource {
   id: string;
   kind?: string;
-  endpoint: { api: ProviderApi };
+  /** baseUrl 可选：额度按地址兜底时要它；其余判定只看 kind / id */
+  endpoint: { api: ProviderApi; baseUrl?: string };
 }
 
 /** 认不出条目时按协议落到哪个兼容入口 */
@@ -712,8 +719,51 @@ export function isPlanBilling(provider: ProviderKindSource): boolean {
  * 第二个实例（`deepseek-2`）也只能靠 id 认回来——只看 kind 会让这些实例的额度块凭空消失。
  * 能力本身逐条写在条目上（`quota`），这里只负责找到那条。
  */
+/**
+ * 额度能力的**来源条目**：通常是 knownProviderOf 认到的那条；用户把网关配成通用兼容条目
+ * （kind = openai-compatible、baseUrl 指向那家）时，按 baseUrl 的 origin 再找一次同类目。
+ *
+ * 为什么单独一个函数：探针要按条目的 id 分派（`deepseek` / `tokenrhythm` …），只拿
+ * `quota` 不够——`knownProviderOf` 对通用条目返回的是兼容条目，它的 id 会把探针带进 default。
+ */
+export function knownQuotaSourceOf(provider: ProviderKindSource): KnownProvider | undefined {
+  const entry = knownProviderOf(provider);
+  if (entry.quota !== undefined && entry.quota !== "none") return entry;
+  /*
+   * 兜底：用户把一家网关配成**通用兼容条目**（`openai-compatible` / `anthropic-compatible` …）时，
+   * `knownProviderOf` 按 kind 认到的是兼容条目，声明在厂商条目上的额度能力落不到它身上。
+   * 这里按 baseUrl 再找一次同类目——**只对通用兼容条目生效**。
+   *
+   * ⚠ 不能对具体厂商条目也兜底：智谱按量与智谱 Coding Plan 同源（`open.bigmodel.cn`），
+   * 只按 origin 匹配会把**按量账号**认成套餐账号，于是额度块拿按量 key 去打控制台端点：
+   * 200 + 空 limits 会说成「团队账号不支持」，401 会说成「厂商拒绝了你的 API 密钥」。
+   * （2026-11-13 审阅复现。）
+   */
+  if (entry.id !== compatibleKindFor(provider.endpoint.api)) return undefined;
+  const baseUrl = provider.endpoint?.baseUrl;
+  if (typeof baseUrl !== "string" || baseUrl === "") return undefined;
+  const normalize = (value: string): string => value.trim().replace(/\/+$/, "").toLowerCase();
+  const target = normalize(baseUrl);
+  if (target === "") return undefined;
+  return KNOWN_PROVIDERS.find((item) => {
+    if (item.quota === undefined || item.quota === "none") return false;
+    /*
+     * 候选地址包括条目自己的 baseUrl 与每条接入方式的地址：同一家网关可能有两种协议
+     * 两个地址（例：基元律动 OpenAI 走 …/v1、Anthropic 走裸域），用户按哪一种配进来
+     * 都应该认得到。匹配用「相等或前缀 + 斜杠」，避免把上级地址误吸进来。
+     */
+    const candidates = [item.baseUrl, ...(item.access ?? []).map((method) => method.baseUrl)];
+    return candidates.some((candidate) => {
+      const known = normalize(candidate);
+      if (known === "") return false;
+      return target === known || target.startsWith(`${known}/`);
+    });
+  });
+}
+
+/** 这家能不能查额度、查哪一类。认不得的一律 `none`。 */
 export function knownProviderQuota(provider: ProviderKindSource): QuotaProbe {
-  return knownProviderOf(provider).quota ?? "none";
+  return knownQuotaSourceOf(provider)?.quota ?? "none";
 }
 
 /**
