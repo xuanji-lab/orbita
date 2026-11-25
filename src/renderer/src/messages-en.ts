@@ -2453,6 +2453,73 @@ export const en = {
     compacted: "Compacted",
     compactedTimes: (n: number) => (n === 1 ? "1 time" : `${n} times`),
     speed: (n: number) => `${n} tok/s`,
+    /** 新会话还没有任何用量时，环菜单里占住「本会话这段」的位置（否则额度段凭空冒出来） */
+    emptyUsage: "No usage in this session yet",
+  },
+
+  /**
+   * 厂商账号额度（余额 / 套餐窗口）。**一个命名空间服务两个面**（设置页的额度块
+   * 与底栏环的菜单行）：同一句话只能有一份写法，否则两处迟早就两个答案。
+   */
+  quota: {
+    account: "Account",
+    balance: "Balance",
+    planQuota: "Plan quota",
+    refresh: "Refresh",
+    checking: "Checking…",
+    notCheckedYet: "Not checked yet.",
+    checkNow: "Check now",
+    // 数字后面永远带 used：条本身方向中性，靠这个词钉住「左段 = 已用」
+    usedUnit: "used",
+    /**
+     * 窗口的语义类别（`QuotaWindow.kind`）。智谱 / Kimi 只给机器字段、没有给人读的标签，
+     * 英文 label 不能直接出现在中文界面——两处窗口名都走 `windowLabel` 取这一份。
+     */
+    windowKind: {
+      "5h": "5-hour window",
+      weekly: "Weekly",
+      // 型号周窗（Claude）：窗口名 = 「每周」+ 厂商给的型号名，拼装见 `kindLabel`；这里只是前半段
+      "weekly-model": "Weekly",
+      monthly: "Monthly",
+      // MCP 工具的每月额度，与 token 窗口不是同一种额度
+      mcp: "MCP monthly",
+    },
+    resetsIn: (duration: string) => `resets in ${duration}`,
+    /**
+     * 额度窗口用尽时的「账户状态」行（PR3 复核后改为**副行**）。
+     *
+     * 为什么带「账户额度：」前缀：缓存只说明「这个窗口满了」这个事实，
+     * **不说明这次失败是它造成的**（钥匙过期 + 恰好窗口满了时，主因是 401）。
+     * 所以要把它读成一条账户状态，不能放在原文前面冒充失败原因。
+     * `label` 已经过 `windowLabel` 本地化，`duration` 是 `2h 14m` 这类机器口径的时长。
+     */
+    exhausted: (label: string, duration: string) => `Account quota: ${label} exhausted · resets in ${duration}`,
+    /** 渲染时重置时刻已经过了（判定时还在未来）：没有可信的恢复时间，就不说 */
+    exhaustedNoReset: (label: string) => `Account quota: ${label} exhausted`,
+    justNow: "just now",
+    minutesAgo: (n: number) => `${n} min ago`,
+    hoursAgo: (n: number) => `${n}h ago`,
+    daysAgo: (n: number) => `${n}d ago`,
+    checked: (age: string) => `Checked ${age}`,
+    checkedJustNow: "Checked just now",
+    failedKeeping: (reason: string, age: string) => `Couldn't refresh (${reason}) · ${age}`,
+    failedAlone: (reason: string) => `Couldn't refresh (${reason}).`,
+    toppedUp: (money: string) => `topped up ${money}`,
+    granted: (money: string) => `granted ${money}`,
+    unlimited: "Unlimited",
+    authMissing: "Add an API key above to see the balance.",
+    authRejected: "The provider rejected this API key (401). Update it above, then try again.",
+    // 浏览器登录的订阅没有「密钥」可改：说的是登录态
+    loginMissing: "Sign in above to see the plan quota.",
+    loginRejected: "The sign-in has expired or was rejected (401). Sign in again above, then try again.",
+    teamUnsupported: "Quota can't be read for this account — team accounts aren't supported, or this provider hasn't been wired up.",
+    noPlan: "This account has no subscription.",
+    consoleOnly: "Balance is only available in this gateway's web console.",
+    emptyUsage: "The provider returned no usage data — the account may have no subscription, or the endpoint changed.",
+    reasonAuth: "key rejected",
+    reasonNetwork: "network error",
+    reasonProtocol: "unexpected response",
+    reasonUnsupported: "not supported",
   },
 
   /** 子会话通道：消息种类、标记行、通道列、派出卡 */

@@ -38,6 +38,7 @@ import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginAgentScope } from "./plugin.ts";
 import type { PluginBoardOutcome } from "./plugin-board.ts";
 import type { IntentRecallRecord } from "./session.ts";
+import type { QuotaExhaustedHint } from "./quota.ts";
 import type {
   MemoryBackfillProgress,
   MemoryDownloadProgress,
@@ -104,6 +105,11 @@ export const ipcChannels = {
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
+  /**
+   * 厂商账号额度（余额 / 套餐窗口）：入参 QuotaQuery，回 QuotaResult。
+   * 主进程负责取密钥、打厂商端点、落缓存；密钥不进返回值。
+   */
+  providerQuota: "provider:quota",
   /**
    * Claude 订阅账号的 OAuth 登录：主进程起回调服务器 + 开系统浏览器，成功后直接
    * 落盘 provider 与凭据，返回 UpsertResult。凭据（access / refresh token）全程
@@ -1686,7 +1692,19 @@ export type AgentEvent =
    * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
-  | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  | {
+      type: "failed";
+      sessionId: string | null;
+      message: string;
+      turn?: true;
+      /**
+       * 这一轮是不是因为某个额度窗口用尽而失败。**主进程按额度缓存判定并补上**，
+       * 不是按厂商文案猜（判据见 `shared/quota.ts` 的 `quotaHintOf`）。缺席 = 不知道
+       * 或不该解释；厂商原文照旧在 `message` 里，不丢排障信息。
+       * 只在主进程补：缓存（`<userData>/quota-cache.json`）只有它读得到。
+       */
+      quota?: QuotaExhaustedHint;
+    }
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

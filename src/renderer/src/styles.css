@@ -827,6 +827,52 @@
 }
 
 /*
+ * 额度条——设置页的额度块（QuotaBlock）与底栏环菜单里的窗行**共用这一条**。
+ * 几何（3px / --radius-xs）与颜色（轨道 = 墨色 12% 混色、填充 = 次级文字色）只在这里写一份：
+ * 两个面一旦各写一份，改一处就漂。两个面自己只管外边距（`.q-bar` / `.menu-progress`）。
+ *
+ * 方向只有「已用」：宽度由 JS 给（宽度是运行时值），**颜色由 `data-spent` 决定**——
+ * 只有真的用尽（>= 100%）才借 --color-danger，那时数字也同时变红；不到 100% 只有墨色。
+ */
+.quota-bar {
+  display: block;
+  position: relative;
+  height: 3px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  overflow: hidden;
+}
+
+.quota-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-text-secondary);
+}
+
+.quota-bar[data-spent="true"] > i {
+  background: var(--color-danger);
+}
+
+/* 菜单里的那一条：吃满行的左右内边距（行自己已有 padding），行下留一小段呼吸 */
+.menu-progress {
+  /*
+   * 左右各留 `--space-2`，但**左边要多让出图标槽那一格**：菜单行即使没有图标也占着
+   * 14px 的列 + 8px 的 gap，条只吃行内边距就会比它上面的文字向左多出 22px，三行看起来
+   * 参差（2026-10-23 验收发现：条 836 起、文字 858 起）。
+   * 右边同理多让一格：行内第三列（`auto`，宽度 0）仍占着一个 `column-gap`，文字右缘因此
+   * 停在 1022，而条原来到 1030。两边都要和文字同起同止（858..1022）。
+   */
+  /*
+   * 图标槽那一格是 14px（Menu 的 gridTemplateColumns 首列）。这里用刻度表达它
+   * （--space-3 12 + --space-0-5 2 = 14）：styles.css 的「刻度外间距」账已满，
+   * 不再新增字面量。将来 Menu 若把条收进文字列（gridColumn: 2 / -1），这段可以整段删掉。
+   */
+  margin: 0 calc(var(--space-2) * 2) var(--space-1)
+    calc(var(--space-2) * 2 + var(--space-3) + var(--space-0-5));
+}
+
+/*
  * 模型卡片左栏的当前格：图标条当前项的配方（readme：`--color-mode-active-bg` / `-fg`
  * 「用于模式按钮与图标条当前项」）再加一圈 1px 光圈，同 ThemeCard 选中的细环。
  * 光圈的理由：左栏只有图标，`.option-row` 的选中靠「淡底 + semibold」，而 semibold

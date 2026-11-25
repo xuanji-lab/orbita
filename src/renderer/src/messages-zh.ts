@@ -2268,6 +2268,57 @@ export const zh: Messages = {
     compacted: "已压缩",
     compactedTimes: (n) => `${n} 次`,
     speed: (n) => `${n} tok/s`,
+    emptyUsage: "本会话还没有用量",
+  },
+
+  /** 厂商账号额度（与 en.quota 同一套键：两个面共用一套说法） */
+  quota: {
+    account: "账户",
+    balance: "余额",
+    planQuota: "套餐额度",
+    refresh: "刷新",
+    checking: "正在查询…",
+    notCheckedYet: "还没有查过。",
+    checkNow: "立即查询",
+    usedUnit: "已用",
+    // 窗口的语义类别：中文界面必须纯中文，不能直接显示厂商的英文 label
+    windowKind: {
+      "5h": "5 小时",
+      weekly: "每周",
+      // 型号周窗（Claude）：窗口名 = 「每周」+ 厂商给的型号名，拼装见 `kindLabel`；这里只是前半段
+      "weekly-model": "每周",
+      monthly: "每月",
+      // MCP 是协议名，保留英文；与「每月」的 token 窗口不是同一种额度
+      mcp: "MCP 每月",
+    },
+    resetsIn: (duration) => `${duration} 后重置`,
+    // 额度事实只作副行：缓存说明不了这次失败是谁造成的，不能冒充原因
+    exhausted: (label, duration) => `账户额度：${label}窗口已用尽 · ${duration} 后重置`,
+    exhaustedNoReset: (label) => `账户额度：${label}窗口已用尽`,
+    justNow: "刚刚",
+    minutesAgo: (n) => `${n} 分钟前`,
+    hoursAgo: (n) => `${n} 小时前`,
+    daysAgo: (n) => `${n} 天前`,
+    checked: (age) => `查于 ${age}`,
+    checkedJustNow: "刚刚查过",
+    failedKeeping: (reason, age) => `刷新失败（${reason}） · ${age}`,
+    failedAlone: (reason) => `刷新失败（${reason}）。`,
+    toppedUp: (money) => `充值 ${money}`,
+    granted: (money) => `赠送 ${money}`,
+    unlimited: "不限量",
+    authMissing: "先在上面填 API 密钥才能查余额。",
+    authRejected: "厂商拒绝了这个 API 密钥（401）。在上面更新密钥后再试。",
+    // 浏览器登录的订阅没有「密钥」可改：说的是登录态
+    loginMissing: "先在上面登录账号才能查套餐额度。",
+    loginRejected: "登录已失效或被拒绝（401）。在上面重新登录后再试。",
+    teamUnsupported: "当前账号查不到额度——团队账号不支持，或这家还没有接入。",
+    noPlan: "这个账号没有订阅套餐。",
+    consoleOnly: "这个网关的余额只能在网页控制台查看。",
+    emptyUsage: "厂商没有返回任何用量数据——可能这个账号没有订阅，或接口已经改了。",
+    reasonAuth: "密钥无效",
+    reasonNetwork: "网络错误",
+    reasonProtocol: "返回格式变了",
+    reasonUnsupported: "不支持",
   },
 
   channel: {
