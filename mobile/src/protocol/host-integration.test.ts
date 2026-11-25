@@ -284,6 +284,37 @@ describe("手机客户端 ↔ 真电脑服务", () => {
     await w.until(() => w.opens === 2, 10_000);
   });
 
+  test("电脑退出（host.shutdown）：宽限窗内慢慢试，窗口过了进 stopped 不再自动重连；手动重试能连回", async () => {
+    const fx = await fixture();
+    await fx.start();
+    const credentials = await pairOnce(fx);
+    const w = watcher();
+    // 宽限窗缩到 600 ms、重试间隔 100 ms：等价于真机的 3 分钟 / 10 秒
+    const link = linkFor(fx, credentials, w, { shutdownRetryMs: 100, shutdownGraceMs: 600 });
+    link.start();
+    await w.until(() => w.opens === 1);
+
+    // 电脑退出：手机看到 host.shutdown，窗口内按间隔试
+    await server?.stop();
+    await w.until(() => w.notes.some((note) => note.event === "host.shutdown"));
+    await w.until(() => w.seen.some((status) => status.kind === "waiting" && status.shutdown), 5_000);
+
+    // 窗口过了：进 stopped，自动重连停掉（不再发起新连接）
+    await w.until(() => link.status.kind === "stopped", 5_000);
+    const connectingCount = w.seen.filter((status) => status.kind === "connecting").length;
+    await new Promise((resolve) => setTimeout(resolve, 400)); // 几个重试间隔
+    assert.equal(w.seen.filter((status) => status.kind === "connecting").length, connectingCount, "stopped 之后还在自动重连");
+    assert.equal(link.status.kind, "stopped");
+
+    // 手动重试（app 回前台走的是同一条 retryNow）：重新开窗，电脑还没起就继续等
+    link.retryNow();
+    await w.until(() => w.seen.filter((status) => status.kind === "connecting").length > connectingCount, 5_000);
+    assert.notEqual(link.status.kind, "stopped");
+    // 电脑起来后连回（重连成功会清掉 shutdown 标记，下次退出再开一个新窗）
+    await fx.start();
+    await w.until(() => w.opens === 2, 10_000);
+  });
+
   test("设备被电脑忘掉：连着几次 hello 被一声不吭地断开，判成 rejected、不再重连", async () => {
     const fx = await fixture();
     await fx.start();

@@ -9,8 +9,9 @@
  *   重新订阅——电脑那头的订阅跟着连接走，断了就没了。
  * - 活性：每 25 秒发一次应用层 `ping`，10 秒没回就当连接已死、重连（手机换网络时 TCP 可能
  *   很久才报错）。
- * - `host.shutdown`：电脑要退出了。契约说「别再重连」；这里改成**慢慢地**试（10 秒一次），
- *   不狂敲：用户把电脑上的璇玑重开之后，手机得自己连回来（验收第 6 步）。
+ * - `host.shutdown`：电脑要退出了。给它 3 分钟的**重启宽限窗**：窗口内 10 秒一试（用户把电脑上的
+ *   璇玑重开之后，手机得自己连回来，验收第 6 步）；窗口过了电脑还没回来就进 `stopped`，停掉重连
+ *   计时器，界面写「电脑没开，点一下再连」，由用户点重试或 app 回前台再开新窗。不要无限重连。
  * - 认不出：连上、发了 hello、电脑一声不吭就断（它对认不出的设备不回明文）连着 3 次，判成
  *   「这台手机被电脑忘掉了」，停止重连，交给界面让用户重新配对。
  */
@@ -66,6 +67,8 @@ const DEFAULT_TIMING = {
   pingTimeoutMs: 10_000,
   backoffMs: [1_000, 2_000, 4_000, 8_000, 15_000] as readonly number[],
   shutdownRetryMs: 10_000,
+  /** 看到 host.shutdown 后自动重连的宽限窗：覆盖电脑正常重启；过了就停，等用户手动重试 / 回前台 */
+  shutdownGraceMs: 180_000,
   rejectAfter: 3,
 };
 
@@ -93,6 +96,8 @@ export class HostLink {
   private attempt = 0;
   private silentRejects = 0;
   private shutdownSeen = false;
+  /** 第一次看到 host.shutdown 的时刻：宽限窗的起点 */
+  private shutdownAt: number | null = null;
   /** 最后一次从电脑收到东西（握手应答或任何一帧）的时刻：断线时界面写「最后同步」 */
   private lastSeenAt: number | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -118,6 +123,8 @@ export class HostLink {
     this.stopped = false;
     this.attempt = 0;
     this.silentRejects = 0;
+    this.shutdownSeen = false;
+    this.shutdownAt = null;
     void this.connect();
   }
 
@@ -130,9 +137,20 @@ export class HostLink {
     this.setStatus({ kind: "stopped" });
   }
 
-  /** 用户点了「重试」，或 app 回到前台：等待中的立刻再连一次 */
+  /** 用户点了「重试」，或 app 回到前台：等待中的立刻再连一次；宽限窗用完停下的，重新开一个窗 */
   retryNow(): void {
-    if (this.stopped || this.live !== null) return;
+    if (this.live !== null) return;
+    // 被电脑忘掉（rejected）不在这里重试——界面引导重新配对
+    if (this.statusValue.kind === "rejected") return;
+    if (this.stopped) {
+      this.stopped = false;
+      this.attempt = 0;
+      this.silentRejects = 0;
+      this.shutdownSeen = false;
+      this.shutdownAt = null;
+      void this.connect();
+      return;
+    }
     if (this.statusValue.kind === "connecting") return;
     if (this.retryTimer !== null) clearTimeout(this.retryTimer);
     this.retryTimer = null;
@@ -216,6 +234,7 @@ export class HostLink {
       this.attempt = 0;
       this.silentRejects = 0;
       this.shutdownSeen = false;
+      this.shutdownAt = null;
       const live: Live = { socket, channel, nextId: 2, pending: new Map(), pingTimer: null };
       this.live = live;
       this.lastSeenAt = this.deps.now();
@@ -263,7 +282,10 @@ export class HostLink {
       return;
     }
     if (payload.kind === "notification") {
-      if (payload.notification.event === "host.shutdown") this.shutdownSeen = true;
+      if (payload.notification.event === "host.shutdown") {
+        this.shutdownSeen = true;
+        this.shutdownAt = this.deps.now();
+      }
       this.deps.onNotification(payload.notification);
       return;
     }
@@ -318,6 +340,16 @@ export class HostLink {
 
   private scheduleRetry(): void {
     if (this.stopped) return;
+    // 宽限窗用完：电脑一直没回来，停下自动重连，等用户点「重试」或 app 回前台再开新窗
+    if (this.shutdownSeen && this.shutdownAt !== null && this.deps.now() - this.shutdownAt >= this.timing.shutdownGraceMs) {
+      this.stopped = true;
+      this.shutdownSeen = false;
+      this.shutdownAt = null;
+      if (this.retryTimer !== null) clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+      this.setStatus({ kind: "stopped" });
+      return;
+    }
     const backoff = this.timing.backoffMs;
     const delay = this.shutdownSeen
       ? this.timing.shutdownRetryMs

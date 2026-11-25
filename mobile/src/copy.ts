@@ -47,6 +47,7 @@ export const copy = {
     loopback: "经本机回环",
     other: "经主机名",
     reconnecting: "正在重连…",
+    stopped: "电脑没开，点一下再连",
     lastSync: (clock: string) => `最后同步 ${clock}`,
     rejected: "电脑认不出这台手机了。",
     rejectedHint: "它可能在电脑上被忘掉了。重新配对一次就好。",

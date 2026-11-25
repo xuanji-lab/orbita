@@ -93,7 +93,7 @@ export function ChatScreen(props: { theme: Theme; state: AppState; controller: A
         {stale && (
           <View style={[styles.notice, { borderBottomColor: color.borderSubtle }]}>
             <PanelEmpty theme={theme} icon="wifi-off" hint={copy.chat.reconnectingHint} exit={{ label: copy.chat.retry, onPress: () => controller.retry() }}>
-              {copy.chat.reconnecting}
+              {state.link.kind === "stopped" ? copy.host.stopped : copy.chat.reconnecting}
             </PanelEmpty>
           </View>
         )}

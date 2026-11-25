@@ -31,7 +31,7 @@ export function ListScreen(props: { theme: Theme; state: AppState; controller: A
   const loading = state.listState === "loading" && state.sessions.size === 0;
   return (
     <View style={{ flex: 1, backgroundColor: color.bgApp }}>
-      <HostBar theme={theme} state={state} topInset={insets.top} />
+      <HostBar theme={theme} state={state} topInset={insets.top} onRetry={() => controller.retry()} />
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + space.s4 }}>
         {state.link.kind === "rejected" && (
           <View style={styles.notice}>

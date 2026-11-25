@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { classifyBindAddress } from "../../../src/shared/mobile.ts";
 import { copy } from "../copy.ts";
 import { clockOf } from "../model/time.ts";
@@ -22,19 +22,23 @@ function netLabel(address: string): string {
 
 /**
  * 清单顶上的主机条（照设计稿）：laptop 图标 + 电脑名 + 「在线 · 经 Tailscale」；
- * 断线时换成 wifi-off + 「正在重连… · 最后同步 23:38」，图标退三级灰。
+ * 断线时换成 wifi-off + 「正在重连… · 最后同步 23:38」，图标退三级灰；
+ * 宽限窗用完（stopped）时写「电脑没开，点一下再连」，整条可点，点了重新连。
  */
-export function HostBar(props: { theme: Theme; state: AppState; topInset: number }) {
+export function HostBar(props: { theme: Theme; state: AppState; topInset: number; onRetry?: () => void }) {
   const { color } = props.theme;
   const { state } = props;
   const stale = isStale(state);
+  const stopped = state.link.kind === "stopped";
   const since = state.link.kind === "connecting" || state.link.kind === "waiting" ? state.link.since : null;
-  const sub = stale
-    ? since === null
-      ? copy.host.reconnecting
-      : `${copy.host.reconnecting} · ${copy.host.lastSync(clockOf(since))}`
-    : `${copy.host.online} · ${netLabel(state.credentials?.address ?? "")}`;
-  return (
+  const sub = stopped
+    ? copy.host.stopped
+    : stale
+      ? since === null
+        ? copy.host.reconnecting
+        : `${copy.host.reconnecting} · ${copy.host.lastSync(clockOf(since))}`
+      : `${copy.host.online} · ${netLabel(state.credentials?.address ?? "")}`;
+  const bar = (
     <View style={[styles.bar, { paddingTop: props.topInset }]}>
       <View style={styles.glyph}>
         <Icon name={stale ? "wifi-off" : "laptop"} size={16} color={stale ? color.textTertiary : color.textSecondary} />
@@ -49,6 +53,14 @@ export function HostBar(props: { theme: Theme; state: AppState; topInset: number
       </View>
     </View>
   );
+  if (stopped && props.onRetry !== undefined) {
+    return (
+      <Pressable onPress={props.onRetry} accessibilityRole="button" accessibilityLabel={copy.host.stopped}>
+        {bar}
+      </Pressable>
+    );
+  }
+  return bar;
 }
 
 const styles = StyleSheet.create({
