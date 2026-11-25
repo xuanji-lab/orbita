@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { safeStorage } from "electron";
-import type { SecretsPort } from "./store.ts";
+import type { SecretRead, SecretsPort } from "./store.ts";
 
 type SecretsFile = Record<string, string>;
 
@@ -60,6 +60,41 @@ export class SafeStorageSecrets implements SecretsPort {
       delete all[account];
       await this.persist(all);
     });
+  }
+
+  /**
+   * 严格读：把「没有这条密文」「有、解得开」「有、解不开」分开说，不替调用方把失败说成「没有」。
+   * 手机的主机私钥用它——`get` 那种「解不开当没有」对 API key 是对的（用户重填就是了），对主机私钥
+   * 却意味着「读不出来 = 钥匙丢了 = 清空全部已配对设备」（2026-11-25 审查 S2）。
+   */
+  async readStrict(account: string): Promise<SecretRead> {
+    const encoded = (await this.readAll())[account];
+    if (encoded === undefined) return { status: "missing" };
+    try {
+      return { status: "ok", plaintext: safeStorage.decryptString(Buffer.from(encoded, "base64")) };
+    } catch (cause) {
+      return { status: "undecryptable", cause: cause instanceof Error ? cause.message : String(cause) };
+    }
+  }
+
+  /**
+   * 这一刻系统密钥库给不给人解密：`exclude` 之外随便哪条密文解得开就算给。
+   * 同一个应用的所有密文用同一把密钥库密码加密，有一条能解，密码就拿得到——主机私钥那条却解不开，
+   * 坏的就是那条密文，不是密钥库。**只读**：不加密、不生成新密钥、不往密钥库写东西。
+   * 只试遇到的第一条：钥匙串没解锁时每试一次都可能弹一次框，试完一条就能下结论。
+   */
+  async unlocksAny(exclude: string): Promise<boolean> {
+    const all = await this.readAll();
+    for (const [account, encoded] of Object.entries(all)) {
+      if (account === exclude) continue;
+      try {
+        safeStorage.decryptString(Buffer.from(encoded, "base64"));
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   /** 排进写链；某一环失败不卡住后面的 */
