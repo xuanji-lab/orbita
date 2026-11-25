@@ -20,6 +20,7 @@ import {
   type AutomationRunTrigger,
 } from "../../shared/automation.ts";
 import type { SubmitAgentInput } from "../../shared/agent-ipc.ts";
+import { resumeTurnContext } from "../agent/turn-context.ts";
 import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { UNASSIGNED_MODEL_ID, UNASSIGNED_PROVIDER_ID } from "../../shared/session.ts";
 import type { AppSettings } from "../../shared/settings.ts";
@@ -240,6 +241,7 @@ export async function launchAutomationRun(
 /**
  * 把指令送回创建它的那条会话（target = this_session）：用**会话自己 meta 里**的 piSessionFile / 模型 /
  * 思考档 resume 一轮——它还是那条会话，不是新开的。调用方已确认这条会话此刻空闲。
+ * 开工上下文由 `resumeTurnContext` 拼（与手机的「回一句」共用，别处不再手拼一份）。
  * 会话没了抛 SessionGoneError；没有 pi 本子（只读的导入会话）抛普通错误（这条会话续不了）。
  */
 export async function deliverAutomationRun(
@@ -250,18 +252,9 @@ export async function deliverAutomationRun(
   if (automation.target.kind !== "this_session") throw new Error("This automation is not bound to a session.");
   const meta = await deps.sessions.readMeta(automation.target.sessionId);
   if (meta === null) throw new SessionGoneError();
-  if (meta.piSessionFile === null) {
-    throw new Error("This session cannot be continued (it has no saved agent state), so the task cannot be sent back into it.");
-  }
-  await deps.submitTurn({
-    sessionId: meta.id,
-    cwd: meta.cwd,
-    workspaceId: meta.workspaceId,
-    resume: { piSessionFile: meta.piSessionFile },
-    providerId: meta.providerId,
-    modelId: meta.modelId,
-    thinkingLevel: meta.thinkingLevel,
-    text: composeAutomationPrompt({
+  const context = resumeTurnContext(
+    meta,
+    composeAutomationPrompt({
       title: automation.title,
       number: input.number,
       ...(automation.maxRuns === undefined ? {} : { max: automation.maxRuns }),
@@ -269,5 +262,9 @@ export async function deliverAutomationRun(
       prompt: automation.prompt,
       ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
     }),
-  });
+  );
+  if (!context.ok) {
+    throw new Error("This session cannot be continued (it has no saved agent state), so the task cannot be sent back into it.");
+  }
+  await deps.submitTurn(context.input);
 }

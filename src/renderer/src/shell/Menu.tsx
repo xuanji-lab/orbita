@@ -8,6 +8,8 @@ import { useT } from "../locale.ts";
 export interface MenuItem {
   id: string;
   label: string;
+  /** 主行是机器事实（设置 › 手机 的 IP 地址）：mono 字体，与触发钮里同一个地址同一种写法 */
+  labelMono?: boolean;
   /**
    * 行的第二行（小一号、tertiary）。只有模型卡片用它：主行是模型名、副行是它属于哪家——
    * 左栏按厂商过滤之后组头那一行就没了，厂商名得有地方待（2026-10-01 定）。
@@ -146,6 +148,8 @@ export function Menu(props: {
   hoverOpen?: boolean;
   /** 顶部渲染搜索框，按键实时过滤（模型菜单这类长清单）。打开即聚焦，关闭即清空 */
   searchable?: boolean;
+  /** 搜索框的占位字。缺省是模型菜单的「搜索模型或服务商…」；别的长清单（设置 › 手机 的地址）给自己的 */
+  searchPlaceholder?: string;
   /** 开合的回声。给调用方复位自己的两段式状态用（菜单关了，确认态不该留着） */
   onOpenChange?: (open: boolean) => void;
   /**
@@ -600,7 +604,7 @@ export function Menu(props: {
                 <input
                   ref={searchRef}
                   value={query}
-                  placeholder={t.menu.searchModels}
+                  placeholder={props.searchPlaceholder ?? t.menu.searchModels}
                   spellCheck={false}
                   onChange={(e) => {
                     setQuery(e.target.value);
@@ -866,6 +870,7 @@ function MenuRow(props: {
             maxWidth: "100%",
             minWidth: 0,
             lineHeight: "var(--line-height-ui)",
+            ...(item.labelMono === true ? { fontFamily: "var(--font-family-mono)" } : null),
             /*
              * 事实行且没有 hint 时，label 是唯一的叙事者：长句（压缩确认那句
              * 「…仍要压缩？」）必须换行说完——省略号切掉一半就成了另一句话。

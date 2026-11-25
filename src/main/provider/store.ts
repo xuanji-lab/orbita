@@ -36,6 +36,17 @@ export interface SecretsPort {
 }
 
 /**
+ * 严格读一条密文的结果。`get` 把「解不开」也说成「没有」——对 API key 是对的（用户重填就是了）；
+ * 有的调用方要把两种分开（手机的主机私钥：读不出来不等于钥匙丢了），所以 `SafeStorageSecrets` 另有
+ * `readStrict` / `unlocksAny`。
+ */
+export type SecretRead =
+  | { status: "missing" }
+  | { status: "ok"; plaintext: string }
+  /** 密文在、解不开：钥匙串没解锁、访问被拒，或者不是这台机器 / 这个账户加密的 */
+  | { status: "undecryptable"; cause: string };
+
+/**
  * 续期端口：默认按目录条目分派（Claude 直连 Anthropic token 端点，ChatGPT / Copilot / xAI
  * 交给 pi 的流程，见 oauth-flows.ts）；测试注入假网络。`kind` 是目录条目 id。
  */

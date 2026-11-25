@@ -295,9 +295,11 @@ describe("SessionStore", () => {
         expected: 2,
       },
       {
-        name: "夹着非法 JSON 的行（裸字符串是合法 JSON，照样收下）",
+        // 裸字符串是合法 JSON 但不是记录（没有 role/content）：以前会原样混进数组，下游一碰
+        // .content 就炸。手机端尾部倒读与全量读取共用同一个 parseLogLine，两边一起拒。
+        name: "夹着非法 JSON 的行（裸字符串不是记录，跳过）",
         text: [logLine("u1", "前"), "{ 这不是 JSON", logLine("u2", "后"), '"裸字符串"'].join("\n") + "\n",
-        expected: 3,
+        expected: 2,
       },
       {
         name: "行内多字节中文和 emoji",

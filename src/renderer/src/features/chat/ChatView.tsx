@@ -78,7 +78,7 @@ import { ExitCard } from "./ExitCard";
 import { ProcessViewContext } from "./process-view-context";
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { REVEAL_ENTRY_EVENT } from "../context/task-progress.ts";
-import { planAwaitingIn, planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
+import { planHistory, planNoticeOf, type PlanTimeline, type PlanVersion } from "../context/plan-timeline.ts";
 import { PlanCard } from "./PlanCard";
 import { PlanCallBlock, PlanTurnCard } from "./PlanTurnCard.tsx";
 import { planCallView, planTurnState, type PlanCallView, type PlanTick } from "./plan-turn.ts";
@@ -86,7 +86,7 @@ import { goalChangesByCall, goalNoticeText } from "../context/plan-text.ts";
 import { useGoalLedger } from "../context/useGoalLedger.ts";
 import { GOAL_TOOL_NAME } from "../../../../shared/goal.ts";
 import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
-import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
+import { PLAN_TOOL_NAME, planAwaitingIn } from "../../../../shared/plan.ts";
 import {
   CHAPTER_STEPS_SHOWN,
   processOutcome,
