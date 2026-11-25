@@ -2,7 +2,21 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { defaultThinkingLevel } from "./model-defaults.ts";
 import type { ProviderDto } from "./provider.ts";
-import { avatarModelError, checkAvatarModel, isAvatarGenerateRequest, isAvatarSelectRequest, isAvatarJobLive, pickAvatarModel, resolveAvatarModel, type AvatarJob } from "./planet-avatar.ts";
+import {
+  AVATAR_RENDER_PRESETS,
+  avatarModelError,
+  avatarPolicyNote,
+  avatarRenderPolicyOf,
+  checkAvatarModel,
+  isAvatarGenerateRequest,
+  isAvatarRenderMode,
+  isAvatarRenderPolicySetRequest,
+  isAvatarSelectRequest,
+  isAvatarJobLive,
+  pickAvatarModel,
+  resolveAvatarModel,
+  type AvatarJob,
+} from "./planet-avatar.ts";
 import { parseSessionMeta, rootSessions, type SessionMeta } from "./session.ts";
 
 describe("planet-avatar 契约", () => {
@@ -233,5 +247,109 @@ describe("生成请求的 model 字段：面板解析好的具体型号，成对
     assert.equal(isAvatarGenerateRequest({ ...base, model: { providerId: "", modelId: "glm-5.4" } }), false);
     assert.equal(isAvatarGenerateRequest({ ...base, model: "glm-5.4" }), false);
     assert.equal(isAvatarGenerateRequest({ ...base, model: null }), false);
+  });
+});
+
+/** 插件 `policy` 读命令的输出（render_surface.py 的 cmd_policy） */
+function scriptPolicy(policy: unknown): unknown {
+  return { ok: true, path: "/plugin/data/render-policy.json", policy, presets: {} };
+}
+const SVG_POLICY = {
+  version: 1,
+  preset: "svg",
+  label: "只让智能体画 SVG，不调任何外部服务",
+  candidates: ["model_svg", "model_svg"],
+  imageModel: { prefer: [], avoid: [] },
+  maxAttempts: { model_svg: 3, image_model: 2, user_image: 1 },
+  decidedBy: "user",
+  decidedAt: "2026-11-24T21:00:00+08:00",
+  note: "",
+};
+
+describe("avatarRenderPolicyOf：「用生图工具」开关的状态（输入是插件 policy 读命令的输出）", () => {
+  it("开关只有两档，各对应插件策略的一个预设：关 = svg（手绘），开 = image_only", () => {
+    assert.deepEqual(AVATAR_RENDER_PRESETS, { hand_drawn: "svg", image_tool: "image_only" });
+    assert.equal(isAvatarRenderMode("image_tool"), true);
+    assert.equal(isAvatarRenderMode("hand_drawn"), true);
+    assert.equal(isAvatarRenderMode("image_first"), false);
+  });
+
+  it("策略文件还没有（脚本按默认回、decided=false）：开关是关，标成还没定", () => {
+    const p = avatarRenderPolicyOf(scriptPolicy({ ...SVG_POLICY, decidedBy: "default", decidedAt: null, decided: false }));
+    assert.equal(p.mode, "hand_drawn");
+    assert.equal(p.preset, "svg");
+    assert.equal(p.decided, false);
+    assert.equal(p.problem, null);
+    assert.equal(p.label, "只让智能体画 SVG，不调任何外部服务");
+  });
+
+  it("svg = 关；image_only = 开", () => {
+    assert.equal(avatarRenderPolicyOf(scriptPolicy(SVG_POLICY)).mode, "hand_drawn");
+    assert.equal(avatarRenderPolicyOf(scriptPolicy(SVG_POLICY)).decided, true);
+    const on = avatarRenderPolicyOf(scriptPolicy({ ...SVG_POLICY, preset: "image_only", candidates: ["image_model", "image_model"] }));
+    assert.equal(on.mode, "image_tool");
+    assert.equal(on.preset, "image_only");
+  });
+
+  it("旧的 image_first（图像 2 张 + 手绘 1 张）读出来当「开」；界面里不再有这一档，一拨开关才换成新档", () => {
+    const p = avatarRenderPolicyOf(scriptPolicy({ ...SVG_POLICY, preset: "image_first", candidates: ["image_model", "image_model", "model_svg"] }));
+    assert.equal(p.mode, "image_tool");
+    assert.equal(p.preset, "image_first");
+  });
+
+  it("ask：按手绘显示（面板出图不会停下来问），原则的原话照实留着不丢", () => {
+    const p = avatarRenderPolicyOf(scriptPolicy({ ...SVG_POLICY, preset: "ask", label: "每次出图前都问我用哪种" }));
+    assert.equal(p.mode, "hand_drawn");
+    assert.equal(p.preset, "ask");
+    assert.equal(p.label, "每次出图前都问我用哪种");
+  });
+
+  it("custom：候选位里有生图工具才算开；候选位与备注原样带着", () => {
+    const withImage = avatarRenderPolicyOf(scriptPolicy({ ...SVG_POLICY, preset: "custom", label: "自定义", candidates: ["image_model", "model_svg"], note: "一张图一张手绘" }));
+    assert.equal(withImage.mode, "image_tool");
+    assert.deepEqual(withImage.candidates, ["image_model", "model_svg"]);
+    assert.equal(withImage.note, "一张图一张手绘");
+    const svgOnly = avatarRenderPolicyOf(scriptPolicy({ ...SVG_POLICY, preset: "custom", label: "自定义", candidates: ["model_svg"] }));
+    assert.equal(svgOnly.mode, "hand_drawn");
+  });
+
+  it("文件坏了（脚本回 ok:false + 原因）：按手绘显示、把原因带上——不改用户的文件", () => {
+    const p = avatarRenderPolicyOf({ ok: false, message: "render-policy.json 不是合法 JSON：Expecting value" });
+    assert.equal(p.mode, "hand_drawn");
+    assert.equal(p.preset, null);
+    assert.equal(p.problem, "render-policy.json 不是合法 JSON：Expecting value");
+  });
+
+  it("插件没说出一句有用的话（不是对象、没有 ok、没有预设）：也回一句原因，不抛", () => {
+    assert.equal(avatarRenderPolicyOf("Traceback ...").problem !== null, true);
+    assert.equal(avatarRenderPolicyOf({}).problem !== null, true);
+    assert.equal(avatarRenderPolicyOf(scriptPolicy({ label: "没有预设" })).problem !== null, true);
+  });
+});
+
+describe("avatarPolicyNote：面板改出图原则时写进备注的那一句", () => {
+  const first = avatarPolicyNote("用户 2026-11-24：先按建议用", "2026-11-25 23:53", "改为 image_only（用生图工具）");
+  it("用户自己写的备注留在前面，面板的记录缀在后面", () => {
+    assert.equal(first, "用户 2026-11-24：先按建议用；2026-11-25 23:53 在 Orbita 的星系设计面板里改为 image_only（用生图工具）");
+    assert.equal(avatarPolicyNote(null, "2026-11-25 23:53", "默认：只让智能体手绘"), "2026-11-25 23:53 在 Orbita 的星系设计面板里默认：只让智能体手绘");
+  });
+  it("拨过一次再拨：上一次面板的记录被换掉，不会拨一次长一截", () => {
+    const twice = avatarPolicyNote(first, "2026-11-25 23:54", "改为 svg（只让智能体手绘）");
+    assert.equal(twice, "用户 2026-11-24：先按建议用；2026-11-25 23:54 在 Orbita 的星系设计面板里改为 svg（只让智能体手绘）");
+    const thrice = avatarPolicyNote(twice, "2026-11-25 23:55", "改为 image_only（用生图工具）");
+    assert.equal(thrice.match(/在 Orbita 的星系设计面板里/g)?.length, 1);
+    assert.match(thrice, /^用户 2026-11-24：先按建议用/);
+  });
+});
+
+describe("isAvatarRenderPolicySetRequest：拨开关的入参只认两档", () => {
+  it("{ mode } 且 mode 是两档之一才认", () => {
+    assert.equal(isAvatarRenderPolicySetRequest({ mode: "image_tool" }), true);
+    assert.equal(isAvatarRenderPolicySetRequest({ mode: "hand_drawn" }), true);
+    assert.equal(isAvatarRenderPolicySetRequest({ mode: "image_first" }), false);
+    assert.equal(isAvatarRenderPolicySetRequest({ mode: "svg" }), false);
+    assert.equal(isAvatarRenderPolicySetRequest({}), false);
+    assert.equal(isAvatarRenderPolicySetRequest("image_tool"), false);
+    assert.equal(isAvatarRenderPolicySetRequest({ mode: "image_tool", preset: "../x" }), true);
   });
 });

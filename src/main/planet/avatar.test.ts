@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AvatarJobs, parseManifest, policySlots, type AvatarDeps, type ScriptResult } from "./avatar.ts";
@@ -61,8 +61,9 @@ function harness(ws: Workspace, root: string | null, overrides: Partial<AvatarDe
     resolveModel: async () => ({ ok: true, providerId: "kimi", modelId: "k3", thinkingLevel: "medium" }),
     submitTurn: async (input) => void h.submitted.push(input),
     abort: (id) => void h.aborted.push(id),
+    // 每次出图前都会先读一次出图原则（policy，不碰候选目录）：不计进「对候选目录跑的脚本」
     runScript: async (_root, args): Promise<ScriptResult> => {
-      h.scripts.push([...args]);
+      if (args[0] !== "policy") h.scripts.push([...args]);
       return { code: 0, stdout: "{}", stderr: "" };
     },
     loadImage: async (path) => `data:${path.split("/").pop()}`,
@@ -517,5 +518,274 @@ describe("聊天里建子智能体", () => {
     assert.deepEqual(changes, [{ workspaceId: "w1", subAgentId: "rec", action: "avatar", source: "chat", sessionId: "c" }]);
     assert.match((outcome as { text: string }).text, /Galaxy Design panel/);
     assert.match((outcome as { text: string }).text, /Do not generate, choose or set/);
+  });
+});
+
+/**
+ * 「用生图工具」开关：真源是插件「行星造物」的策略文件 data/render-policy.json，读写都经它的脚本
+ * `render_surface.py policy`。这里的假脚本照真脚本的行为演（读：文件没有按默认回 decided=false、文件坏了回 ok:false；
+ * --set：整个文件重建，只认 --prefer / --note 这两个带得回去的字段——avoid 与 maxAttempts 被它抹掉，应用侧要补回）。
+ */
+const FAKE_PRESETS: Record<string, string[]> = {
+  svg: ["model_svg", "model_svg"],
+  image_first: ["image_model", "image_model", "model_svg"],
+  image_only: ["image_model", "image_model"],
+  ask: ["model_svg", "model_svg"],
+};
+const FAKE_MAX_ATTEMPTS = { model_svg: 3, image_model: 2, user_image: 1 };
+
+function fakePolicyScript(root: string): {
+  run: (args: readonly string[]) => Promise<ScriptResult>;
+  calls: string[][];
+} {
+  const file = join(root, "data", "render-policy.json");
+  const calls: string[][] = [];
+  /** 照真脚本的 read_json：文件不存在 → 默认（decided=false）；不是 JSON / 预设不认识 → ok:false 配退出码 2 */
+  const read = async (): Promise<string | undefined> => readFile(file, "utf8").catch(() => undefined);
+  const write = async (data: Record<string, unknown>): Promise<void> => writeFile(file, JSON.stringify(data));
+  return {
+    calls,
+    run: async (args): Promise<ScriptResult> => {
+      calls.push([...args]);
+      if (args[0] !== "policy") return { code: 0, stdout: "{}", stderr: "" };
+      const flag = (name: string): string | undefined => {
+        const at = args.indexOf(name);
+        return at === -1 ? undefined : args[at + 1];
+      };
+      const set = flag("--set");
+      if (set !== undefined) {
+        const prefer = (flag("--prefer") ?? "").split(",").filter((each) => each !== "");
+        const policy = {
+          version: 1,
+          preset: set,
+          label: `假脚本：${set}`,
+          candidates: FAKE_PRESETS[set] ?? [],
+          imageModel: { prefer, avoid: [] },
+          maxAttempts: FAKE_MAX_ATTEMPTS,
+          decidedBy: "user",
+          decidedAt: "2026-11-25T23:00:00+08:00",
+          note: flag("--note") ?? "",
+        };
+        await mkdir(join(root, "data"), { recursive: true });
+        await write(policy);
+        return { code: 0, stdout: JSON.stringify({ ok: true, path: file, policy }), stderr: "" };
+      }
+      const text = await read();
+      if (text === undefined) {
+        const policy = { version: 1, preset: "svg", label: "只让智能体画 SVG", candidates: FAKE_PRESETS["svg"], imageModel: { prefer: [], avoid: [] }, maxAttempts: FAKE_MAX_ATTEMPTS, decidedBy: "default", decidedAt: null, note: "用户还没选，按默认", decided: false };
+        return { code: 0, stdout: JSON.stringify({ ok: true, path: file, policy }), stderr: "" };
+      }
+      let raw: unknown;
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        return { code: 2, stdout: JSON.stringify({ ok: false, message: "render-policy.json 不是合法 JSON：Expecting value" }), stderr: "" };
+      }
+      if (typeof (raw as { preset?: unknown })?.preset !== "string" || !((raw as { preset: string }).preset in FAKE_PRESETS)) {
+        return { code: 2, stdout: JSON.stringify({ ok: false, message: "render-policy.json 格式不对：preset 缺失或不认识" }), stderr: "" };
+      }
+      return { code: 0, stdout: JSON.stringify({ ok: true, path: file, policy: { ...(raw as object), decided: true } }), stderr: "" };
+    },
+  };
+}
+
+/** 一份带满字段的用户策略（prefer / avoid / 重画上限 / 备注都有），用来验「拨开关不清掉别的字段」 */
+async function writeUserPolicy(root: string, preset = "svg"): Promise<string> {
+  const file = join(root, "data", "render-policy.json");
+  await mkdir(join(root, "data"), { recursive: true });
+  await writeFile(
+    file,
+    JSON.stringify({
+      version: 1,
+      preset,
+      label: "用户自己的原则",
+      candidates: FAKE_PRESETS[preset],
+      imageModel: { prefer: ["qwen"], avoid: ["dall"] },
+      maxAttempts: { model_svg: 5, image_model: 1, user_image: 1 },
+      decidedBy: "user",
+      decidedAt: "2026-11-24T21:12:09+08:00",
+      note: "用户 2026-11-24：先按建议用",
+    }),
+  );
+  return file;
+}
+
+describe("AvatarJobs：「用生图工具」开关", () => {
+  const policyHarness = (
+    ws: Workspace,
+    root: string | null,
+    script: { run: (args: readonly string[]) => Promise<ScriptResult>; calls: string[][] } = { run: async () => ({ code: 0, stdout: "{}", stderr: "" }), calls: [] },
+  ) =>
+    harness(ws, root, {
+      resolveModel: async () => ({ ok: true, providerId: "kimi", modelId: "k3", thinkingLevel: "medium" }),
+      runScript: (_root, args): Promise<ScriptResult> => (args[0] === "policy" ? script.run(args) : Promise.resolve({ code: 0, stdout: "{}", stderr: "" })),
+    });
+
+  it("插件没装：开关读不了，原因照实回给面板", async () => {
+    const { ws } = await fixture();
+    const h = policyHarness(ws, null);
+    const result = await h.jobs.renderPolicy();
+    assert.equal(result.ok, false);
+    assert.match((result as { error: string }).error, /行星造物/);
+  });
+
+  it("读：策略文件还没有 = 关、未决定；image_first 与 image_only = 开；svg = 关", async () => {
+    const { ws, root } = await fixture();
+    const script = fakePolicyScript(root as string);
+    const file = join(root as string, "data", "render-policy.json");
+    await writeFile(file, JSON.stringify({ label: "没有预设", candidates: ["model_svg"] }));
+    const h = policyHarness(ws, root, script);
+
+    const fresh = await h.jobs.renderPolicy();
+    assert.deepEqual(fresh, { ok: true, policy: { mode: "hand_drawn", preset: null, label: null, note: null, candidates: [], decided: true, problem: "render-policy.json 格式不对：preset 缺失或不认识" } });
+
+    await rm(file);
+    const none = await h.jobs.renderPolicy();
+    assert.equal(none.ok && none.policy.mode, "hand_drawn");
+    assert.equal(none.ok && none.policy.decided, false);
+    assert.equal(none.ok && none.policy.preset, "svg");
+
+    await writeUserPolicy(root as string, "image_first");
+    const first = await h.jobs.renderPolicy();
+    assert.equal(first.ok && first.policy.mode, "image_tool");
+    assert.equal(first.ok && first.policy.preset, "image_first");
+
+    await writeUserPolicy(root as string, "svg");
+    const off = await h.jobs.renderPolicy();
+    assert.equal(off.ok && off.policy.mode, "hand_drawn");
+    assert.equal(off.ok && off.policy.decided, true);
+  });
+
+  it("脚本的输出不是 JSON（依赖没装、traceback）：回一句原因，不抛", async () => {
+    const { ws, root } = await fixture();
+    const h = policyHarness(ws, root, { run: async () => ({ code: 1, stdout: "", stderr: "Traceback (most recent call last): ModuleNotFoundError: No module named 'PIL'" }), calls: [] });
+    const result = await h.jobs.renderPolicy();
+    assert.equal(result.ok, false);
+    assert.match((result as { error: string }).error, /出图脚本|脚本/);
+  });
+
+  it("拨到「用生图工具」：经脚本写成 image_only；文件里原有的 prefer / avoid / 重画上限 / 备注一个不清掉", async () => {
+    const { ws, root } = await fixture();
+    const file = await writeUserPolicy(root as string, "svg");
+    const script = fakePolicyScript(root as string);
+    const h = policyHarness(ws, root, script);
+    const result = await h.jobs.setRenderPolicy({ mode: "image_tool" });
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.policy.mode, "image_tool");
+    assert.equal(result.ok && result.policy.preset, "image_only");
+    // 调的是脚本的 policy --set，带上原来的 prefer 与备注
+    const write = script.calls.find((args) => args.includes("--set"));
+    assert.ok(write);
+    assert.equal(write?.[0], "policy");
+    assert.equal(write?.[1], "--set");
+    assert.equal(write?.[2], "image_only");
+    assert.equal(write?.[3], "--prefer");
+    assert.equal(write?.[4], "qwen");
+    const onDisk = await readJsonFile(file);
+    assert.equal(onDisk["preset"], "image_only");
+    assert.deepEqual(onDisk["imageModel"], { prefer: ["qwen"], avoid: ["dall"] });
+    assert.deepEqual(onDisk["maxAttempts"], { model_svg: 5, image_model: 1, user_image: 1 });
+    assert.equal(onDisk["decidedBy"], "user");
+    assert.match(String(onDisk["note"]), /^用户 2026-11-24：先按建议用/);
+    assert.match(String(onDisk["note"]), /image_only/);
+    // 来回拨：面板的记录不叠加，用户的备注一直在
+    await h.jobs.setRenderPolicy({ mode: "hand_drawn" });
+    const back = await h.jobs.setRenderPolicy({ mode: "image_tool" });
+    assert.equal(back.ok && back.policy.mode, "image_tool");
+    const note = String((await readJsonFile(file))["note"]);
+    assert.equal(note.match(/在 Orbita 的星系设计面板里/g)?.length, 1);
+    assert.match(note, /^用户 2026-11-24：先按建议用/);
+  });
+
+  it("策略文件是坏的：照样能拨——拨开关就是把它重写成合法文件的那条路", async () => {
+    const { ws, root } = await fixture();
+    const file = join(root as string, "data", "render-policy.json");
+    await writeFile(file, "{ 这不是 JSON");
+    const script = fakePolicyScript(root as string);
+    const h = policyHarness(ws, root, script);
+    const result = await h.jobs.setRenderPolicy({ mode: "image_tool" });
+    assert.equal(result.ok, true);
+    assert.equal(result.ok && result.policy.mode, "image_tool");
+    assert.equal((await readJsonFile(file))["preset"], "image_only");
+  });
+
+  it("拨回手绘：写成 svg", async () => {
+    const { ws, root } = await fixture();
+    await writeUserPolicy(root as string, "image_only");
+    const script = fakePolicyScript(root as string);
+    const h = policyHarness(ws, root, script);
+    const result = await h.jobs.setRenderPolicy({ mode: "hand_drawn" });
+    assert.equal(result.ok && result.policy.mode, "hand_drawn");
+    assert.equal(script.calls.find((args) => args.includes("--set"))?.[2], "svg");
+  });
+
+  it("脚本不肯写（原则文件目录只读、脚本自己报错）：回失败与脚本的原话，用户的文件一个字不动", async () => {
+    const { ws, root } = await fixture();
+    const file = await writeUserPolicy(root as string, "svg");
+    const before = await readFile(file, "utf8");
+    const h = policyHarness(ws, root, {
+      run: async (): Promise<ScriptResult> => ({ code: 2, stdout: JSON.stringify({ ok: false, message: "原则只能是 svg / image_first" }), stderr: "" }),
+      calls: [],
+    });
+    const result = await h.jobs.setRenderPolicy({ mode: "image_tool" });
+    assert.equal(result.ok, false);
+    assert.match((result as { error: string }).error, /原则只能是/);
+    assert.equal(await readFile(file, "utf8"), before);
+  });
+
+  it("第一次出图时策略文件还没有：先按面板的默认（手绘）把它落成已决定，再开幕后会话——不让智能体在幕后会话里问「用哪种出图方式」", async () => {
+    const { ws, root } = await fixture();
+    const file = join(root as string, "data", "render-policy.json");
+    await writeFile(file, JSON.stringify({ label: "没有预设", candidates: ["model_svg"] }));
+    await rm(file);
+    const script = fakePolicyScript(root as string);
+    const h = harness(ws, root, {
+      resolveModel: async () => ({ ok: true, providerId: "kimi", modelId: "k3", thinkingLevel: "medium" }),
+      runScript: (_root, args): Promise<ScriptResult> => (args[0] === "policy" ? script.run(args) : Promise.resolve({ code: 0, stdout: "{}", stderr: "" })),
+      submitTurn: async (input) => void h.submitted.push(input),
+    });
+    const result = await h.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(result.ok, true);
+    const order = script.calls.map((args) => args.slice(0, 2).join(" "));
+    assert.deepEqual(order, ["policy", "policy --set"]);
+    const write = script.calls[1] ?? [];
+    assert.equal(write[2], "svg");
+    assert.match(write.join(" "), /面板/);
+    const onDisk = await readJsonFile(file);
+    assert.equal(onDisk["preset"], "svg");
+    assert.equal(onDisk["decidedBy"], "user");
+    assert.equal(h.submitted.length, 1);
+    // 幕后会话拿到的提示词里仍然写明不问出图方式
+    assert.match(h.submitted[0]?.text ?? "", /needsPolicyChoice 为 true 也不要问/);
+    // 已经定了：再出一组只读一次、不重写用户的原则
+    await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+    script.calls.length = 0;
+    await h.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    assert.deepEqual(script.calls, [["policy"]]);
+    await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+  });
+
+  it("策略文件已经定了（哪怕是手绘之外的档）：出图不碰它；文件坏了也不拦出图、不去改它", async () => {
+    const { ws, root } = await fixture();
+    const script = fakePolicyScript(root as string);
+    const decided = harness(ws, root, {
+      resolveModel: async () => ({ ok: true, providerId: "kimi", modelId: "k3", thinkingLevel: "medium" }),
+      runScript: (_root, args): Promise<ScriptResult> => (args[0] === "policy" ? script.run(args) : Promise.resolve({ code: 0, stdout: "{}", stderr: "" })),
+      submitTurn: async () => undefined,
+    });
+    await writeUserPolicy(root as string, "image_only");
+    const a = await decided.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(a.ok, true);
+    assert.deepEqual(script.calls.map((args) => args[0]), ["policy"]);
+    await decided.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+
+    const file = join(root as string, "data", "render-policy.json");
+    await writeFile(file, "{ 这不是 JSON");
+    script.calls.length = 0;
+    const b = await decided.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(b.ok, true);
+    assert.deepEqual(script.calls.map((args) => args[0]), ["policy"]);
+    assert.equal(await readFile(file, "utf8"), "{ 这不是 JSON");
+    await decided.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
   });
 });

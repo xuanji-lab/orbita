@@ -417,6 +417,9 @@ export const ipcChannels = {
   planetAvatarSelect: "planet:avatar-select",
   planetAvatarCancel: "planet:avatar-cancel",
   planetAvatarEvent: "planet:avatar-event",
+  /** 面板「用生图工具」开关：读 / 拨（真源是插件「行星造物」的策略文件，经它的脚本读写） */
+  planetAvatarPolicyGet: "planet:avatar-policy",
+  planetAvatarPolicySet: "planet:avatar-policy-set",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */

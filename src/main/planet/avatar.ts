@@ -16,7 +16,10 @@ import type { AgentEvent, SubmitAgentInput } from "../../shared/agent-ipc.ts";
 import {
   AVATAR_JOB_TIMEOUT_MS,
   AVATAR_INSTRUCTION_MAX,
+  AVATAR_RENDER_PRESETS,
   AVATAR_SLOTS_MAX,
+  avatarPolicyNote,
+  avatarRenderPolicyOf,
   isAvatarBackend,
   isAvatarJobLive,
   type AvatarAttempt,
@@ -27,6 +30,8 @@ import {
   type AvatarHistoryResult,
   type AvatarJob,
   type AvatarJobResult,
+  type AvatarRenderPolicyResult,
+  type AvatarRenderPolicySetRequest,
   type AvatarSelectRequest,
   type AvatarSlot,
 } from "../../shared/planet-avatar.ts";
@@ -42,6 +47,7 @@ export const AVATAR_PLUGIN = "planet-forge";
 export const AVATAR_SKILL = join("skills", "planet-render", "SKILL.md");
 export const AVATAR_SCRIPT = join("scripts", "render_surface.py");
 export const AVATAR_POLICY = join("data", "render-policy.json");
+const AVATAR_PLUGIN_MISSING = "没装插件「行星造物」（planet-forge）：出图走它的技能与脚本，装上后再试";
 /** 候选目录名（主星在 planet/ 下，行星在 planet/agents/<id>/ 下）——与插件技能「planet/surfaces/」一致 */
 export const SURFACES_DIR = "surfaces";
 /** 每一轮的自然语言要求与它所对应的插件轮次；候选图本身仍在插件 manifest 里，这里不重复抄一份 */
@@ -370,7 +376,7 @@ export function avatarPrompt(input: { root: string; input: string; dir: string; 
     "1. 认出你手边的图像生成工具（技能第 1 步的规则）；有配套的状态工具（如 *_status）先查一次在不在线，不在线就当没有。",
     "2. 出视觉计划和候选位（只跑这一次）：",
     `   RS plan --input "${input.input}" --dir "${input.dir}" --image-tools <认出的工具全名，逗号分隔；一个都没有就去掉这个参数>`,
-    "   输出里 needsPolicyChoice 为 true 也不要问，照它给的 slots 出图。",
+    "   输出里 needsPolicyChoice 为 true 也不要问（出图方式由界面上的开关定，这里没有人回答），照它给的 slots 出图。",
     "3. 按 slots 逐位出图，交给脚本（submit / fail），按退出码走（5 改了重交、6 换成 slotNow.backend、7 这一位用完），直到每一位都收下或用完：",
     "   - image_model：用 plan 输出的 imagePrompt / negativePrompt 调 imageTool（Qwen 用 turbo 档出候选），每一位换一个种子；出图后亲眼看一遍，有字、水印、眼睛、嘴就 fail 掉重出。",
     `   - model_svg：读 plan 写的 svg-brief，照骨架写一个完整 SVG，存到 ${join(input.dir, "work")}/ 下（如 r<轮>-s<位>.svg）再 submit。`,
@@ -473,9 +479,10 @@ export class AvatarJobs {
     if (!located.ok) return located;
     const place = located.place;
     const root = await this.deps.pluginRoot();
-    if (root === null) return { ok: false, error: "没装插件「行星造物」（planet-forge）：出图走它的技能与脚本，装上后再试" };
+    if (root === null) return { ok: false, error: AVATAR_PLUGIN_MISSING };
     const model = await this.deps.resolveModel(request);
     if (!model.ok) return { ok: false, error: model.error };
+    await this.ensurePolicyDecided(root);
 
     const rounds = parseManifest(await readJson(join(place.dir, "manifest.json")));
     let base: AvatarPromptBase | undefined;
@@ -573,6 +580,67 @@ export class AvatarJobs {
     live.deadline.unref?.();
     this.deps.emit(job);
     return { ok: true, job };
+  }
+
+  /** 面板「用生图工具」开关此刻的状态：读插件的策略文件。插件没装 / 它的脚本没跑起来为 ok:false */
+  async renderPolicy(): Promise<AvatarRenderPolicyResult> {
+    const root = await this.deps.pluginRoot();
+    if (root === null) return { ok: false, error: AVATAR_PLUGIN_MISSING };
+    const reply = scriptJson(await this.deps.runScript(root, ["policy"]));
+    return reply.ok ? { ok: true, policy: avatarRenderPolicyOf(reply.value) } : reply;
+  }
+
+  /**
+   * 拨开关：经插件脚本 `policy --set` 把策略文件写成面板的两档之一。脚本的 --set 会把整个文件重建，命令行只带得回
+   * --prefer / --note，`imageModel.avoid` 与各后端的重画上限会被它抹掉——那几样与档位无关，先记下来、写完补回去，
+   * 不顺手清掉用户的设置。用户的备注同样留着，后面缀一笔这次是面板改的。
+   */
+  async setRenderPolicy(request: AvatarRenderPolicySetRequest): Promise<AvatarRenderPolicyResult> {
+    const root = await this.deps.pluginRoot();
+    if (root === null) return { ok: false, error: AVATAR_PLUGIN_MISSING };
+    const file = join(root, AVATAR_POLICY);
+    // 文件还没有、或已经不是合法 JSON（readJson 回 undefined / null）：旧字段读不出来就当没有，照常往下写——
+    // 拨开关正是把坏文件重写成合法文件的那条路
+    const previous = await readJson(file);
+    const old = isRecord(previous) ? previous : {};
+    const oldImageModel = isRecord(old["imageModel"]) ? old["imageModel"] : {};
+    const prefer = strings(oldImageModel["prefer"]);
+    const avoid = strings(oldImageModel["avoid"]);
+    const maxAttempts = isRecord(old["maxAttempts"]) ? old["maxAttempts"] : {};
+    const oldNote = typeof old["note"] === "string" && old["note"].trim() !== "" ? old["note"].trim() : null;
+    const preset = AVATAR_RENDER_PRESETS[request.mode];
+    const note = avatarPolicyNote(oldNote, localStamp(this.deps.now()), `改为 ${preset}（${request.mode === "image_tool" ? "用生图工具" : "只让智能体手绘"}）`);
+    const out = await this.deps.runScript(root, ["policy", "--set", preset, "--prefer", prefer.join(","), "--note", note]);
+    const reply = scriptJson(out);
+    if (!reply.ok) return reply;
+    const message = isRecord(reply.value) ? reply.value["message"] : undefined;
+    if (!isRecord(reply.value) || reply.value["ok"] !== true) {
+      return { ok: false, error: `没能改出图原则：${typeof message === "string" && message !== "" ? message : `退出码 ${out.code}`}` };
+    }
+    await restorePolicyFields(file, avoid, maxAttempts);
+    return this.renderPolicy();
+  }
+
+  /**
+   * 面板的开关是出图原则的唯一来源：策略文件还没有时（新用户第一次出图），手边要是又有生图工具，插件的 plan 会回
+   * needsPolicyChoice、让智能体来问用户「用哪种出图方式」——幕后会话里没有人回答。所以先按面板的默认（手绘）把策略
+   * 落成已决定，再开幕后会话。文件已经定了（哪一档都行）或读不出来都不碰：读不出来的由 plan 自己报给智能体。
+   */
+  private async ensurePolicyDecided(root: string): Promise<void> {
+    try {
+      const reply = scriptJson(await this.deps.runScript(root, ["policy"]));
+      if (!reply.ok) return;
+      const policy = avatarRenderPolicyOf(reply.value);
+      if (policy.problem !== null || policy.decided) return;
+      const stamp = localStamp(this.deps.now());
+      const out = await this.deps.runScript(root, ["policy", "--set", AVATAR_RENDER_PRESETS.hand_drawn, "--note", avatarPolicyNote(null, stamp, "默认：只让智能体手绘")]);
+      const written = scriptJson(out);
+      if (!written.ok || !isRecord(written.value) || written.value["ok"] !== true) {
+        console.error(`[avatar] 没能把出图原则落成默认：${scriptMessage(out)}`);
+      }
+    } catch (cause) {
+      console.error(`[avatar] 没能把出图原则落成默认：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
   }
 
   /** 读这颗天体当前这一轮：有活任务给活的，没有就按盘上账本的最后一轮重建；从没出过图为 null */
@@ -805,6 +873,45 @@ export function execPluginScript(root: string, args: readonly string[]): Promise
       resolveResult({ code, stdout: String(stdout), stderr: error !== null && stderr === "" ? error.message : String(stderr) });
     });
   });
+}
+
+/**
+ * 插件 `policy` 子命令的输出 → JSON。它正常时打印 JSON（出错也是：`{ ok: false, message }` 配退出码 2）；
+ * 打不出 JSON 的只有脚本自己没跑起来（依赖没装、被拦截……），那时 stderr 里是原因。
+ */
+function scriptJson(out: ScriptResult): { ok: true; value: unknown } | { ok: false; error: string } {
+  if (out.stdout.trim() === "") return { ok: false, error: `插件的出图脚本没跑起来：${scriptMessage(out)}` };
+  try {
+    return { ok: true, value: JSON.parse(out.stdout) };
+  } catch {
+    return { ok: false, error: `插件的出图脚本没说出一句有用的话：${scriptMessage(out)}` };
+  }
+}
+
+/** 脚本的 --set 抹掉的两样（避开哪些生图工具、各后端的重画上限）原样补回策略文件；原文件里没有就不写 */
+async function restorePolicyFields(file: string, avoid: readonly string[], maxAttempts: Record<string, unknown>): Promise<void> {
+  const written = await readJson(file);
+  if (!isRecord(written)) return;
+  const limits: Record<string, number> = {};
+  for (const key of ["model_svg", "image_model", "user_image"]) {
+    const value = maxAttempts[key];
+    if (typeof value === "number" && Number.isInteger(value) && value >= 1) limits[key] = value;
+  }
+  const imageModel = isRecord(written["imageModel"]) ? written["imageModel"] : {};
+  const merged = {
+    ...written,
+    imageModel: { ...imageModel, ...(avoid.length === 0 ? {} : { avoid: [...avoid] }) },
+    maxAttempts: { ...(isRecord(written["maxAttempts"]) ? written["maxAttempts"] : {}), ...limits },
+  };
+  if (JSON.stringify(merged) === JSON.stringify(written)) return;
+  await writeJsonAtomic(file, merged);
+}
+
+/** 策略文件里 decidedAt / note 用的本地时间（到分） */
+function localStamp(ms: number): string {
+  const at = new Date(ms);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 /** 插件脚本的输出 → 一句话（它打印 JSON，message 字段是人话） */

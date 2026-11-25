@@ -205,6 +205,98 @@ export const AVATAR_SLOTS_MAX = 4;
 /** 一轮最长多久（ms）：到点还没交的位记「超时」并停掉幕后会话。Qwen turbo 一张 10–20 s，SVG 一张约一分钟，三位串行加重画留足余量 */
 export const AVATAR_JOB_TIMEOUT_MS = 8 * 60 * 1000;
 
+// ── 用生图工具还是手绘（面板的开关；真源是插件的策略文件） ─────────────────────
+
+/** 面板「用生图工具」开关的两态：关 = 只让智能体手绘，开 = 用生图工具出候选（工具不在 / 出不来时插件自己退回手绘） */
+export const AVATAR_RENDER_MODES = ["hand_drawn", "image_tool"] as const;
+export type AvatarRenderMode = (typeof AVATAR_RENDER_MODES)[number];
+
+export function isAvatarRenderMode(value: unknown): value is AvatarRenderMode {
+  return typeof value === "string" && (AVATAR_RENDER_MODES as readonly string[]).includes(value);
+}
+
+/** 每一档对应插件「行星造物」策略的哪个预设（render_surface.py 的 PRESETS）。面板只写这两档 */
+export const AVATAR_RENDER_PRESETS: Readonly<Record<AvatarRenderMode, string>> = { hand_drawn: "svg", image_tool: "image_only" };
+
+/**
+ * 开关此刻的状态。真源是插件的策略文件 `<插件根>/data/render-policy.json`，读写都经插件脚本
+ * `render_surface.py policy`——面板不直接改那个文件。面板只有两档，策略文件里的档更多：
+ * - svg → 关；image_only → 开；
+ * - image_first（图像 2 张 + 手绘 1 张，面板没有这一档）→ 读出来当「开」，用户一拨开关才换成新档；
+ * - ask / custom → 按候选位里有没有生图工具显示；原话留在 label / note / candidates 里，面板照实说，不去改用户的文件。
+ */
+export interface AvatarRenderPolicy {
+  mode: AvatarRenderMode;
+  /** 策略文件里的预设（svg / image_first / image_only / ask / custom）；读不出来为 null */
+  preset: string | null;
+  /** 插件给这条原则的原话 */
+  label: string | null;
+  /** 用户记在原则里的备注 */
+  note: string | null;
+  /** 原则里的候选位（image_model / model_svg / user_image） */
+  candidates: string[];
+  /** 策略文件还没有（新用户）：按默认手绘走；第一次在面板出图前应用把它落成已决定 */
+  decided: boolean;
+  /** 文件在但读不出来（不是 JSON、预设不认识……）：插件给的原因写这里，mode 按手绘显示 */
+  problem: string | null;
+}
+
+/**
+ * 面板改出图原则时写进策略文件 note 的那一句。用户自己写的备注留在前面；面板以前追加的记录先剥掉——
+ * 只留「用户的备注 + 最近这一次」，不会拨一次长一截。
+ */
+export function avatarPolicyNote(previous: string | null, stamp: string, change: string): string {
+  const own = (previous ?? "").replace(/；\d{4}-\d{2}-\d{2} \d{2}:\d{2} 在 Orbita 的星系设计面板里[^；]*/g, "").trim();
+  const line = `${stamp} 在 Orbita 的星系设计面板里${change}`;
+  return own === "" ? line : `${own}；${line}`;
+}
+
+/** ok:false = 插件没装，或它的出图脚本没跑起来（面板上开关不可用，原因照实显示） */
+export type AvatarRenderPolicyResult = { ok: true; policy: AvatarRenderPolicy } | { ok: false; error: string };
+
+/** 面板拨开关 */
+export interface AvatarRenderPolicySetRequest {
+  mode: AvatarRenderMode;
+}
+
+export function isAvatarRenderPolicySetRequest(raw: unknown): raw is AvatarRenderPolicySetRequest {
+  return isRecord(raw) && isAvatarRenderMode(raw["mode"]);
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+function stringsOf(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/**
+ * 插件 `policy` 读命令的输出（任意形状都接）→ 开关的状态。不抛：插件没说出一句有用的话时也回一个带 problem 的手绘态，
+ * 面板照实显示原因。
+ */
+export function avatarRenderPolicyOf(raw: unknown): AvatarRenderPolicy {
+  const blank = { label: null, note: null, candidates: [], decided: true };
+  if (!isRecord(raw) || raw["ok"] !== true) {
+    const message = isRecord(raw) ? text(raw["message"]) : null;
+    return { mode: "hand_drawn", preset: null, ...blank, problem: message ?? "插件没有说出图原则" };
+  }
+  const policy = isRecord(raw["policy"]) ? raw["policy"] : {};
+  const preset = text(policy["preset"]);
+  if (preset === null) return { mode: "hand_drawn", preset: null, ...blank, problem: "插件没有说出图原则是哪一档" };
+  const candidates = stringsOf(policy["candidates"]);
+  const usesImageTool = preset === "image_only" || preset === "image_first" || (preset === "custom" && candidates.includes("image_model"));
+  return {
+    mode: usesImageTool ? "image_tool" : "hand_drawn",
+    preset,
+    label: text(policy["label"]),
+    note: text(policy["note"]),
+    candidates,
+    decided: policy["decided"] !== false,
+    problem: null,
+  };
+}
+
 // ── 这一组用哪个模型 ────────────────────────────────────────────────────
 
 /** 取法落到的型号，和它是怎么来的（面板照这个写胶囊，主进程照这个定思考档） */

@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { extname } from "node:path";
 import { ipcMain, nativeImage } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import { isAvatarBodyRef, isAvatarGenerateRequest, isAvatarSelectRequest, type AvatarHistoryResult, type AvatarJob, type AvatarJobEvent, type AvatarJobResult } from "../../shared/planet-avatar.ts";
+import { isAvatarBodyRef, isAvatarGenerateRequest, isAvatarRenderPolicySetRequest, isAvatarSelectRequest, type AvatarHistoryResult, type AvatarJob, type AvatarJobEvent, type AvatarJobResult, type AvatarRenderPolicyResult } from "../../shared/planet-avatar.ts";
 import { mainWindows } from "../window/main-windows.ts";
 import type { AvatarJobs } from "./avatar.ts";
 import { isPlanetWriteRequest, type PlanetReadResult, type PlanetWriteResult } from "../../shared/planet-design.ts";
@@ -137,6 +137,19 @@ export function registerAvatarIpc(jobs: AvatarJobs): void {
   };
   const bad: AvatarJobResult = { ok: false, error: "请求的形状不对" };
   const badHistory: AvatarHistoryResult = { ok: false, error: "请求的形状不对" };
+  const badPolicy: AvatarRenderPolicyResult = { ok: false, error: "请求的形状不对" };
+  const guardPolicy = async (run: () => Promise<AvatarRenderPolicyResult>): Promise<AvatarRenderPolicyResult> => {
+    try {
+      return await run();
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  };
+  // 「用生图工具」开关：策略是插件级的（不分工作区），读 / 拨都经插件脚本
+  ipcMain.handle(ipcChannels.planetAvatarPolicyGet, (): Promise<AvatarRenderPolicyResult> => guardPolicy(() => jobs.renderPolicy()));
+  ipcMain.handle(ipcChannels.planetAvatarPolicySet, (_event, request: unknown): Promise<AvatarRenderPolicyResult> =>
+    isAvatarRenderPolicySetRequest(request) ? guardPolicy(() => jobs.setRenderPolicy(request)) : Promise.resolve(badPolicy),
+  );
   ipcMain.handle(ipcChannels.planetAvatarGenerate, (_event, request: unknown) => (isAvatarGenerateRequest(request) ? guard(() => jobs.generate(request)) : bad));
   ipcMain.handle(ipcChannels.planetAvatarGet, (_event, request: unknown) => (isAvatarBodyRef(request) ? guard(() => jobs.get(request)) : bad));
   ipcMain.handle(ipcChannels.planetAvatarHistory, (_event, request: unknown) => (isAvatarBodyRef(request) ? guardHistory(() => jobs.history(request)) : badHistory));

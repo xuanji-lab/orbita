@@ -5,7 +5,7 @@
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { PlanetReadResult, PlanetWriteRequest, PlanetWriteResult } from "../../shared/planet-design.ts";
-import type { AvatarBodyRef, AvatarGenerateRequest, AvatarHistoryResult, AvatarJobEvent, AvatarJobResult, AvatarSelectRequest } from "../../shared/planet-avatar.ts";
+import type { AvatarBodyRef, AvatarGenerateRequest, AvatarHistoryResult, AvatarJobEvent, AvatarJobResult, AvatarRenderPolicyResult, AvatarRenderPolicySetRequest, AvatarSelectRequest } from "../../shared/planet-avatar.ts";
 import type { SubAgentCreateRequest, SubAgentDeleteRequest, SubAgentMutationResult, SubAgentUpdateRequest } from "../../shared/sub-agent.ts";
 
 export const planetApi = {
@@ -29,6 +29,11 @@ export const planetApi = {
   /** 挑一张写进 planet/ */
   selectAvatar: (request: AvatarSelectRequest): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarSelect, request),
   cancelAvatar: (request: AvatarBodyRef): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarCancel, request),
+  /** 「用生图工具」开关此刻的状态（读插件的策略文件；插件没装为 ok:false） */
+  avatarRenderPolicy: (): Promise<AvatarRenderPolicyResult> => ipcRenderer.invoke(ipcChannels.planetAvatarPolicyGet),
+  /** 拨开关：经插件脚本把策略文件写成手绘 / 用生图工具 */
+  setAvatarRenderPolicy: (request: AvatarRenderPolicySetRequest): Promise<AvatarRenderPolicyResult> =>
+    ipcRenderer.invoke(ipcChannels.planetAvatarPolicySet, request),
   /** 进度推送；返回退订函数 */
   onAvatarJob: (listener: (event: AvatarJobEvent) => void): (() => void) => {
     const handler = (_e: unknown, event: AvatarJobEvent) => listener(event);
