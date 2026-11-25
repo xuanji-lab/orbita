@@ -7,8 +7,9 @@ import { pairWithHost } from "./protocol/pair.ts";
 import { rnSocketFactory } from "./protocol/rn-socket.ts";
 import { clearCredentials, loadCredentials, saveCredentials } from "./protocol/credentials-store.ts";
 import { AppController } from "./store/controller.ts";
-import { fixtureController, parseFixtureUrl, type FixtureParams } from "./store/fixture.ts";
+import { FIXTURE_DRAFT, fixtureController, parseFixtureUrl, type FixtureParams } from "./store/fixture.ts";
 import { useTheme, type Theme } from "./theme/theme.ts";
+import { ChatScreen } from "./ui/ChatScreen.tsx";
 import { ListScreen } from "./ui/ListScreen.tsx";
 import { PairScreen } from "./ui/PairScreen.tsx";
 import { Spinner } from "./ui/PanelEmpty.tsx";
@@ -94,6 +95,17 @@ function Screens(props: { theme: Theme; controller: AppController; fixture: Fixt
         initialCode={fixture?.pair !== null && fixture !== null ? "418207" : ""}
       />
     );
+  if (state.openId !== null) {
+    return (
+      <ChatScreen
+        key={state.openId}
+        theme={theme}
+        state={state}
+        controller={controller}
+        initialDraft={fixture?.draft === true ? FIXTURE_DRAFT : ""}
+      />
+    );
+  }
   return <ListScreen theme={theme} state={state} controller={controller} initiallyOpen={fixture?.open ?? null} />;
 }
 
