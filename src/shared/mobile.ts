@@ -590,6 +590,8 @@ export const MOBILE_CRYPTO = {
   maxOnlineDevices: 8,
   /** 还没认出设备的连接同时最多几条 */
   maxUnauthenticatedConnections: 8,
+  /** 其中同一个来源地址最多占几条：不分来源的话，一台主机开 8 条空连接就能把真手机挡在外面 */
+  maxUnauthenticatedConnectionsPerAddress: 2,
   /** 所有连接（含未认证的）同时最多几条 */
   maxConnections: 16,
   /** 连上之后多久没过握手就断（毫秒） */

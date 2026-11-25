@@ -5,8 +5,9 @@
  * - 现有 IPC 通道没有调用方鉴权，其中一条能取回明文密钥——**手机不桥接它们**，只开契约里
  *   列出的十个方法，每个方法的入参都过 `mobile-wire.ts` 的手写校验。
  * - 单帧上限 64 KB（`maxPayload`，`ws` 默认是 100 MiB）、关压缩、带 `Origin` 的握手一律拒
- *   （浏览器网页能跨源连 WebSocket）；未认证的连接最多 8 条、10 秒内没过握手就断；总连接
- *   最多 16 条；一台设备只留一条连接（重连顶掉旧的）。
+ *   （浏览器网页能跨源连 WebSocket）；未认证的连接最多 8 条，**其中同一个来源地址最多 2 条**
+ *   （不分来源的话一台主机就能把 8 条占满，真手机连不上——2026-11-25 审查 S1）；10 秒内没过握手
+ *   就断；总连接最多 16 条；一台设备只留一条连接（重连顶掉旧的）。
  * - 每个连接的回调整体 try/catch：主进程没有 uncaughtException 兜底，一处抛错整个应用退出。
  * - 撤销立刻断：先 terminate 连接，再清这台设备的待发回复，最后落盘；每个 `await` 之后、
  *   往连接写东西之前，都复查这条连接是不是还活着。
@@ -97,6 +98,24 @@ interface Connection {
 
 /** 每条连接每秒最多收几帧（契约常量） */
 const FRAME_LIMIT = MOBILE_CRYPTO.maxFramesPerSecond;
+
+/** 对端的来源地址。只绑 IPv4，正常就是点分四段；个别系统把 IPv4 写成 IPv4 映射的 IPv6，按里面的 IPv4 算 */
+function addressOf(request: IncomingMessage): string {
+  return (request.socket.remoteAddress ?? "").replace(/^::ffff:/i, "");
+}
+
+/**
+ * 一条还没认出设备的连接能不能进：全局的未认证上限，加「同一个来源地址最多占几条」。
+ * `peers` 是此刻所有未认证连接的来源地址。两个上限都在契约的 `MOBILE_CRYPTO` 里。
+ */
+export function admitsUnauthenticated(peers: readonly string[], address: string): boolean {
+  if (peers.length >= MOBILE_CRYPTO.maxUnauthenticatedConnections) return false;
+  let fromAddress = 0;
+  for (const peer of peers) {
+    if (peer === address) fromAddress += 1;
+  }
+  return fromAddress < MOBILE_CRYPTO.maxUnauthenticatedConnectionsPerAddress;
+}
 
 export class MobileServer {
   private readonly deps: MobileServerDeps;
@@ -233,7 +252,10 @@ export class MobileServer {
 
   // ———————————————————— 连接生命周期 ————————————————————
 
-  /** 握手时的门槛（安全审查第 4 条）：路径、Origin、连接数上限 */
+  /**
+   * 握手时的门槛（安全审查第 4 条）：路径、Origin、连接数上限。verifyClient 是同步回调，
+   * 到 onConnection 把连接记进表之间不让出，所以这里数出来的数是准的
+   */
   private verifyClient(info: { origin: string; req: IncomingMessage }, cb: (result: boolean, code?: number, message?: string) => void): void {
     // 浏览器网页能跨源连 WebSocket：带 Origin 的一律拒（手机端是原生 app，不带）
     if (info.origin !== undefined && info.origin !== "") {
@@ -244,8 +266,11 @@ export class MobileServer {
       cb(false, 503, "Too Many Connections");
       return;
     }
-    const unauthenticated = [...this.connections].filter((conn) => conn.deviceId === null).length;
-    if (unauthenticated >= MOBILE_CRYPTO.maxUnauthenticatedConnections) {
+    const peers: string[] = [];
+    for (const conn of this.connections) {
+      if (conn.deviceId === null) peers.push(conn.address);
+    }
+    if (!admitsUnauthenticated(peers, addressOf(info.req))) {
       cb(false, 503, "Too Many Connections");
       return;
     }
@@ -258,9 +283,10 @@ export class MobileServer {
       socket.terminate();
       return;
     }
+    const address = addressOf(request);
     const conn: Connection = {
       socket,
-      address: request.socket.remoteAddress ?? "",
+      address,
       channel: new SecureChannel(crypto.privateKey),
       deviceId: null,
       offeredOfferId: null,

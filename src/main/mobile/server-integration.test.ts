@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { WebSocket, type RawData } from "ws";
 import type { SessionMeta } from "../../shared/session.ts";
 import type { HostInfo, PairProveResult, PairStartResult } from "../../shared/mobile.ts";
-import { MOBILE_PATH, MOBILE_PROTOCOL_VERSION } from "../../shared/mobile.ts";
+import { MOBILE_CRYPTO, MOBILE_PATH, MOBILE_PROTOCOL_VERSION } from "../../shared/mobile.ts";
 import {
   boxKeyPairFromRaw,
   boxPrivateKeyFromRaw,
@@ -25,7 +25,7 @@ import {
 } from "./crypto.ts";
 import type { HostCrypto } from "./host-keys.ts";
 import { MobileCatalog } from "./summaries.ts";
-import { MobileServer } from "./server.ts";
+import { MobileServer, admitsUnauthenticated } from "./server.ts";
 import { MobileStore } from "./store.ts";
 import { MobileTails } from "./tails.ts";
 import { ReplyQueue } from "./replies.ts";
@@ -72,9 +72,9 @@ class Phone {
     socket.on("close", () => this.closeResolve?.());
   }
 
-  static async open(port: number): Promise<Phone> {
+  static async open(port: number, attempts = 30): Promise<Phone> {
     let lastError: unknown = null;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         return await new Promise<Phone>((resolve, reject) => {
           const socket = new WebSocket(`ws://127.0.0.1:${port}${MOBILE_PATH}`);
@@ -238,11 +238,16 @@ interface Authenticated {
 
 /** 不走完整配对（上面那条用例付过成本了）：直接登记一台设备，然后 hello 进加密段 */
 async function openAuthenticated(port: number, store: MobileStore, pnByte: number): Promise<Authenticated> {
+  const phone = await Phone.open(port);
+  phones.push(phone);
+  return authenticate(phone, store, pnByte);
+}
+
+/** 给一条刚连上、还没发过东西的连接配上身份：登记一台设备，等 host.hello，发 hello，等握手应答 */
+async function authenticate(phone: Phone, store: MobileStore, pnByte: number): Promise<Authenticated> {
   const device = generateBoxKeyPair();
   const deviceId = pnByte.toString(16).padStart(2, "0").repeat(16);
   await store.addDevice({ id: deviceId, name: "已配对", boxPublic: device.publicRaw.toString("base64"), pairedAt: 1, lastSeenAt: null });
-  const phone = await Phone.open(port);
-  phones.push(phone);
   const hostHello = await phone.next();
   const nonce = Buffer.from(hostHello["nonce"] as string, "base64");
   const shared = sharedSecret(boxPrivateKeyFromRaw(device.privateRaw), HOST.publicRaw);
@@ -528,5 +533,42 @@ describe("准入：四个口只认清单，增量刷新也只认根会话", () =
     session.request(seq, seq, "unread.clear", { sessionId: SESSION });
     assert.equal((await session.next())?.body["ok"], true);
     assert.deepEqual(fx.cleared, [SESSION]);
+  });
+});
+
+describe("未认证的连接：全局最多 8 条，同一个来源地址最多占 2 条", () => {
+  test("同一地址的第三条空连接被 503 挡在 HTTP 握手；过了握手的、关掉了的不再占名额", async () => {
+    const { port, store } = await fixture();
+    const first = await Phone.open(port);
+    phones.push(first);
+    const second = await Phone.open(port);
+    phones.push(second);
+    await second.next(); // host.hello 到了，连接已经记进表
+    // 第三、第四条：不重试（Phone.open 默认会重试，名额放出来它就连上了）
+    await assert.rejects(Phone.open(port, 1), /503/);
+    await assert.rejects(Phone.open(port, 1), /503/);
+
+    // 第一条过了握手，成了已认证设备：不再占未认证名额，第三条空连接进得来
+    await authenticate(first, store, 5);
+    const third = await Phone.open(port);
+    phones.push(third);
+    await third.next();
+    await assert.rejects(Phone.open(port, 1), /503/);
+
+    // 关掉一条没认证的：名额放出来
+    second.close();
+    await second.closed;
+    const fourth = await Phone.open(port);
+    phones.push(fourth);
+    await fourth.next();
+  });
+
+  test("判据本身：同一地址的第三条被拒时别的地址还有名额；全局 8 条满了谁都进不来", () => {
+    const peers = ["10.0.0.1", "10.0.0.1", "10.0.0.2", "10.0.0.2", "10.0.0.3", "10.0.0.3", "10.0.0.4", "10.0.0.4"];
+    assert.equal(MOBILE_CRYPTO.maxUnauthenticatedConnections, 8);
+    assert.equal(admitsUnauthenticated([], "10.0.0.9"), true);
+    assert.equal(admitsUnauthenticated(peers.slice(0, 6), "10.0.0.1"), false, "同一地址已经有两条");
+    assert.equal(admitsUnauthenticated(peers.slice(0, 6), "10.0.0.9"), true, "别的地址还有名额");
+    assert.equal(admitsUnauthenticated(peers, "10.0.0.9"), false, "全局 8 条满了");
   });
 });
