@@ -23,7 +23,7 @@ import { useReadQuote } from "./useReadQuote";
 import { OfmReader, PlainTextReader } from "./OfmReader";
 import { createTargetResolver } from "./ofm-targets.ts";
 import type { OfmEnv } from "./ofm-env.ts";
-import { docScope, getView, setLast, setView } from "./view-memory.ts";
+import { getView, setView } from "./view-memory.ts";
 import { SlidesView } from "./SlidesView";
 import { deckHtml, overflowPages, resolvedTokenCss } from "./slide-render";
 import { parseDeck } from "@shared/doc-slides";
@@ -72,7 +72,7 @@ export interface DocEditPaneProps {
 function MarkdownEditPane(props: DocEditPaneProps) {
   const t = useT();
   const { sessionId, workspaceId, path } = props;
-  const { paper, locked, setPaper } = useDocPaper();
+  const { paper, setPaper } = useDocPaper();
   // 外部合并结果怎么落进屏幕由具体视图（文档 / 演示文稿）决定，它们把处理函数挂在这里
   const externalRef = useRef<(change: ExternalChange) => void>(() => undefined);
   const docHandle = useRef<DocEditorHandle | null>(null);
@@ -105,10 +105,6 @@ function MarkdownEditPane(props: DocEditPaneProps) {
   }, [doc.initial, path]);
 
   const ready = doc.phase === "ready" && doc.session !== null && doc.initial !== null;
-  // 记下「这个工作区最近开的文档」：右栏「文档」入口据此回到它
-  useEffect(() => {
-    if (ready && !deck) setLast(docScope(workspaceId, "doc"), path);
-  }, [ready, deck, workspaceId, path]);
   useEffect(() => {
     if (!ready) return undefined;
     const session = doc.session;
@@ -352,7 +348,6 @@ function MarkdownEditPane(props: DocEditPaneProps) {
     id: value,
     label: paperName(value, t),
     checked: paper === value,
-    disabled: locked,
     onSelect: () => setPaper(value),
   }));
   const paperMenu = (
@@ -363,8 +358,7 @@ function MarkdownEditPane(props: DocEditPaneProps) {
         <SelectButton
           open={open}
           onClick={toggle}
-          disabled={locked}
-          title={`${t.doc.paperLabel}：${paperName(paper, t)}${locked ? `（${t.doc.paperLocked}）` : ""}`}
+          title={`${t.doc.paperLabel}：${paperName(paper, t)}`}
         >
           {paperName(paper, t)}
         </SelectButton>

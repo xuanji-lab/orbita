@@ -38,11 +38,15 @@ Text mode only sees characters. Charts, plots, diagrams and scanned pages are in
 
 ## cite_pdf — quote the original so the user can click through
 
-`cite_pdf` is an experimental feature ("PDF citations" in settings); when it is off the tool does not exist, so just quote the passage in your reply instead. When it is on, use it whenever you explain or summarise a PDF and a statement relies on specific wording in the document, or the user asks for the original text / the source of a claim.
+Use `cite_pdf` whenever you explain or summarise a PDF and a statement relies on specific wording in the document, or the user asks for the original text / the source of a claim.
 
 1. Read the PDF with `read_pdf` first, then call `cite_pdf` with `path` and `quotes: [{ text, page? }, …]` — up to 12 quotes per call, so batch everything one answer needs.
 2. `text` must be **the original wording copied from the `read_pdf` output**, a sentence or phrase of at least 4 letters/digits — not a paraphrase, not a translation, not text from memory. Line breaks, spacing, punctuation, hyphenation at line ends and ligatures do not matter. `page` is only a hint; the tool searches the whole document.
 3. Each verified quote returns a marker like `[^c4k2]`. Put it **exactly as written** right after the sentence it supports, e.g. `…uses double buffering[^c4k2].` The user clicks it and the PDF opens at that passage, highlighted. Do not also paste the quoted text into your reply — the marker already shows it.
+   **A PDF marker is not a footnote.** Only ever write the exact `[^cxxx]` that `cite_pdf` gave you, inline:
+   - do not renumber it to `[^1]`, `[^2]` — a number is not a PDF marker and will not open the PDF;
+   - do not add a definition line (`[^c4k2]: file.pdf, p. 3`) or a "Sources" list at the end — that turns the marker into a footnote at the bottom of the page and the click no longer opens the PDF;
+   - do not merge it into the numbering of another source. Search tools over the user's notes return `[^1]`, `[^2]` with a Sources list; that is a different system. When one answer cites both notes and a PDF, write each set in its own format — notes `[^1]` as that tool asks, PDF `[^cxxx]` as above — and never mix their numbers.
 4. Read the notes after each marker: `found on page N, not M` (fine), `appears K times; cited the one on page N` (pick a longer, more specific quote if you meant another occurrence), and `approximate match — the PDF actually reads: "…"` (the beginning and end of your quote matched but the middle differs; make sure your sentence fits the real wording, or fix the quote).
 5. A quote marked **NOT CITED** — too short, or not found (the result shows the closest passage on the PDF) — has no marker. Fix the quote from the closest passage, or drop the claim, and call again. Never invent a marker or cite from memory.
 6. A scanned PDF cannot be cited (no text layer); describe the page instead.

@@ -69,6 +69,41 @@ describe("引用标记带脚注定义", () => {
     );
   });
 
+  it("定义写成文件链接（会话 67dbf3）或整句原文（会话 928b72）也照样还原；定义内容不影响判断", () => {
+    const tree = run(
+      "年份[^clkm]；结论[^cz55]。\n\n" +
+        "[^clkm]: [Scepanovic-2021.pdf, p.1](/Users/x/Scepanovic-2021.pdf#page=1)\n" +
+        "[^cz55]: is approximately equivalent to DG for high noise variance σ(t) and query points far from the finite training data\n",
+    );
+    assert.deepEqual(citeLinks(tree), ["clkm=1", "cz55=2"]);
+    assert.equal(collect(tree, "footnoteReference").length, 0);
+    assert.equal(collect(tree, "footnoteDefinition").length, 0);
+    // 定义里的文件链接随定义一起去掉，不会漏成正文里的普通链接
+    assert.equal(collect(tree, "link").filter((node) => !node.url?.startsWith(CITE_HREF_PREFIX)).length, 0);
+  });
+
+  it("同一条回答里笔记检索（miyo）的 [^n] + Sources 定义原样保留，PDF 标记照常可点", () => {
+    const tree = run(
+      "你 07-21 的判断[^3]，论文原文[^c6fv]，另一篇笔记[^6]。\n\n" +
+        "[^3]: research-vault/2-fleeting/diaries&devlog/2026-Quarter-3/2026-07-21.md\n" +
+        "[^6]: research-vault/1-project/26-Multi-Agent-Startup/notes.md\n",
+    );
+    assert.deepEqual(citeLinks(tree), ["c6fv=1"]);
+    assert.deepEqual(
+      collect(tree, "footnoteReference").map((node) => node.identifier),
+      ["3", "6"],
+    );
+    assert.equal(collect(tree, "footnoteDefinition").length, 2);
+  });
+
+  it("兜底边界：把 PDF 标记重编号成 [^1] 再补带 .pdf 的定义，与 miyo 的数字脚注结构上无法区分，不映射", () => {
+    // 不映射的理由见 fix 提交说明：解析不依赖引用表（memo 不变量），且 [^1] 与 miyo 的 [^1] 撞号，
+    // 靠定义里写没写 .pdf 判断不可靠。这条测试钉住「不去猜」：数字脚注仍是脚注。
+    const tree = run("原文[^1]。\n\n[^1]: paper.pdf, p. 3\n");
+    assert.deepEqual(citeLinks(tree), []);
+    assert.equal(collect(tree, "footnoteReference").length, 1);
+  });
+
   it("没有定义时行为不变（文本路径）", () => {
     const tree = run("采用双缓冲[^c4k2]。");
     assert.deepEqual(citeLinks(tree), ["c4k2=1"]);

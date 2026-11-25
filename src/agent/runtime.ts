@@ -57,8 +57,11 @@ import { planBranchCut } from "./branch-cut.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
 import { movePiBook, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
+import { measureMedia } from "./media-duration.ts";
 import {
+  capMediaArtifacts,
   foldWebArtifacts,
+  dropSavedPages,
   makeWebAccept,
   noteSessionWrite,
   scanWebArtifacts,
@@ -127,8 +130,10 @@ import {
   hashImage,
   planImageBudget,
   readImageBudgetBook,
+  type ContextMessage,
   type ImageBudgetMark,
 } from "./image-byte-budget.ts";
+import { currentReplyLang } from "./reply-language.ts";
 
 // pi-ai 的模型调用与 main 同一个坑（同一台机器、同一个全局 fetch）
 preferIPv4();
@@ -217,13 +222,16 @@ async function reportFileTurn(
     ]);
     const tracked = new Set(changes.map((change) => change.path));
     const folded = foldWebArtifacts(scan.paths.filter((path) => !tracked.has(path)));
-    if (changes.length > 0 || folded.webArtifacts.length > 0 || folded.webArtifactsBatch !== undefined) {
+    // 音视频候选：同一次扫描顺带收的，全部报上来（卡片再按回答点名筛）；顺手量一遍时长，量不到的不带
+    const mediaArtifacts = await measureMedia(capMediaArtifacts(scan.mediaPaths.filter((path) => !tracked.has(path))));
+    if (changes.length > 0 || folded.webArtifacts.length > 0 || folded.webArtifactsBatch !== undefined || mediaArtifacts.length > 0) {
       send({
         type: "fileTurn",
         sessionId,
         changes,
         ...(folded.webArtifacts.length > 0 ? { webArtifacts: folded.webArtifacts } : {}),
         ...(folded.webArtifactsBatch !== undefined ? { webArtifactsBatch: folded.webArtifactsBatch } : {}),
+        ...(mediaArtifacts.length > 0 ? { mediaArtifacts } : {}),
       });
     }
   } catch (cause) {
@@ -250,10 +258,12 @@ async function scanWebArtifactsLogged(watch: WebArtifactWatch): Promise<WebScanR
   try {
     const windows = watch.windows.snapshot(Date.now());
     // 本轮没跑过脚本类工具：不可能有旁路产物，也就不必扫盘（顺带省掉大目录的遍历）
-    if (windows.length === 0) return { paths: [], truncated: false };
+    if (windows.length === 0) return { paths: [], mediaPaths: [], truncated: false };
     const result = await scanWebArtifacts(roots, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS, undefined, {
       accept: makeWebAccept(watch.sessionId, windows, startedAt),
     });
+    // 从网上存下来的页面（canonical / og:url 指向 http）是原料，不是本轮产物
+    const paths = await dropSavedPages(result.paths);
     if (result.truncated) {
       console.warn(
         `[web-artifacts] 扫描撞条目上限被截断（本轮网页产物可能漏报）roots=${roots
@@ -261,10 +271,10 @@ async function scanWebArtifactsLogged(watch: WebArtifactWatch): Promise<WebScanR
           .join(" | ")}`,
       );
     }
-    return result;
+    return { ...result, paths };
   } catch (cause) {
     console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
-    return { paths: [], truncated: false };
+    return { paths: [], mediaPaths: [], truncated: false };
   }
 }
 
@@ -452,54 +462,6 @@ async function summarizeFocus(command: Extract<AgentCommand, { type: "summarizeF
       return;
     }
     send({ type: "focusSummarized", requestId: command.requestId, bullets });
-  } catch (cause) {
-    fail(cause instanceof Error ? cause.message : String(cause));
-  }
-}
-
-/** 家务活小调用的硬上限（主进程那头 150 秒兜底，这里先放手） */
-const CHORE_TIMEOUT_MS = 120_000;
-
-/**
- * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
- * 这里只调模型、把回复的 text 块拼起来交回去——**不解析**：解析规则与 prompt 是同一份契约，
- * 都在 shared/wrapup-scan.ts，主进程收到原文后解析。失败回 null 带原因。
- */
-async function choreComplete(command: Extract<AgentCommand, { type: "choreComplete" }>): Promise<void> {
-  const fail = (error: string): void => {
-    send({ type: "choreCompleted", requestId: command.requestId, text: null, error });
-  };
-  try {
-    const runtime = await createModelRuntime();
-    const model = registerAndResolveModel(runtime, command.provider, command.modelId);
-    if (model === undefined) {
-      fail(`unknown model "${command.provider.id}/${command.modelId}"`);
-      return;
-    }
-    const response = await completeSimple(
-      model,
-      {
-        systemPrompt: command.system,
-        messages: [{ role: "user", content: command.prompt, timestamp: Date.now() }],
-      },
-      {
-        apiKey: command.provider.apiKey,
-        maxTokens: 8192,
-        timeoutMs: CHORE_TIMEOUT_MS,
-        signal: AbortSignal.timeout(CHORE_TIMEOUT_MS),
-        onPayload: ccBillingPatch,
-        ...(command.provider.headers ? { headers: command.provider.headers } : {}),
-      },
-    );
-    if (response.stopReason === "error") {
-      fail(response.errorMessage ?? `${model.id} returned an error`);
-      return;
-    }
-    let output = "";
-    for (const block of response.content) {
-      if (block.type === "text") output += block.text;
-    }
-    send({ type: "choreCompleted", requestId: command.requestId, text: output });
   } catch (cause) {
     fail(cause instanceof Error ? cause.message : String(cause));
   }
@@ -1395,15 +1357,21 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const mcpLabel = command.workspaceId === null ? "" : command.cwd;
   await mcpHub.ensure(mcpScope, command.mcpServers, mcpLabel);
   send({ type: "mcp", servers: mcpHub.describe() });
+  // 通道工具要读本会话的历史算用户的语言，而 session 在工具之后才创建：先留个槽，创建后填上
+  let sessionForLang: AgentSession | undefined;
   const customTools = [
     ...mcpHub.toolsFor(mcpScope),
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
-    // cite_pdf 挂在实验功能「PDF 引用」的开关后面（缺席 = 关）
-    ...createPdfTools(command.cwd, { pdfCitations: command.pdfCitations === true }),
+    // cite_pdf 与 read_pdf 同台常驻（2026-11-22 PDF 引用转正）
+    ...createPdfTools(command.cwd),
     // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
     ...createDocxTools(command.cwd),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
-    ...createImageTools(command.cwd),
+    // 白名单外的图（如 /tmp）先拷进会话工作台的 shots/，回答里嵌的路径界面才读得到（2026-11-23）
+    ...createImageTools(command.cwd, {
+      roots: [...(command.directories?.attached ?? []), command.attachmentsDir],
+      workbench: command.directories?.workbench ?? null,
+    }),
     // update_plan（./plan-tools.ts）：agent 写下计划、做一步勾一步；计划就在转录里，不另存
     ...createPlanTools(planOptions),
     // update_goal（./goal-tools.ts）：agent 替用户记下会话级目标；目标就在转录里，不另存
@@ -1440,7 +1408,11 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
       authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
     }),
-    ...createChannelTools(requestBroker, command.sessionId, role),
+    // 派发 / 回信时把此刻用户的语言交给主进程（写进通道消息的 lang）。session 在工具之后才创建，
+    // 所以用延迟读：工具被调用时 sessionForLang 已经就位
+    ...createChannelTools(requestBroker, command.sessionId, role, () =>
+      sessionForLang === undefined ? undefined : currentReplyLang(sessionForLang.messages as ContextMessage[]),
+    ),
     ...(memoryTools
       ? createMemoryTools(requestBroker, command.sessionId, {
           scope: { workspaceId: command.workspaceId, cwd: command.cwd },
@@ -1463,6 +1435,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   });
   // 订阅车道改写的落点补全（cc-billing-stream.ts）：压缩 / 分支摘要绕过主循环的
   // before_provider_request，包一层 streamFunction 把改写给到每一条出站请求
+  sessionForLang = session;
   applyBillingStreamPatch(session);
   // Claude 官方直连的主会话用 1 小时提示缓存，子会话与网关保持 pi 默认（cache-retention.ts）
   applyCacheRetentionPatch(session, role);
@@ -1497,7 +1470,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 文件快照的 after：工具落定即读盘。不 await（读盘是毫秒级，不该卡事件流），
     // finalize 自己等在途读全部落定
     if (event.type === "tool_execution_start") {
-      webWatch.windows.begin(event.toolCallId, event.toolName, Date.now());
+      webWatch.windows.begin(event.toolCallId, event.toolName, Date.now(), event.args);
     }
     if (event.type === "tool_execution_end") {
       void tracker.noteExecutionEnd(event.toolCallId);
@@ -2087,7 +2060,7 @@ async function echoAndPrompt(
           !isChildSession(command),
         )
       : null;
-  const promptText = composePromptText(command.text, pasted, files);
+  const promptText = composePromptText(command.text, pasted, files, images.length);
   // 本回显 user item 的 id（意图召回的 turnId 与 /ingest 的去重键都用它）；
   // 纯图片等极端情况下没有文字 item，退回临时 id（recall 卡片照常，只是与转录对不上）
   let turnId = "";
@@ -2429,11 +2402,6 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "probeProvider") {
     // 同上：独立小调用，不挡后续命令
     void probeProvider(command);
-    return;
-  }
-  if (command.type === "choreComplete") {
-    // 同上：独立小调用，不挡后续命令
-    void choreComplete(command);
     return;
   }
   // 穷尽性检查：AgentCommand 加了新分支而这里没接，编译期就报——

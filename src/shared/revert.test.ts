@@ -46,6 +46,18 @@ describe("isFileTurnRecord —— webArtifacts 加法字段", () => {
   });
 });
 
+describe("isFileTurnRecord —— mediaArtifacts 加法字段", () => {
+  it("合法项（路径 + 可选正数时长）收下", () => {
+    strictEqual(isFileTurnRecord({ ...baseRecord, mediaArtifacts: [{ path: "/a/x.mp3" }, { path: "/a/y.mp4", duration: 18.9 }] }), true);
+    strictEqual(isFileTurnRecord({ ...baseRecord, mediaArtifacts: [] }), true);
+  });
+  it("在场但有一项坏（空路径 / 非正时长 / 非对象 / 非数组）→ 整条拒掉", () => {
+    for (const bad of [[{ path: "" }], [{ path: "/a.mp3", duration: 0 }], [{ path: "/a.mp3", duration: "9" }], [{ path: "/a.mp3", duration: Number.NaN }], ["/a.mp3"], [null], "x", {}]) {
+      strictEqual(isFileTurnRecord({ ...baseRecord, mediaArtifacts: bad }), false, JSON.stringify(bad));
+    }
+  });
+});
+
 describe("isFileTurnRecord —— webArtifactsBatch 加法字段", () => {
   it("旧记录没有字段照常收下", () => {
     strictEqual(isFileTurnRecord(baseRecord), true);

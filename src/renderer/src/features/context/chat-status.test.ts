@@ -32,11 +32,13 @@ describe("状态卡：子会话此刻在跑什么", () => {
   it("尾巴上 running 的工具记录 = 正在跑的调用", () => {
     assert.deepEqual(childActivityOf([tool("complete", 1), tool("running", 5)]), { toolName: "bash", input: { command: "sleep 900" }, since: 5 });
   });
-  it("一条命令跑过十分钟算卡住；通道关了不算在跑", () => {
+  it("活 phase 才在跑；同一个调用超过十分钟才算卡住，通道关了不算在跑", () => {
     const activity = { toolName: "bash", input: {}, since: 0 };
-    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity, now: STUCK_MS + 1 }), "stuck");
-    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity, now: 60_000 }), "running");
+    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: true, activity, now: STUCK_MS + 1 }), "stuck");
+    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: true, activity, now: 60_000 }), "running");
+    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity, now: STUCK_MS + 1 }), "idle");
     assert.equal(childStateOf({ channelStatus: "done", needsApproval: false, enginePhaseRunning: false, activity, now: 60_000 }), "done");
+    assert.equal(childStateOf({ channelStatus: "interrupted", needsApproval: false, enginePhaseRunning: false, activity, now: 60_000 }), "interrupted");
   });
   it("调用的一行字：工具名 + 能认出它的参数", () => {
     assert.equal(toolCallLine("bash", { command: "sleep 600\nnext" }), "bash sleep 600");
@@ -69,13 +71,36 @@ describe("状态卡：产物按文件类型分行", () => {
       { kind: "pptx" as const, id: 5 },
       { kind: "board" as const, id: 6 },
       { kind: "file" as const, id: 7 },
+      { kind: "audio" as const, id: 8 },
+      { kind: "video" as const, id: 9 },
     ];
     const groups = groupOutputs(outs);
-    assert.deepEqual(groups.map((group) => group.key), ["slides", "doc", "web", "pdf", "board", "file"]);
+    assert.deepEqual(groups.map((group) => group.key), ["slides", "doc", "web", "pdf", "video", "audio", "board", "file"]);
     assert.deepEqual(groups[0]?.items.map((item) => item.id), [3, 5]);
     // 并进来的 PPTX 再新也排在能渲染的演示文稿之后
     assert.deepEqual(groupOutputs([{ kind: "pptx" as const, id: 1 }, { kind: "slides" as const, id: 2 }])[0]?.items.map((item) => item.id), [2, 1]);
     assert.deepEqual(groups[1]?.items.map((item) => item.id), [4]);
+  });
+  it("音视频只收最终回答点名的 mediaArtifacts，保留时长并各自成行", () => {
+    const records = [
+      { id: "a1", role: "assistant", content: [{ type: "text", text: "成品是 voice.mp3 和 clip.mp4。" }], timestamp: 1 },
+      {
+        id: "f1",
+        role: "file-turn",
+        timestamp: 2,
+        changes: [],
+        mediaArtifacts: [
+          { path: "/w/voice.mp3", duration: 231 },
+          { path: "/w/part.mp3", duration: 38 },
+          { path: "/w/clip.mp4", duration: 12.5 },
+        ],
+      },
+    ] as unknown as TranscriptRecord[];
+    const outputs = statusOutputs(records, null);
+    assert.deepEqual(outputs.map((item) => item.path).sort(), ["/w/clip.mp4", "/w/voice.mp3"]);
+    assert.equal(outputs.find((item) => item.kind === "audio")?.duration, 231);
+    assert.equal(outputs.find((item) => item.kind === "video")?.duration, 12.5);
+    assert.deepEqual(groupOutputs(outputs).map((group) => group.key), ["video", "audio"]);
   });
   it("看板结果认出插件名（右栏打开它的看板要用）", () => {
     assert.deepEqual(boardOf({ pluginBoard: { plugin: "kw-engine", title: "解法库" } }), { title: "解法库", plugin: "kw-engine" });

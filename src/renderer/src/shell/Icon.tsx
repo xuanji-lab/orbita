@@ -12,6 +12,7 @@ import arrowUp from "../../../../design-system/assets/icons/lucide/arrow-up.svg?
 import arrowUpRight from "../../../../design-system/assets/icons/lucide/arrow-up-right.svg?raw";
 import blend from "../../../../design-system/assets/icons/lucide/blend.svg?raw";
 import bell from "../../../../design-system/assets/icons/lucide/bell.svg?raw";
+import bellOff from "../../../../design-system/assets/icons/lucide/bell-off.svg?raw";
 import blocks from "../../../../design-system/assets/icons/lucide/blocks.svg?raw";
 import book from "../../../../design-system/assets/icons/lucide/book.svg?raw";
 import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg?raw";
@@ -19,6 +20,7 @@ import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.sv
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
 import alarmClock from "../../../../design-system/assets/icons/lucide/alarm-clock.svg?raw";
+import clipboard from "../../../../design-system/assets/icons/lucide/clipboard.svg?raw";
 import clipboardList from "../../../../design-system/assets/icons/lucide/clipboard-list.svg?raw";
 import hourglass from "../../../../design-system/assets/icons/lucide/hourglass.svg?raw";
 import notebookText from "../../../../design-system/assets/icons/lucide/notebook-text.svg?raw";
@@ -66,10 +68,12 @@ import alignCenter from "../../../../design-system/assets/icons/lucide/align-cen
 import alignRight from "../../../../design-system/assets/icons/lucide/align-right.svg?raw";
 import monitorPlay from "../../../../design-system/assets/icons/lucide/monitor-play.svg?raw";
 import expand from "../../../../design-system/assets/icons/lucide/expand.svg?raw";
+import maximize2 from "../../../../design-system/assets/icons/lucide/maximize-2.svg?raw";
 import minimize2 from "../../../../design-system/assets/icons/lucide/minimize-2.svg?raw";
 import imagePlus from "../../../../design-system/assets/icons/lucide/image-plus.svg?raw";
 import scrollText from "../../../../design-system/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../design-system/assets/icons/lucide/image.svg?raw";
+import imageOff from "../../../../design-system/assets/icons/lucide/image-off.svg?raw";
 import info from "../../../../design-system/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../design-system/assets/icons/lucide/fold-vertical.svg?raw";
 import flaskConical from "../../../../design-system/assets/icons/lucide/flask-conical.svg?raw";
@@ -165,6 +169,7 @@ import zap from "../../../../design-system/assets/icons/lucide/zap.svg?raw";
 const ICONS = {
   archive,
   bell,
+  "bell-off": bellOff,
   blend,
   blocks,
   book,
@@ -182,6 +187,7 @@ const ICONS = {
   bot,
   brain,
   "alarm-clock": alarmClock,
+  clipboard,
   "clipboard-list": clipboardList,
   hourglass,
   "notebook-text": notebookText,
@@ -240,6 +246,7 @@ const ICONS = {
   "grid-3x3": grid3x3,
   "grip-vertical": gripVertical,
   image,
+  "image-off": imageOff,
   info,
   key,
   lightbulb,
@@ -319,6 +326,7 @@ const ICONS = {
   "align-right": alignRight,
   "monitor-play": monitorPlay,
   "expand": expand,
+  "maximize-2": maximize2,
   "minimize-2": minimize2,
   "image-plus": imagePlus,
 } as const;

@@ -158,9 +158,10 @@ type Entry = { path: string; text: string };
  */
 const SAMPLE_ARGS: Record<string, unknown[][]> = {
   thinkingLevel: [["xhigh", "claude-opus-4-6"], ["medium", null]],
-  // 自动化：间隔的单位、触发方式是枚举；wake 的上限可以为 null（没有上限）
+  // 自动化：间隔的单位、触发方式是枚举；唤醒卡的上限可以为 null（没有上限）
   "automation.sched.interval": [[1, "hour"], [15, "minute"], [2, "day"]],
-  "automation.wake": [["日报", 3, 12, "10-31 01:45"], ["日报", 3, null, "10-31 01:45"]],
+  "automation.wakeTitle": [["日报"]],
+  "automation.wakeRun": [[3, 12], [3, null]],
   "automation.runBar.label": [["日报", 3, "10-31 01:45", "schedule"], ["日报", 3, "10-31 01:45", "manual"], ["日报", 3, "10-31 01:45", "caughtUp"]],
   // 语音文案的参数是厂商 id：两家各调一遍，插值出来的名字才被守卫看到
   "voice.failures.not-configured": [["doubao"], ["stepfun"]],
@@ -229,13 +230,6 @@ describe("messages —— 中英两张表", () => {
     deepStrictEqual([zh.focus.linesUnknown, zh.review.linesUnknown], ["行数未知", "行数未知"]);
     // 两处是同一个计数器的同一个结论，英文也是同一句（左栏悬停时它与文件名挤一行，长句会把文件名挤没）
     deepStrictEqual(en.focus.linesUnknown, en.review.linesUnknown);
-  });
-
-  test("首页批语落当天日期：中文「阅 月.日」，英文照美式缩写（Sept，不写 Sep）", () => {
-    deepStrictEqual(
-      [zh.chat.homeMark(9, 25), en.chat.homeMark(9, 25), en.chat.homeMark(3, 1), en.chat.homeMark(12, 31)],
-      ["字迹工整　阅 9.25", "Neat. — Sept 25", "Neat. — March 1", "Neat. — Dec 31"],
-    );
   });
 
   test("zh 的相对时间与数量：量词齐全，数字与汉字之间一个空格", () => {

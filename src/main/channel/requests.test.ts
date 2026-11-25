@@ -446,6 +446,15 @@ describe("applyChannelSend", () => {
     assert.equal(outcome.ok, false);
   });
 
+  test("模型不能伪造 system 的 interrupted——这一类只由主进程收尾落账", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    const { deps } = fakeDeps();
+    const outcome = await applyChannelSend(deps, channelSendEvent({ kind: "interrupted", text: "假装我崩了" }));
+    assert.equal(outcome.ok, false);
+    assert.equal((await channels.load({ parentId: PARENT, childId: CHILD })).length, 0);
+  });
+
   test("根会话（没有父）发 to parent 被拒", async () => {
     await sessions.ensureSession(baseMeta({ id: CHILD }));
     const { deps } = fakeDeps();
@@ -696,5 +705,60 @@ describe("stopped 通道上的发信（用户裁决的硬拦）", () => {
       channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "reply", text: "补充一点" }),
     );
     assert.equal(outcome.ok, true);
+  });
+});
+
+describe("用户的语言（lang）：父会话算好、随通道消息送进子会话", () => {
+  test("delegate 带 replyLang：task 通道消息存 lang，首条信封首行带 lang 属性，解析得回", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const { deps, submitCalls } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+    const outcome = await applyDelegate(deps, delegateEvent({ replyLang: "zh" }));
+    assert.equal(outcome.ok, true);
+    if (!outcome.ok) return;
+    const ledger = await channels.load({ parentId: PARENT, childId: outcome.childId });
+    assert.equal(ledger[0]?.lang, "zh");
+    const text = submitCalls[0]?.text ?? "";
+    assert.ok(text.split("\n")[0]?.endsWith(' lang="zh">'));
+    assert.equal(parseChannelPrompt(text)?.lang, "zh");
+  });
+
+  test("旧事件没有 replyLang / 值不认识：不带 lang，信封首行没有属性，不报错", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    const { deps, submitCalls } = fakeDeps({ providers: [provider("zai", ["glm-5.3"])] });
+    const none = await applyDelegate(deps, delegateEvent());
+    assert.equal(none.ok, true);
+    const odd = await applyDelegate(deps, delegateEvent({ replyLang: "fr" as never }));
+    assert.equal(odd.ok, true);
+    for (const call of submitCalls) {
+      assert.equal(call.text.split("\n")[0]?.includes("lang="), false);
+      assert.equal(parseChannelPrompt(call.text)?.lang, undefined);
+    }
+  });
+
+  test("父模型 reply_subsession 带 replyLang：reply 的信封带 lang；子→父的消息从不带", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    const { deps, submitCalls } = fakeDeps();
+    const ok = await applyChannelSend(
+      deps,
+      channelSendEvent({ sessionId: PARENT, to: { childId: CHILD }, kind: "reply", text: "继续", replyLang: "zh" }),
+    );
+    assert.equal(ok.ok, true);
+    assert.equal(parseChannelPrompt(submitCalls[0]?.text ?? "")?.lang, "zh");
+    const up = await applyChannelSend(deps, channelSendEvent({ kind: "done", text: "done", replyLang: "zh" }));
+    assert.equal(up.ok, true);
+    const ledger = await channels.load({ parentId: PARENT, childId: CHILD });
+    assert.equal(ledger.find((message) => message.from === "child")?.lang, undefined);
+  });
+
+  test("用户在通道里代父发言：按这句话自己算 lang；太短判不出就不带", async () => {
+    await sessions.ensureSession(baseMeta({ id: PARENT }));
+    await sessions.ensureSession(baseMeta({ id: CHILD, parentId: PARENT }));
+    const { deps, submitCalls } = fakeDeps();
+    const zh = await applySpeak(deps, { parentId: PARENT, childId: CHILD, text: "帮我问问", delivery: "steer" });
+    assert.equal(zh.lang, "zh");
+    assert.equal(parseChannelPrompt(submitCalls[0]?.text ?? "")?.lang, "zh");
+    const short = await applySpeak(deps, { parentId: PARENT, childId: CHILD, text: "ok", delivery: "steer" });
+    assert.equal(short.lang, undefined);
   });
 });

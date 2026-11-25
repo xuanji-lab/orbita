@@ -19,37 +19,20 @@ import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
  * **"black"**（玄 Onyx，纯灰、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
  * 契约，换的只是显示名（`themes` 在 messages-*.ts）。第三档 "dark"（Warm 微暖）
  * 2026-09-27 退役，存量设置迁移到 graphite（`parseTheme`）。
- *
- * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
- * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
- * system 不落这两档，都是手动档。copybook 载入当天由 "manuscript"（稿纸）改名：那个年代
- * 小学生写字用的是绿格作业本，不是稿纸。旧 id 的兼容见 `parseTheme`。
  */
-export const THEME_PREFERENCES = ["system", "light", "graphite", "black", "copybook", "typescript"] as const;
+export const THEME_PREFERENCES = ["system", "light", "graphite", "black"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
-/** 界面语言。缺席 = "en"（语言设置落地之前，双语主题一直是英文界面） */
+/** 界面语言。缺席 = "en"（语言设置落地之前的默认） */
 export const LANGUAGES = ["en", "zh"] as const;
 export type Language = (typeof LANGUAGES)[number];
 
 /**
- * 主题自带的语言。**稿纸一档是单语的**：小学作业的绿格按汉字画、打字稿的横线按英文打字机
- * 画，换一门文字格子就对不上（wafo 2026-09-25 当初不加语言开关的理由，正是这种组合）；
- * 其余各档（system 与它落到的 light / black，以及 graphite）中英都成立，跟 `language` 走。
- * null = 这个主题不定语言。
+ * 实际生效的语言：跟设置走。**渲染层（文案表、`<html lang>`）与主进程
+ * （commit / PR 署名）都走这一条**——两边各判一次的话，界面是中文、署名是英文。
  */
-export function themeLanguage(theme: ThemePreference): Language | null {
-  if (theme === "copybook") return "zh";
-  if (theme === "typescript") return "en";
-  return null;
-}
-
-/**
- * 实际生效的语言：单语主题说了算，双语主题听设置。**渲染层（文案表、`<html lang>`）
- * 与主进程（commit / PR 署名）都走这一条**——两边各判一次的话，界面是中文、署名是英文。
- */
-export function effectiveLanguage(theme: ThemePreference, language: Language | undefined): Language {
-  return themeLanguage(theme) ?? language ?? "en";
+export function effectiveLanguage(language: Language | undefined): Language {
+  return language ?? "en";
 }
 
 /**
@@ -104,7 +87,7 @@ export interface LastUsedIntent {
 }
 
 /**
- * 给家务活用的模型（起名、收尾扫描、迁移的随手一句检查……）。这些是一次次的
+ * 给家务活用的模型（起名、迁移的随手一句检查……）。这些是一次次的
  * 小调用，用不着主力模型——指一个小而快的，来得更快也更便宜，后面还会让它
  * 承担更多家务。两个 id 必须成对：光有 modelId 无法定位到哪家的密钥。
  */
@@ -119,11 +102,7 @@ export interface ModelPair {
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
  * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
  */
-export const EXPERIMENTAL_FEATURE_IDS = [
-  "paper-themes",
-  "pdf-citations",
-  "intent-system",
-] as const;
+export const EXPERIMENTAL_FEATURE_IDS = ["intent-system"] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
 /**
@@ -177,17 +156,21 @@ export interface UsagePetPref {
   hidden?: true;
 }
 
-/** 过程显示的两种形态，见 AppSettings.processView */
-export type ProcessView = "turn" | "steps";
+/** 过程显示的三档，见 AppSettings.processView */
+export type ProcessView = "chapters" | "flat" | "steps";
 
-/** 一轮一行展开之后的两种排法，见 AppSettings.processLayout */
-export type ProcessLayout = "chapters" | "flat";
+/** processView 的读时兼容：新三档原样；旧 "turn" 按旧 processLayout 映射到前两档；旧 "steps" 原样；只有旧 processLayout（缺 processView）也按它认 */
+export function parseProcessView(view: unknown, legacyLayout: unknown): ProcessView | undefined {
+  if (view === "chapters" || view === "flat" || view === "steps") return view;
+  if (view === "turn") return legacyLayout === "flat" ? "flat" : "chapters";
+  if (view === undefined && legacyLayout === "flat") return "flat";
+  return undefined;
+}
 
 export interface AppSettings {
   theme: ThemePreference;
   /**
-   * 界面语言偏好。**只在双语主题下生效**（见 `effectiveLanguage`）：选了小学作业 / 打字稿时
-   * 这个值留着不动，切回双语主题就恢复。缺席 = "en"。
+   * 界面语言偏好。缺席 = "en"。
    */
   language?: Language;
   /**
@@ -224,27 +207,25 @@ export interface AppSettings {
    */
   collapsePastedText?: boolean;
   /**
+   * 回答里本地图的默认尺寸（2026-11-23）：右键一张图选「大图 / 小图」，选的这一次记下来，之后新出现的图按它画。
+   * **缺席 = "large"**。已经画在屏幕上的图不跟着变（每张图挂载时读一次），免得右键一张、整页的图一起跳。
+   */
+  chatImageSize?: "large" | "small";
+  /**
    * 后台会话跑完时响一声提示音（客舱呼唤铃）。**缺席 = 响**：这个提醒的价值就在于
    * 人不在跟前时也能知道，默认关等于没做。只管声音——侧栏未读底色与辅助对话旁的
    * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
    */
   completionSound?: boolean;
   /**
-   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30）。**缺席 = "turn"**：
-   * - "turn"：一轮一行——干活时一块定高的现场块（走表 + 当前这一步），落定收成一行结论，
-   *   展开成按旁白切开的几段（features/chat/turn-process.ts）；
-   * - "steps"：逐步铺开——每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条
-   *   Worked（肖志芬的原设计，groupTurns）。
-   * 其余值丢掉。
+   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30 两档，2026-11-22 扩成三档）。**缺席 = "chapters"**：
+   * - "chapters"「按块」：一轮一行——干活时一块现场（走表 + 当前这一步，点开实时往下长），落定收成一行结论，
+   *   展开后按旁白切成几段（features/chat/turn-process.ts）；
+   * - "flat"「铺开」：同样一轮一行，展开后旁白一行、每一步一行平铺；
+   * - "steps"「逐步铺开」：每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条 Worked（肖志芬的原设计，groupTurns）。
+   * 旧设置读时兼容（parseSettings）：旧 "turn" 配旧 processLayout（缺席 / "chapters" → "chapters"，"flat" → "flat"），旧 "steps" 原样。其余值丢掉。
    */
   processView?: ProcessView;
-  /**
-   * 一轮一行展开之后怎么排（2026-11-22 用户：「两个都留」）。**缺席 = "chapters"**：
-   * - "chapters"：按段——一句旁白一段（整句），下面一行列这段的前几步，点开是每一步；
-   * - "flat"：平铺——旁白一行、每一步一行。
-   * 在展开处右上角切换，切了全局生效（features/chat/ChatView.tsx 的 ProcessExpanded）。其余值丢掉。
-   */
-  processLayout?: ProcessLayout;
   /**
    * 自动化：**有任务在跑时阻止系统睡眠**。缺席 = 关。开着时主进程只在
    * 有自动化运行**正在执行**期间用 Electron 的 powerSaveBlocker（`prevent-app-suspension`）
@@ -277,8 +258,8 @@ export interface AppSettings {
    */
   planFirst?: boolean;
   /**
-   * 家务活模型：给任务起名、收尾扫描、迁移的「跳过随手一句」检查这类小活的专用模型。
-   * **缺席 = 各自退回会话当时的模型**（起名 / 扫描）或置灰不可用（随手一句检查，
+   * 家务活模型：给任务起名、迁移的「跳过随手一句」检查这类小活的专用模型。
+   * **缺席 = 各自退回会话当时的模型**（起名）或置灰不可用（随手一句检查，
    * 状态行提醒去选）。主进程在发命令前把它解成带密钥的 provider 载荷；指的
    * provider 被删了不拦那件家务，退回会话模型。
    *
@@ -358,25 +339,18 @@ export interface AppSettings {
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
    * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
-   * 不动数据——已存的主题照常应用、已星标 / 已完成的会话与遗留事项原样在盘上，
+   * 不动数据——已存的主题照常应用、已星标的会话原样在盘上，
    * 开了就回来。
-   *
-   * 各项的语义：
-   * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
-   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
-   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
-   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
-   *
-   * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
-   * - 旧总开关 `experimental: true` 等价于 paper-themes 开（当年还挂着会话生命周期，已转正）。
    *
    * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
    * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
    * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
-   * 解析时直接丢，下一次写入从盘上带走。
+   * 解析时直接丢，下一次写入从盘上带走。2026-11-24 删除的 `paper-themes` 与旧总开关
+   * `experimental` 也同样忽略，不影响其它仍在表的实验项。
    *
-   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻）：盘上残留的 `session-lifecycle`
-   * 不在表里，解析时丢掉，开着关着都不再有任何效果。
+   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻；2026-11-22 PDF 引用转正，
+   * cite_pdf 常注册、PDF 预览与引用编号常开）：盘上残留的 `session-lifecycle` /
+   * `pdf-citations` 不在表里，解析时丢掉，开着关着都不再有任何效果。
    */
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
@@ -503,27 +477,14 @@ function isThemePreference(value: unknown): value is ThemePreference {
 }
 
 /**
- * "manuscript" 是 copybook 改名前的 id（同一档）：settings.json 里存着旧值的落回这一档，
- * 不退回 system。下次写设置时磁盘上就是新 id 了。"dark"（Warm）2026-09-27 退役，
- * 存量值落到 graphite——同为「不近黑的暗档」，继任关系最直。
+ * 退役主题的读时迁移：`dark`（Warm）落到同为「不近黑暗档」的 graphite；
+ * 2026-11-24 删除的纸面两档与它们的旧别名没有直接继任，跟其他坏值一样回
+ * `DEFAULT_SETTINGS.theme`（system），继续跟随用户的系统深浅，不强行改成浅色。
  */
 function parseTheme(value: unknown): ThemePreference {
   if (isThemePreference(value)) return value;
-  if (value === "manuscript") return "copybook";
   if (value === "dark") return "graphite";
   return DEFAULT_SETTINGS.theme;
-}
-
-/**
- * 主题选择卡的可选档位。实验功能 `paper-themes` 关闭时纸面两档（copybook /
- * typescript）不出现（逐项开关 2026-10-12 之前的总开关 `experimental` 同此语义）。
- * **只藏入口不动数据**：已存的主题照常应用、已星标 / 已完成的会话与遗留事项
- * 原样在盘上，开关打开入口就回来。开源首发的默认门面（2026-10 用户裁决：
- * 不成熟的功能在公开快照里默认不出现）。
- */
-export function selectableThemes(paperThemes: boolean): readonly ThemePreference[] {
-  if (paperThemes) return THEME_PREFERENCES;
-  return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
 }
 
 /** 设置 › 插件这一页的界面记忆（AppSettings.pluginsPage）；每个键缺席都是默认值 */
@@ -587,8 +548,10 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebarWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
+    chatImageSize?: unknown;
     completionSound?: unknown;
     processView?: unknown;
+    /** 只读：旧版「一轮一行」展开后的排法，并进 processView（不再写） */
     processLayout?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
@@ -614,8 +577,6 @@ export function parseSettings(raw: unknown): AppSettings {
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
     vector?: unknown;
-    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
-    experimental?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -635,7 +596,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const starredModels = parseStarredModels(record.starredModels);
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
-  const experimentalFeatures = parseExperimentalFeatures(record);
+  const experimentalFeatures = parseExperimentalFeatures(record.experimentalFeatures);
   const intent = parseIntentSettings(record.intent);
   const vector = parseVectorSettings(record.vector);
   const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
@@ -673,12 +634,11 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
       : {}),
-    ...(record.processView === "turn" || record.processView === "steps"
-      ? { processView: record.processView }
-      : {}),
-    ...(record.processLayout === "chapters" || record.processLayout === "flat"
-      ? { processLayout: record.processLayout }
-      : {}),
+    // 只认两个值，别的丢掉（缺席 = 大图）
+    ...(record.chatImageSize === "large" || record.chatImageSize === "small" ? { chatImageSize: record.chatImageSize } : {}),
+    ...(parseProcessView(record.processView, record.processLayout) === undefined
+      ? {}
+      : { processView: parseProcessView(record.processView, record.processLayout) }),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
       ? { completionSound: record.completionSound }
@@ -735,22 +695,13 @@ function parseVectorSettings(raw: unknown): Partial<MemoryVectorSettings> | unde
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function parseExperimentalFeatures(record: {
-  experimentalFeatures?: unknown;
-  experimental?: unknown;
-}): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
+function parseExperimentalFeatures(raw: unknown): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
   const out: Partial<Record<ExperimentalFeatureId, boolean>> = {};
-  const raw = record.experimentalFeatures;
   if (typeof raw === "object" && raw !== null) {
     for (const id of EXPERIMENTAL_FEATURE_IDS) {
       const value = (raw as Record<string, unknown>)[id];
       if (typeof value === "boolean") out[id] = value;
     }
-  }
-  // 旧总开关：true = 当年挂在它后面的 paper-themes 照常开（另一项会话生命周期已转正）。
-  // 新键里已显式给值的项以新键为准（??=）
-  if (record.experimental === true) {
-    out["paper-themes"] ??= true;
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }

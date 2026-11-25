@@ -8,26 +8,31 @@
  *     `report_to_parent` 的分流消费）——文案来自那次工具调用的入参/kind；接收侧
  *     的文案间或经 `channelMarkLabel`（tool-results.ts，QueueStrip 也在用）。
  *   - 接收侧（对话流里收到对面消息的位置）不走胶囊：子侧是带引子的虚线气泡
- *     （`ChannelFromParentBubble`），父侧是一行问询胶囊（`ChannelFromChildPill`）。
+ *     （`ChannelFromParentBubble`），父侧是一张白卡（`ChannelFromChildCard` / `ChildLineCard`，2026-11-22 收掉了胶囊）。
  *
  * 派出卡（`DelegateCardView`）是另一种语言：GlassCard 同款 1px 边框 + panel 底的
  * 小卡片，不是一行标记。
  *
  * 父子会话面板删除后（2026-10-12 用户裁决：它总是自己弹出，且把两边对话抽走、
  * 变成第三个又长又啰嗦的地方）：标记行不再有「点开面板」的去处——父流的
- * question / done / failed 标记换成 `ChannelFromChildPill`（点开 Sub-sessions 面板），
+ * question / done / failed 标记换成一行白卡 `ChildLineCard`（点开 Sub-sessions 面板），
  * 子流的父侧消息换成 `ChannelFromParentBubble`（正文直接进对话流），都在本文件。
  */
-import type { ChannelMessage, ChannelMessageKind, ChannelSummary } from "@shared/channel";
+import type { ChannelEndInfo, ChannelMessage, ChannelMessageKind, ChannelSummary } from "@shared/channel";
 import type { DelegateCard } from "@shared/agent-ipc";
 import { thinkingLevelLabel } from "@shared/thinking";
 import { Icon, type IconName } from "../../shell/Icon";
-import type { ChannelMarkTone } from "./tool-results";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
+import { questionAnswered, type ChannelMarkTone } from "./tool-results";
 import { EXIT_CARD_KICKER, EXIT_CARD_STYLE, ExitCard } from "./ExitCard";
 import { MarkdownBlock } from "./MarkdownBlock";
 import type { SessionEntry } from "./session-states";
 import type { Messages } from "../../messages-en.ts";
 import { useT } from "../../locale.ts";
+import { useState } from "react";
+import { api } from "../../api";
+import { Menu, type MenuItem } from "../../shell/Menu";
+import { channelEndOf, channelEndText } from "./sub-sessions-rows.ts";
 
 /**
  * 通道渲染面共用的上下文（子会话 PR4a）：`TranscriptColumn` 往下经 `EntryView` /
@@ -36,16 +41,24 @@ import { useT } from "../../locale.ts";
  * TranscriptColumn 的 memo 会被每次渲染新建的对象打穿（见该组件的注释）。
  */
 export interface ChannelViewContext {
+  /** 当前查看会话 id：派出卡的重试 / 终止复用 channel:speak / channel:stop。 */
+  ownSessionId: string;
   /** 被查看会话相对通道的身份：父看到子发来的消息，子看到父发来的消息 */
   ownSide: "parent" | "child";
   /** 被查看会话自己的 parentId——仅 ownSide 为 "child" 时有意义（report_to_parent 的隐式对面） */
   ownParentId: string | null;
   /** 会话 id → 标题，标记行 / 派出卡按 peerId / childId 查对面的名字 */
   titles: ReadonlyMap<string, string>;
+  /** 子会话 id → 它用的型号 id（交回卡左边的模型名标签用）；没有的退回派出卡上记的型号 */
+  childModelIds: ReadonlyMap<string, string>;
+  /** 型号 id → 显示名（声明名 > 白名单 > 目录名 > id，与模型菜单同一套） */
+  modelNameOf: (modelId: string) => string;
+  /** 被查看的这条会话自己的型号显示名（子会话视图顶行用）；还没选型号 null */
+  ownModelName: string | null;
   /** 派出卡状态优先读它（done/failed/waiting），来自 useChannelSummaries */
   channelSummaries: ReadonlyMap<string, ChannelSummary>;
-  /** 派出卡状态的兜底——channelSummaries 没有终态时看子会话是否还在跑 */
-  childPhaseOf: (id: string) => SessionEntry["phase"];
+  /** 派出卡 / 交回产出读同一份 phase 快照；key 变化会让 ChatView 重建 channel 对象。 */
+  childPhases: ReadonlyMap<string, SessionEntry["phase"]>;
   /**
    * 点主流里的派出卡 / 子会话消息胶囊 → 打开右栏 Sub-sessions 面板并直接进入该子
    * 会话的会话层。null = 不可点（辅助对话抽屉不传；子会话自己没有子会话入口）。
@@ -115,6 +128,8 @@ export function channelKindIcon(kind: ChannelMessageKind): IconName {
       return "circle-check";
     case "failed":
       return "triangle-alert";
+    case "interrupted":
+      return "circle-off";
     // 用户终止：终止八边形，与通道卡 / 子会话列表的 stopped 状态同一枚图标
     case "stop":
       return "octagon-x";
@@ -218,7 +233,7 @@ export function ChannelToolMarkLine(props: {
   );
 }
 
-export type DelegateCardStatus = "running" | "waiting" | "done" | "failed" | "stopped" | "idle";
+export type DelegateCardStatus = "running" | "waiting" | "done" | "failed" | "interrupted" | "stopped" | "idle";
 
 
 function delegateStatusColor(status: DelegateCardStatus): string {
@@ -230,6 +245,7 @@ function delegateStatusColor(status: DelegateCardStatus): string {
     case "done":
       return "var(--color-success)";
     case "failed":
+    case "interrupted":
       return "var(--color-danger)";
     // stopped 是用户的裁决不是故障：中性灰（同 Sub-sessions 面板的 STATUS_COLOR）
     case "stopped":
@@ -257,8 +273,14 @@ export function DelegateCardView(props: {
   taskPreview: string;
   /** 结果帧永远不来（interruptedToolCallIds）：null 卡不呼吸「委派中」，换静止的中性「已中断」 */
   interrupted?: boolean;
+  /** 终局分类与正文（来自 ChannelSummary.end，无需为卡再读整份账本） */
+  end?: ChannelEndInfo;
+  /** 失败 / 中断：既有 channel:speak 重试与 channel:stop 终止。 */
+  recovery?: { parentId: string; childId: string };
   onClick?: () => void;
   lit?: boolean;
+  /** 子会话用的型号显示名：写在标题后面的灰色小字（「GLM-5.3」），同型号的子会话靠标题分开；缺 = 不写 */
+  modelName?: string;
 }) {
   const t = useT();
   if (props.card === null) {
@@ -305,18 +327,29 @@ export function DelegateCardView(props: {
     );
   }
   const { card, status } = props;
+  const endText = channelEndText(props.end, t, "");
+  const failed = status === "failed" || status === "interrupted";
   return (
     <ExitCard
       kicker={t.channel.delegated}
-      icon="bot"
+      icon={FEATURE_ICON.subsessions}
       title={card.title}
+      {...(props.modelName !== undefined ? { titleSuffix: <ModelNameLabel name={props.modelName} /> } : {})}
       status={{ text: t.channel.delegateStatus[status], color: delegateStatusColor(status), active: status === "running" }}
-      preview={props.taskPreview}
+      preview={failed && endText !== "" ? endText : props.taskPreview}
       meta={`${card.modelId} · ${thinkingLevelLabel(card.thinkingLevel, card.modelId)}`}
+      {...(props.recovery === undefined
+        ? {}
+        : { footer: <SubSessionRecoveryActions parentId={props.recovery.parentId} childId={props.recovery.childId} /> })}
       {...(props.onClick !== undefined ? { onClick: props.onClick, clickTitle: t.chat.openTaskCard(card.title) } : {})}
       {...(props.lit !== undefined ? { lit: props.lit } : {})}
     />
   );
+}
+
+/** 子会话卡标题后面的型号名：灰色小字（不用位图头像——小尺寸下发灰辨认不清，2026-11-22 用户看过选文字标签） */
+export function ModelNameLabel(props: { name: string }) {
+  return <span className="model-name-label">{props.name}</span>;
 }
 
 const TASK_CARD_TOGGLE_STYLE = {
@@ -384,54 +417,140 @@ export function ChannelFromParentBubble(props: {
 }
 
 /**
- * 父会话对话流里的子会话问询胶囊（2026-10-12 用户裁决）：子发来的 question /
- * done / failed 各一行——问询带正文首行（截断）与「去回答 ›」尾签，完成 / 失败
- * 只报名字不转述结论（结论由父会话的模型自己转述，我们不多控制）。**progress
- * 不进父流**（调用方已过滤）：进度是子会话自己的事，父只关心要它拿主意的三种。
- *
- * 整行可点：打开右栏 Sub-sessions 面板并进入该子会话的会话层（`openSubSession`，
- * 与派出卡同一个入口）。辅助对话抽屉里接不上它——胶囊退化为不可点的静态行。
- * 颜色走状态色（warning / success / danger），只给行首图标——图标在说话，颜色是
- * 第二信号。
+ * 主流里子会话来往的白卡（2026-11-22：过程收进过程行、要用户看的做成白卡）：同交回卡的一行骨架——
+ * 机器人 / 警示图标 +「「标题」…」+ 型号名小字 + 第一行 + 右侧描边小按钮。红只给图标，不染底。
  */
-export function ChannelFromChildPill(props: {
+export function ChildLineCard(props: {
+  icon: IconName;
+  danger?: boolean;
+  head: string;
+  /** 子会话用的型号显示名（灰色小字）；空 = 不写 */
+  model: string;
+  /** 通道正文的第一行；读不到 / 空就不写（不显示「读取失败」） */
+  first: string;
+  action: { label: string; onClick: () => void } | null;
+  /** 卡下面补一行（交回卡的「还改了 N 个别的文件」） */
+  below?: React.ReactNode;
+}) {
+  return (
+    <div className="child-report">
+      <div className="child-report-head">
+        <span className="exit-card-icon" style={props.danger === true ? { color: "var(--color-danger)" } : undefined}>
+          <Icon name={props.icon} size={18} strokeWidth={1.6} />
+        </span>
+        <span className="child-report-line">
+          <span className="exit-card-name">{props.head}</span>
+          {props.model !== "" && <ModelNameLabel name={props.model} />}
+          {props.first !== "" && <span className="child-report-first">{props.first}</span>}
+        </span>
+        {props.action !== null && (
+          <button type="button" className="card-btn" onClick={props.action.onClick}>
+            {props.action.label}
+          </button>
+        )}
+      </div>
+      {props.below}
+    </div>
+  );
+}
+
+/**
+ * 父流里子会话发来的问询 / 失败（完成见 ChatView 的 ChildReportCard，它还要挂「改了别的文件」）。
+ * 问询：「「标题」在问你 · 问题第一行 · 型号名」+［去回答］（打开右栏子会话面板定位到回答框）；答过了（通道后面有了回复）
+ * 变成「「标题」问过你 · 已回答」，按钮去掉。失败：「「标题」失败了 · 原因第一行 · 型号名」+［看它的会话］。
+ * 通道正文读不到（旧样张没有账本）时第一行留空，只写「在问你」「失败了」。
+ */
+export function ChannelFromChildCard(props: {
   mark: { peerId: string; messageId: string; kind: ChannelMessageKind };
   channel: ChannelViewContext;
 }) {
   const t = useT();
   const { mark, channel } = props;
-  const childTitle = peerTitleOf(channel, mark.peerId, t);
+  const title = peerTitleOf(channel, mark.peerId, t);
   const message = channel.channelMessages.get(mark.messageId);
-  const openSubSession = channel.openSubSession;
-  const clickable = openSubSession !== null;
-  const common = {
-    className: "channel-from-child-pill",
-    onClick: clickable ? () => openSubSession(mark.peerId) : undefined,
-    title: clickable ? t.subSessions.openInPanel : undefined,
-  } satisfies React.ButtonHTMLAttributes<HTMLButtonElement>;
-  if (mark.kind === "question") {
+  const first = firstLineOf(message?.text ?? "");
+  const model = channel.modelNameOf(channel.childModelIds.get(mark.peerId) ?? "");
+  const open = channel.openSubSession;
+  if (mark.kind === "failed" || mark.kind === "interrupted") {
+    const end = channelEndOf(message === undefined ? undefined : [message], mark.kind);
     return (
-      <button type="button" {...common} data-tone="question">
-        <Icon name="circle-help" size={13} strokeWidth={1.8} />
-        <span className="channel-from-child-name">{t.channel.asksYou(childTitle)}</span>
-        <span className="channel-from-child-text">{firstLineOf(message?.text ?? "")}</span>
-        <span className="channel-from-child-go">{t.channel.goAnswer}</span>
-      </button>
+      <ChildLineCard
+        icon={mark.kind === "failed" ? "triangle-alert" : "circle-off"}
+        danger
+        head={mark.kind === "failed" ? t.channel.childFailedLine(title) : t.channel.childInterruptedLine(title)}
+        model={model}
+        first={channelEndText(end, t, first)}
+        action={open === null ? null : { label: t.chat.childReportOpen, onClick: () => open(mark.peerId) }}
+      />
     );
   }
-  if (mark.kind === "failed") {
-    return (
-      <button type="button" {...common} data-tone="failed">
-        <Icon name="triangle-alert" size={13} strokeWidth={1.8} />
-        <span className="channel-from-child-name">{t.channel.childFailed(childTitle)}</span>
-      </button>
-    );
-  }
+  const answered = questionAnswered(channel.channelSummaries.get(mark.peerId), message);
   return (
-    <button type="button" {...common} data-tone="done">
-      <Icon name="circle-check" size={13} strokeWidth={1.8} />
-      <span className="channel-from-child-name">{t.channel.childDone(childTitle)}</span>
-    </button>
+    <ChildLineCard
+      icon="circle-help"
+      head={answered ? t.channel.askedYouLine(title) : t.channel.asksYouLine(title)}
+      model={model}
+      first={answered ? t.channel.answered : first}
+      action={answered || open === null ? null : { label: t.channel.goAnswerShort, onClick: () => open(mark.peerId) }}
+    />
+  );
+}
+
+/** 失败 / 中断的恢复动作：重试就是一条既有父→子 reply；终止仍走既有三步。 */
+export function SubSessionRecoveryActions(props: { parentId: string; childId: string }) {
+  const t = useT();
+  const [busy, setBusy] = useState<"retry" | "stop" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const report = (cause: unknown): void => setError(cause instanceof Error ? cause.message : String(cause));
+  const retry = (): void => {
+    if (busy !== null) return;
+    setBusy("retry");
+    setError(null);
+    void api.channel
+      .speak({
+        parentId: props.parentId,
+        childId: props.childId,
+        text: t.subSessions.retryPrompt,
+        delivery: "followUp",
+      })
+      .catch(report)
+      .finally(() => setBusy(null));
+  };
+  const stop = (): void => {
+    if (busy !== null) return;
+    setBusy("stop");
+    setError(null);
+    void api.channel
+      .stop({ parentId: props.parentId, childId: props.childId })
+      .catch(report)
+      .finally(() => setBusy(null));
+  };
+  const stopItems: MenuItem[] = [
+    { id: "stop-hint", label: t.subSessions.stopHint, fact: true },
+    { id: "stop-confirm", label: t.subSessions.stopConfirm, icon: "octagon-x", danger: true, disabled: busy !== null, onSelect: stop },
+    { id: "stop-cancel", label: t.common.cancel, icon: "x", onSelect: () => undefined },
+  ];
+  return (
+    <span className="subsession-recovery">
+      <button type="button" className="card-btn" title={t.subSessions.retryTip} disabled={busy !== null} onClick={retry}>
+        {t.subSessions.retry}
+      </button>
+      <Menu
+        items={stopItems}
+        align="end"
+        trigger={({ toggle }) => (
+          <button type="button" className="card-btn" disabled={busy !== null} title={t.subSessions.stopTip} onClick={toggle}>
+            {t.subSessions.stopLabel}
+          </button>
+        )}
+      />
+      {error !== null && (
+        <span className="subsession-recovery-error" role="alert" title={error}>
+          <Icon name="triangle-alert" size={12} />
+          {firstLineOf(error)}
+        </span>
+      )}
+    </span>
   );
 }
 

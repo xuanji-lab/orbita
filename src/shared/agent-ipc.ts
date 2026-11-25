@@ -15,9 +15,10 @@ import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
-import type { FileChangePayload, FileChangeView } from "./revert.ts";
+import type { FileChangePayload, FileChangeView, MediaArtifact } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
+import type { ReplyLang } from "./reply-language.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
@@ -37,6 +38,7 @@ import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginAgentScope } from "./plugin.ts";
 import type { PluginBoardOutcome } from "./plugin-board.ts";
 import type { IntentRecallRecord } from "./session.ts";
+import type { QuotaExhaustedHint } from "./quota.ts";
 import type {
   MemoryBackfillProgress,
   MemoryDownloadProgress,
@@ -103,6 +105,11 @@ export const ipcChannels = {
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
+  /**
+   * 厂商账号额度（余额 / 套餐窗口）：入参 QuotaQuery，回 QuotaResult。
+   * 主进程负责取密钥、打厂商端点、落缓存；密钥不进返回值。
+   */
+  providerQuota: "provider:quota",
   /**
    * Claude 订阅账号的 OAuth 登录：主进程起回调服务器 + 开系统浏览器，成功后直接
    * 落盘 provider 与凭据，返回 UpsertResult。凭据（access / refresh token）全程
@@ -183,8 +190,6 @@ export const ipcChannels = {
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
   sessionStar: "session:star",
-  /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
-  sessionSetCompletion: "session:set-completion",
   /**
    * 意图召回的会话级开关（实验功能 intent-system）：载荷 (sessionId, boolean)，回 void。
    * 只落 meta（intentEnabled），下一轮开轮时主进程现读现装配；输入框旁的小开关用。
@@ -266,6 +271,12 @@ export const ipcChannels = {
    */
   fsReadPdf: "fs:read-pdf",
   /**
+   * 给音 / 视频文件要一个播放地址（同 root/dir 白名单，且须是媒体扩展名，回 `FileMediaUrl`，files.ts）。
+   * 不读字节：主进程发一个映射到 realpath 的随机 token，renderer 的 <audio> / <video> 经
+   * `orbita-media://` 协议按 Range 流式读，大文件不过 IPC
+   */
+  fsMediaUrl: "fs:media-url",
+  /**
    * 建一个文件的行索引（同 root/dir 白名单，回 `FileLineIndex`，files.ts）：大于
    * PREVIEW_TEXT_LIMIT 的文本走「按行分段预览」时，renderer 先问这份文件有多少行。
    * 主进程按 8 MB 分块扫换行、逐块让出事件循环；同一个文件同时只扫一遍（在途的请求合并），
@@ -341,8 +352,6 @@ export const ipcChannels = {
   docOfmResolve: "doc:ofm-resolve",
   /** 插图：复制进附件目录，回要插入的 markdown */
   docInsertImage: "doc:insert-image",
-  /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
-  carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
@@ -363,20 +372,6 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /**
-   * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
-   * （会话不存在 / 没有新轮次时 null）。
-   */
-  sessionWrapupPlan: "session:wrapup-plan",
-  /** 收尾：按用户一句话改清单（家务活模型一次独立小调用，不进会话）。载荷 (sessionId, WrapupReviseInput)，回 `WrapupReviseResult` */
-  sessionWrapupRevise: "session:wrapup-revise",
-  /**
-   * 收尾确认：做完的事落进 meta.wrapups 并记进任务账本、留下的事落遗留清单、会话标完成、
-   * 这条会话在接着做的遗留事项（meta.resumedCarryovers）标为做完。载荷 (sessionId, WrapupConfirmInput)，回 void
-   */
-  sessionWrapupConfirm: "session:wrapup-confirm",
-  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
-  carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
   sessionRevertPlan: "session:revert-plan",
   /** 会话回退：撤回目标消息及之后全部（对话 + pi 本子 + 文件快照） */
@@ -727,11 +722,6 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
-  /**
-   * 这一轮是在接着做某条遗留事项（遗留清单的「继续」）：主进程把它记进这条会话的
-   * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
-   */
-  carryoverId?: string;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -913,12 +903,6 @@ export type AgentCommand =
        * 单语主题说了算，双语主题听语言设置），runtime 只收数据。缺席 = "en"。
        */
       attributionLanguage?: Language;
-      /**
-       * 实验功能「PDF 引用」的开关（settings.experimentalFeatures["pdf-citations"]）。
-       * **主进程从设置装配**（同 gitAttribution）。开着时 runtime 才注册 cite_pdf
-       * 并讲它的用法；缺席 = 关
-       */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /**
@@ -994,18 +978,6 @@ export type AgentCommand =
     }
   | {
       /**
-       * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
-       * 回复原文经 `choreCompleted` 事件按 requestId 回传。不开会话、不落盘（同 summarizeFocus）。
-       */
-      type: "choreComplete";
-      requestId: string;
-      provider: ProviderSecrets;
-      modelId: string;
-      system: string;
-      prompt: string;
-    }
-  | {
-      /**
        * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
        * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
        * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
@@ -1060,8 +1032,6 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
-      /** 实验功能「PDF 引用」的开关，语义同 submit */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1129,8 +1099,6 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
-      /** 实验功能「PDF 引用」的开关，语义同 submit */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1532,6 +1500,11 @@ export type AgentEvent =
       modelId?: string;
       /** 可选的思考档；缺席时跟着解析出的模型走（见上方 delegateRequest 的说明） */
       thinkingLevel?: ThinkingLevel;
+      /**
+       * 此刻用户的语言（agent 按父会话历史里「用户亲手打的字」算好，shared/reply-language.ts）：
+       * 主进程写进 task 通道消息的 lang，子会话据此写可见文字与汇报。缺席 = 没算出来。
+       */
+      replyLang?: ReplyLang;
     }
   /**
    * 派发参考：agent 的 model_costs 工具请求。**数据在主进程**（任务账本 usage-tasks.json、
@@ -1565,17 +1538,14 @@ export type AgentEvent =
       kind: ChannelMessageKind;
       text: string;
       delivery?: ChannelDelivery;
+      /** 父→子 reply 才带：同 delegateRequest.replyLang，写进这条 reply 通道消息的 lang */
+      replyLang?: ReplyLang;
     }
 /**
  * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
-/**
- * 「以后再做」（carryovers.jsonl）有新增：agent 写 update_plan 时当场记下的事，由主进程在落盘那条
- * 记录时写进清单后广播。无载荷、无 sessionId——界面听到就重拉 carryoverList（skillsChanged 同款）。
- */
-| { type: "carryoversChanged" }
 /**
  * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
@@ -1613,6 +1583,11 @@ export type AgentEvent =
       changes: readonly FileChangePayload[];
       webArtifacts?: readonly string[];
       webArtifactsBatch?: number;
+      /**
+       * 音视频产物候选（脚本生成的 mp3 / mp4 等，同样走旁路扫描与时间窗；只有它、没有 changes 的轮也发）。
+       * 不参与撤销；卡片只显示回答里点了名的。
+       */
+      mediaArtifacts?: readonly MediaArtifact[];
     }
   /**
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
@@ -1626,6 +1601,8 @@ export type AgentEvent =
       webArtifacts?: readonly string[];
       /** 批量折叠计数：本轮网页文件变动超过上限，不逐个列（与 webArtifacts 互斥） */
       webArtifactsBatch?: number;
+      /** 音视频产物候选（与 fileTurn 同字段） */
+      mediaArtifacts?: readonly MediaArtifact[];
     }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
@@ -1645,8 +1622,6 @@ export type AgentEvent =
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
-  /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
-  | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
@@ -1719,7 +1694,19 @@ export type AgentEvent =
    * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
-  | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  | {
+      type: "failed";
+      sessionId: string | null;
+      message: string;
+      turn?: true;
+      /**
+       * 这一轮是不是因为某个额度窗口用尽而失败。**主进程按额度缓存判定并补上**，
+       * 不是按厂商文案猜（判据见 `shared/quota.ts` 的 `quotaHintOf`）。缺席 = 不知道
+       * 或不该解释；厂商原文照旧在 `message` 里，不丢排障信息。
+       * 只在主进程补：缓存（`<userData>/quota-cache.json`）只有它读得到。
+       */
+      quota?: QuotaExhaustedHint;
+    }
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

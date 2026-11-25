@@ -47,7 +47,7 @@ export const PROGRESS_NARRATION_GUIDELINE =
   "Put conclusions, decisions the user should know about, and anything they must act on in the final answer.\n" +
   "Decks, documents and exported files you made in this turn are listed as clickable cards under your answer: refer to them by name, do not paste their full paths.\n" +
   "To show the user a picture, embed it in your final answer where you discuss it: ![short caption](</absolute/path/to/image.png>) on its own line, followed by the paragraph that explains it. " +
-  "The file must be inside the workspace, an attached directory or the session workbench.\n";
+  "The file must be inside the workspace, an attached directory or the session workbench — save screenshots and figures you make into the session workbench's shots/ folder, never /tmp, or the user sees a broken image.\n";
 
 /**
  * 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。单独成段、由 runtime
@@ -58,18 +58,31 @@ export const PROGRESS_NARRATION_GUIDELINE =
  * 正文在附件里时，消息整体被 Orbita 自动加的英文包装（点名 skill 的说明、附件清单说明）
  * 压倒，模型判成英文、整轮英文回。包装块的列表要与实际组装处保持一致（测试锚定）：
  * invocation.ts / prompt-attachments.ts / user-context.ts / memory-inject.ts / task-ref.ts / channel.ts / quote.ts。
+ *
+ * 2026-11-22：规则只写在这里一次不够——长会话里紧挨回复的是大量英文，离得近的压过离得远的；
+ * 子会话收到的全是信封，没有「用户亲手打的字」，规则又把信封排除在外，默认就写英文。
+ * 所以代码按「用户亲手打的字」算出语言，每条用户消息末尾附一行 `<reply_language>`
+ * （user-context.ts 的 wire 层；子会话的语言由父会话写进信封 lang，见 shared/reply-language.ts），
+ * 本段声明它优先，并把它加进「不算用户的字」的包装清单。信封正文在子会话一侧**不**算用户的字
+ * （二选一，选标记）：正文是父模型写的，父模型自己漂成英文时子会话不该跟着漂，
+ * 而 lang 是代码从用户的字算出来的，两条规则不打架。
  */
 export const REPLY_LANGUAGE_GUIDELINE =
   "Reply language: write all user-visible text, progress notes and final answers alike, in the language the user themselves writes in, " +
   "even if these instructions, project files or earlier messages are in another language. Switch only if the user asks you to.\n" +
+  "Each user message may end with a <reply_language lang=\"zh|en\"> marker. Orbita computes it from what the user typed (in a sub-session, " +
+  "from the user's language that your parent session carried in the channel messages), so it takes priority: write in that language, " +
+  "including every report_to_parent text and every task you hand to a sub-session. It also holds when the recent context is full of " +
+  "English (reports, tool output, channel boilerplate). Without a marker, use the rules below.\n" +
   "What counts as the user's own writing: the words they typed in their latest message, plus the prose of text they attached or pasted " +
   "(a <pasted-text> block, or a text file listed in <attached-files> once you have read it). " +
   "When the typed words are short or mixed-language and point at an attachment, follow the language of that attachment's prose.\n" +
   "What does not count: blocks that Orbita adds around the message on its own — <mentioned_tools>, <attached-files> (the listing and its " +
-  "instruction line, not the files' contents), <user_context>, <orbita-memory>, <referenced_task>, and <channel> envelopes — and the " +
-  "excerpts inside <quoted_context> (they quote earlier turns, possibly the assistant's own). These are mostly English boilerplate; " +
-  "never let their language, or how much of the message they take up, decide the reply language.\n" +
-  "When the latest message has no words the user typed (a turn opened by a <channel> report from a sub-session, an automation " +
+  "instruction line, not the files' contents), <user_context>, <reply_language>, <orbita-memory>, <referenced_task>, and <channel> envelopes — " +
+  "and the excerpts inside <quoted_context> (they quote earlier turns, possibly the assistant's own). These are mostly English boilerplate; " +
+  "never let their language, or how much of the message they take up, decide the reply language. The text of a <channel> envelope is " +
+  "not the user's writing even when it comes from your parent session: only the marker carries the user's language there.\n" +
+  "When the latest message has no words the user typed and no marker (a turn opened by a <channel> report from a sub-session, an automation " +
   "wake-up, or anything else Orbita sends on its own), keep the language of the user's most recent message that they did type; " +
   "a sub-session's report or your own task text being in another language does not change it.";
 

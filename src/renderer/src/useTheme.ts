@@ -18,8 +18,7 @@ import { htmlLang } from "./locale.ts";
  *
  * 返回解析后的主题：界面语言由它与语言设置一起派生（shared 的 `effectiveLanguage`）。`<html lang>` 与
  * `data-theme` 在同一处、同一次提交里写——文案表的切换也包进同一次交叉淡入
- * （transition 回调里 flushSync），换到小学作业时颜色和中文一起淡入，
- * 不是先换色、淡入完了文字再跳一下。
+ * （transition 回调里 flushSync），语言和颜色一起淡入。
  */
 export function useTheme(
   preference: ThemePreference,
@@ -37,7 +36,7 @@ export function useTheme(
       const current = root.dataset["theme"];
       const commit = () => {
         root.dataset["theme"] = resolved;
-        root.lang = htmlLang(effectiveLanguage(resolved, language));
+        root.lang = htmlLang(effectiveLanguage(language));
       };
       if (current === resolved) {
         commit();

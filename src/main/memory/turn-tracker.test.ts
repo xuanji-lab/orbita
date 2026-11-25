@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { MemoryTurnTracker, memoryBuildEligible, turnNumberOf } from "./turn-tracker.ts";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { parseChannelPrompt } from "../../shared/channel.ts";
-import { LEGACY_CLOSING_SCAN_PROMPT } from "../../shared/wrapup-scan.ts";
+import { LEGACY_CLOSING_SCAN_PROMPT } from "../../shared/legacy-closing-scan.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { MemoryChoreModel } from "../../shared/memory.ts";
 import type { MemoryTurnPayload } from "./host-core.ts";

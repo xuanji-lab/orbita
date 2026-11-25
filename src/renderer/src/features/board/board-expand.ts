@@ -6,6 +6,9 @@
  * 用 toolCallId 作键——它在整条会话里唯一，状态卡的缩略图点过来（`requestRevealBoard`）也靠它定位。
  */
 
+import type { BoardCardSize } from "../../../../shared/plugin-board.ts";
+import { containerLayout, gridHeight } from "../plugins/board-layout.ts";
+
 /** 对话里看板结果收起时最高占窗口高度的几成：一张 2x2 的卡能占满一整屏，收起时限到约半屏 */
 export const BOARD_RESULT_MAX_VH = 0.5;
 
@@ -29,6 +32,30 @@ export function boardClip(input: { contentHeight: number; windowHeight: number; 
   const foldable = input.contentHeight > cap;
   const clipped = foldable && !input.expanded;
   return { cap, foldable, clipped, maxHeight: clipped ? cap : null };
+}
+
+/**
+ * 虚拟列表里一行看板结果比 `.board-result` 本体多出来的高度：`.board-result` 上下各 8px 的 margin（--space-2）
+ * + 虚拟行的 padding-bottom（--chat-row-gap，实测 20px）。实测：看板 400 → 行 436，看板 326.7 → 行 362.7。
+ */
+export const BOARD_ROW_EXTRA = 36;
+
+/**
+ * 一行看板结果**还没挂载过**时的高度估值（给虚拟列表的 estimateSize 用）。
+ *
+ * 为什么要有它：未测行默认按 kind 估，`toolCall` 的先验是 230——对工具行合适，对看板结果差得远
+ * （2x2 收起是 436、2x1 是 363，随宽度线性变）。往上滚进没挂载过的看板行时，估值被实测替换，
+ * 总高一次跳 130–200px，只补偿「整行都在视口上方」的部分，其余就成了视口里的位移（实测 8 次看板进入、
+ * 总高跳 +344 / +89 / −304，对应视口里 13 – 171px 的跳变）。看板的高度其实能从快照直接算出来
+ * （与挂载后的占位同一个 `gridHeight`），所以直接给准。
+ */
+export function boardRowEstimate(
+  board: { cards: readonly { size: BoardCardSize }[] },
+  ctx: { columnWidth: number; windowHeight: number; expanded: boolean },
+): number {
+  const content = gridHeight(containerLayout(ctx.columnWidth), board.cards.map((card) => card.size));
+  const clip = boardClip({ contentHeight: content, windowHeight: ctx.windowHeight, expanded: ctx.expanded });
+  return (clip.maxHeight === null ? content : Math.min(content, clip.maxHeight)) + BOARD_ROW_EXTRA;
 }
 
 /**

@@ -82,6 +82,7 @@ function ImageLayer(props: { images: readonly Extract<ComposerMaterial, { kind: 
           openLabel={t.lightbox.open}
           onOpen={() => setViewing(index)}
           paperclip
+          index={index + 1}
           onRemove={item.remove}
           removeLabel={t.composer.removeImage}
         />

@@ -34,6 +34,8 @@ const dedupe = createDedupe<WebThumb | null>();
 
 /** 每个截图窗口（按 webContents id）当前放行的 file:// 根；窗口销毁就移除 */
 const rootsByContents = new Map<number, readonly string[]>();
+/** 每个截图窗口打开的顶层网页（realpath 后）：页面闸据此放行它自己，哪怕文件名是点开头（同 browser/sandbox.ts） */
+const pageByContents = new Map<number, string>();
 let guarded: Session | null = null;
 
 function thumbSession(): Session {
@@ -50,7 +52,8 @@ function thumbSession(): Session {
       return;
     }
     const roots = details.webContentsId === undefined ? [] : (rootsByContents.get(details.webContentsId) ?? []);
-    void localRequestAllowed(details.url, roots).then(
+    const page = details.webContentsId === undefined ? undefined : pageByContents.get(details.webContentsId);
+    void localRequestAllowed(details.url, roots, undefined, page).then(
       (allowed) => callback({ cancel: !allowed }),
       () => callback({ cancel: true }),
     );
@@ -83,6 +86,7 @@ async function capture(path: string, roots: readonly string[]): Promise<Omit<Web
   const contents = window.webContents;
   const id = contents.id;
   rootsByContents.set(id, roots);
+  pageByContents.set(id, path);
   contents.setAudioMuted(true);
   contents.setWindowOpenHandler(() => ({ action: "deny" }));
   // 页面自己跳去别处（含同根里的另一页）也不跟：缩略图只画这一页
@@ -106,6 +110,7 @@ async function capture(path: string, roots: readonly string[]): Promise<Omit<Web
     return null;
   } finally {
     rootsByContents.delete(id);
+    pageByContents.delete(id);
     if (!window.isDestroyed()) window.destroy();
   }
 }

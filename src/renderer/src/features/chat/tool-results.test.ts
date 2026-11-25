@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
 import type { CompactedRecord, SessionRecord } from "@shared/session";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载（同 tool-results.ts 本身的纪律）
-import { composeChannelPrompt } from "../../../../shared/channel.ts";
+import { composeChannelBatchPrompt, composeChannelPrompt } from "../../../../shared/channel.ts";
+import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../../../../shared/permission.ts";
 import {
   answerText,
@@ -177,6 +178,30 @@ describe("flattenRenderUnits", () => {
         timestamp: 6,
       },
     ]);
+  });
+
+  test("带 also 的 channel-mark 记录与实时合并信封都按顺序展开成多行，首行 key 不变", () => {
+    const merged = { ...channelMark, also: [{ peerId: "c2", messageId: "m2", from: "child" as const, kind: "done" as const }] };
+    const fromDisk = flattenRenderUnits([merged]);
+    assert.deepEqual(
+      fromDisk.map((unit) => unit.key),
+      ["k1", "k1:also0"],
+    );
+    const text = composeChannelBatchPrompt([
+      { message: { id: "m1", from: "child", author: "model", kind: "question", text: "问", delivery: "followUp", createdAt: 6 }, peer: { id: "c1", title: "甲" } },
+      { message: { id: "m2", from: "child", author: "model", kind: "done", text: "好", delivery: "followUp", createdAt: 7 }, peer: { id: "c2", title: "乙" } },
+    ]);
+    // 真实的 user item 正文按空行拆成多个 text 块（runtime 回显的切法）
+    const live = flattenRenderUnits([
+      { id: "k1", role: "user", content: splitEchoBlocks(text).map((part) => ({ type: "text" as const, text: part })), timestamp: 6 },
+    ]);
+    assert.deepEqual(
+      live.map((unit) => [unit.key, unit.kind === "channelMark" ? unit.mark.messageId : null]),
+      [
+        ["k1", "m1"],
+        ["k1:also0", "m2"],
+      ],
+    );
   });
 
   test("实时流里首个 text 块是信封的 user item 同样产 channelMark，不产 user 单元——两条路 key 相同", () => {
@@ -1919,7 +1944,7 @@ describe("channelMarkLabel（子会话 PR4a）", () => {
   });
 });
 
-describe("时长与结果摘要 —— 中文（小学作业）", () => {
+describe("时长与结果摘要 —— 中文界面", () => {
   test("工具时长：不足一分钟带小数秒，满一分钟分秒", () => {
     assert.equal(formatToolDuration(12_345, zh), "12.3 秒");
     assert.equal(formatToolDuration(64_000, zh), "1 分 04 秒");

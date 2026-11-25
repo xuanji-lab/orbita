@@ -36,10 +36,10 @@
  *
  * 纯注入设计：读盘经 ScanFs 注入，node --test 喂假目录树。
  */
-import { readdir, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
-import { isWebArtifactFile } from "../shared/files.ts";
+import { isMediaArtifactFile, isWebArtifactFile } from "../shared/files.ts";
 
 /**
  * mtime 判定的时钟余量（毫秒）。开轮时刻由 agent 进程的 `Date.now()` 记，文件
@@ -80,6 +80,11 @@ export interface ScanRoot {
 export interface WebScanResult {
   /** mtime 判为本轮新出现的网页文件绝对路径（按路径排序，显示稳定） */
   paths: string[];
+  /**
+   * 同一次扫描顺带收的音视频文件（mp3 / mp4 等，同样的 mtime 与时间窗判定，按路径排序）。
+   * 全部报上来、不在这里按名字筛——哪些是「交给用户的」由 renderer 按回答点名决定。
+   */
+  mediaPaths: string[];
   truncated: boolean;
 }
 
@@ -119,6 +124,7 @@ export async function scanWebArtifacts(
 ): Promise<WebScanResult> {
   const maxDepth = limits.maxDepth ?? SCAN_MAX_DEPTH;
   const paths = new Set<string>();
+  const mediaPaths = new Set<string>();
   let truncated = false;
   const scanned = new Set<string>();
   for (const { root, maxEntries } of roots) {
@@ -147,18 +153,18 @@ export async function scanWebArtifacts(
         if (entry.isDir) {
           if (SKIP_DIRS.has(entry.name) || depth + 1 > maxDepth) continue;
           queue.push({ dir: join(dir, entry.name), depth: depth + 1 });
-        } else if (isWebArtifactFile(entry.name)) {
+        } else if (isWebArtifactFile(entry.name) || isMediaArtifactFile(entry.name)) {
           const path = join(dir, entry.name);
           const mtimeMs = await fs.statFile(path);
           if (mtimeMs !== null && mtimeMs >= sinceMs && (limits.accept === undefined || limits.accept(path, mtimeMs))) {
-            paths.add(path);
+            (isWebArtifactFile(entry.name) ? paths : mediaPaths).add(path);
           }
         }
       }
     }
     if (rootTruncated) truncated = true;
   }
-  return { paths: [...paths].sort(), truncated };
+  return { paths: [...paths].sort(), mediaPaths: [...mediaPaths].sort(), truncated };
 }
 
 /**
@@ -168,6 +174,19 @@ export async function scanWebArtifacts(
  */
 export function isScriptTool(toolName: string): boolean {
   return toolName === "bash" || toolName === "powershell" || toolName === "terminal_execute" || toolName.startsWith("mcp__");
+}
+
+/**
+ * 下载类命令：curl / wget / Invoke-WebRequest 把别人的网页存成 .html，git clone 拉下整仓。它们落盘的网页是「搬来的原料」，
+ * 不是本轮做出来的东西（2026-11-23 会话 2defbe：调研时 curl 了五个官网页面去 grep，轮尾卡片把它们算成「5 个网页」）。
+ * 这类命令不开窗口。代价：同一条命令里既下载又用脚本生成网页时，生成的那份漏报——宁可漏报，不替用户没做过的事背书。
+ */
+const DOWNLOAD_COMMAND = /\b(?:curl|wget|Invoke-WebRequest|iwr|yt-dlp|youtube-dl)\b|\bgit\s+clone\b|\bgh\s+repo\s+clone\b/i;
+
+export function isDownloadCommand(args: unknown): boolean {
+  if (typeof args !== "object" || args === null || !("command" in args)) return false;
+  const command = args.command;
+  return typeof command === "string" && DOWNLOAD_COMMAND.test(command);
 }
 
 /** 一个工具执行窗口：开跑 → 落定（毫秒时间戳）。 */
@@ -181,8 +200,8 @@ export class ToolWindows {
   private readonly open = new Map<string, number>();
   private readonly closed: ToolWindow[] = [];
 
-  begin(toolCallId: string, toolName: string, at: number): void {
-    if (isScriptTool(toolName)) this.open.set(toolCallId, at);
+  begin(toolCallId: string, toolName: string, at: number, args?: unknown): void {
+    if (isScriptTool(toolName) && !isDownloadCommand(args)) this.open.set(toolCallId, at);
   }
 
   finish(toolCallId: string, at: number): void {
@@ -245,6 +264,55 @@ export function makeWebAccept(
 }
 
 /**
+ * 从网上存下来的页面：头部带指向 http(s) 的 canonical / og:url，或浏览器「另存为」留下的 `saved from url` 注释。
+ * 下载命令那道拦不住的（node / python 脚本里 fetch 再写盘、playwright 的 page.content()）靠这道兜。
+ * 只看文件头 64 KB：这些标记都在 <head> 里，实测五个官网页面最晚出现在第 18 KB。
+ * 代价：agent 给用户做的、写了真实域名 canonical 的站点页会被漏报（少见）。
+ */
+const SAVED_PAGE_MARKERS = [
+  /<link\b(?=[^>]*\bcanonical\b)(?=[^>]*https?:\/\/)[^>]*>/i,
+  /<meta\b(?=[^>]*\bog:url\b)(?=[^>]*https?:\/\/)[^>]*>/i,
+  /<!--\s*saved from url=/i,
+];
+export const SAVED_PAGE_HEAD_BYTES = 64 * 1024;
+
+export function looksSavedFromWeb(head: string): boolean {
+  return SAVED_PAGE_MARKERS.some((marker) => marker.test(head));
+}
+
+/** 读文件头（失败 = 空串，按不是存下来的页面处理）。 */
+export async function readFileHead(path: string, bytes: number = SAVED_PAGE_HEAD_BYTES): Promise<string> {
+  try {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(bytes);
+      const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 扣掉从网上存下来的 .html / .htm（svg 不查）。命中数远超批量上限时不逐个读——反正要折叠成计数，读了白读。
+ */
+export async function dropSavedPages(
+  paths: readonly string[],
+  readHead: (path: string) => Promise<string> = readFileHead,
+): Promise<string[]> {
+  if (paths.length > WEB_ARTIFACT_BATCH_LIMIT * 5) return [...paths];
+  const kept: string[] = [];
+  for (const path of paths) {
+    if (/\.html?$/i.test(path) && looksSavedFromWeb(await readHead(path))) continue;
+    kept.push(path);
+  }
+  return kept;
+}
+
+/**
  * 轮尾结算的批量折叠：命中数超过 WEB_ARTIFACT_BATCH_LIMIT 就不逐个列，改报
  * 计数（卡片出一行「本轮有 N 个网页文件变动」）。返回形状即 fileTurn 事件的
  * 两个可选字段——折叠时只给 webArtifactsBatch、不给 webArtifacts。
@@ -256,6 +324,16 @@ export function foldWebArtifacts(
     return { webArtifacts: [], webArtifactsBatch: paths.length };
   }
   return { webArtifacts: [...paths] };
+}
+
+/**
+ * 音视频候选的批量上限：超过就判定为批量操作（解压归档、整目录拷贝），一个不报——和网页的折叠同一条纪律，
+ * 只是媒体没有「N 个」那一行（卡片只显示回答点名的，没有批量计数可挂）。正常一轮脚本生成的分段 / 试音远低于此数。
+ */
+export const MEDIA_ARTIFACT_BATCH_LIMIT = 100;
+
+export function capMediaArtifacts(paths: readonly string[]): string[] {
+  return paths.length > MEDIA_ARTIFACT_BATCH_LIMIT ? [] : [...paths];
 }
 
 /**

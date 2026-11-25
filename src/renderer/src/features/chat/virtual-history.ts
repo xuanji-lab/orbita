@@ -9,7 +9,7 @@
  * `EntryView` 的提前返回逐条对应；带分支按钮行的条目保留——`TranscriptRow` 会只画
  * 分支行（正文为 null 时按钮仍要出现）。
  */
-import type { ScanAnswerCard, ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
+import type { ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
 
 /** 一个渲染行：`index` 是它在历史段 `turnView` 里的原下标（分支行、show_image 前项判定都用它） */
 export interface VirtualHistoryRow {
@@ -29,14 +29,12 @@ function showCallRenders(entry: TurnViewEntry, results: ToolResultIndex): boolea
 /**
  * 历史段里真正会产出 DOM 的行。规则（按顺序，与渲染层一致）：
  * 1. 相邻成功 show_image：后一张被前一张的画廊吸收（`TranscriptRow` 返回 null）；
- * 2. 同一条 assistant 消息的多个 text 块：只有扫描回答卡的 `firstKey` 画卡，其余 null；
- * 3. 通道标记：只有「子看父」与「父看子（非 progress）」画，其余 null；
- * 4. 带有分支按钮行的条目一律保留——即使正文为 null，按钮仍要渲染。
+ * 2. 通道标记：只有「子看父」与「父看子（非 progress）」画，其余 null；
+ * 3. 带有分支按钮行的条目一律保留——即使正文为 null，按钮仍要渲染。
  */
 export function virtualHistoryRows(
   view: readonly TurnViewEntry[],
   results: ToolResultIndex,
-  carryoverCards: ReadonlyMap<string, ScanAnswerCard>,
   ownSide: "parent" | "child",
   branchRows: ReadonlyMap<number, string>,
 ): VirtualHistoryRow[] {
@@ -48,9 +46,6 @@ export function virtualHistoryRows(
     if (showCallRenders(entry, results)) {
       const prev = view[index - 1];
       if (prev !== undefined && showCallRenders(prev, results)) renders = false;
-    } else if (entry.kind === "text") {
-      const card = carryoverCards.get(entry.messageId);
-      if (card !== undefined && entry.key !== card.firstKey) renders = false;
     } else if (entry.kind === "channelMark") {
       const fromParent = ownSide === "child" && entry.mark.from === "parent";
       const fromChild = ownSide === "parent" && entry.mark.from === "child" && entry.mark.kind !== "progress";
@@ -62,46 +57,10 @@ export function virtualHistoryRows(
   return rows;
 }
 
-/** 条目（含折叠成员）里出现的消息 id：引用跳转要按消息 id 找它所在的行 */
-function messageIdsOf(entry: TurnViewEntry): string[] {
-  switch (entry.kind) {
-    case "user":
-      return [entry.item.id];
-    case "text":
-    case "thinking":
-    case "toolCall":
-      return [entry.messageId];
-    case "toolGroup":
-      return entry.calls.map((call) => call.messageId);
-    case "turnGroup":
-      return entry.members.flatMap(messageIdsOf);
-    case "turnProcess":
-      return entry.steps.flatMap(messageIdsOf);
-    case "compacted":
-    case "fileTurn":
-    case "revertMark":
-    case "intentRecall":
-      return [entry.record.id];
-    case "channelMark":
-      return [entry.mark.messageId];
-    default:
-      return [];
-  }
-}
-
 /** 虚拟行 key → 虚拟行下标（`scrollToIndex` / 前插锚点按 key 找位置） */
 export function rowIndexByKey(rows: readonly VirtualHistoryRow[]): Map<string, number> {
   const map = new Map<string, number>();
   rows.forEach((row, index) => map.set(row.entry.key, index));
-  return map;
-}
-
-/** 消息 id → 虚拟行下标（同一消息占多行时取最后一行，与分支锚点口径一致） */
-export function messageRowIndex(rows: readonly VirtualHistoryRow[]): Map<string, number> {
-  const map = new Map<string, number>();
-  rows.forEach((row, index) => {
-    for (const id of messageIdsOf(row.entry)) map.set(id, index);
-  });
   return map;
 }
 
@@ -292,4 +251,27 @@ export function createHeightCache(limit = 4000): HeightCache {
       map.clear();
     },
   };
+}
+
+/**
+ * 一次测高要不要补偿进 scrollTop，补多少（只补「整行都在视口上方」的变化，与虚拟器默认补偿同口径）。
+ *
+ * prev 必须是**虚拟器此刻对这一行的实际假设**，否则差额会被当成「上方行变高了」白白补进 scrollTop，视口里的内容凭空跳：
+ * - `cached`：这一行测过（同一次挂载的第二次测高回调也算）——虚拟器的假设就是上次测的值，再补一次会重复计数；
+ * - `assumed`：没测过——measurementsCache 里的 size，即 estimateSize 当时给的（看板结果行有自己的估值 boardRowEstimate）；
+ * - 之后才是 kind 估值 / 默认值（量不到 measurementsCache 项时的兜底）。
+ * 旧写法没测过时直接取「此刻的 kind 估值」：EMA 每测一行就挪一点，与虚拟器当时用的估值对不上，
+ * 实测往上滚 220 步，73 次整行在上方的测高里累计白补 −2070px，表现为 12 次视口跳变（最大 171px）。
+ */
+export function rowResizeCompensation(input: {
+  height: number;
+  cached: number | undefined;
+  assumed: number | undefined;
+  kindEstimate: number | undefined;
+  itemEnd: number | undefined;
+  scrollTop: number;
+}): number {
+  if (input.itemEnd === undefined || input.itemEnd > input.scrollTop + 1) return 0;
+  const prev = input.cached ?? input.assumed ?? input.kindEstimate ?? DEFAULT_ROW_ESTIMATE;
+  return input.height - prev;
 }

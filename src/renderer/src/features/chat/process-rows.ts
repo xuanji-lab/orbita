@@ -10,6 +10,8 @@
  * 纯模块：不 import React，可被 node --test 直接加载。
  */
 import { readCommandCard } from "../../../../shared/builtin-command.ts";
+import { mediaArtifactKind } from "../../../../shared/files.ts";
+import type { MediaArtifact } from "../../../../shared/revert.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { builtinCommand, docEditPath, docEditLabel, fileLabel } from "./builtin-commands.ts";
@@ -34,10 +36,18 @@ export interface StepVerbWords {
   image: string;
   config: string;
   plugin: string;
+  /** 装插件 / 放插件看板：这两个工具各有动词，不笼统写「用插件」 */
+  installPlugin: string;
+  pluginBoard: string;
   askUser: string;
   report: string;
   delegate: string;
   reply: string;
+  /** 子会话报告给主会话：按 kind 说（done / question / failed / progress） */
+  reportDone: string;
+  reportQuestion: string;
+  reportFailed: string;
+  reportProgress: string;
   memorySearch: string;
   memoryEdit: string;
   automation: string;
@@ -72,10 +82,10 @@ const VERB_OF_TOOL: Readonly<Record<string, keyof Omit<StepVerbWords, "mcp">>> =
   show_image: "image",
   create_skill: "config",
   add_mcp_server: "config",
-  install_plugin: "plugin",
+  install_plugin: "installPlugin",
   preview_plugin: "plugin",
   list_plugins: "plugin",
-  show_plugin_board: "plugin",
+  show_plugin_board: "pluginBoard",
   request_user_action: "askUser",
   report_to_parent: "report",
   delegate: "delegate",
@@ -109,8 +119,23 @@ export function stepVerb(
   input: unknown,
   words: StepVerbWords,
   skills: ReadonlyArray<{ slug: string; name: string }> = [],
+  /** 子会话 id → 标题（回复子会话那一步写「回复了「标题」」）；不给就不写对象 */
+  peerTitle?: (childId: string) => string,
 ): StepVerb {
   const record = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
+  // 主会话回复子会话：「回复了「标题」」，展开看原文
+  if (toolName === "reply_subsession") {
+    const childId = str(record["childId"]);
+    const title = childId === null || peerTitle === undefined ? "" : peerTitle(childId);
+    return { verb: words.reply, object: title === "" ? null : `「${title}」`, raw: null };
+  }
+  // 子会话报告给主会话：「报告给主会话 / 问了主会话 / 报告失败」，对象是报告第一行
+  if (toolName === "report_to_parent") {
+    const kind = str(record["kind"]);
+    const verb = kind === "question" ? words.reportQuestion : kind === "failed" ? words.reportFailed : kind === "progress" ? words.reportProgress : words.reportDone;
+    const first = (str(record["text"]) ?? "").split("\n").find((line) => line.trim() !== "")?.trim() ?? null;
+    return { verb, object: first, raw: null };
+  }
   // 读某个技能的 SKILL.md = 在用这个技能
   if (toolName === "read" && typeof record["path"] === "string") {
     const skill = skillForReadPath(record["path"], skills);
@@ -214,17 +239,31 @@ export function outsideFailure(toolName: string, errorText: string, words: Outsi
 
 /** 一份产物：结尾那一处收的一行 */
 export interface TurnOutput {
-  /** 演示文稿 / 文档在右栏打开；网页在内置浏览器打开；导出的文件在文件面板预览 */
-  kind: "slides" | "doc" | "file" | "web";
+  /**
+   * 按**文件类型**分（2026-11-22 用户：「这个导出的文件是什么意思」）：演示文稿（含导出的 PowerPoint）、文档（含导出的 Word / Markdown）、
+   * PDF、网页。不再有「导出的文件」这一类。`format` 非 null = 这份是导出来的文件：预览在文件面板里开，不进演示文稿 / 文档编辑面板。
+   */
+  kind: "slides" | "doc" | "pdf" | "web" | "audio" | "video";
   /** 绝对路径（去重键） */
   path: string;
   title: string;
   /** 演示文稿的页数（这一轮最后一次写 / 改之后的；量不到 null） */
   pages: number | null;
-  /** 导出的格式（PDF、Word…）；不是导出的 null */
+  /** 导出的格式名（PDF、PowerPoint、Word…，行尾类型字）；不是导出的 null */
   format: string | null;
   /** 导出文件的说明（「PDF · 3 页 · 171 KB」，工具结果卡上带的）；没有 null */
   detail: string | null;
+  /** 音视频的时长（秒；agent 读容器头量到才有，量不到缺席 = 不显示） */
+  duration?: number;
+  /** 这份是哪个子会话交回来的（和主会话自己的产物摆在同一摞里，卡上多一行「来自子会话…」）；主会话自己的没有 */
+  source?: OutputSource;
+}
+
+/** 来自哪个子会话：点那行小字打开它；模型名同子会话卡标题后的小字（modelDisplayName） */
+export interface OutputSource {
+  sessionId: string;
+  title: string;
+  modelName: string;
 }
 
 /** 写演示文稿的工具：结果里带「the deck now has N slide(s)」 */
@@ -233,15 +272,42 @@ const DECK_WRITERS = new Set(["slides_write", "slides_edit", "slides_insert_imag
 /** PNG 是 agent 自己看排版用的（一页一张）：留在过程里当缩略图，不算交给用户的产物 */
 const SELF_CHECK_EXPORT = new Set(["png"]);
 
+/** 导出格式的类型字（中文界面的英文词白名单里没有 PPTX，写 PowerPoint） */
 const FORMAT_NAME: Readonly<Record<string, string>> = {
   pdf: "PDF",
   html: "HTML",
-  pptx: "PPTX",
-  "pptx-basic": "PPTX",
+  pptx: "PowerPoint",
+  "pptx-basic": "PowerPoint",
   docx: "Word",
   md: "Markdown",
   "md-plain": "Markdown",
 };
+
+/** 导出的格式 → 归哪一类：PDF 自成一类，PowerPoint 并进演示文稿，Word / Markdown 并进文档，HTML 归网页 */
+const KIND_OF_FORMAT: Readonly<Record<string, TurnOutput["kind"]>> = {
+  pdf: "pdf",
+  pptx: "slides",
+  "pptx-basic": "slides",
+  docx: "doc",
+  md: "doc",
+  "md-plain": "doc",
+  html: "web",
+};
+
+function exportKind(format: string | null, path: string): { kind: TurnOutput["kind"]; format: string | null } {
+  if (format !== null) return { kind: KIND_OF_FORMAT[format] ?? "doc", format: FORMAT_NAME[format] ?? format };
+  // 入参没写格式：按扩展名认
+  const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase() ?? "";
+  const known = ext === "pptx" ? "pptx" : ext;
+  return { kind: KIND_OF_FORMAT[known] ?? "doc", format: FORMAT_NAME[known] ?? (ext === "" ? null : ext.toUpperCase()) };
+}
+
+/** 导出文件的说明：类型字 + 工具结果卡上带的其余部分（「3 页 · 171 KB」）；卡上第一段是工具自己的格式名（PPTX），换成类型字 */
+function exportDetail(format: string | null, subtitle: string | undefined): string | null {
+  if (format === null) return subtitle ?? null;
+  const rest = subtitle === undefined ? [] : subtitle.split(" · ").slice(1);
+  return [format, ...rest].join(" · ");
+}
 
 function inputPath(call: ToolCallUnit): string | null {
   const value = (call.input as Record<string, unknown> | null)?.["path"];
@@ -304,7 +370,8 @@ export function turnOutputs(calls: readonly ToolCallUnit[], results: ToolResultI
     if ((call.toolName === "slides_export" || call.toolName === "doc_export") && card !== null) {
       const format = str((call.input as Record<string, unknown> | null)?.["format"]);
       if (format !== null && SELF_CHECK_EXPORT.has(format)) continue;
-      put({ kind: "file", path: card.path, title: card.title, pages: null, format: format === null ? null : (FORMAT_NAME[format] ?? format), detail: card.subtitle ?? null });
+      const made = exportKind(format, card.path);
+      put({ kind: made.kind, path: card.path, title: card.title, pages: null, format: made.format, detail: exportDetail(made.format, card.subtitle) });
     }
   }
   return order.map((path) => byPath.get(path)).filter((output): output is TurnOutput => output !== undefined);
@@ -326,16 +393,58 @@ export function fileOutputs(kind: "web" | "doc", paths: readonly string[]): Turn
 }
 
 /**
+ * 回答里点了名的音视频 → 产物行（类型由扩展名定，量得到时长就带上）。调用方已按点名过滤（named-outputs.ts）。
+ */
+export function mediaOutputs(media: readonly MediaArtifact[]): TurnOutput[] {
+  const out: TurnOutput[] = [];
+  for (const item of media) {
+    const kind = mediaArtifactKind(item.path);
+    if (kind === null) continue;
+    out.push({ kind, path: item.path, title: basename(item.path), pages: null, format: null, detail: null, ...(item.duration !== undefined ? { duration: item.duration } : {}) });
+  }
+  return out;
+}
+
+/**
  * 结尾这一摞产物：工具做出来的（演示文稿、文档、导出）+ 这一轮写的文档 + 网页，按路径去重（doc_open 打开过、
  * 又被 edit 改过的文档只算一份）。顺序：演示文稿与文档在前，导出的文件，最后网页。
  */
-export function allOutputs(calls: readonly ToolCallUnit[], results: ToolResultIndex, docs: readonly string[], web: readonly string[]): TurnOutput[] {
+/** 结尾那摞的顺序：演示文稿与文档在前，PDF，最后网页；同一类里保持原顺序（稳定排序） */
+export function sortOutputs(outputs: readonly TurnOutput[]): TurnOutput[] {
+  const order = (output: TurnOutput) =>
+    output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "pdf" ? 1 : output.kind === "audio" ? 2 : output.kind === "video" ? 3 : 4;
+  return [...outputs].sort((a, b) => order(a) - order(b));
+}
+
+/**
+ * 主会话自己的产物与子会话交回的产物合成同一摞（2026-11-22 用户：「让它跟主会话的产出摆在一起」）：主会话的在前、子会话的在后
+ * （主会话的是给用户的答案本身，子会话的是它派出去的活的产出；子会话之间按交回先后），再按类稳定排序，同一类相邻——
+ * 三份以上收组时主会话与子会话合计算。同一路径只留一份（主会话的）。
+ */
+export function mergeOutputs(main: readonly TurnOutput[], fromChildren: readonly TurnOutput[]): TurnOutput[] {
+  const norm = (path: string) => path.replace(/\\/g, "/");
+  const seen = new Set(main.map((output) => norm(output.path)));
+  const extra: TurnOutput[] = [];
+  for (const output of fromChildren) {
+    if (seen.has(norm(output.path))) continue;
+    seen.add(norm(output.path));
+    extra.push(output);
+  }
+  return sortOutputs([...main, ...extra]);
+}
+
+export function allOutputs(
+  calls: readonly ToolCallUnit[],
+  results: ToolResultIndex,
+  docs: readonly string[],
+  web: readonly string[],
+  media: readonly MediaArtifact[] = [],
+): TurnOutput[] {
   const norm = (path: string) => path.replace(/\\/g, "/");
   const made = turnOutputs(calls, results);
   const seen = new Set(made.map((output) => norm(output.path)));
-  const more = [...fileOutputs("doc", docs), ...fileOutputs("web", web)].filter((output) => !seen.has(norm(output.path)));
-  const order = (output: TurnOutput) => (output.kind === "slides" || output.kind === "doc" ? 0 : output.kind === "file" ? 1 : 2);
-  return [...made, ...more].sort((a, b) => order(a) - order(b));
+  const more = [...fileOutputs("doc", docs), ...fileOutputs("web", web), ...mediaOutputs(media)].filter((output) => !seen.has(norm(output.path)));
+  return sortOutputs([...made, ...more]);
 }
 
 
@@ -430,9 +539,10 @@ export function processHeadline(
   // 改计划、定目标也算一步：展开后它们各占一行，段里写的步数也数它们，折叠行要对得上
   const calls = processCalls(steps);
   const outputs = turnOutputs(calls, results);
-  const decks = outputs.filter((output) => output.kind === "slides").length;
-  const docs = outputs.filter((output) => output.kind === "doc").length;
-  const exported = outputs.filter((output) => output.kind === "file").length;
+  // 导出来的（format 非 null）单算「导出 N 个」，不再混进做出的演示文稿 / 打开的文档里
+  const decks = outputs.filter((output) => output.kind === "slides" && output.format === null).length;
+  const docs = outputs.filter((output) => output.kind === "doc" && output.format === null).length;
+  const exported = outputs.filter((output) => output.format !== null).length;
   const delegated = calls.filter((call) => call.toolName === "delegate").length;
   const parts: string[] = [];
   let accounted = 0;
@@ -493,12 +603,13 @@ export function processRows(steps: readonly ProcessStep[]): ProcessRow[] {
 }
 
 /**
- * 结尾那一摞太长时按类收（2026-11-22 压力测试：一轮写了 12 个网页、4 份文档，结尾排了 20 张卡）：同一类（文档 / 导出的文件 / 网页）
+ * 结尾那一摞太长时按类收（2026-11-22 压力测试：一轮写了 12 个网页、4 份文档，结尾排了 20 张卡）：同一类（文档 / PDF / 网页）
  * 有 GROUP_MIN 份以上，收成一张「12 个网页」的卡，点开逐个列；演示文稿一份一张不收（通常只有一两份，又是这一轮的主产物）。
  */
 export const GROUP_MIN = 3;
 
-export type OutputSlot = { kind: "one"; output: TurnOutput } | { kind: "group"; type: "doc" | "file" | "web"; outputs: TurnOutput[] };
+export type OutputGroupType = "doc" | "pdf" | "web" | "audio" | "video";
+export type OutputSlot = { kind: "one"; output: TurnOutput } | { kind: "group"; type: OutputGroupType; outputs: TurnOutput[] };
 
 export function groupOutputs(outputs: readonly TurnOutput[]): OutputSlot[] {
   const count = new Map<string, number>();

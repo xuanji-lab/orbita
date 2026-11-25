@@ -13,6 +13,7 @@ import {
   compactionBoundaryStatus,
   enqueue,
   enqueueChannelMessage,
+  requeueFront,
   markAllIdle,
   mergeSideRecords,
   moveQueued,
@@ -423,6 +424,20 @@ describe("轮尾账的旁路网页产物（webArtifacts）", () => {
     assert.equal(turns.length, 1);
     assert.deepEqual(turns[0]?.changes, []);
     assert.deepEqual(turns[0]?.webArtifacts, ["/w/out/proto.html"]);
+  });
+
+  test("fileTurnView 只有 mediaArtifacts 也进槽（卡片按回答点名从候选里挑）", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, {
+      type: "fileTurnView",
+      sessionId: "A",
+      turnId: "t1",
+      changes: [],
+      mediaArtifacts: [{ path: "/w/audio/final.mp3", duration: 231 }],
+    });
+    const turns = states.get("A")?.fileTurns ?? [];
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0]?.mediaArtifacts, [{ path: "/w/audio/final.mp3", duration: 231 }]);
   });
 
   test("fileTurnView 两样都空不进槽（没有产出的轮不产卡）", () => {
@@ -883,6 +898,14 @@ describe("子会话 PR4a：channel 队列条目", () => {
     assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m1", "m2"]);
   });
 
+  test("投递失败 requeueFront：按原顺序回队首，新到消息排后，重复 id 不翻倍", () => {
+    let states = enqueue(new Map(), "parent-1", item("m3"));
+    states = requeueFront(states, "parent-1", [item("m1"), item("m2")]);
+    assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m1", "m2", "m3"]);
+    states = requeueFront(states, "parent-1", [item("m2"), item("m1")]);
+    assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m2", "m1", "m3"]);
+  });
+
   test("nextDeliverable 对 channel 条目的规则同 text：只认 phase idle", () => {
     const idleStates = enqueue(new Map(), "parent-1", item("m1"));
     const idleEntry = idleStates.get("parent-1")!;
@@ -928,11 +951,28 @@ describe("nextDeliverable —— 投递节奏归我们，一次只放一条", ()
   });
 });
 
-describe("markAllIdle —— runtime 没了，排队的消息没人会发", () => {
-  test("队列一并清空，槽里不留尸体", () => {
+describe("markAllIdle —— runtime 没了，相位归位但不丢通道待投", () => {
+  test("text / compact 清空，channel 保留在 QueueStrip，无需刷新才找回", () => {
+    const channel: QueuedMessage = {
+      id: "channel-1",
+      kind: "channel",
+      childId: "child-1",
+      childWorkbench: "/wb/child-1",
+      message: {
+        id: "channel-1",
+        from: "child",
+        author: "model",
+        kind: "done",
+        text: "完成了",
+        delivery: "followUp",
+        createdAt: 1,
+      },
+    };
     let states = enqueue(new Map(), "A", { id: "1", kind: "text", text: "甲" });
+    states = enqueue(states, "A", { id: "2", kind: "compact" });
+    states = enqueue(states, "A", channel);
     states = markAllIdle(states);
-    assert.deepEqual(states.get("A")?.queued, []);
+    assert.deepEqual(states.get("A")?.queued.map((item) => item.id), ["channel-1"]);
     assert.equal(states.get("A")?.phase, "idle");
   });
 });
@@ -951,7 +991,24 @@ describe("turnError —— 回合失败标注的进出槽", () => {
     });
     const entry = states.get("A");
     assert.equal(entry?.phase, "idle");
-    assert.equal(entry?.turnError, "重试 3 次后仍失败：fetch failed");
+    assert.deepEqual(entry?.turnError, { message: "重试 3 次后仍失败：fetch failed" });
+  });
+
+  test("failed(turn) 带额度提示：结构化事实原样进槽，句子留给渲染层", () => {
+    const quota = { kind: "5h" as const, label: "5-hour window", resetsAt: 1_900_000_000_000 };
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, {
+      type: "failed",
+      sessionId: "A",
+      message: "429 {\"error\":\"insufficient_quota\"}",
+      turn: true,
+      quota,
+    });
+    // 原文与事实都在：主进程不做文案，槽里也不存拼好的句子
+    assert.deepEqual(states.get("A")?.turnError, {
+      message: "429 {\"error\":\"insufficient_quota\"}",
+      quota,
+    });
   });
 
   test("failed 不带 turn：槽里不产生标注（操作级失败走全局红字），归位照旧", () => {
@@ -971,7 +1028,7 @@ describe("turnError —— 回合失败标注的进出槽", () => {
       turn: true,
     });
     states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
-    assert.equal(states.get("A")?.turnError, "重试 3 次后仍失败：fetch failed");
+    assert.deepEqual(states.get("A")?.turnError, { message: "重试 3 次后仍失败：fetch failed" });
   });
 
   test("新一轮开跑即清：phase turn / compaction 与乐观置 turn 都算", () => {

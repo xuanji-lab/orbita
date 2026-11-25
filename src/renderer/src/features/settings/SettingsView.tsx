@@ -52,7 +52,7 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
+import { effectiveLanguage, LANGUAGES, type Language, type ModelPair } from "@shared/settings";
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
@@ -299,7 +299,7 @@ function General(props: {
   // 完成提示音：缺席 = 响（这个提醒的价值在人不在跟前时也成立；只管声音，卡片与未读不受它影响）
   const completionSound = props.settings.completionSound ?? true;
   // 过程显示：缺席 = 一轮一行（2026-10-30）
-  const processView = props.settings.processView ?? "turn";
+  const processView = props.settings.processView ?? "chapters";
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -373,35 +373,21 @@ function General(props: {
           })),
         );
 
-  // 单语主题定死的语言（null = 双语主题，听设置）；芯片亮的是实际生效的那一门
-  const lockedLanguage = themeLanguage(props.settings.theme);
-  const shownLanguage = effectiveLanguage(props.settings.theme, props.settings.language);
+  const shownLanguage = effectiveLanguage(props.settings.language);
 
   return (
     <div className="set-page">
       <SettingGroup label={t.settings.appearance}>
         <SettingRow name={t.settings.theme}>
-          <ThemePicker
-            value={props.settings.theme}
-            paperThemes={props.settings.experimentalFeatures?.["paper-themes"] === true}
-            onChange={props.onChange}
-          />
+          <ThemePicker value={props.settings.theme} onChange={props.onChange} />
         </SettingRow>
         <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
-          {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
-              设置里存的值不动，切回双语主题就恢复 */}
           <Segmented
             label={t.settings.language}
             value={shownLanguage}
             options={LANGUAGES.map((language) => ({ value: language, label: LANGUAGE_NAMES[language] }))}
-            disabled={lockedLanguage !== null}
             onChange={(language) => props.onChange({ language })}
           />
-          {lockedLanguage !== null && (
-            <span className="set-row-hint">
-              {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
-            </span>
-          )}
         </SettingRow>
         <ChatStatusToggle />
       </SettingGroup>
@@ -550,7 +536,8 @@ function General(props: {
             label={t.settings.processViewAria}
             value={processView}
             options={[
-              { value: "turn" as const, label: t.settings.processViewTurn },
+              { value: "chapters" as const, label: t.settings.processViewChapters },
+              { value: "flat" as const, label: t.settings.processViewFlat },
               { value: "steps" as const, label: t.settings.processViewSteps },
             ]}
             onChange={(next) => props.onChange({ processView: next })}
@@ -600,8 +587,8 @@ function ExperimentalSettings(props: {
   onChange: (patch: SettingsPatch) => void;
 }) {
   const t = useT();
-  // 单语主题定死的语言：与通用页语言行同一条解析规则（shared 的 effectiveLanguage）
-  const language = effectiveLanguage(props.settings.theme, props.settings.language);
+  // 与通用页语言行同一条解析规则（shared 的 effectiveLanguage）
+  const language = effectiveLanguage(props.settings.language);
   /** 展开哪一张卡的日志（一次至多一张）：默认都收着，只看最近一条 */
   const [openId, setOpenId] = useState<ExperimentalFeatureId | null>(null);
   // 意图系统（实验）：开关打开才出现设置区（地址 / 渠道 / 连接状态 / 新任务默认）

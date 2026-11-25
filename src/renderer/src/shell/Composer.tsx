@@ -1,11 +1,15 @@
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Icon } from "./Icon";
+import { Icon, type IconName } from "./Icon";
 import { IconButton } from "./IconButton";
 import { Menu } from "./Menu";
 import { MaterialStack } from "./composer-material-stack.tsx";
 import { PastedTextCollapseContext } from "./attachment-chips";
 import type { TextQuote } from "@shared/quote";
 import { isPastedTextLarge, pastedTextSize } from "@shared/prompt-attachments";
+import { parseImageRefs, type ImageRefSpan } from "@shared/prompt-image-refs";
+import { TASK_REF_MIME, insertTaskToken, parseTaskRefPayload, resolveTaskTokens, type TaskRef } from "@shared/task-ref";
+import { FEATURE_ICON } from "./feature-icons.ts";
+import { dropIndexAtPoint } from "./drop-point.ts";
 import { filesOf, type ComposerImage } from "./composer-images.ts";
 import type { ComposerFileRef } from "./composer-attachments.ts";
 import {
@@ -20,7 +24,6 @@ import {
 import { composerMaterials } from "./composer-materials.ts";
 import { composerBoxHeight, COMPOSER_MIN_ROWS } from "./composer-height.ts";
 import { isSubmitKey } from "./composer-keys.ts";
-import { composerScript } from "./composer-script.ts";
 import { caretPoint } from "./caret-point.ts";
 import {
   slashSpaceOpensPanel,
@@ -28,16 +31,14 @@ import {
 import {
   chipRangeAfter,
   chipRangeBefore,
-  chipRemovalRange,
   chipIconName,
   mirrorSegments,
   parseChips,
+  CHIPS_MAX_LENGTH,
   snapSelection,
   type ChipKind,
   type TextSelection,
 } from "./composer-chips.ts";
-import { whiteoutSegments, type CompositionRange } from "./whiteout-segments.ts";
-import type { DominantScript } from "../features/chat/dominant-script.ts";
 import { useDictation } from "../features/voice/useDictation.ts";
 import { DictationStatus } from "../features/voice/DictationStatus.tsx";
 import { useT } from "../locale.ts";
@@ -82,45 +83,22 @@ function syncMirror(textarea: HTMLTextAreaElement, mirror: HTMLDivElement): void
 }
 
 /**
- * 指针下是哪颗胶囊的 ×（返回那颗 chip 的起点）。textarea 盖在镜像上，× 收不到指针事件——
- * 按坐标对镜像里的 × 量。外扩 2px：12px 的字形太小，点偏一点也算。
- */
-function chipCloseAt(mirror: HTMLDivElement | null, x: number, y: number): number | null {
-  if (mirror === null) return null;
-  for (const close of mirror.querySelectorAll<HTMLElement>(".composer-chip-x")) {
-    const box = close.getBoundingClientRect();
-    if (x >= box.left - 2 && x <= box.right + 2 && y >= box.top - 2 && y <= box.bottom + 2) {
-      const start = Number(close.dataset["chipStart"]);
-      return Number.isInteger(start) ? start : null;
-    }
-  }
-  return null;
-}
-
-/**
- * 胶囊的脸：类别图标 + 名字 + ×，盖在 token 原文自己的格子上（原文透明、只占位）。
+ * 胶囊的脸：图标 + 名字，盖在 token 原文自己的格子上（原文透明、只占位）。没有 ×：
+ * 删整颗走退格 / Delete（2026-11-23 用户：「我们可以用 delete 键，为什么要用 x 呢」）。
  * **不贡献任何文字**：镜像的 textContent 必须与 textarea 逐字一致（caret-point 的
  * locateText 靠它）——图标是无文本的 SVG，名字走 ::before 的 attr(data-name)。
- * 名字继承输入框的字（同字体、同字号、同字距），所以它的宽度就是原文里名字那一截的宽度，
- * 藏掉的 `/skill:`（34px）/ `/mcp:`（37.5px）正好让给图标、× 与左右留白。
- * 插件 chip 写的是**显示名**（可能是中文，宽度与标识不同）：名字槽可收缩、放不下时省略号截断，
- * 胶囊永远不超出 token 原文占的格子（超出会盖住后面的字）。
+ * 名字继承输入框的字（同字体、同字号、同字距）；原文比脸宽时（藏掉的 `/skill:` 前缀、
+ * 插件写中文显示名）脸在格子里居中，多出来的宽度均分成两头的留白。
+ * 放不下（名字比原文宽）时名字省略号截断，胶囊永远不超出 token 原文占的格子（超出会盖住后面的字）。
+ * 五种胶囊一个长相，只是颜色不同：技能绿、MCP 蓝、插件橙；粘贴的长文本、附图「图 N」是中性灰。
  */
-function ChipFace(props: { kind: ChipKind; name: string; start: number }) {
+function ChipFace(props: { icon: IconName; name: string }) {
   return (
     <span className="composer-chip-face" aria-hidden="true">
-      <Icon name={chipIconName(props.kind)} size={12} strokeWidth={1.8} />
+      <Icon name={props.icon} size={12} strokeWidth={1.8} />
       <span className="composer-chip-name" data-name={props.name} />
-      <span className="composer-chip-x" data-chip-start={props.start}>
-        <Icon name="x" size={12} strokeWidth={2} />
-      </span>
     </span>
   );
-}
-
-/** 修正液只在小学作业主题下画。主题落在 <html data-theme> 上（useTheme.ts / main.tsx 写） */
-function isCopybook(): boolean {
-  return document.documentElement.dataset.theme === "copybook";
 }
 
 export function Composer(props: {
@@ -142,8 +120,14 @@ export function Composer(props: {
   jumpToQuote: (quote: TextQuote) => (() => void) | undefined;
   /** 输入框里待发的附图（按会话隔离，状态在 useChatSession） */
   attachments: readonly ComposerImage[];
-  /** 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收 */
-  onAttach: (files: readonly File[]) => void;
+  /**
+   * 挑选 / 粘贴 / 拖放进来的文件。分拣与报错在调用方，这里只管收。caret = 附上那一刻的光标：
+   * 图的小签（「[图 N]」）就插在那里。图读完、小签写进草稿后 resolve 成新正文与小签之后的光标，
+   * 没有图（或没写进草稿）resolve null——Composer 据此把光标放回小签后面
+   */
+  onAttach: (files: readonly File[], caret?: number) => Promise<{ text: string; caret: number } | null>;
+  /** 能被 [任务 xxxxxxxx] 指到的会话（id + 标题）：胶囊的名字、发送时的展开都查它；查不到的 token 只是普通文字 */
+  tasks: readonly TaskRef[];
   onRemoveAttachment: (id: string) => void;
   /** 回形针菜单的「添加文件夹」：主进程目录选择器（Windows 不能与选文件同框，分两个入口） */
   onPickFolders: () => void;
@@ -178,27 +162,16 @@ export function Composer(props: {
   const dictation = useDictation({ value: props.value, onChange: props.onChange, textareaRef });
   const dictating = dictation.phase !== "idle";
   const mirrorRef = useRef<HTMLDivElement>(null);
-  // 输入法组词中的范围（没在组词是 null）。拼音字母会先进 value：字距判法在组词期间沿用
-  // 上一次的结果，修正液不涂这一截
-  const [composition, setComposition] = useState<CompositionRange | null>(null);
-  // 以中文还是英文为主（composer-script.ts）：小学作业主题按它切字距。要记住上一次的结果——
-  // 渲染中按新输入调整 state，React 会在提交前重渲一遍
-  const [script, setScript] = useState<DominantScript>("cjk");
-  const nextScript = composerScript(script, props.value, composition !== null);
-  if (nextScript !== script) setScript(nextScript);
-  // 镜像层（全主题常驻，垫在 textarea 下面）：句中 chip 画在这一层（composer-chips.ts
-  // 切区间）；小学作业主题的修正液也画在同一层（whiteout-segments.ts，主题开启时才分段）。
-  // 两层区间叠在同一份文本上，chip 区间优先于修正液（mirrorSegments）
-  const [whiteout, setWhiteout] = useState(isCopybook);
+  // 输入法组词中的范围（没在组词是 null）：组词期间不把光标吸到 chip 边上
+  const [composition, setComposition] = useState<{ start: number; end: number } | null>(null);
+  // 镜像层（垫在 textarea 下面）：句中 chip 与粘贴展开段画在这一层（composer-chips.ts 切区间）
   // textarea 的滚动位置：展开段的收起标签跟着内容滚（标签在镜像上量坐标，量法吃它）
   const [scrollTop, setScrollTop] = useState(0);
   const chips = useMemo(() => parseChips(props.value), [props.value]);
   // 插件 chip 写显示名（中文）；表由插件页与首次订阅填
   const pluginNames = usePluginNames();
-  // 镜像里的 chip 段按起点找回那颗 chip（胶囊的名字、× 的归属都要它）
+  // 镜像里的 chip 段按起点找回那颗 chip（胶囊的名字要它）
   const chipAt = useMemo(() => new Map(chips.map((chip) => [chip.start, chip])), [chips]);
-  // 指针停在哪颗胶囊的 × 上（chip 起点）：× 提亮、指针变手
-  const [closeHover, setCloseHover] = useState<number | null>(null);
   // 光标吸附（snapSelection）要的上一次选区：键盘移动靠它判方向；按着鼠标时不吸（拖选中），
   // 松手再按「指针」口径吸一次
   const lastSelectionRef = useRef<TextSelection>({ start: 0, end: 0 });
@@ -206,22 +179,13 @@ export function Composer(props: {
   /** 把选区的端点吸到胶囊边上（端点不在胶囊中间就不动），并记下这一次的选区 */
   const snapToChips = (el: HTMLTextAreaElement, prev: TextSelection | null): void => {
     const next = { start: el.selectionStart, end: el.selectionEnd };
-    const snapped = snapSelection(parseChips(el.value), next, prev);
+    // 任务胶囊（[任务 xxxxxxxx]）原文里的位置在屏幕上同样不存在，与技能胶囊一起吸
+    const ranges = [...parseChips(el.value), ...resolveTaskTokens(el.value, props.tasks)];
+    const snapped = snapSelection(ranges, next, prev);
     if (snapped.start !== next.start || snapped.end !== next.end) {
       el.setSelectionRange(snapped.start, snapped.end, el.selectionDirection);
     }
     lastSelectionRef.current = snapped;
-  };
-  /** 点胶囊的 ×：删整颗（连带一个空格，chipRemovalRange）。走 execCommand 保撤销栈；被拒退 setRangeText */
-  const removeChip = (el: HTMLTextAreaElement, start: number): void => {
-    const chip = parseChips(el.value).find((each) => each.start === start);
-    if (chip === undefined) return;
-    const range = chipRemovalRange(el.value, chip);
-    el.focus({ preventScroll: true });
-    el.setSelectionRange(range.start, range.end);
-    if (!document.execCommand("delete")) el.setRangeText("", range.start, range.end, "end");
-    lastSelectionRef.current = { start: range.start, end: range.start };
-    setCloseHover(null);
   };
   // ── 句中粘贴块（方案 C，paste-blocks.ts）──────────────────────────────
   // token 只画有主的：块已沉默（删了又没发）或手打的 token 形状只是普通文字，
@@ -245,21 +209,30 @@ export function Composer(props: {
   );
   // 画成胶囊的区间：skill / mcp 的 token（带 kind，按类别上色）+ 收着的粘贴
   // token（不带 kind，中性配方）——同一副药方，两种墨
+  // 图的小签「[图 N]」：只画有对应附图的（N ≤ 附图张数），否则是用户自己写的字。
+  // 与粘贴 token 同一套中性胶囊——文本里就是字面的 `[图 N]`，发出去也是它
+  const imageRefs = useMemo(
+    () => (props.value.length > CHIPS_MAX_LENGTH ? [] : parseImageRefs(props.value, props.attachments.length)),
+    [props.value, props.attachments.length],
+  );
+  // 任务引用的小签「[任务 xxxxxxxx]」：只画查得到会话的（名字取会话标题）
+  const taskTokens = useMemo(
+    () => (props.value.length > CHIPS_MAX_LENGTH ? [] : resolveTaskTokens(props.value, props.tasks)),
+    [props.value, props.tasks],
+  );
   const chipSpans = useMemo(
     () => [
       ...chips.map((chip) => ({ start: chip.start, end: chip.end, kind: chip.kind })),
       ...paintedPasteTokens.map((token) => ({ start: token.start, end: token.end })),
+      ...imageRefs.map((ref) => ({ start: ref.start, end: ref.end })),
+      ...taskTokens.map((token) => ({ start: token.start, end: token.end })),
     ],
-    [chips, paintedPasteTokens],
+    [chips, paintedPasteTokens, imageRefs, taskTokens],
   );
   const segments = useMemo(
     () =>
-      mirrorSegments(
-        whiteout ? whiteoutSegments(props.value, composition ?? undefined) : [{ text: props.value, whiteout: false }],
-        chipSpans,
-        pasteRuns,
-      ),
-    [whiteout, props.value, composition, chipSpans, pasteRuns],
+      mirrorSegments(props.value, chipSpans, pasteRuns),
+    [props.value, chipSpans, pasteRuns],
   );
   // 每段在原文里的起点：chip 段靠它对上 chipAt（名字、× 归哪颗）
   const segmentsWithOffsets = useMemo(() => {
@@ -270,6 +243,32 @@ export function Composer(props: {
       return { segment, offset: at };
     });
   }, [segments]);
+  // 每颗胶囊的脸（种类、图标、名字），按镜像段的起点查：技能 / MCP / 插件按 token，
+  // 粘贴的长文本写「粘贴 1 · 40 行」、附图写编号——都去掉方括号、配图标（2026-11-23 用户定）。
+  // 粘贴名字去掉原文里的空格：方括号 + 空格省下的宽度刚好让给图标与两头留白（原文 `[粘贴 1 · 40 行]`
+  // 与脸同字同号）；附图的原文 `[图 1]` 太窄，图标后面只写编号，「图」由图标表达
+  const pasteAt = useMemo(() => new Map(paintedPasteTokens.map((token) => [token.start, token])), [paintedPasteTokens]);
+  const imageRefAt = useMemo(() => new Map(imageRefs.map((ref) => [ref.start, ref])), [imageRefs]);
+  const taskAt = useMemo(() => new Map(taskTokens.map((token) => [token.start, token])), [taskTokens]);
+  const chipFaceAt = (offset: number): { kind: string; icon: IconName; name: string } | null => {
+    const chip = chipAt.get(offset);
+    if (chip !== undefined) {
+      return {
+        kind: chip.kind,
+        icon: chipIconName(chip.kind),
+        name: chip.kind === "plugin" ? pluginChipName(pluginNames, chip.target) : chip.target,
+      };
+    }
+    const paste = pasteAt.get(offset);
+    if (paste !== undefined) return { kind: "paste", icon: "clipboard", name: t.composer.pasteChipName(paste.seq, paste.lines) };
+    const ref = imageRefAt.get(offset);
+    if (ref !== undefined) return { kind: "image", icon: "image", name: String(ref.n) };
+    const task = taskAt.get(offset);
+    if (task !== undefined) {
+      return { kind: "task", icon: FEATURE_ICON.taskRef, name: task.task.title === "" ? t.common.newTask : task.task.title };
+    }
+    return null;
+  };
   /** 展开一块：token 换回全文（execCommand 保撤销栈），区间写回块状态。
    *  区间里的文字从块存的全文来——收起态下它就是唯一真相 */
   const expandPaste = (seq: number): void => {
@@ -302,8 +301,7 @@ export function Composer(props: {
   };
   // 随内容长高：撤回能把好几条排队消息堆进来，写死两行就只能盲着改。
   // useLayoutEffect 而非 useEffect——量完就改高度，放到绘制后会闪一帧。
-  // script 变了也要重量：字距一换行数就变，而组词结束时切换的那一下 value 没有变。
-  // 高度一变可能出现或收起滚动条，镜像跟着同步；镜像刚挂上（whiteout 变 true）时也要同步一次
+  // 高度一变可能出现或收起滚动条，镜像跟着同步。
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (el === null) return;
@@ -316,19 +314,7 @@ export function Composer(props: {
     for (const chip of mirror.querySelectorAll<HTMLElement>(".composer-chip[data-kind]")) {
       chip.toggleAttribute("data-wrapped", chip.getClientRects().length > 1);
     }
-  }, [props.value, script, whiteout]);
-  // 换主题也要重量：纸面两档的行高是 24px，浅 / 暗是 22px——只跟着 value 量，切主题后高度
-  // 停在上一档，方格的末行会被切掉半行（2026-09-25 实测）。同一个信号决定画不画修正液
-  useLayoutEffect(() => {
-    const el = textareaRef.current;
-    if (el === null) return;
-    const observer = new MutationObserver(() => {
-      fitComposerHeight(el);
-      setWhiteout(isCopybook());
-    });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    return () => observer.disconnect();
-  }, []);
+  }, [props.value]);
   // ── 光标位置（「/ + 空格」开右栏选取的触发条件在 panel-token.ts）──────
   // 纯移动不经过 onChange，所以还要 onSelect 跟；value 被外部改写（草稿恢复、
   // token 插入）后从 DOM 回同步一次
@@ -337,6 +323,53 @@ export function Composer(props: {
     const el = textareaRef.current;
     if (el !== null) setCursor(el.selectionStart);
   }, [props.value]);
+  // 附图后光标落到新小签之后：小签是异步（读图）写进草稿的，外部改写 value 时 textarea 的光标会跳到末尾，
+  // 句中附图就把用户的位置丢了。只在正文还是写入那一版时落（期间用户又打了字 / 切了会话就不抢光标）
+  const [caretRequest, setCaretRequest] = useState<{ text: string; caret: number } | null>(null);
+  useLayoutEffect(() => {
+    if (caretRequest === null) return;
+    const el = textareaRef.current;
+    if (el !== null && el.value === caretRequest.text) {
+      el.setSelectionRange(caretRequest.caret, caretRequest.caret);
+      lastSelectionRef.current = { start: caretRequest.caret, end: caretRequest.caret };
+      setCursor(caretRequest.caret);
+    }
+    setCaretRequest(null);
+  }, [caretRequest, props.value]);
+  /** 附图：光标处插小签（props.onAttach 读图写草稿），写完把光标放到小签后面 */
+  const attach = (files: readonly File[], caret: number | undefined): void => {
+    void props.onAttach(files, caret).then((done) => {
+      if (done !== null) setCaretRequest(done);
+    });
+  };
+
+  // ── 拖进来的东西落在指针处（drop-point.ts）：拖动时画一根插入竖线，松手在那里插小签 ──
+  const [dropAt, setDropAt] = useState<{ index: number; left: number; top: number; height: number } | null>(null);
+  const dropRanges = useMemo(() => chipSpans.map(({ start, end }) => ({ start, end })), [chipSpans]);
+  /** 任务胶囊：在 at 处插 token（execCommand 保撤销栈），光标落在它之后 */
+  const insertTaskAt = (task: TaskRef, at: number): void => {
+    const el = textareaRef.current;
+    const next = insertTaskToken(props.value, at, task);
+    if (el === null) {
+      props.onChange(next.text);
+      return;
+    }
+    el.focus();
+    el.setSelectionRange(next.from, next.from);
+    if (!document.execCommand("insertText", false, next.inserted)) props.onChange(next.text);
+    lastSelectionRef.current = { start: next.caret, end: next.caret };
+  };
+  // 拖动中途取消（Esc、拖出窗口）不一定触发 field 的 dragleave：全局兜底收掉竖线
+  useEffect(() => {
+    if (dropAt === null) return;
+    const clear = (): void => setDropAt(null);
+    window.addEventListener("dragend", clear);
+    window.addEventListener("drop", clear, true);
+    return () => {
+      window.removeEventListener("dragend", clear);
+      window.removeEventListener("drop", clear, true);
+    };
+  }, [dropAt === null]);
 
   const disabled = props.disabled === true;
   const running = props.running === true;
@@ -391,35 +424,65 @@ export function Composer(props: {
           outlineOffset: -5,
         }}
       >
-      <div className={`composer-field${pasteRuns.length > 0 ? " has-paste-run" : ""}`}>
+      <div
+        className={`composer-field${pasteRuns.length > 0 ? " has-paste-run" : ""}`}
+        onDragOver={(event) => {
+          const types = event.dataTransfer.types;
+          if (disabled || !(types.includes("Files") || types.includes(TASK_REF_MIME))) return;
+          event.preventDefault();
+          const el = textareaRef.current;
+          const index = el === null ? null : dropIndexAtPoint(el, event.clientX, event.clientY, dropRanges);
+          if (el === null || index === null) {
+            if (dropAt !== null) setDropAt(null);
+            return;
+          }
+          if (dropAt?.index === index) return;
+          const point = caretPoint(el, index);
+          setDropAt(
+            point === null
+              ? null
+              : { index, left: point.left + el.offsetLeft, top: point.top + el.offsetTop, height: point.height },
+          );
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDropAt(null);
+        }}
+        onDrop={(event) => {
+          setDropAt(null);
+          const types = event.dataTransfer.types;
+          const isTask = types.includes(TASK_REF_MIME);
+          if (disabled || !(isTask || types.includes("Files"))) return;
+          // preventDefault 同时是给外层 ChatView 的信号：这次已在落点处理过，别再追加到末尾
+          event.preventDefault();
+          const el = textareaRef.current;
+          const index = el === null ? null : dropIndexAtPoint(el, event.clientX, event.clientY, dropRanges);
+          if (isTask) {
+            const task = parseTaskRefPayload(event.dataTransfer.getData(TASK_REF_MIME));
+            if (task !== null) insertTaskAt(task, index ?? props.value.length);
+            return;
+          }
+          const files = filesOf(event.dataTransfer);
+          if (files.length > 0) attach(files, index ?? undefined);
+        }}
+      >
         {/*
           镜像层（全主题常驻）：与 textarea 同字体、同字距、同宽。**字由它画**（2026-10-30 起）：
           textarea 的字透明，只管光标、选区、输入法与撤销。句中 token 在这里包成 .composer-chip：
           原文透明占位，上面盖一颗胶囊（ChipFace）——两层共用同一套排版，光标与字才逐像素对齐；
-          修正液（copybook）、粘贴展开段的底色也画在这一层。
+          粘贴展开段的底色也画在这一层。
           末尾补一个零宽字符：textarea 末尾的换行会多出一行，div 里不会，滚动范围就对不上
         */}
-        <div ref={mirrorRef} className="composer-input composer-mirror" data-script={script} aria-hidden="true">
+        <div ref={mirrorRef} className="composer-input composer-mirror" aria-hidden="true">
           {segmentsWithOffsets.map(({ segment, offset }, index) => {
-            const chip = segment.chipKind !== undefined ? chipAt.get(offset) : undefined;
+            const face = segment.chip ? chipFaceAt(offset) : null;
             return segment.chip ? (
-              <span
-                key={index}
-                className="composer-chip"
-                data-kind={segment.chipKind ?? undefined}
-                data-close-hover={chip !== undefined && closeHover === offset ? "" : undefined}
-              >
+              <span key={index} className="composer-chip" data-kind={face?.kind}>
                 {segment.text}
-                {chip !== undefined && (
-                  <ChipFace kind={chip.kind} name={chip.kind === "plugin" ? pluginChipName(pluginNames, chip.target) : chip.target} start={chip.start} />
-                )}
+                {face !== null && <ChipFace icon={face.icon} name={face.name} />}
               </span>
             ) : segment.pasteRun ? (
               <span key={index} className="composer-paste-run">
-                {segment.text}
-              </span>
-            ) : segment.whiteout ? (
-              <span key={index} className="composer-whiteout">
                 {segment.text}
               </span>
             ) : (
@@ -428,6 +491,13 @@ export function Composer(props: {
           })}
           {"\u200b"}
         </div>
+        {dropAt !== null && (
+          <span
+            className="composer-drop-caret"
+            aria-hidden="true"
+            style={{ left: dropAt.left, top: dropAt.top, height: dropAt.height }}
+          />
+        )}
         {/* 展开段的收起标签：浮在区间头上（.composer-field 内绝对定位，叠在 textarea
             之上可点击）。不在镜像层里——镜像的 textContent 必须与 textarea 逐字一致
             （caret-point 的 locateText 靠它），多一颗按钮就全乱了 */}
@@ -447,7 +517,6 @@ export function Composer(props: {
         <textarea
           ref={textareaRef}
           className="composer-input"
-          data-script={script}
           rows={COMPOSER_MIN_ROWS}
           value={props.value}
           disabled={disabled}
@@ -474,13 +543,6 @@ export function Composer(props: {
           onMouseDown={(event) => {
             if (event.button !== 0) return;
             const el = event.currentTarget;
-            // 点在胶囊的 × 上：不动光标、不开始拖选，直接删整颗
-            const close = chipCloseAt(mirrorRef.current, event.clientX, event.clientY);
-            if (close !== null && !disabled && !dictating) {
-              event.preventDefault();
-              removeChip(el, close);
-              return;
-            }
             pointerDownRef.current = true;
             // 按下的那一下光标可能落在胶囊中间：下一帧就挂到最近的一边，不等松手（继续拖的话
             // 浏览器仍从自己的锚点扩选，松手时再整颗吸）
@@ -495,13 +557,6 @@ export function Composer(props: {
               },
               { once: true },
             );
-          }}
-          onMouseMove={(event) => {
-            const close = chipCloseAt(mirrorRef.current, event.clientX, event.clientY);
-            if (close !== closeHover) setCloseHover(close);
-          }}
-          onMouseLeave={() => {
-            if (closeHover !== null) setCloseHover(null);
           }}
           onClick={(event) => {
             // 点在句中粘贴胶囊上 = 展开（方案 C：点开 = 全文真正回到输入框里）。
@@ -521,7 +576,7 @@ export function Composer(props: {
             const files = filesOf(event.clipboardData);
             if (files.length > 0) {
               event.preventDefault();
-              props.onAttach(files);
+              attach(files, event.currentTarget.selectionStart);
               return;
             }
             // 纯文字粘贴：超过折叠阈值的一大段在**光标处**收成句中胶囊（方案 C：鼠标光标
@@ -637,12 +692,26 @@ export function Composer(props: {
                 const owner = paste !== null ? pasteBySeq.get(paste.seq) : undefined;
                 const pasteOwned =
                   paste !== null && owner !== undefined && owner.range === null ? paste : null;
+                // 图的小签同理整删（只认有对应附图的）：退格一次删掉整颗。图本身仍在附图里——
+                // 小签只是正文里的一处引用，删了它不是撤图（撤图点缩略图上的 ×，小签随之一起走）
+                const imageRef: ImageRefSpan | null =
+                  parseImageRefs(el.value, props.attachments.length).find((ref) =>
+                    backspace ? ref.end === el.selectionStart : ref.start === el.selectionEnd,
+                  ) ?? null;
+                const taskToken =
+                  resolveTaskTokens(el.value, props.tasks).find((token) =>
+                    backspace ? token.end === el.selectionStart : token.start === el.selectionEnd,
+                  ) ?? null;
                 const span =
-                  chip !== null
+                  taskToken !== null
+                    ? { start: taskToken.start, end: taskToken.end }
+                    : chip !== null
                     ? { start: chip.start, end: chip.end }
                     : pasteOwned !== null
                       ? { start: pasteOwned.start, end: pasteOwned.end }
-                      : null;
+                      : imageRef !== null
+                        ? { start: imageRef.start, end: imageRef.end }
+                        : null;
                 if (span !== null) {
                   event.preventDefault();
                   el.setSelectionRange(span.start, span.end);
@@ -683,7 +752,6 @@ export function Composer(props: {
             overflowY: "hidden",
             outline: "none",
             // 字的颜色不在这里：textarea 的字透明、由镜像层画（styles.css 的 .composer-field > textarea）
-            cursor: closeHover !== null ? "pointer" : undefined,
           }}
         />
       </div>
@@ -734,7 +802,7 @@ export function Composer(props: {
           multiple
           hidden
           onChange={(event) => {
-            props.onAttach(Array.from(event.target.files ?? []));
+            attach(Array.from(event.target.files ?? []), textareaRef.current?.selectionStart);
             // 清掉选择：同一张图移除后再选一次，change 才会再触发
             event.target.value = "";
           }}

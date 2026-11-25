@@ -56,7 +56,7 @@ import {
   type BrowserWindowState,
 } from "../../shared/browser.ts";
 import { normalizeAddress, resolveAddressOrSearch } from "./address.ts";
-import { guardLocalFileRequests, resolveLocalPage } from "./local-file.ts";
+import { guardLocalFileRequests, localPageRoots, resolveLocalPage } from "./local-file.ts";
 import { browserUserAgent } from "./identity.ts";
 import { browserShortcut, type BrowserShortcut } from "./shortcuts.ts";
 import { availableDownloadPath, forceDownloadHeaders } from "./downloads.ts";
@@ -70,6 +70,7 @@ import { placeInUserTab } from "./user-tabs.ts";
 import { tabPaint } from "./tab-painting.ts";
 import { emptyElementRefs, type ElementRefs } from "./page-outline.ts";
 import type { ShotGeometry } from "./screenshot-geometry.ts";
+import { PAGE_BACKGROUNDS } from "./page-background.ts";
 
 /** 全局一个持久化 partition（2026-09-27 裁决：学校登录是跨工作区的身份，不按工作区分） */
 export const BROWSER_PARTITION = "persist:orbita-browser";
@@ -89,7 +90,7 @@ const AGENT_TAB_MAX = 8;
 const AGENT_TAB_SWEEP_MS = 60_000;
 
 /** 空白 tab 在第一次读到设置之前的垫底色（明主题壳底）。按档取色见 page-background.ts */
-const PAGE_BACKGROUND_FALLBACK = "#e7ebef";
+const PAGE_BACKGROUND_FALLBACK = PAGE_BACKGROUNDS.light;
 
 /** 网页视图与弹窗子窗口共用的 webPreferences：无 preload，三条安全不变量全开 */
 const PAGE_PREFERENCES = {
@@ -126,10 +127,12 @@ export interface BrowserTab {
   crashed: boolean;
   /**
    * 这个 tab 里的本地网页能读到的本地范围（file:// 页面闸，local-file.ts）。每次经入口闸打开本地网页
-   * 时换成那道闸认的根：文件面板打开 = 文件面板的白名单根，browser_navigate / 轮尾卡 = 本会话的目录。
+   * 时只给网页真实路径所在的目录；入口用哪套会话白名单不再决定页面之后能读多少。
    * 空 = 这个 tab 的任何 file:// 请求都不放（从没打开过本地网页的 tab 不该碰本地文件）
    */
   localRoots: readonly string[];
+  /** 已过入口闸的顶层网页真实路径：点开头文件名只对它自己豁免，其余点资源仍由页面闸拒绝 */
+  localPagePath: string | null;
 }
 
 interface PendingHandoff {
@@ -250,16 +253,16 @@ export class BrowserSandbox {
   }
 
   /**
-   * 在用户的 tab 里打开一个本地网页（同 open 的落点规则）。路径已过入口闸（文件面板的 root/dir 白名单，
-   * 或轮尾卡那道 resolveLocalPage），这里不再判；roots 是那道闸认的根，记到落点 tab 上——页面
-   * 打开之后对 file:// 的每一个请求都只在这些根里放行（页面闸，#365）。
+   * 在用户的 tab 里打开一个本地网页（同 open 的落点规则）。path 已过入口闸（文件面板的 root/dir 白名单，
+   * 或轮尾卡那道 resolveLocalPage），这里不再判；只把 path 真实所在目录交给落点 tab——页面打开之后
+   * 对 file:// 的每一个请求都只在这个目录里放行（页面闸，#365）。
    *
    * 落在用户的 tab 而不是会话的 agent tab，理由同 open：你手动打开的东西不该落进 agent 正在用的
    * tab——会打断它手上的操作，下载也会跟着进那个会话的工作台。agent 要看，按 id 只读。
    */
-  async openLocalFile(path: string, roots: readonly string[]): Promise<void> {
+  async openLocalFile(path: string): Promise<void> {
     const window = await this.ensureWindow();
-    this.openInUserTab(pathToFileURL(path).href, roots);
+    this.openInUserTab(pathToFileURL(path).href, localPageRoots(path), path);
     bringToFront(window);
   }
 
@@ -273,7 +276,7 @@ export class BrowserSandbox {
     const roots = await this.deps.sessionRoots(sessionId);
     const resolved = await resolveLocalPage(path, roots);
     if (!resolved.ok) return { ok: false, reason: resolved.reason };
-    await this.openLocalFile(resolved.path, roots);
+    await this.openLocalFile(resolved.path);
     return { ok: true };
   }
 
@@ -505,6 +508,16 @@ export class BrowserSandbox {
     return [];
   }
 
+  /** 当前 tab 经入口闸打开的顶层网页；找不到 / 已关闭时不给点文件豁免 */
+  private localPagePathOf(webContentsId: number | undefined): string | undefined {
+    if (webContentsId === undefined) return undefined;
+    for (const tab of this.tabs.values()) {
+      const contents = tab.view.webContents;
+      if (!contents.isDestroyed() && contents.id === webContentsId) return tab.localPagePath ?? undefined;
+    }
+    return undefined;
+  }
+
   /** 截图另存的目录：`<会话工作台>/screenshots/` */
   screenshotDir(sessionId: string): string {
     return join(this.deps.workbenchPath(sessionId), "screenshots");
@@ -729,6 +742,7 @@ export class BrowserSandbox {
       pending: 0,
       crashed: false,
       localRoots: [],
+      localPagePath: null,
     };
     this.tabs.set(tab.id, tab);
     // 先垫到最底层：新 agent tab 不盖住用户正在看的那一页
@@ -859,7 +873,7 @@ export class BrowserSandbox {
    * 在用户的 tab 里打开 url（已规范化）：落点规则见 user-tabs.ts。localRoots 只有经入口闸打开本地网页时才给，
    * 记到落点 tab 上（先记后加载：页面闸对主框架本身也生效）；网址不动它（http 页面本就读不了 file://）
    */
-  private openInUserTab(url: string, localRoots?: readonly string[]): void {
+  private openInUserTab(url: string, localRoots?: readonly string[], localPagePath?: string): void {
     const views = this.userTabs()
       .filter((tab) => !tab.view.webContents.isDestroyed())
       .map((tab) => ({ id: tab.id, url: pageUrl(tab.view.webContents), loading: tab.view.webContents.isLoading() }));
@@ -867,12 +881,14 @@ export class BrowserSandbox {
     if (placement.kind === "switch") {
       const open = this.tabs.get(placement.id);
       if (open !== undefined && localRoots !== undefined) open.localRoots = localRoots;
+      if (open !== undefined && localPagePath !== undefined) open.localPagePath = localPagePath;
       this.show(placement.id);
       return;
     }
     const tab = placement.kind === "reuse" ? this.tabs.get(placement.id) : this.createTab({ kind: "user" });
     if (tab === undefined) return;
     if (localRoots !== undefined) tab.localRoots = localRoots;
+    if (localPagePath !== undefined) tab.localPagePath = localPagePath;
     this.show(tab.id);
     // 加载失败（断网、文件刚被删）页面自己会显示错误页，不当异常抛——同 navigate
     tab.view.webContents.loadURL(url).catch(() => undefined);
@@ -948,7 +964,11 @@ export class BrowserSandbox {
     partition.on("will-download", (_event, item, contents) => this.onDownload(item, contents));
     // 页面闸（#365）：本地网页打开之后，它对 file:// 的每一个请求（跳转、iframe、fetch、脚本……）
     // 都要 realpath 后落在这个 tab 的放行根里。弹窗、找不到的 webContents 一律不放
-    guardLocalFileRequests(partition, (webContentsId) => this.localRootsOf(webContentsId));
+    guardLocalFileRequests(
+      partition,
+      (webContentsId) => this.localRootsOf(webContentsId),
+      (webContentsId) => this.localPagePathOf(webContentsId),
+    );
     // agent tab 打开 PDF 这类文件：改成下载，不在 tab 里显示——agent 读不了查看器里的字，
     // 下载进工作台它能用文件工具读。「你的」tab 不动，照常在查看器里看
     partition.webRequest.onHeadersReceived((details, callback) => {

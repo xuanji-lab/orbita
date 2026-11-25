@@ -12,6 +12,7 @@ import type {
   FileLinesRequest,
   FileListRequest,
   FileListResponse,
+  FileMediaUrl,
   FilePreview,
   FileRoot,
   FileRootsRequest,
@@ -29,8 +30,10 @@ export const filesApi = {
   reveal: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsReveal, req),
   /** 读一个文件给面板预览（同 root/dir 白名单，`dir` 就是文件路径） */
   read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
-  /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf；实验功能「PDF 引用」） */
+  /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf） */
   readPdf: (req: FileListRequest): Promise<PdfFile> => ipcRenderer.invoke(ipcChannels.fsReadPdf, req),
+  /** 给音 / 视频文件要播放地址（同白名单，且须是媒体扩展名）；<audio> / <video> 拿它按 Range 流式读 */
+  mediaUrl: (req: FileListRequest): Promise<FileMediaUrl> => ipcRenderer.invoke(ipcChannels.fsMediaUrl, req),
   /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */
   lineIndex: (req: FileLineIndexRequest): Promise<FileLineIndex> =>
     ipcRenderer.invoke(ipcChannels.fsLineIndex, req),

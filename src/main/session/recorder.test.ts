@@ -4,7 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import { composeChannelPrompt } from "../../shared/channel.ts";
+import { composeChannelBatchPrompt, composeChannelPrompt } from "../../shared/channel.ts";
+import { splitEchoBlocks } from "../../shared/prompt-attachments.ts";
 import { createSessionRecorder } from "./recorder.ts";
 import { SessionStore } from "./store.ts";
 
@@ -299,6 +300,42 @@ describe("recorder 的通道标记识别（子会话 2026-09-23：信封自描�
     });
   });
 
+  test("合并信封（几个子会话回报一条消息）→ 仍落一条标记，首条在主字段、其余在 also", async () => {
+    const child = (id: string, kind: "done" | "question") => ({
+      id,
+      from: "child" as const,
+      author: "model" as const,
+      kind,
+      text: id,
+      delivery: "followUp" as const,
+      createdAt: 1,
+    });
+    const prompt = composeChannelBatchPrompt([
+      { message: child("m1", "done"), peer: { id: "c1", title: "甲" } },
+      { message: child("m2", "question"), peer: { id: "c2", title: "乙" } },
+    ]);
+    // 真实的 user item 正文是按空行拆开的多个 text 块（runtime 回显的切法），不是一整段
+    record(
+      progress({
+        type: "item_started",
+        item: { ...envelopeUser(prompt), content: splitEchoBlocks(prompt).map((text) => ({ type: "text" as const, text })) },
+      }),
+    );
+    await settleUntil(transcriptLanded(1));
+    const detail = await store.load(ID);
+    assert.equal(detail?.transcript.length, 1);
+    assert.deepEqual(detail?.transcript[0], {
+      role: "channel-mark",
+      id: "u-env",
+      peerId: "c1",
+      messageId: "m1",
+      from: "child",
+      kind: "done",
+      timestamp: 5000,
+      also: [{ peerId: "c2", messageId: "m2", from: "child", kind: "question" }],
+    });
+  });
+
   test("普通 user 消息照旧落成 user 记录——不是每条 user 消息都要过一遍解析开销地改变落盘形状", async () => {
     record(progress({ type: "item_started", item: user }));
     await settleUntil(transcriptLanded(1));
@@ -408,47 +445,5 @@ describe("recorder 给 assistant 记录盖本轮生效的思考档（价格 · �
     record(progress({ type: "item_finished", item: assistant("complete") }));
     await settleUntil(transcriptLanded(1));
     assert.deepEqual(await rawLevels(), ["absent"]);
-  });
-});
-
-describe("createSessionRecorder 的「以后再做」", () => {
-  const planTool = (status: "complete" | "running" | "error", input: unknown, toolName = "update_plan") => ({
-    id: "t-plan",
-    role: "tool" as const,
-    toolCallId: "call-7",
-    toolName,
-    input: input as never,
-    content: [],
-    timestamp: 3000,
-    status,
-    isError: status === "error",
-  });
-  const withLater = { items: [{ text: "a", status: "in_progress" }], later: [{ text: "日期解析不一致", why: "这次不动" }, "加 CI"] };
-
-  test("update_plan 跑完（complete）：later 逐条交给回调，带上调用 id 当锚点", () => {
-    const got: unknown[] = [];
-    const rec = createSessionRecorder(store, undefined, (sessionId, drafts) => got.push({ sessionId, drafts }));
-    rec(progress({ type: "item_finished", item: planTool("complete", withLater) as never }));
-    assert.deepEqual(got, [
-      {
-        sessionId: ID,
-        drafts: [
-          { title: "日期解析不一致", detail: "这次不动", anchor: "call-7" },
-          { title: "加 CI", detail: "", anchor: "call-7" },
-        ],
-      },
-    ]);
-  });
-
-  test("还在跑 / 被拒 / 别的工具 / 没有 later：不交；记录本身照落盘", async () => {
-    const got: unknown[] = [];
-    const rec = createSessionRecorder(store, undefined, (_id, drafts) => got.push(drafts));
-    rec(progress({ type: "item_finished", item: planTool("running", withLater) as never }));
-    rec(progress({ type: "item_finished", item: planTool("error", withLater) as never }));
-    rec(progress({ type: "item_finished", item: planTool("complete", withLater, "read") as never }));
-    rec(progress({ type: "item_finished", item: planTool("complete", { items: [{ text: "a", status: "done" }] }) as never }));
-    await settleUntil(transcriptLanded(4));
-    assert.deepEqual(got, []);
-    assert.equal((await store.load(ID))?.transcript.length, 4);
   });
 });

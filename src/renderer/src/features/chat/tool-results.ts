@@ -19,20 +19,19 @@ import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-prot
 import type { DelegateCard, ReadTaskCard } from "@shared/agent-ipc";
 import type { ChannelMessageKind } from "@shared/channel";
 import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptRecord } from "@shared/session";
-import type { FileTurnRecord, FileTurnView, RevertRecord } from "@shared/revert";
+import type { FileTurnRecord, FileTurnView, MediaArtifact, RevertRecord } from "@shared/revert";
 import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
-import { parseChannelPrompt } from "../../../../shared/channel.ts";
+import { parseChannelBatch } from "../../../../shared/channel.ts";
 import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
 import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
 import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import { gatedCommandTimeout, PLUGIN_BOARD_TOOL } from "../../../../shared/permission.ts";
 import { builtinCommand, DOC_EDIT_KEY, DOC_WRITE_KEY, docEditPath, isBuiltinCommand } from "./builtin-commands.ts";
 import { turnOutputs } from "./process-rows.ts";
+import { turnArtifacts } from "./turn-artifacts.ts";
 import { isWebArtifactFile } from "../../../../shared/files.ts";
-// 收尾扫描回答卡（scanAnswerCards）只用它认消息形状；纯模块，node --test 可直接加载
-import { matchScanMessage, type ScanMessage } from "./carryover-parse.ts";
-// 值导入必须走相对路径带 .ts 后缀（同上一行的纪律：本文件被 node --test 直接加载）
+// 值导入必须走相对路径带 .ts 后缀（本文件被 node --test 直接加载）
 import { skillForReadPath } from "../../../../shared/skill.ts";
 import { markdownImagePaths, resolveChatPath, samePathKey } from "./chat-paths.ts";
 import { parseQualifiedToolName } from "../../../../shared/mcp.ts";
@@ -116,6 +115,15 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
         mark: { peerId: record.peerId, messageId: record.messageId, from: record.from, kind: record.kind },
         timestamp: record.timestamp,
       });
+      // 合并投递的其余信封各画一行（key 带序号，首行 key 不变）
+      (record.also ?? []).forEach((more, index) => {
+        units.push({
+          kind: "channelMark",
+          key: `${record.id}:also${index}`,
+          mark: { peerId: more.peerId, messageId: more.messageId, from: more.from, kind: more.kind },
+          timestamp: record.timestamp,
+        });
+      });
       continue;
     }
     if (record.role === "tool") continue;
@@ -141,9 +149,16 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
       // 首个 text 块能解出信封就按同一条判定画成标记行、不产 user 单元——
       // key 与落盘后的 channel-mark 记录相同（都是这条 user item 的 id），
       // 重载前后 React key 保持稳定。
-      const envelope = channelEnvelopeOf(record);
-      if (envelope !== null) {
-        units.push({ kind: "channelMark", key: record.id, mark: envelope, timestamp: record.timestamp });
+      const envelopes = channelEnvelopesOf(record);
+      if (envelopes.length > 0) {
+        envelopes.forEach((envelope, index) => {
+          units.push({
+            kind: "channelMark",
+            key: index === 0 ? record.id : `${record.id}:also${index - 1}`,
+            mark: envelope,
+            timestamp: record.timestamp,
+          });
+        });
         continue;
       }
       units.push({ kind: "user", key: record.id, item: record });
@@ -174,16 +189,20 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
 /**
  * user 记录的首个 text 块能否解出通道信封——同 `main/session/recorder.ts` 的
  * `channelMarkOf` 判定，只是画在渲染层而不是落盘层（重载前的活会话还没走过
- * recorder，实时流里它仍是一条带信封文本的 user item）。
+ * recorder，实时流里它仍是一条带信封文本的 user item）。合并投递带几条信封就返回几条。
  */
-function channelEnvelopeOf(
+function channelEnvelopesOf(
   item: Extract<TranscriptItem, { role: "user" }>,
-): { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind } | null {
-  const text = item.content.find((block) => block.type === "text");
-  if (text === undefined || text.type !== "text") return null;
-  const parsed = parseChannelPrompt(text.text);
-  if (parsed === null) return null;
-  return { peerId: parsed.peerId, messageId: parsed.messageId, from: parsed.from, kind: parsed.kind };
+): { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind }[] {
+  // 回显的正文按空行拆成多个 text 块：合并信封的各条信封落在不同的块里，要拼回全文再认
+  const joined = item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n");
+  if (joined === "") return [];
+  return parseChannelBatch(joined).map((parsed) => ({
+    peerId: parsed.peerId,
+    messageId: parsed.messageId,
+    from: parsed.from,
+    kind: parsed.kind,
+  }));
 }
 
 /**
@@ -219,11 +238,56 @@ const PLUGIN_INSTALL_TOOL_NAME = "install_plugin";
 // 那一部分该被排除，谓词的假分支会让 TS 把整个 "toolCall" kind 都窄掉，
 // 下游 `entry.kind === "toolCall"` 判断就报「没有交集」。
 // 名字沿用 isChannelToolCall：通道工具与交接都是「独立成卡、不参与合并与折叠」的那一类。
-function isChannelToolCall(entry: RenderEntry): boolean {
+function isChannelToolCall(entry: RenderEntry, results?: ToolResultIndex): boolean {
+  if (entry.kind !== "toolCall") return false;
+  // 回复子会话 / 报告给主会话是过程（2026-11-22：收进过程行，和普通工具同一种行）；只有报错的才留在外面（红行，要让用户看见它没发出去）
+  if (PROCESS_CHANNEL_TOOLS.has(entry.toolName)) return results?.get(entry.toolCallId)?.status === "error";
   return (
-    entry.kind === "toolCall" &&
-    (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME)
+    (CHANNEL_TOOL_NAMES.has(entry.toolName) || entry.toolName === HANDOFF_TOOL_NAME || entry.toolName === PLUGIN_INSTALL_TOOL_NAME) &&
+    hasOwnCard(entry, results)
   );
+}
+
+/** 主会话回复子会话、子会话报告给主会话：不是独立的卡，是过程里的一步（不并进工具组——各自一行写给谁、写了什么） */
+const PROCESS_CHANNEL_TOOLS: ReadonlySet<string> = new Set(["reply_subsession", "report_to_parent"]);
+
+/**
+ * 子会话的一条问询（channel-mark question）有没有被答过：通道摘要给的状态是 waiting 而且这条就是最后一条消息（createdAt = lastAt）
+ * 才是还在等；摘要里状态已不是 waiting（后来有了回复 / 终态）= 答过。读不到摘要（旧样张没有账本）按还在等——不编造「已回答」。
+ */
+export function questionAnswered(
+  summary: { status: string; lastAt: number } | undefined,
+  message: { createdAt: number } | undefined,
+): boolean {
+  if (summary === undefined) return false;
+  if (summary.status !== "waiting") return true;
+  return message !== undefined && message.createdAt !== summary.lastAt;
+}
+
+/**
+ * 这些「钉在折叠外」的工具，落定后得**真有那张卡可画**才留在外面（2026-11-22 用户截图：show_plugin_board 的结果
+ * details.pluginBoard 解析不出——缺 source / at——退回通用工具行，一行英文名「show_plugin_board 12 字」就露在折叠外）。
+ * 解析不出的收进过程行（那里按动作词写「放插件看板」），不以通用行留在外面。
+ * - 还在跑 / 没有结果索引（离线推导、测试）：照旧留在外面——它即将成卡，位置不该先跳后回。
+ * - 报错：照旧留在外面（红行，行首是中文动作词，见 process-rows.ts outsideFailure），用户需要看见它失败了。
+ * - 落定但卡片数据解析不出：收进过程。
+ */
+function hasOwnCard(entry: Extract<RenderEntry, { kind: "toolCall" }>, results: ToolResultIndex | undefined): boolean {
+  if (results === undefined) return true;
+  const result = results.get(entry.toolCallId);
+  if (result === undefined || result.status !== "complete") return true;
+  switch (entry.toolName) {
+    case PLUGIN_BOARD_TOOL:
+      return pluginBoardOf(result) !== null;
+    case "show_image":
+      return showImageCard(result) !== null;
+    case PLUGIN_INSTALL_TOOL_NAME:
+      return pluginInstallRowOf(result) !== null;
+    case "automation_update":
+      return automationModeRowOf(result) !== null;
+    default:
+      return true;
+  }
 }
 
 /**
@@ -238,8 +302,8 @@ function isChannelToolCall(entry: RenderEntry): boolean {
  */
 const PINNED_TOOL_NAMES: ReadonlySet<string> = new Set(["show_image", PLUGIN_BOARD_TOOL]);
 
-function isPinnedToolCall(entry: RenderEntry): boolean {
-  return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName);
+function isPinnedToolCall(entry: RenderEntry, results?: ToolResultIndex): boolean {
+  return entry.kind === "toolCall" && PINNED_TOOL_NAMES.has(entry.toolName) && hasOwnCard(entry, results);
 }
 
 function isShowImageCall(entry: RenderEntry): boolean {
@@ -399,13 +463,21 @@ export interface TurnOutputsUnit {
   calls: readonly ToolCallUnit[];
   /** 这一轮做出来的网页（文件账里改到的与旁路生成的），各占一张预览卡，不再挤在文件账卡里 */
   web: readonly string[];
-  /** 本轮网页文件变动超过上限（像是批量操作）时的个数；不逐个列，结尾那摞里是一张没有预览按钮的卡。没有 = 0 */
-  webBatch: number;
   /**
    * 这一轮写 / 改的文档（.md / .markdown / .txt，文件账里的绝对路径）：和「文档」功能是同一种东西，
    * 各占一张预览卡，点了在文档面板里看（2026-11-22 用户：a.md 只出现在编辑文件里，没有预览卡）
    */
   docs: readonly string[];
+  /**
+   * 这一轮回答里**点了名**的音视频（脚本生成的 mp3 / mp4 等；候选来自轮尾扫描，过滤见 named-outputs.ts）：
+   * 分段、试音样本没被提到就不在这里。点开在右侧文件面板播放。
+   */
+  media: readonly MediaArtifact[];
+  /**
+   * 这一轮是被子会话交回开头的（channelMark done）：交回的子会话的产物也摆进这一摞里（渲染时异步读子会话记录），
+   * 不再套在交回卡的框里。没有 = 空。
+   */
+  children: readonly { peerId: string; messageId: string }[];
 }
 
 export type TurnViewEntry = RenderEntry | TurnGroupUnit | TurnProcessUnit | TurnOutputsUnit;
@@ -421,8 +493,8 @@ export type TurnMemberEntry = Extract<
  * 它们是父子间的通信，不是「工作过程」，不该被折叠吞掉（子会话 PR4b 显示缺陷修正）。
  * 它们也从不出现在 toolGroup 里（`groupToolUnits` 已挡），这里只需挡 toolCall 分支。
  */
-function isTurnMember(entry: RenderEntry): entry is TurnMemberEntry {
-  if (isChannelToolCall(entry) || isPinnedToolCall(entry)) return false;
+function isTurnMember(entry: RenderEntry, results?: ToolResultIndex): entry is TurnMemberEntry {
+  if (isChannelToolCall(entry, results) || isPinnedToolCall(entry, results)) return false;
   return entry.kind === "thinking" || entry.kind === "toolCall" || entry.kind === "toolGroup";
 }
 
@@ -589,7 +661,7 @@ function foldSegment(
     chunk = [];
   };
   for (const entry of segment) {
-    if (isPinnedToolCall(entry)) {
+    if (isPinnedToolCall(entry, results)) {
       pinned.push(entry);
       continue;
     }
@@ -600,7 +672,7 @@ function foldSegment(
       tailCards.push(entry);
       continue;
     }
-    if (isChannelToolCall(entry)) {
+    if (isChannelToolCall(entry, results)) {
       flushChunk(false);
       view.push(entry);
       continue;
@@ -626,20 +698,18 @@ function foldSegment(
   // 结尾的卡（2026-11-22 照 Kimi：改了的文件在前、做出来的东西在后，同宽同色一摞）：先文件账，再这一轮交给
   // 用户的东西（演示文稿、文档、导出的文件）。还在跑的轮不出产物——跑的时候右栏已经自己打开在看着它写
   if (tailCards.length > 0) view.push(...tailCards);
-  if (mode !== "live" && results !== undefined) {
-    const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
-    const web = tailCards.flatMap((entry) =>
-      entry.kind === "fileTurn"
-        ? [...entry.record.changes.map((change) => change.path).filter((path) => isWebArtifactFile(path)), ...(entry.record.webArtifacts ?? [])]
-        : [],
-    );
-    const webBatch = tailCards.reduce((sum, entry) => sum + (entry.kind === "fileTurn" ? (entry.record.webArtifactsBatch ?? 0) : 0), 0);
-    const docs = tailCards.flatMap((entry) =>
-      entry.kind === "fileTurn" ? entry.record.changes.map((change) => change.path).filter((path) => DOC_FILE.test(path)) : [],
-    );
-    if (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || webBatch > 0) {
-      view.push({ kind: "turnOutputs", key: `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`, calls, web, webBatch, docs });
-    }
+  // 这一段是被子会话交回开头的：子会话的产物摆进这一轮结尾的产物摞（跑着的轮也要有——交回的产物不是还在写的东西）
+  const head = segment[0];
+  const children = head !== undefined && head.kind === "channelMark" && head.mark.kind === "done" ? [{ peerId: head.mark.peerId, messageId: head.mark.messageId }] : [];
+  const calls = segment.flatMap((entry) => (entry.kind === "toolCall" ? [entry] : entry.kind === "toolGroup" ? [...entry.calls] : []));
+  const settled = mode !== "live" && results !== undefined;
+  // 网页 / 文档 / 音视频候选只留这一轮最终回答里点了名的（turn-artifacts.ts，主会话、子会话交回、状态卡共用）：
+  // 顺手 edit 的 SKILL.md、批量 clone 下来的网页、别的会话同时写的网页、脚本留下的分段与试音，没点名就不是交给用户的东西
+  const { docs, web, media } = settled ? turnArtifacts(segment) : { docs: [], web: [], media: [] };
+  const hasMain = settled && results !== undefined && (turnOutputs(calls, results).length > 0 || web.length > 0 || docs.length > 0 || media.length > 0);
+  if (hasMain || children.length > 0) {
+    const key = children.length > 0 ? `out:child:${children[0]?.messageId ?? ""}` : `out:${calls[0]?.key ?? tailCards[0]?.key ?? ""}`;
+    view.push({ kind: "turnOutputs", key, calls: settled ? calls : [], web, docs, media, children });
   }
   return view;
 }
@@ -669,7 +739,7 @@ function foldChunk(chunk: readonly RenderEntry[], results?: ToolResultIndex): Tu
     run = [];
   };
   for (const entry of chunk) {
-    if (isTurnMember(entry)) {
+    if (isTurnMember(entry, results)) {
       run.push(entry);
       continue;
     }
@@ -697,7 +767,7 @@ function foldChunkByTurn(
   let first = -1;
   let last = -1;
   kept.forEach((entry, index) => {
-    if (!isTurnMember(entry)) return;
+    if (!isTurnMember(entry, results)) return;
     if (first === -1) first = index;
     last = index;
   });
@@ -708,7 +778,7 @@ function foldChunkByTurn(
   const steps: ProcessStep[] = lead.filter((entry): entry is Extract<RenderUnit, { kind: "text" }> => entry.kind === "text");
   const aside: RenderEntry[] = [];
   for (const entry of kept.slice(first, last + 1)) {
-    if (isTurnMember(entry) || entry.kind === "text") steps.push(entry);
+    if (isTurnMember(entry, results) || entry.kind === "text") steps.push(entry);
     else aside.push(entry);
   }
   const after = kept.slice(last + 1);
@@ -1012,38 +1082,6 @@ export function streamingRecordIds(records: readonly TranscriptRecord[]): Readon
     if (record.role === "assistant" && record.status === "streaming") ids.add(record.id);
   }
   return ids;
-}
-
-/** 收尾扫描回答卡：assistant 记录 id → 卡片与首个 text 单元的 key（只读展示卡替代整条 markdown） */
-export interface ScanAnswerCard {
-  scan: ScanMessage;
-  firstKey: string;
-}
-
-/**
- * 把落定的 assistant 消息里**整条恰好是一个可解析 fenced json 块**的那些认成扫描回答卡。
- * 判定按整条消息的全部 text 块拼接（与 collectScanAnswer 同口径：围栏可能被拆在多个
- * text 块里）；命中后多个 text 单元只在第一个的位置渲染一次卡片，其余跳过。
- * 纯函数：历史段 / 实时尾段各自在自己的记录上算，引用随记录稳定。
- */
-export function scanAnswerCards(
-  records: readonly TranscriptRecord[],
-): ReadonlyMap<string, ScanAnswerCard> {
-  const cards = new Map<string, ScanAnswerCard>();
-  for (const record of records) {
-    if (record.role !== "assistant" || record.status === "streaming") continue;
-    let firstKey: string | null = null;
-    const parts: string[] = [];
-    record.content.forEach((block, index) => {
-      if (block.type !== "text") return;
-      if (firstKey === null) firstKey = `${record.id}:${index}`;
-      parts.push(block.text);
-    });
-    if (firstKey === null) continue;
-    const scan = matchScanMessage(parts.join(""));
-    if (scan !== null) cards.set(record.id, { scan, firstKey });
-  }
-  return cards;
 }
 
 /** 思考时长格式：不足 1 秒按 1 秒；满一分钟「1m 05s」（秒两位补零，与 formatToolDuration 同款）。 */
@@ -1413,6 +1451,8 @@ export function channelMarkLabel(
           return { text: c.markDone(peerTitle), tone: "done" };
         case "failed":
           return { text: c.markFailed(peerTitle), tone: "failed" };
+        case "interrupted":
+          return { text: c.markInterrupted(peerTitle), tone: "failed" };
         default:
           return { text: c.markOther(peerTitle, c.kinds[mark.kind]), tone: "neutral" };
       }

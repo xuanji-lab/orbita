@@ -7,6 +7,8 @@ import {
   catalogPreferenceOf,
   isPlanBilling,
   knownProviderDefaultName,
+  knownQuotaSourceOf,
+  knownProviderQuota,
   knownProviderOf,
   knownProviderGroup,
   knownAccessFor,
@@ -349,5 +351,94 @@ describe("地址分组 —— OpenCode Go 的 inference/go、旧写法 zen/go、
     assert.deepEqual(endpointHintsOf(zhipu, { api: "anthropic-messages", baseUrl: "https://open.bigmodel.cn/api/anthropic" }), {
       catalogId: "zai-coding-cn",
     });
+  });
+});
+
+describe("knownProviderQuota —— 谁有可查的额度", () => {
+  it("DeepSeek 是余额（公开文档接口）；五家订阅是套餐窗口（控制台 / 网关路由）", () => {
+    assert.equal(knownProviderQuota(p("deepseek")), "balance");
+    for (const id of ["zhipu-coding", "zai", "kimi-coding", "opencode-go", "stepfun"]) {
+      assert.equal(knownProviderQuota(p(id)), "plan-windows", id);
+    }
+  });
+
+  it("Claude 是浏览器登录的条目：只有 OAuth 登录的才有套餐窗口可查，API 钥匙的没有", () => {
+    assert.equal(knownProviderQuota({ ...p("claude"), auth: { scheme: "oauth" } }), "plan-windows");
+    assert.equal(knownProviderQuota({ ...p("claude"), auth: { scheme: "api_key" } }), "none");
+    // 没带鉴权方式：按「不是浏览器登录」处理，宁可整块不画，也不去打一个只认 OAuth 令牌的接口
+    assert.equal(knownProviderQuota(p("claude")), "none");
+  });
+
+  it("其余条目缺省是 none（整块不渲染，不留「—」）", () => {
+    // 智谱标准 API（按量）没有实证过的余额端点：不声张，不猜
+    // 其余的浏览器登录订阅（ChatGPT / Copilot / xAI）也没接：Codex 的 wham/usage 要 accountId，没有真账号验证
+    for (const id of ["zhipu", "openai-codex", "github-copilot", "xai"]) {
+      assert.equal(knownProviderQuota(p(id)), "none", id);
+    }
+  });
+
+  it("老数据没有 kind / 第二个实例：靠 id 认回来，额度块不会凭空消失", () => {
+    assert.equal(knownProviderQuota(p("deepseek-2")), "balance");
+    assert.equal(knownProviderQuota(p("my-ds", { kind: "deepseek" })), "balance");
+  });
+
+  it("认不得的（自建网关）当 none", () => {
+    assert.equal(knownProviderQuota(p("my-own-gateway")), "none");
+    assert.equal(knownProviderQuota(p("gw", { api: "anthropic-messages" })), "none");
+  });
+});
+
+describe("knownQuotaSourceOf —— 通用兼容条目按地址兜底（只对它生效）", () => {
+  test("智谱按量（同源 open.bigmodel.cn）**不能**被认成套餐：兜底只对通用兼容条目生效", () => {
+    const zhipu = { id: "zhipu", endpoint: { api: "openai-completions" as const, baseUrl: "https://open.bigmodel.cn/api/paas/v4" } };
+    assert.equal(knownProviderQuota(zhipu), "none", "按量 key 不能去打套餐控制台接口");
+    assert.equal(knownQuotaSourceOf(zhipu), undefined);
+  });
+
+  test("通用 openai-compatible 指向基元律动：认回它自己的余额能力", () => {
+    const generic = { id: "openai-compatible", endpoint: { api: "openai-completions" as const, baseUrl: "https://tokenrhythm.studio/v1" } };
+    assert.equal(knownProviderQuota(generic), "balance");
+    assert.equal(knownQuotaSourceOf(generic)?.id, "tokenrhythm");
+  });
+
+  test("通用 anthropic-compatible 指向基元律动的裸域：也认得到（地址在 access 里）", () => {
+    const generic = { id: "anthropic-compatible", endpoint: { api: "anthropic-messages" as const, baseUrl: "https://tokenrhythm.studio" } };
+    assert.equal(knownProviderQuota(generic), "balance");
+    assert.equal(knownQuotaSourceOf(generic)?.id, "tokenrhythm");
+  });
+
+  test("具体厂商条目即使地址同源也不兜底（免得把按量认成套餐）", () => {
+    const kimi = { id: "kimi-api", endpoint: { api: "openai-completions" as const, baseUrl: "https://api.kimi.com/coding" } };
+    assert.equal(knownProviderQuota(kimi), "none");
+  });
+
+  test("通用 anthropic-compatible 指向 Anthropic 官方地址、配的是 API 钥匙：不认成 Claude 订阅", () => {
+    // 额度接口只认 OAuth 令牌；拿 API 钥匙去打只会 401，卡片会红字说「密钥被拒」，而这把钥匙聊天是通的
+    const withKey = {
+      id: "my-claude",
+      endpoint: { api: "anthropic-messages" as const, baseUrl: "https://api.anthropic.com" },
+      auth: { scheme: "api_key" as const },
+    };
+    assert.equal(knownProviderQuota(withKey), "none");
+    assert.equal(knownQuotaSourceOf(withKey), undefined);
+  });
+
+  test("同一个通用条目改用浏览器登录（OAuth）：认得到 Claude 订阅", () => {
+    const oauth = {
+      id: "my-claude",
+      endpoint: { api: "anthropic-messages" as const, baseUrl: "https://api.anthropic.com" },
+      auth: { scheme: "oauth" as const },
+    };
+    assert.equal(knownProviderQuota(oauth), "plan-windows");
+    assert.equal(knownQuotaSourceOf(oauth)?.id, "claude");
+  });
+
+  test("按地址兜底的其它几家不看鉴权方式（基元律动没有浏览器登录这一说）", () => {
+    const generic = {
+      id: "openai-compatible",
+      endpoint: { api: "openai-completions" as const, baseUrl: "https://tokenrhythm.studio/v1" },
+      auth: { scheme: "api_key" as const },
+    };
+    assert.equal(knownProviderQuota(generic), "balance");
   });
 });

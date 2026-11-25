@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { BOARD_RESULT_MAX_VH, BoardExpandStore, boardClip, collapseScrollDelta } from "./board-expand.ts";
+import { BOARD_RESULT_MAX_VH, BOARD_ROW_EXTRA, BoardExpandStore, boardClip, boardRowEstimate, collapseScrollDelta } from "./board-expand.ts";
 
 describe("对话里看板结果的限高与展开", () => {
   it("内容没超过半屏：不裁、不可折叠", () => {
@@ -58,5 +58,32 @@ describe("展开状态按 toolCallId 记在内存里", () => {
     off();
     store.set("a", true);
     assert.equal(notified, 0);
+  });
+});
+
+describe("没挂载过的看板结果行的高度估值", () => {
+  const card = (size: "1x1" | "2x1" | "1x2" | "2x2") => ({ size });
+  it("与实测对上：宽 734、窗口高 800 时，2x2 收起 = 400 + 36 = 436，2x1 = 326.7 + 36 = 362.7（实例里量到的行高）", () => {
+    assert.equal(boardRowEstimate({ cards: [card("2x2")] }, { columnWidth: 734, windowHeight: 800, expanded: false }), 400 + BOARD_ROW_EXTRA);
+    const two = boardRowEstimate({ cards: [card("2x1")] }, { columnWidth: 734, windowHeight: 800, expanded: false });
+    assert.ok(Math.abs(two - 362.695) < 0.01, String(two));
+  });
+  it("多张卡：2x2 + 2x1 排成三行，收起时同样裁到限高", () => {
+    assert.equal(boardRowEstimate({ cards: [card("2x2"), card("2x1")] }, { columnWidth: 734, windowHeight: 800, expanded: false }), 436);
+  });
+  it("展开后不裁：高度 = 整块网格 + 额外", () => {
+    const expanded = boardRowEstimate({ cards: [card("2x2")] }, { columnWidth: 734, windowHeight: 800, expanded: true });
+    // 2x2 = 2 行格高 + 1 个间距：格宽 (734-8)/2 = 363，格高 326.7
+    assert.ok(Math.abs(expanded - (2 * 326.7 + 8 + BOARD_ROW_EXTRA)) < 0.1, String(expanded));
+  });
+  it("没有卡（全被跳过）只剩额外；比旧估值 230（toolCall 的先验）更接近实测的是新估值", () => {
+    assert.equal(boardRowEstimate({ cards: [] }, { columnWidth: 734, windowHeight: 800, expanded: false }), BOARD_ROW_EXTRA);
+    const measured = 436;
+    const next = boardRowEstimate({ cards: [card("2x2")] }, { columnWidth: 734, windowHeight: 800, expanded: false });
+    assert.ok(Math.abs(next - measured) < Math.abs(230 - measured));
+  });
+  it("容器宽还没量到（0）不抛、不出 NaN（ChatView 另外在宽度为 0 时不用它）", () => {
+    const value = boardRowEstimate({ cards: [card("2x2")] }, { columnWidth: 0, windowHeight: 800, expanded: false });
+    assert.ok(Number.isFinite(value) && value >= BOARD_ROW_EXTRA);
   });
 });

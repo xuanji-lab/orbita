@@ -28,9 +28,7 @@ import {
   groupTurnsByTurn,
   indexToolResults,
   interruptedToolCallIds,
-  scanAnswerCards,
   type RenderEntry,
-  type ScanAnswerCard,
   type ToolResultIndex,
   type TurnViewEntry,
 } from "./tool-results.ts";
@@ -60,7 +58,6 @@ export interface HistorySegment {
   streamingIds: ReadonlySet<string>;
   /** 视图下标 → 分支锚点消息 id（历史段的下标从 0 起） */
   branchRows: ReadonlyMap<number, string>;
-  carryoverCards: ReadonlyMap<string, ScanAnswerCard>;
 }
 
 /** 跨渲染帧的缓存：segment 与它对应的输入签名 */
@@ -96,7 +93,7 @@ export function deriveHistorySegment(
   const units = flattenRenderUnits(prefix);
   const entries = groupToolUnits(units, skills);
   const turnView =
-    processView === "turn"
+    processView !== "steps"
       ? groupTurnsByTurn(entries, false, toolResults)
       : groupTurns(entries, false, toolResults);
   const plan = planHistory(
@@ -112,7 +109,6 @@ export function deriveHistorySegment(
       interruptedCalls: interruptedToolCallIds(prefix, toolResults, false),
       streamingIds: NO_STREAMING_IDS,
       branchRows: branchAnchorEntries(branchAnchorIds(prefix, toolResults, false), turnView),
-      carryoverCards: scanAnswerCards(prefix),
     },
     boundary,
     skills,

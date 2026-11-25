@@ -14,7 +14,10 @@ import type { ChatSession, SessionEngine } from "../chat/useChatSession";
 import { useTaskRecords } from "../chat/useTaskRecords.ts";
 import { useChannelSummaries } from "../chat/useChannelSummaries";
 import { useParentChannels } from "../chat/useChannelMessages";
+import { channelHold, useChannelHold } from "../chat/channel-hold-store.ts";
+import { Switch } from "../settings/SettingControls";
 import type { ChatFileScope } from "../chat/chat-file-scope.ts";
+import { formatDuration } from "../chat/named-outputs.ts";
 import { useMemorySession } from "../memory/useMemory.ts";
 import { useProgressDigest } from "./TaskProgress";
 import { useGoalLedger } from "./useGoalLedger.ts";
@@ -23,11 +26,12 @@ import { STATUS_FOCUS_EVENT, type StatusFocusDetail } from "./chat-status-flag.t
 import { forgetViews, patchView, readView, type StatusView, type StatusViewPatch } from "./chat-status-memory.ts";
 import { LruCache } from "../../../../shared/lru.ts";
 import { OutputThumb, SlideStyles } from "./StatusThumb";
+import { delegationSteps } from "./delegation-steps.ts";
+import { channelEndOf, channelEndText } from "../chat/sub-sessions-rows.ts";
 import {
   childActivityOf,
   childStateOf,
   clampPanelWidth,
-  delegationSteps,
   fitsPanel,
   boardClickAction,
   elapsedParts,
@@ -58,7 +62,7 @@ import "./chat-status.css";
  * - 进度里母子一眼分得开：步骤是母节点（状态圆点），子会话从步骤「垂下来」（缩进到步骤文字线、一条竖引导线、小机器人图标、轻一档的字），
  *   折叠行（「还有 N 步」）不带状态圆点、用 chevron + 次级色；展开到底时收起键在最后一步下面；
  * - 产物按类型分行，每行一排大缩略图，横向滑（Shift + 滚轮 / 触控板横扫），点一下在右栏打开，悬停不弹东西；
- * - 产物口径同每轮结尾的产物卡（sessionOutputs），多图片与看板；按文件类型分行（同日 20:58）；
+ * - 产物口径同每轮结尾的产物卡（sessionOutputs），多图片与看板；音视频仍只收最终回答点名的；按文件类型分行（同日 20:58）；
  * - 记忆一行接在产物后面（第二版的「这次用到的」只留它）；目标最多两行；卡第一次打开时进度只露在做的步；
  * - 删掉底部的上下文 / 改动 / 摘抄与临时预览浮层。
  *
@@ -199,21 +203,25 @@ export function ChatStatus(props: {
     const label = signal === null ? t.chatStatus.pill.quiet : t.chatStatus.pill[signal.kind](signal.count);
     return (
       <div className="cs-host" ref={hostRef}>
-        <button
-          type="button"
-          className="cs-pill"
-          data-signal={signal?.kind}
-          aria-label={t.chatStatus.name}
-          title={`${t.chatStatus.name} · ${label}`}
-          onClick={() => toggleOpen(true)}
-        >
-          {signal === null ? (
-            <Icon name={FEATURE_ICON.status} size={14} strokeWidth={1.8} />
-          ) : (
-            <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
-          )}
-          {signal !== null && <span className="cs-pill-n">{label}</span>}
-        </button>
+        <div className="cs-collapsed">
+          <button
+            type="button"
+            className="cs-pill"
+            data-signal={signal?.kind}
+            aria-label={t.chatStatus.name}
+            title={`${t.chatStatus.name} · ${label}`}
+            onClick={() => toggleOpen(true)}
+          >
+            {signal === null ? (
+              <Icon name={FEATURE_ICON.status} size={14} strokeWidth={1.8} />
+            ) : (
+              <StatusPie state={signal.kind === "waiting" || signal.kind === "stuck" ? "waiting" : signal.kind === "failed" ? "failed" : "running"} />
+            )}
+            {signal !== null && <span className="cs-pill-n">{label}</span>}
+          </button>
+          {/* 与状态合并成同一枚小钮，不向下再叠一枚胶囊遮正文 */}
+          <HoldRow sessionId={sessionId} variant="pill" />
+        </div>
       </div>
     );
   }
@@ -236,6 +244,8 @@ export function ChatStatus(props: {
             <Icon name="minimize-2" size={12} strokeWidth={1.8} />
           </button>
         </div>
+        {/* 不打岔：卡头下面一行，带字的开关——一眼能看到现在是开还是关 */}
+        <HoldRow sessionId={sessionId} variant="card" />
         <ScrollBox memo={memo}>
           {(hasPlan || children.length > 0) && (
             <ProgressSection
@@ -374,6 +384,51 @@ function Resizer(props: { width: number; onChange: (width: number) => void; onCo
         props.onCommit(next);
       }}
     />
+  );
+}
+
+// ───────────────────────── 不打岔 ─────────────────────────
+
+/**
+ * 「不打岔」开关（按会话记，默认开）：开着 = 子会话交回的东西先攒着，由用户决定什么时候讨论，
+ * 不会自己给主会话开一轮；关着 = 只在用户没在读、没在输入时才送进来。
+ * 两种样子，同一个开关：展开的卡里是卡头下面的一行（名字 + 一句说明 + 开关），
+ * 收起时与状态合并进同一枚小钮（图标 + 个数 + 开关），不再另叠一排浮层。
+ * 有子会话在等回答时，图标上挂一枚 danger 小点；攒着的个数写在开关前面。
+ */
+function HoldRow(props: { sessionId: string; variant: "card" | "pill" }) {
+  const t = useT();
+  const hold = useChannelHold(props.sessionId);
+  const on = hold?.holdOn !== false;
+  const held = hold?.summary.children ?? 0;
+  const ask = hold?.summary.hasQuestion === true;
+  const toggle = <Switch label={t.channelHold.toggleName} checked={on} onChange={(next) => channelHold.setHoldOn(props.sessionId, next)} />;
+  const lead = (
+    <span className="cs-hold-lead" title={ask ? t.channelHold.askDot : undefined}>
+      <Icon name={FEATURE_ICON.holdReports} size={14} strokeWidth={1.8} />
+      {ask && <span className="cs-hold-dot" aria-hidden="true" />}
+    </span>
+  );
+  if (props.variant === "pill") {
+    return (
+      <div className="cs-hold-pill">
+        {lead}
+        <span className="cs-hold-name">{t.channelHold.toggleName}</span>
+        {held > 0 && <span className="cs-hold-n">{t.channelHold.heldCount(held)}</span>}
+        {toggle}
+      </div>
+    );
+  }
+  return (
+    <div className="cs-hold-row">
+      {lead}
+      <span className="cs-hold-text">
+        <span className="cs-hold-name">{t.channelHold.toggleName}</span>
+        <span className="cs-hold-desc">{on ? t.channelHold.toggleHintOn : t.channelHold.toggleHintOff}</span>
+      </span>
+      {held > 0 && <span className="cs-hold-n">{t.channelHold.heldCount(held)}</span>}
+      {toggle}
+    </div>
   );
 }
 
@@ -613,8 +668,14 @@ function KidRow(props: { row: ChildRow; now: number; onOpen: (childId: string) =
   const { row } = props;
   const running = row.state === "running" || row.state === "stuck";
   const question = row.state === "waiting" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "question")?.text : undefined;
-  const failed = row.state === "failed" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "failed")?.text : undefined;
-  const handed = row.state === "done" ? [...(row.messages ?? [])].reverse().find((message) => message.kind === "done")?.text.split("\n")[0] : undefined;
+  const failed =
+    row.state === "failed" || row.state === "interrupted"
+      ? channelEndText(channelEndOf(row.messages, row.state), t, t.chatStatus.state[row.state])
+      : undefined;
+  const handed =
+    row.state === "done"
+      ? channelEndText(channelEndOf(row.messages, "done"), t, t.chatStatus.state.done)
+      : undefined;
   const line =
     running && row.activity !== null
       ? toolCallLine(row.activity.toolName, row.activity.input)
@@ -708,7 +769,10 @@ function OutputsSection(props: { memo: StatusMemo; outputs: readonly StatusOutpu
 
 /** 缩略图下的类型行：同一行里并进来的格式写具体（PPTX / Word）；演示文稿带页数；子会话做的补一句是谁做的 */
 function kindLine(t: Messages, output: StatusOutput): string {
-  const kind = output.pages === null ? t.chatStatus.kinds[output.kind] : `${t.chatStatus.kinds[output.kind]} · ${t.chatStatus.pages(output.pages)}`;
+  const duration = formatDuration(output.duration);
+  const kind = [t.chatStatus.kinds[output.kind], output.pages === null ? null : t.chatStatus.pages(output.pages), duration]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
   return output.by === null ? kind : `${kind} · ${t.chatStatus.byChild(output.by)}`;
 }
 
@@ -1133,7 +1197,7 @@ interface ChildRow {
  */
 function Robots(props: { rows: readonly ChildRow[] }) {
   const t = useT();
-  const working = sortChildren(props.rows.filter((row) => isWorking(row.state) || row.state === "failed"));
+  const working = sortChildren(props.rows.filter((row) => isWorking(row.state) || row.state === "failed" || row.state === "interrupted"));
   if (working.length === 0) {
     const done = props.rows.filter((row) => row.state === "done").length;
     if (done === 0) return null;

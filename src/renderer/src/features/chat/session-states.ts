@@ -31,8 +31,22 @@ import {
   type RecallCardState,
 } from "../../../../shared/intent-recall.ts";
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
+import type { QuotaExhaustedHint } from "@shared/quota";
 import type { TranscriptRecord } from "@shared/session";
 import type { Messages } from "../../messages-en.ts";
+
+/**
+ * 一次回合级失败的事实：厂商原文 + （可选）主进程按额度缓存补的「窗口用尽」。
+ * 两段分开存，句子归 renderer 组（中文界面不能从主进程冒出来）。
+ */
+export interface TurnFailure {
+  message: string;
+  /**
+   * 失败发生时这个账户有窗口满着（主进程判定，不是按文案猜）。
+   * **是账户状态，不是失败原因**：与「钥匙过期」可以同时成立，所以它只作副行。
+   */
+  quota?: QuotaExhaustedHint;
+}
 
 /** 一次待应答的工具审批。requestId = `${sessionId}:${toolCallId}`，全局唯一。 */
 export interface PendingApproval {
@@ -67,7 +81,18 @@ export type QueuedMessage =
       files?: readonly ComposerFileRef[];
     }
   | { id: string; kind: "compact"; instructions?: string }
-  | { id: string; kind: "channel"; childId: string; childWorkbench: string; message: ChannelMessage };
+  | {
+      id: string;
+      kind: "channel";
+      childId: string;
+      childWorkbench: string;
+      message: ChannelMessage;
+      /**
+       * 用户明确说了「现在讨论」（提示条 / 排队条的立即发送）：投递时不再过「用户在读吗」的
+       * 判定。父会话在跑时它先在这里排着，轮结束照投，不会又被攒回提示条里。
+       */
+      forced?: true;
+    };
 
 /**
  * 输入框里的手动压缩指令：`/compact` 直接压缩，`/compact <要求>` 带自定义要求。
@@ -141,11 +166,13 @@ export interface SessionEntry {
    */
   retry: RetryStatus | null;
   /**
-   * 回合级失败标注（重试耗尽）：渲染在转录末尾——正是这轮没送出去的那条用户消息
-   * 下面。**新一轮开跑即清**（非 idle 的 phase 事件 / 乐观置 turn），落定的 idle
+   * 回合级失败标注（重试耗尽 / 不可重试的模型错误）：渲染在转录末尾——正是这轮
+   * 没送出去的那条用户消息下面。`message` 是厂商原文（排障信息，不丢）；`quota` 是
+   * 主进程按额度缓存补的事实（窗口用尽 + 重置时刻），有它时界面多一句人话。
+   * **新一轮开跑即清**（非 idle 的 phase 事件 / 乐观置 turn），落定的 idle
    * 不清（failed 之后紧随的 agent_settled 不能把标注抹掉）。纯 ephemeral，不落盘。
    */
-  turnError: string | null;
+  turnError: TurnFailure | null;
   /**
    * 最近一次用量快照。null = 还没有——纯浏览的旧会话不起 runtime session，
    * 不落盘也不算假数，等用户说话唤醒后由 runtime 的第一次推送填上。
@@ -302,7 +329,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     // 重读会话后自然对齐；活会话期这帧就是卡片的数据源。只有旁路网页产物、
     // 没有 changes 的轮也进来（卡片要出）；批量折叠的轮同理——只有计数也进
     const webArtifacts = event.webArtifacts ?? [];
-    if (event.changes.length === 0 && webArtifacts.length === 0 && event.webArtifactsBatch === undefined) {
+    const mediaArtifacts = event.mediaArtifacts ?? [];
+    if (event.changes.length === 0 && webArtifacts.length === 0 && event.webArtifactsBatch === undefined && mediaArtifacts.length === 0) {
       return states;
     }
     return update(states, event.sessionId, (entry) => ({
@@ -316,6 +344,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
           changes: event.changes,
           ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
           ...(event.webArtifactsBatch !== undefined ? { webArtifactsBatch: event.webArtifactsBatch } : {}),
+          ...(mediaArtifacts.length > 0 ? { mediaArtifacts } : {}),
         },
       ],
     }));
@@ -383,7 +412,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
         ...current,
         phase: "idle",
         retry: null,
-        turnError: event.message,
+        // 厂商原文必存；额度事实有就带上（渲染层据此多一句人话）
+        turnError: event.quota === undefined ? { message: event.message } : { message: event.message, quota: event.quota },
       }));
     }
     return setEntryPhase(states, event.sessionId, "idle");
@@ -478,6 +508,8 @@ function splitRecords(transcript: readonly SessionRecord[]): SplitRecords {
           ? { webArtifacts: record.webArtifacts }
           : {}),
         ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
+        // 音视频候选随种子还原（卡片按回答点名从里面挑）
+        ...(record.mediaArtifacts !== undefined && record.mediaArtifacts.length > 0 ? { mediaArtifacts: record.mediaArtifacts } : {}),
       });
     } else if (record.role === "revert") {
       split.reverts.push(record);
@@ -747,7 +779,7 @@ export function setPendingEcho(states: SessionStates, sessionId: string, blocks:
   return update(states, sessionId, (entry) => ({ ...entry, pendingEcho: { blocks } }));
 }
 
-/** runtime 没了：所有还在忙的槽（turn / 压缩中 / 重试等待中）一并归位。全是 idle 时返回原引用。 */
+/** runtime 没了：忙碌相位归位；普通排队没人会发，通道消息仍保留给用户处理。 */
 export function markAllIdle(states: SessionStates): SessionStates {
   let changed = false;
   const next = new Map<string, SessionEntry>();
@@ -761,8 +793,9 @@ export function markAllIdle(states: SessionStates): SessionStates {
         ...entry,
         phase: "idle",
         retry: null,
-        // runtime 进程没了 = 这一轮彻底断了，排队的消息没人会发，槽里不留尸体
-        queued: [],
+        // runtime 进程没了：text / compact 不再留尸体；channel 正文与 pending 都在账本里，
+        // 保留在 QueueStrip，用户不用刷新也知道它还没投出去，可重试或「现在讨论」。
+        queued: entry.queued.filter((item) => item.kind === "channel"),
       });
       changed = true;
     } else {
@@ -797,6 +830,22 @@ export function enqueueChannelMessage(
   const entry = states.get(parentId);
   if (entry !== undefined && entry.queued.some((queued) => queued.id === item.id)) return states;
   return enqueue(states, parentId, item);
+}
+
+/** IPC 投递失败：把刚才取出的几条按原顺序放回队首；期间新来的消息仍排后面。 */
+export function requeueFront(
+  states: SessionStates,
+  sessionId: string,
+  items: readonly QueuedMessage[],
+): SessionStates {
+  if (items.length === 0) return states;
+  const entry = states.get(sessionId);
+  if (entry === undefined) return states;
+  const ids = new Set(items.map((item) => item.id));
+  return update(states, sessionId, (current) => ({
+    ...current,
+    queued: [...items, ...current.queued.filter((item) => !ids.has(item.id))],
+  }));
 }
 
 /** 按 id 移出一条（撤回 / 删除 / 投递后出队都走它）。找不到就原样返回。 */

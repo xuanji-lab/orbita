@@ -14,8 +14,7 @@ import { enRevealLabel, enTrashName, type FileManagerKind } from "./file-manager
  * 值是字符串，或 `(…) => string`（数量、插值、单复数）。函数参数只用原始类型
  * （number / string），守卫测试（messages.test.ts）要能拿样例参数把每一条都调一遍。
  *
- * 用哪张表由 shared 的 `effectiveLanguage` 定：Copybook（小学作业）恒中文、Typescript 恒英文，
- * 其余主题跟设置里的语言走。
+ * 用哪张表由设置里的语言决定（shared 的 `effectiveLanguage`）。
  * 组件里用 `useT()` 取表；纯函数不读全局，由调用方把表传进去。
  *
  * 分组按界面区域，不按文件——同一句话在两处出现时放 `common`。
@@ -74,7 +73,6 @@ const VENDOR_NAMES: Record<DictationProvider, string> = {
 };
 
 /** 批语日期的月份写法（AP 缩写：Sept，不写 Sep；March–July 写全） */
-const MARK_MONTHS = ["Jan", "Feb", "March", "April", "May", "June", "July", "Aug", "Sept", "Oct", "Nov", "Dec"];
 
 const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
@@ -399,7 +397,6 @@ export const en = {
   },
 
   app: {
-    carryoversEntry: (open: number) => `For later (${open})`,
     archivedEntry: (count: number) => `Archived (${count})`,
   },
 
@@ -645,9 +642,12 @@ export const en = {
         failed: (detail: string) => `Could not change it: ${detail}`,
       },
     },
-    wake: (title: string, number: number, max: number | null, stamp: string) =>
-      `Automation “${title}” · run ${max === null ? number : `${number}/${max}`} · ${stamp}`,
-    wakeExpand: "Show the instruction",
+    wakeKicker: "Automation",
+    wakeTitle: (title: string) => `“${title}”`,
+    wakeRun: (number: number, max: number | null) => `· run ${max === null ? number : `${number}/${max}`}`,
+    wakeOpen: "View automation",
+    wakeExpand: "Show instruction",
+    wakeCollapse: "Hide instruction",
     runBar: {
       label: (title: string, number: number, when: string, trigger: "schedule" | "manual" | "caughtUp") =>
         `${title} · run ${number} · ${when} · ${trigger === "manual" ? "manual" : trigger === "caughtUp" ? "catch-up" : "scheduled"}`,
@@ -678,6 +678,7 @@ export const en = {
     attachFileAction: "Add files…",
     attachFolderAction: "Add folders…",
     removeImage: "Remove image",
+    imageRefLabel: (n: number) => `Image ${n}`,
     materialBox: "Materials",
     imageUnsupported: (name: string) => `${name}: only PNG, JPEG, GIF and WebP can be sent — convert it first.`,
     imageTooLarge: (name: string, mb: number) =>
@@ -700,6 +701,8 @@ export const en = {
     pastedExpand: "Show the pasted text in full",
     pastedCollapse: "Collapse the pasted text",
     pasteToken: (seq: number, lines: number) => `[Pasted ${seq} · ${plural(lines, "line")}]`,
+    /** 输入框里粘贴胶囊上写的名字（原文的方括号与「Pasted」让给剪贴板图标） */
+    pasteChipName: (seq: number, lines: number) => `${seq} · ${plural(lines, "line")}`,
     pasteRunLabel: (lines: number) => `${plural(lines, "line")} · Collapse`,
     /** 意图召回的会话级开关（实验功能 intent-system）：输入框旁的小开关 */
     intentToggle: "Intent recall",
@@ -799,6 +802,12 @@ export const en = {
     open: "View larger",
     prev: "Previous image",
     next: "Next image",
+    openInFiles: "Preview in the files panel",
+    imageRef: (name: string) => `Image · ${name}`,
+    missing: (name: string) => `Image unavailable · ${name}`,
+    missingTip: (path: string) => `${path}\nOutside the folders this task can see (workspace, attached folders, task workbench), or the file is gone`,
+    sizeLarge: "Enlarge",
+    sizeSmall: "Shrink",
   },
 
   rowStatus: {
@@ -812,11 +821,10 @@ export const en = {
 
   /** 首页会话卡：一句「此刻在干什么」+ 一行「在哪 · 状态 · 多久前」（home-cards.ts 的 homeCardLine） */
   homeCard: {
-    /** 首页记录的三组名（落在左侧索引边栏里，窄栏时落在组上方一行） */
+    /** 首页记录的两组名（落在左侧索引边栏里，窄栏时落在组上方一行） */
     group: {
       waiting: "Waiting",
       running: "Running",
-      recent: "Recent",
     },
     state: {
       running: "Running",
@@ -1010,6 +1018,9 @@ export const en = {
     edit: "Edit",
     newDoc: "New document",
     newDeck: "New presentation",
+    newHere: "New ones are saved in",
+    created: (name: string) => `Created “${name}” in`,
+    recentOnly: (n: number) => `Showing the ${n} most recent; older ones are in the Files panel`,
     newTitle: "New document or presentation",
     newFailed: (message: string) => `Couldn't create it: ${message}`,
     saved: "Saved",
@@ -1062,7 +1073,6 @@ export const en = {
     paperQuiet: "Quiet desk",
     paperPrint: "Print layout",
     paperFocus: "Focus writing",
-    paperLocked: "Paper themes keep the quiet desk",
     slidesEmpty: "No pages yet. Add one, or ask the agent to.",
     addPage: "Add a page",
     pageCount: (count: number) => `${count} pages`,
@@ -1141,9 +1151,6 @@ export const en = {
   },
 
   sidebar: {
-    emptyHasTodos: "No task has open carryover items. Wrap one up to collect them here.",
-    emptyDoneStarred: "No starred tasks done yet.",
-    emptyDone: "No done tasks yet. Mark a task done from its menu to find it here.",
     emptyStarred: "No starred tasks yet. Hover a task and click its star to find it here.",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
@@ -1151,16 +1158,12 @@ export const en = {
     agentMode: "Agent mode",
     orchestrate: "Orchestrate",
     orchestratePlanned: "Orchestration mode (planned)",
-    filterAll: "All",
-    filterAllTip: "All tasks",
-    filterDone: "Done",
-    filterDoneTip: "Completed tasks",
+    filter: "Filter",
+    filterTip: "Filter the list: starred only, recently active only",
+    filterClear: "Clear filters",
     filterStarred: "Starred",
     filterStarredTip: "Show starred tasks only",
-    filterTodos: "Has todos",
-    filterTodosTip: "Show tasks with open carryover items only",
     filterAge: "Time range",
-    filterAgeTip: "Only tasks active within a recent period",
     filterAgeChip: (days: number) => `${days}d`,
     filterAgeHeader: "Only tasks active in the last…",
     filterAgeChoice: (days: number) => (days === 1 ? "Last 1 day" : `Last ${days} days`),
@@ -1192,6 +1195,7 @@ export const en = {
     remove: "Remove from the list",
     removeArmedTip: "Click again to remove. The folder and its tasks stay — the tasks move to Tasks.",
     removeTip: "Remove from the list. The folder on disk is not touched.",
+    emptyWorkspaceNew: "No tasks yet · start one here",
     newTaskInWorkspace: "New task in this workspace",
     showLess: "Show less",
     showMore: (next: number, hidden: number) => (next === hidden ? `Show ${hidden} more` : `Show ${next} more (${hidden} hidden)`),
@@ -1199,7 +1203,6 @@ export const en = {
     deleteHintSub: (count: number) => `+${count} sub`,
     deleteHintFiles: (count: number) => `+${plural(count, "file")}`,
     archiveTask: "Archive task",
-    archiveDoneTasks: (count: number) => `Archive ${plural(count, "done task")}`,
     noWorkspaceTarget: "No workspace",
     unpin: "Unpin",
     pin: "Pin to top",
@@ -1222,30 +1225,12 @@ export const en = {
     exportMarkdown: "Export as Markdown…",
     unarchive: "Unarchive",
     archive: "Archive…",
-    archiveAllDone: (count: number) => `Archive all done (${count})…`,
     deleteTask: "Delete task…",
     unstar: "Unstar this task",
     star: "Star this task",
     starredTip: "Starred · click to unstar",
-    reopen: "Reopen this task",
-    markDone: "Mark this task done",
-    doneWithTodos: (open: number) => `Done with ${plural(open, "open carryover item")} · click to reopen`,
-    doneTip: "Done · click to reopen",
-    idleSuggest: (days: number) => `Idle for ${days}+ days · mark done?`,
-    openTodosLeft: (open: number) => `${plural(open, "open carryover item")} left`,
     taskActions: "Task actions",
-    carryovers: "For later",
-    noCarryovers: "Nothing noted for later yet. Things the agent notices but won't do in a task are kept here.",
     noArchived: "Nothing archived. Archive a task from its menu to move it here without deleting it.",
-    sourceDeleted: "The source task was deleted",
-    openSource: "Open the source task",
-    deletedTask: "Deleted task",
-    reopenItem: "Reopen this item",
-    markItemDone: "Mark this item done",
-    continueWithContext: "Continue with context",
-    continueTipResumable:
-      "Put this item's context in the input box — pick a workspace, then press Enter · right-click to continue in the original task",
-    continueTip: "Put this item's context in the input box — pick a workspace, then press Enter",
     jumpToSource: "Jump to the source task",
     jumpToSourceTip: "Open the task this came from",
   },
@@ -1359,10 +1344,7 @@ export const en = {
     appearance: "Appearance",
     theme: "Theme",
     language: "Language",
-    languageInfo:
-      "Light, Dark and Black come in both languages. Copybook is Chinese-only and Typescript English-only — their ruled lines are drawn for that script. Commit and PR attribution follows the interface language.",
-    languageLockedZh: "This theme is Chinese-only",
-    languageLockedEn: "This theme is English-only",
+    languageInfo: "Choose the interface language. Commit and PR attribution follows it.",
     /** The "Guide" tab: one line of intro + "Start from the top", then the whole chapter list */
     guideLead: "One research project from start to finish — what Orbita can do. Pick any chapter below to jump straight to it.",
     guideStart: "Start from the top",
@@ -1387,7 +1369,6 @@ export const en = {
         review: "Review",
         memory: "Memory",
         intent: "Intent",
-        carryovers: "Carryovers",
         archived: "Archive",
         bell: "Notifications",
         plugins: "Abilities",
@@ -1423,7 +1404,7 @@ export const en = {
     compactSummary: "folds into a summary",
     choreModel: "Chore model",
     choreModelInfo:
-      "Small housekeeping calls — naming tasks, revising the wrap-up list from what you say, filtering throwaway imports · a fast model is enough · more chores will move here over time",
+      "Small housekeeping calls — naming tasks, filtering throwaway imports · a fast model is enough",
     choreModelTip: "Chores use the model the task is running",
     sameAsSession: "Same as session",
     sameAsSessionHint: "Use whichever model the task is running",
@@ -1451,8 +1432,9 @@ export const en = {
     processView: "Agent's work",
     processViewAria: "How the agent's thinking and tool calls show",
     processViewInfo:
-      "One line per turn: while it works, a fixed-height block ticks with the current step; when it's done, one line you can open into parts · Every step: each thought and tool call on its own row",
-    processViewTurn: "One line per turn",
+      "By part: one line per turn, open it while it works and it grows live; opened after it's done it groups into parts · Flat: one line per turn, opened it lists every step · Every step: each thought and tool call on its own row",
+    processViewChapters: "By part",
+    processViewFlat: "Flat",
     processViewSteps: "Every step",
     completionSound: "Completion sound",
     completionSoundAria: "Completion sound",
@@ -1567,11 +1549,7 @@ export const en = {
     light: "Light",
     graphite: "Slate",
     black: "Onyx",
-    copybook: "Copybook",
-    typescript: "Typescript",
     systemTip: "Follows your desktop's light or dark appearance · dark lands on Onyx",
-    copybookTip: "A green-grid Chinese school exercise book with red pen marks · light only",
-    typescriptTip: "A typewritten page with a red margin line, the English counterpart of Copybook · light only",
   },
 
   modelMenu: {
@@ -1812,7 +1790,7 @@ export const en = {
       borrowNote:
         "Levels the board didn't rate borrow the model's top rated level's score (dotted). The board skipping a level means it wasn't worth testing on its own — for real tasks, prefer the levels the board rated.",
       explainer:
-        "A task is one thing you confirmed as done when wrapping up a session: its cost is those turns added up, counted toward the model and thinking level that used the most tokens in them. A sub-session that reports back counts as one task. Sessions never wrapped up are not measured.",
+        "A task is one result a sub-session reports back: its cost is the whole sub-session added up, counted toward the model and thinking level that used the most tokens in it. Main sessions do not count as tasks and are not measured.",
       planNote: "Plans and subscriptions are converted at official prices.",
       source: (date: string, revision: string) =>
         `Scores: Arena (arena.ai) · lmarena-ai/leaderboard-dataset · CC BY 4.0 · board ${date} · revision ${revision} · subsets and columns selected by Orbita`,
@@ -2074,15 +2052,8 @@ export const en = {
   chat: {
     moveHeader: "Move this task to… (the working folder moves too)",
     moveBlocked: "The task is running — stop it first, then move it",
-    /**
-     * 纸面两档首页 slogan 下的红笔批语（老师在作业本上写的那一行），落当天日期；只在纸面
-     * 两档出现。月份照美式批改的缩写（原型写「Sept 25」）：五个字母以内的月份写全
-     */
-    homeMark: (month: number, day: number) => `Neat. — ${MARK_MONTHS[month - 1] ?? month} ${day}`,
     placeholderNew: "Ask anything, or start a task",
     placeholderReply: "Reply, or steer the agent",
-    // 收尾扫描是会话里的一轮、不设超时（审核 S-4）：出口是输入卡的停止键，这里说出来
-    placeholderScanning: "Wrapping up this task — press Stop anytime to end the scan",
     providersFailed: (error: string) => `Providers failed to load: ${error} — open Settings to retry.`,
     // 阻塞提示 = 一句说清卡在哪 + 句尾一个出口（Notice 的 exit）；草稿不会丢，说出来
     noProvider: "No model to send with yet. Your draft stays here.",
@@ -2095,14 +2066,6 @@ export const en = {
     backToParent: (title: string) => `Back to "${title}"`,
     renameTask: "Rename task",
     scrollToBottom: "Scroll to bottom",
-    scanningLabel: "Scanning for leftover items…",
-    markTaskDone: "Mark task done",
-    reopenTask: "Reopen task",
-    scanningTip: "Scanning this task for leftover items…",
-    waitBeforeDone: "Wait for this task to finish before marking it done",
-    doneScanlessTip: "Mark done without a leftover scan (this task has no agent session)",
-    doneTip: "Mark this task done — the agent scans for leftovers first, reopen anytime",
-    reopenTip: "Reopen this task — clears the done state",
     subSessionCount: (count: number) => plural(count, "sub-session"),
     subSessionWaiting: (waiting: number) => `${waiting} waiting`,
     openSubSessions: "Open sub-sessions",
@@ -2118,7 +2081,6 @@ export const en = {
     compactNow: "Compact context now",
     compactReadOnly: "this task can't be continued",
     compactWait: "wait for this turn",
-    compactSuggestDone: "Consider marking this done and continuing in a new task",
     compactSuggestNew: "Consider continuing in a new task",
     showLess: "Show less",
     showMore: "Show more",
@@ -2365,14 +2327,15 @@ export const en = {
     // 过程与产物（2026-11-22，process-rows.ts）
     processWorked: (duration: string) => `Worked ${duration}`,
     // 这一轮被用户打断（有工具调用永远等不到结果）：过程行的头一句换成它，不再写「工作了 X 秒」
+    processLiveWorking: "Working",
     processInterrupted: "Interrupted by you",
+    // 过程里改了目标：展开时那一步的动作词；落定态那一句话里也带一个
+    goalChangedStep: "Changed goal",
+    processGoalChanged: "Goal changed",
     processStepFailed: "didn't work",
     processWorking: "Working",
     processQuietFailed: (n: number) => `${n} didn't work`,
     processSteps2: (n: number) => plural(n, "step"),
-    processLayoutChapters: "By part",
-    processLayoutFlat: "Every step",
-    processLayoutHint: "How the expanded process is laid out",
     headline: {
       wroteFiles: (n: number) => `wrote ${plural(n, "file")}`,
       madeDecks: (n: number) => (n === 1 ? "made a deck" : `made ${n} decks`),
@@ -2400,10 +2363,16 @@ export const en = {
       image: "Showed you",
       config: "Configured",
       plugin: "Plugin",
+      installPlugin: "Install plugin",
+      pluginBoard: "Show plugin board",
       askUser: "Asked you",
       report: "Reported",
       delegate: "Handed off",
-      reply: "Replied",
+      reply: "Replied to",
+      reportDone: "Reported to parent",
+      reportQuestion: "Asked parent",
+      reportFailed: "Reported failure",
+      reportProgress: "Progress update",
       memorySearch: "Recalled",
       memoryEdit: "Memory",
       automation: "Automation",
@@ -2432,14 +2401,24 @@ export const en = {
     outputDeck: (pages: number | null) => (pages === null ? "Deck" : `Deck · ${plural(pages, "slide")}`),
     outputDoc: "Document",
     outputWeb: "Web page",
-    outputFile: (format: string | null) => format ?? "File",
+    /** 音频 / 视频行的类型字：「Audio · 3:51」；量不到时长就只写类型 */
+    outputMedia: (kind: "audio" | "video", clock: string | null) => `${kind === "audio" ? "Audio" : "Video"}${clock === null ? "" : ` · ${clock}`}`,
     outputPreview: "Preview",
     // 本轮网页文件变动超过上限（像是批量操作）：不逐个列，结尾那摞里一张「N web pages · 批量」卡，没有预览按钮
-    outputBatch: "Generated in bulk",
-    outputGroup: (type: "doc" | "file" | "web", n: number) =>
-      type === "doc" ? `${n} documents` : type === "web" ? `${n} web pages` : `${n} exported files`,
-    childReportKicker: "Sub-session",
-    childReportDone: "Handed back",
+    outputGroup: (type: "doc" | "pdf" | "web" | "audio" | "video", n: number) =>
+      type === "doc"
+        ? `${n} documents`
+        : type === "web"
+          ? `${n} web pages`
+          : type === "audio"
+            ? `${n} audio files`
+            : type === "video"
+              ? `${n} videos`
+              : `${n} PDFs`,
+    childReportHead: (title: string) => `"${title}" handed back`,
+    outputFromChildShort: "From sub-session",
+    outputFromLead: "From",
+    outputFromChild: (title: string, model: string) => `From sub-session "${title}"${model === "" ? "" : ` · ${model}`}`,
     childReportOpen: "Open its session",
     childReportEdited: (n: number) => `Also edited ${n} other file${n === 1 ? "" : "s"}`,
     planTurnNew: (n: number) => `Made a plan · ${plural(n, "step")}`,
@@ -2474,10 +2453,84 @@ export const en = {
     compacted: "Compacted",
     compactedTimes: (n: number) => (n === 1 ? "1 time" : `${n} times`),
     speed: (n: number) => `${n} tok/s`,
+    /** 新会话还没有任何用量时，环菜单里占住「本会话这段」的位置（否则额度段凭空冒出来） */
+    emptyUsage: "No usage in this session yet",
+  },
+
+  /**
+   * 厂商账号额度（余额 / 套餐窗口）。**一个命名空间服务两个面**（设置页的额度块
+   * 与底栏环的菜单行）：同一句话只能有一份写法，否则两处迟早就两个答案。
+   */
+  quota: {
+    account: "Account",
+    balance: "Balance",
+    planQuota: "Plan quota",
+    refresh: "Refresh",
+    checking: "Checking…",
+    notCheckedYet: "Not checked yet.",
+    checkNow: "Check now",
+    // 数字后面永远带 used：条本身方向中性，靠这个词钉住「左段 = 已用」
+    usedUnit: "used",
+    /**
+     * 窗口的语义类别（`QuotaWindow.kind`）。智谱 / Kimi 只给机器字段、没有给人读的标签，
+     * 英文 label 不能直接出现在中文界面——两处窗口名都走 `windowLabel` 取这一份。
+     */
+    windowKind: {
+      "5h": "5-hour window",
+      weekly: "Weekly",
+      // 型号周窗（Claude）：窗口名 = 「每周」+ 厂商给的型号名，拼装见 `kindLabel`；这里只是前半段
+      "weekly-model": "Weekly",
+      monthly: "Monthly",
+      // MCP 工具的每月额度，与 token 窗口不是同一种额度
+      mcp: "MCP monthly",
+    },
+    resetsIn: (duration: string) => `resets in ${duration}`,
+    /**
+     * 额度窗口用尽时的「账户状态」行（PR3 复核后改为**副行**）。
+     *
+     * 为什么带「账户额度：」前缀：缓存只说明「这个窗口满了」这个事实，
+     * **不说明这次失败是它造成的**（钥匙过期 + 恰好窗口满了时，主因是 401）。
+     * 所以要把它读成一条账户状态，不能放在原文前面冒充失败原因。
+     * `label` 已经过 `windowLabel` 本地化，`duration` 是 `2h 14m` 这类机器口径的时长。
+     */
+    exhausted: (label: string, duration: string) => `Account quota: ${label} exhausted · resets in ${duration}`,
+    /** 渲染时重置时刻已经过了（判定时还在未来）：没有可信的恢复时间，就不说 */
+    exhaustedNoReset: (label: string) => `Account quota: ${label} exhausted`,
+    justNow: "just now",
+    minutesAgo: (n: number) => `${n} min ago`,
+    hoursAgo: (n: number) => `${n}h ago`,
+    daysAgo: (n: number) => `${n}d ago`,
+    checked: (age: string) => `Checked ${age}`,
+    checkedJustNow: "Checked just now",
+    failedKeeping: (reason: string, age: string) => `Couldn't refresh (${reason}) · ${age}`,
+    failedAlone: (reason: string) => `Couldn't refresh (${reason}).`,
+    toppedUp: (money: string) => `topped up ${money}`,
+    granted: (money: string) => `granted ${money}`,
+    unlimited: "Unlimited",
+    authMissing: "Add an API key above to see the balance.",
+    authRejected: "The provider rejected this API key (401). Update it above, then try again.",
+    // 浏览器登录的订阅没有「密钥」可改：说的是登录态
+    loginMissing: "Sign in above to see the plan quota.",
+    loginRejected: "The sign-in has expired or was rejected (401). Sign in again above, then try again.",
+    teamUnsupported: "Quota can't be read for this account — team accounts aren't supported, or this provider hasn't been wired up.",
+    noPlan: "This account has no subscription.",
+    consoleOnly: "Balance is only available in this gateway's web console.",
+    emptyUsage: "The provider returned no usage data — the account may have no subscription, or the endpoint changed.",
+    reasonAuth: "key rejected",
+    reasonNetwork: "network error",
+    reasonProtocol: "unexpected response",
+    reasonUnsupported: "not supported",
   },
 
   /** 子会话通道：消息种类、标记行、通道列、派出卡 */
   channel: {
+    asksYouLine: (peer: string) => `"${peer}" is asking you`,
+    askedYouLine: (peer: string) => `"${peer}" asked you`,
+    answered: "Answered",
+    goAnswerShort: "Answer",
+    childFailedLine: (peer: string) => `"${peer}" failed`,
+    childInterruptedLine: (peer: string) => `"${peer}" was interrupted`,
+    childOf: (title: string) => `Sub-session of "${title}"`,
     kinds: {
       task: "task",
       reply: "reply",
@@ -2486,11 +2539,13 @@ export const en = {
       progress: "progress",
       done: "done",
       failed: "failed",
+      interrupted: "interrupted",
     },
     markAsked: (peer: string) => `${peer} asked`,
     markProgress: (peer: string) => `${peer} · progress`,
     markDone: (peer: string) => `${peer} done`,
     markFailed: (peer: string) => `${peer} failed`,
+    markInterrupted: (peer: string) => `${peer} interrupted`,
     markOther: (peer: string, kind: string) => `${peer} · ${kind}`,
     taskFrom: (peer: string) => `task from ${peer}`,
     replyFrom: (peer: string) => `reply from ${peer}`,
@@ -2501,6 +2556,7 @@ export const en = {
       waiting: "waiting for reply",
       done: "done",
       failed: "failed",
+      interrupted: "interrupted",
       idle: "idle",
       stopped: "stopped",
     },
@@ -2511,18 +2567,33 @@ export const en = {
     fromParentYouReply: "You (as the parent) replied",
     fromParentStop: "Stopped by the parent session",
     messageNotFound: "Message not found in the channel.",
-    asksYou: (peer: string) => `${peer} asks:`,
-    goAnswer: "Answer ›",
-    childDone: (peer: string) => `${peer} finished`,
-    childFailed: (peer: string) => `${peer} failed`,
     answerIt: "Answer it…",
-    notSpokenRunning: "running · hasn't spoken yet",
-    notSpoken: "hasn't spoken yet",
-    latestQuestion: (text: string) => `Q: ${text}`,
-    latestProgress: (text: string) => `Progress: ${text}`,
-    latestDone: "Done",
-    latestFailed: "Failed",
-    latestReply: (text: string) => `Replied: ${text}`,
+  },
+
+  /** 子会话回报的「不打岔」：对话流里的一行提示、状态卡上的开关、子会话面板里的「待讨论」组 */
+  channelHold: {
+    header: (n: number) => `${n} sub-session${n === 1 ? "" : "s"} reported back`,
+    withAsk: (n: number) => (n === 1 ? "1 is waiting for your answer" : `${n} are waiting for your answer`),
+    discuss: "Discuss now",
+    discussTitle: "Hand all of these to the main agent in one turn",
+    inPanel: "See in panel",
+    inPanelTitle: "Read them and reply in the Sub-sessions panel",
+    reasons: {
+      switch: "Held until you say so",
+      draft: "You have unsent text — held back",
+      "scrolled-up": "You're reading above — held back",
+      active: "You just moved — held back",
+      background: "Window is in the background — held back",
+      recovered: "Left over from before the restart",
+    },
+    toggleName: "Do not disturb",
+    toggleHintOn: "Reports from sub-sessions wait; they never start a turn by themselves.",
+    toggleHintOff: "Reports come in when you aren't reading or typing.",
+    heldCount: (n: number) => `${n} held`,
+    askDot: "A sub-session is waiting for your answer",
+    panelGroup: "To discuss",
+    panelGroupTip: "These reported back; the main agent hasn't seen them yet",
+    reply: "Reply",
   },
 
   queue: {
@@ -2547,6 +2618,7 @@ export const en = {
       approval: "needs approval",
       done: "done",
       failed: "failed",
+      interrupted: "interrupted",
       /** 用户终止（通道 stopped）：比 closed 更硬，父模型的回信不能重开 */
       stopped: "stopped",
       idle: "idle",
@@ -2555,7 +2627,38 @@ export const en = {
     openAsMain: "Open as main",
     openInPanel: "Open in the Sub-sessions panel",
     waitingCount: (count: number) => `${count} waiting on you`,
-    inboxFoot: "Click a row to see that sub-session's full exchange with the parent",
+    groups: { attention: "Needs you", running: "Running", handed: "Handed back", stopped: "Stopped" },
+    folded: (group: "handed" | "stopped", count: number) =>
+      group === "handed" ? `${count} handed back` : `${count} stopped`,
+    foldTip: "Fold this group",
+    thinking: "Thinking",
+    stuck: "Stuck",
+    toolLabel: (id: string) =>
+      ({ web_search: "web search", web_fetch: "fetch page", browser_navigate: "open page", browser_extract: "read page", terminal_read: "read terminal", terminal_execute: "run in terminal", read_pdf: "read PDF", read_docx: "read Word", report_to_parent: "report", reply_subsession: "reply" })[id] ?? "tool",
+    stuckTip: (minutes: number) => `The same call has run for ${minutes} min`,
+    approvalLine: (call: string) => `Needs approval · ${call}`,
+    stoppedByYou: "You stopped it",
+    idleLine: "This turn ended without handing back",
+    endCauses: {
+      completed: "Answer ended without a report",
+      model: "Model error",
+      quota: "Quota exhausted or rate limited",
+      refusal: "Model refused",
+      network: "Network disconnected",
+      "app-exit": "Interrupted when the app exited",
+      "process-exit": "Agent process interrupted",
+      aborted: "Turn interrupted",
+      incomplete: "Stopped before the final answer",
+    },
+    retry: "Continue",
+    retryTip: "Send a continue message and start a new turn for this sub-session",
+    retryPrompt:
+      "Continue from where the previous turn stopped. The previous turn failed or was interrupted before a final handback. Inspect the existing work, finish the remaining task, and report back to the parent.",
+    elapsedS: (s: number) => `${s}s`,
+    elapsedM: (m: number) => `${m} min`,
+    elapsedHM: (h: number, m: number) => `${h} h ${m} min`,
+    answer: "Answer",
+    answerFold: "Fold",
     openAsMainTip: "Switch the main pane to this sub-session",
     gone: "This sub-session is gone.",
     of: (title: string) => `Sub-sessions of "${title}"`,
@@ -2581,65 +2684,12 @@ export const en = {
     editInput: "Edit input",
   },
 
-  carryover: {
-    wrapUp: "Wrap up this task",
-    intro: (done: number, left: number) =>
-      `The agent looked back over this task: ${plural(done, "thing")} done, ${plural(left, "item")} left. Fix it here directly, or tell it what's wrong.`,
-    clickToEdit: "Click to edit",
-    doneGroup: "Done",
-    doneGroupNote: (count: number) => `${count} · each one is a task on the price chart`,
-    leftGroup: "Left to do",
-    leftGroupNote: (count: number) => `${count} · goes to For later, pick up any time`,
-    turns: (from: number, to: number) => (from === to ? `Turn ${from}` : `Turns ${from}–${to}`),
-    noTurns: "No turns",
-    jumpToTurns: "Jump back to this part of the conversation",
-    addDone: "Add something done",
-    addLeft: "Add something left to do",
-    newItemPlaceholder: "One line…",
-    removeDone: "Don't count this",
-    removeLeft: "Remove",
-    moveToLeft: "Move to left to do",
-    moveToDone: "Move to done",
-    feedbackPlaceholder: "Something off? Tell the agent (e.g. \"1 and 2 are one thing\")",
-    feedbackSend: "Send to the agent",
-    youSaid: "You said",
-    revising: "The agent is revising the list as you said…",
-    reviseFailed: (error: string) => `Not revised: ${error} (the list is unchanged)`,
-    reviseUnreadable: "Couldn't read the agent's reply — the list is unchanged. Try saying it another way.",
-    revised: (summary: string) => `As you said: ${summary}`,
-    undoRevise: "Undo this revision",
-    expand: "Show the list",
-    change: {
-      merged: "Merged",
-      "moved-to-left": "Moved from done",
-      "moved-to-done": "Moved from left",
-      added: "New",
-      edited: "Edited",
-    },
-    confirm: (done: number, left: number) => `Confirm: ${done} done · ${left} left`,
-    discardAndDone: "Discard & mark done",
-    keepOpen: "Keep open",
-    scanResult: "Closing scan result",
-    doneCount: (count: number) => `${plural(count, "thing")} done`,
-    itemsToCarry: (count: number) => `${plural(count, "item")} to carry over`,
-    nothingToCarry: "Nothing to carry over",
-  },
-
-  /** 会话引擎（useChatSession）报给界面的错误与收尾结果 */
+  /** 会话引擎（useChatSession）报给界面的错误 */
   session: {
     noProvider: "Add a provider with at least one model first",
     pickModelFirst: "Pick a model first.",
     noWorkspaceFolder: "Choose a workspace folder first",
     noRunningToCompact: "No running task to compact",
-    scanUnreadable:
-      "Didn't get a wrap-up list it could read — marked done. Retry to scan again; if it keeps happening, try another model.",
-    queuedBeforeWrapUp: "There are queued messages in this task — send or withdraw them before wrapping up.",
-    noAgentSession: "This task cannot be scanned (no agent session) — marked done directly.",
-    nothingSaid: "Nothing was ever said in this task — marked done directly.",
-    scanNoNewTurns: "Nothing new since the last wrap-up — marked done directly.",
-    wrapupConfirmed: (done: number, left: number) =>
-      `Marked done: ${plural(done, "thing")} done, ${plural(left, "item")} left to do.`,
-    checklistDiscarded: "Marked done — the checklist was discarded.",
   },
 
   terminal: {
@@ -3132,6 +3182,16 @@ export const en = {
     rendered: "Rendered",
     source: "Source",
     noPreview: "No preview for this file type",
+    /** Audio / video player in the file panel */
+    mediaPlay: "Play",
+    mediaPause: "Pause",
+    mediaSeek: "Seek",
+    mediaSpeed: (rate: string) => `Playback speed ${rate}`,
+    mediaFullscreen: "Full screen",
+    mediaExitFullscreen: "Exit full screen",
+    mediaCantPlay: "This file can't be played here",
+    mediaKindAudio: "Audio",
+    mediaKindVideo: "Video",
     tooLarge: (size: string, limit: string) => `Too large to preview (${size} — the limit is ${limit})`,
     emptyFile: "Empty file",
     truncated: (shown: string, total: string) => `Showing the first ${shown} of ${total}`,
@@ -3243,7 +3303,7 @@ export const en = {
     unassignedTip: "Sent before there was a plan, or while no step was in progress",
     handedBack: (n: number) => `${n} handed back`,
     showAll: (n: number) => `${n} more`,
-    state: { running: "Running", stuck: "Stuck", waiting: "Asking you", approval: "Needs approval", done: "Handed back", failed: "Failed", stopped: "Stopped", idle: "Not started" },
+    state: { running: "Running", stuck: "Stuck", waiting: "Asking you", approval: "Needs approval", done: "Handed back", failed: "Failed", interrupted: "Interrupted", stopped: "Stopped", idle: "Not started" },
     thinking: "Thinking",
     elapsedS: (s: number) => `${s}s`,
     elapsedM: (m: number) => `${m}m`,
@@ -3253,14 +3313,14 @@ export const en = {
     nextRun: (time: string) => `next ${time}`,
     nextRunTomorrow: (time: string) => `tomorrow ${time}`,
     outputs: "Outputs",
-    kinds: { slides: "Slides", pptx: "PPTX", doc: "Document", word: "Word", web: "Web page", pdf: "PDF", image: "Image", board: "Board", file: "File" },
+    kinds: { slides: "Slides", pptx: "PPTX", doc: "Document", word: "Word", web: "Web page", pdf: "PDF", image: "Image", audio: "Audio", video: "Video", board: "Board", file: "File" },
     byChild: (title: string) => `Made by sub-session “${title}”`,
     pages: (n: number) => `${n} pages`,
     toggleName: "Status card (trial)",
     toggleInfo: "Show the status card at the top right of the conversation: goal, progress with sub-sessions, what is running, outputs and memory.",
     foldKids: "Collapse",
     resize: "Drag to resize the status card",
-    groups: { slides: "Slides", doc: "Documents", web: "Web pages", pdf: "PDFs", image: "Images", board: "Boards", file: "Other files" },
+    groups: { slides: "Slides", doc: "Documents", web: "Web pages", pdf: "PDFs", image: "Images", video: "Videos", audio: "Audio", board: "Boards", file: "Other files" },
     usedMemory: "Memory",
     usedMemoryTail: (read: number, remembered: number) => [read > 0 ? `Read ${read}` : "", remembered > 0 ? `remembered ${remembered}` : ""].filter((part) => part !== "").join(" · "),
   },
@@ -3285,14 +3345,6 @@ export const en = {
     noPlan: "No plan yet — for work with three or more steps the agent writes one first.",
     history: "Done so far",
     nothingYet: "Nothing done yet.",
-    later: "For later",
-    toTask: "Start as a task, with this item's context",
-    doNow: "Do it now: send it to the agent in this task",
-    dismiss: "Drop it",
-    restore: "Bring it back",
-    dismissedCount: (n: number) => `${n} dropped`,
-    laterNoticed: (time: string) => `Noted by the agent while working · ${time}`,
-    laterWrapup: (time: string) => `Confirmed at wrap-up · ${time}`,
     jump: "Show this in the conversation",
     notInChat: "This turn isn't loaded in the conversation yet. Scroll up there to reach it.",
     olderNotLoaded: "Earlier turns aren't loaded.",
@@ -3356,6 +3408,7 @@ export const en = {
     editsTitle: "What changed in the goal and the plan, why, and who asked",
     logOnly: "Log",
     /** 对话里的一行：目标从什么改成什么；why 空串 = 没写理由 */
+    changeObject: (from: string, to: string, why: string) => `"${from}" → "${to}"${why === "" ? "" : ` — ${why}`}`,
     notice: (from: string, to: string, why: string) => `Goal changed: "${from}" → "${to}"${why === "" ? "" : ` — ${why}`}`,
     /** 目标行上的动作：带着目标开新会话（不是确认，是一个去处） */
     carry: "Continue the goal in a new task",
@@ -3369,7 +3422,6 @@ export const en = {
     goal: "Goal",
     done: "Done so far",
     open: "Not done yet",
-    later: "Noted for later (not handled yet)",
     changes: "How the goal and plan changed",
     ask: "Please record the goal above as this task's goal (update_goal, keep my wording; leave progress words like \"already done\" or \"not this time\" out of it), then continue from what is not done yet.",
     /** 改动要点的一行：time 本地时间；what 改了什么；why 空串 = 没写；source 谁提的 */
@@ -3492,7 +3544,7 @@ export const en = {
           roles: {
             name: "Who does what",
             title: "Three jobs, one model each",
-            body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks, wrap-up scans — go to a small fast model.",
+            body: "The **main** model is the one you pick in the message box and does the real work; **sub-sessions** use theirs for helpers it sends out; **chores** — naming tasks, filtering throwaway imports — go to a small fast model.",
             notes: ["Chore model: Settings › General.", "Sub-session model: left alone, it follows the main one."],
           },
           import: {
@@ -3616,7 +3668,7 @@ export const en = {
             name: "PDF citations",
             title: "Quoting the source, with a way back",
             body: "When it explains a PDF, every quoted line is checked against the original first and carries a number; click the number and the Files panel opens that page with the passage highlighted.",
-            notes: ["An experimental feature: turn on PDF citations under Settings › Experimental."],
+            notes: ["Click a number: the Files panel jumps to that page and highlights it."],
           },
           session: {
             name: "Refer to another task",
@@ -3856,28 +3908,16 @@ export const en = {
         },
       },
       focus: {
-        name: "Focus and wrap-up",
-        blurb: "Focus for a while, wrap up, keep what's unfinished for later.",
-        case: "Case: getting one thing done",
-        lead: "Focus for a stretch, then wrap up: it lists what's left undone and keeps it for later.",
+        name: "Focus",
+        blurb: "Focus for a while; before time is up, the chore model sums up what you did.",
+        case: "Case: focusing on one thing",
+        lead: "Focus for a stretch: the left side turns into that workspace's files, and a summary of what you did comes before time is up.",
         pages: {
           focus: {
             name: "Focus mode",
             title: "Focus for a while",
             body: "The bolt at the top left starts **Focus**: choose a length and a workspace, and the left side turns into that workspace's files, marking new and changed ones. Five minutes before the end, the chore model sums up what you did.",
             notes: ["Start focus here."],
-          },
-          wrap: {
-            name: "Tick to wrap up",
-            title: "Done? Tick it",
-            body: "The **tick** next to the task title wraps it up: it scans the task first, lists what's still undone, and marks it done once you confirm. You can reopen it any time.",
-            notes: ["Wrap up this task."],
-          },
-          later: {
-            name: "For later",
-            title: "Unfinished work isn't lost",
-            body: "Leftovers you confirm at wrap-up go to More › **For later**; click one to start a new task with its context and pick up where you stopped.",
-            notes: ["Leftovers, grouped by the task they came from."],
           },
         },
       },

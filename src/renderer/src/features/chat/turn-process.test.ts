@@ -12,10 +12,14 @@ import {
   branchAnchorEntries,
   indexToolResults,
   unreferencedShowImages,
+  questionAnswered,
   type TurnProcessUnit,
   type TurnViewEntry,
 } from "./tool-results.ts";
-import { firstLine, processChapters, processCounts, processInterrupted, processLive, processOutcome } from "./turn-process.ts";
+import { goalChangesByCall } from "../context/plan-text.ts";
+import type { GoalLedger } from "../../../../shared/goal-ledger.ts";
+import { zh } from "../../messages-zh.ts";
+import { finishedSteps, firstLine, processChapters, processCounts, processInterrupted, processLive, processOutcome } from "./turn-process.ts";
 
 const user = (id: string, timestamp: number): TranscriptItem =>
   ({ id, role: "user", content: [{ type: "text", text: "hi" }], timestamp }) as TranscriptItem;
@@ -243,7 +247,7 @@ describe("钉住的看板 / 画廊不随轮尾文件卡换位（2026-11-06：看
     assistant("a2", 3000, [call("b1", "bash", { command: "python run.py" })]),
     tool({ toolCallId: "b1", toolName: "bash", timestamp: 3100 }),
     assistant("a3", 4000, [call("sb", "show_plugin_board", { plugin: "lit" })]),
-    tool({ toolCallId: "sb", toolName: "show_plugin_board", timestamp: 4100 }),
+    tool({ toolCallId: "sb", toolName: "show_plugin_board", timestamp: 4100, details: { pluginBoard: { plugin: "lit", displayName: "Lit", title: "Lit", source: "installed", draftPath: null, at: 4100, tuned: false, cards: [], skipped: [] } } }),
     assistant("a4", 5000, [{ type: "text", text: "看板在上面。" }]),
   ];
   const fileTurn = { role: "file-turn", id: "ft1", timestamp: 5500, changes: [] } as unknown as TranscriptItem;
@@ -272,24 +276,239 @@ describe("被打断的一轮（过程行写「被你打断」）", () => {
   });
 });
 
-describe("批量网页变动并进结尾那摞（不再是文件账里的一句说明）", () => {
+describe("批量网页变动不出卡（git clone / checkout 的副作用，不是 agent 做的东西）", () => {
   const withBatch = (changes: unknown[]) =>
     [
       user("u1", 1),
-      assistant("a1", 2, [call("b1", "bash", { command: "python export.py" })]),
+      assistant("a1", 2, [call("b1", "bash", { command: "git clone --depth 1 https://example.com/repo.git" })]),
       tool({ toolCallId: "b1", toolName: "bash", timestamp: 3 }),
-      assistant("a2", 4, [{ type: "text", text: "导完了。" }]),
-      { role: "file-turn", id: "ft1", timestamp: 5, changes, webArtifactsBatch: 37 } as unknown as TranscriptItem,
+      assistant("a2", 4, [{ type: "text", text: "读完了。" }]),
+      { role: "file-turn", id: "ft1", timestamp: 5, changes, webArtifactsBatch: 250 } as unknown as TranscriptItem,
     ] as TranscriptItem[];
-  test("只有批量网页变动、没有文件改动：出产物那摞，带个数", () => {
-    const v = view(withBatch([]), false);
+  test("只有批量网页变动、没有别的产物：不出结尾那摞", () => {
+    assert.equal(view(withBatch([]), false).some((e) => e.kind === "turnOutputs"), false);
+  });
+});
+
+describe("音视频产物：只显示最终回答里点了名的（13 个 mp3 的误报场景）", () => {
+  const candidates = [
+    { path: "/w/audio/final.mp3", duration: 231 },
+    { path: "/w/audio/part_1.mp3", duration: 38 },
+    { path: "/w/audio/part_2.mp3", duration: 40 },
+    { path: "/w/audio/test_bella.mp3", duration: 9 },
+  ];
+  const round = (answer: string, narration = "先生成两个试音文件 test_bella.mp3。") =>
+    [
+      user("u1", 1),
+      assistant("a1", 2, [{ type: "text", text: narration }, call("b1", "bash", { command: "say ... && ffmpeg ..." })]),
+      tool({ toolCallId: "b1", toolName: "bash", timestamp: 3 }),
+      assistant("a2", 4, [{ type: "text", text: answer }]),
+      { role: "file-turn", id: "ft1", timestamp: 5, changes: [], mediaArtifacts: candidates } as unknown as TranscriptItem,
+    ] as TranscriptItem[];
+  const mediaOf = (records: TranscriptItem[], active = false) => {
+    const out = view(records, active).find((e) => e.kind === "turnOutputs");
+    return out !== undefined && out.kind === "turnOutputs" ? out.media.map((m) => m.path) : null;
+  };
+  test("回答只点了成品：只出成品；过程里的旁白提到的试音文件不算", () => {
+    assert.deepEqual(mediaOf(round("成品是 final.mp3，3 分 51 秒。")), ["/w/audio/final.mp3"]);
+  });
+  test("回答没点名任何一个：不出结尾那摞", () => {
+    assert.equal(mediaOf(round("做好了，在 audio 目录里。")), null);
+  });
+  test("回答点了几个就出几个", () => {
+    assert.deepEqual(mediaOf(round("成品 final.mp3，另外 part_2.mp3 是第二段。")), ["/w/audio/final.mp3", "/w/audio/part_2.mp3"]);
+  });
+  test("还在跑的轮不出", () => {
+    assert.equal(mediaOf(round("成品是 final.mp3。"), true), null);
+  });
+});
+
+describe("钉在折叠外的工具：落定后卡片数据解析不出的收进过程行（2026-11-22 用户截图：show_plugin_board 一行英文名露在折叠外）", () => {
+  const board = { plugin: "p", displayName: "P", title: "P", source: "installed", draftPath: null, at: 1, tuned: false, cards: [], skipped: [] };
+  const round = (toolName: string, input: unknown, details: unknown, status: "complete" | "error" | "running" = "complete") =>
+    [
+      user("u1", 1),
+      assistant("a1", 2, [call("r1"), call("x1", toolName, input)]),
+      tool({ toolCallId: "r1", timestamp: 3 }),
+      tool({ toolCallId: "x1", toolName, timestamp: 4, status, ...(details === undefined ? {} : { details: details as ToolTranscriptItem["details"] }) }),
+      assistant("a2", 5, [{ type: "text", text: "好了。" }]),
+    ] as TranscriptItem[];
+  const kinds = (records: TranscriptItem[]) => view(records, false).map((e) => e.kind);
+  const insideProcess = (records: TranscriptItem[], id: string) =>
+    procOf(view(records, false)).some((p) => p.steps.some((step) => step.kind === "toolCall" && step.toolCallId === id));
+
+  test("show_plugin_board：解析成功钉在折叠外；缺 source / at（解析不出）收进过程行", () => {
+    const ok = round("show_plugin_board", { plugin: "p" }, { pluginBoard: board });
+    assert.equal(insideProcess(ok, "x1"), false);
+    assert.ok(kinds(ok).includes("toolCall"));
+    const { source: _s, at: _a, ...broken } = board;
+    const bad = round("show_plugin_board", { plugin: "p" }, { pluginBoard: broken });
+    assert.equal(insideProcess(bad, "x1"), true);
+    assert.deepEqual(kinds(bad), ["user", "turnProcess", "text"]);
+  });
+
+  test("show_image / install_plugin / automation_update：同样，解析不出的收进过程行", () => {
+    assert.equal(insideProcess(round("show_image", { paths: ["/a.png"] }, { showImage: { images: [] } }), "x1"), true);
+    assert.equal(insideProcess(round("show_image", { paths: ["/a.png"] }, { showImage: { images: [{ data: "AAAA", mimeType: "image/png", name: "a.png" }] } }), "x1"), false);
+    assert.equal(insideProcess(round("install_plugin", { path: "/p" }, undefined), "x1"), true);
+    assert.equal(insideProcess(round("automation_update", { id: "a" }, undefined), "x1"), true);
+  });
+
+  test("还在跑 / 报错的照旧留在外面（报错的红行要让用户看见）；delegate / request_user_action 不受解析影响", () => {
+    assert.equal(insideProcess(round("show_plugin_board", { plugin: "p" }, undefined, "running"), "x1"), false);
+    assert.equal(insideProcess(round("show_plugin_board", { plugin: "p" }, undefined, "error"), "x1"), false);
+    assert.equal(insideProcess(round("install_plugin", { path: "/p" }, undefined, "error"), "x1"), false);
+    assert.equal(insideProcess(round("delegate", { title: "t" }, undefined), "x1"), false);
+    assert.equal(insideProcess(round("request_user_action", { reason: "r" }, undefined), "x1"), false);
+  });
+});
+
+describe("改目标收进过程行", () => {
+  test("goalChangesByCall：第二次 update_goal 才算改，第一次定目标不算", () => {
+    const ledger = {
+      entries: [
+        { kind: "goal", id: "g1", at: 1, from: null, to: "做 A", why: null, by: "user", source: null },
+        { kind: "goal", id: "g2", at: 2, from: "做 A", to: "做 B", why: "用户改主意", by: "user", source: null },
+      ],
+    } as unknown as GoalLedger;
+    const changes = goalChangesByCall(zh, ledger, ["g1", "g2"]);
+    assert.deepEqual([...changes.keys()], ["g2"]);
+    assert.equal(changes.get("g2"), "「做 A」改成「做 B」——用户改主意");
+    assert.equal(goalChangesByCall(zh, ledger, []).size, 0);
+  });
+});
+
+describe("子会话交回的那一轮：结尾产物摞里带上交回的子会话", () => {
+  const mark = { role: "channel-mark", id: "cm1", peerId: "child-1", messageId: "msg-1", from: "child", kind: "done", timestamp: 2 } as unknown as TranscriptItem;
+  const records = [user("u1", 1), mark, assistant("a1", 3, [{ type: "text", text: "子会话交回了。" }])];
+  const v = view(records, false);
+
+  test("channelMark done 开头的一轮：结尾有 turnOutputs 单元，children 指向交回消息（没有主会话产物也有）", () => {
     const out = v.find((e) => e.kind === "turnOutputs");
     assert.ok(out !== undefined && out.kind === "turnOutputs");
-    assert.equal(out.webBatch, 37);
-    assert.deepEqual(out.web, []);
+    assert.deepEqual(out.children, [{ peerId: "child-1", messageId: "msg-1" }]);
+    assert.equal(out.key, "out:child:msg-1");
+    assert.deepEqual(v.map((e) => e.kind), ["user", "channelMark", "text", "turnOutputs"]);
   });
-  test("没有批量时 webBatch 是 0，没有别的产物就不出这一摞", () => {
-    const records = withBatch([]).slice(0, 4);
-    assert.equal(view(records, false).some((e) => e.kind === "turnOutputs"), false);
+
+  test("跑着的轮也有（交回的产物不是还在写的东西），key 不变不重挂", () => {
+    const live = view(records, true).find((e) => e.kind === "turnOutputs");
+    assert.ok(live !== undefined);
+    assert.equal(live.key, "out:child:msg-1");
+  });
+
+  test("别的种类的通道标记（问询 / 失败）不带产物", () => {
+    const question = { ...mark, kind: "question" } as unknown as TranscriptItem;
+    assert.equal(view([user("u1", 1), question, assistant("a1", 3, [{ type: "text", text: "好" }])], false).some((e) => e.kind === "turnOutputs"), false);
+  });
+});
+
+describe("子会话来往：回复收进过程行，问询 / 失败是白卡", () => {
+  const replyCall = (id: string) => call(id, "reply_subsession", { childId: "c1", text: "只看桌面端" });
+  const records = (status: "complete" | "error") =>
+    [
+      user("u1", 1),
+      assistant("a1", 2, [call("r1"), replyCall("rp1")]),
+      tool({ toolCallId: "r1", timestamp: 3 }),
+      tool({ toolCallId: "rp1", toolName: "reply_subsession", timestamp: 4, status }),
+      assistant("a2", 5, [{ type: "text", text: "已回复。" }]),
+    ] as TranscriptItem[];
+  const inProcess = (v: readonly TurnViewEntry[]) =>
+    procOf(v).some((p) => p.steps.some((step) => step.kind === "toolCall" && step.toolCallId === "rp1"));
+
+  test("reply_subsession 成功：是过程里的一步，不再钉在折叠外", () => {
+    const v = view(records("complete"), false);
+    assert.equal(inProcess(v), true);
+    assert.deepEqual(v.map((e) => e.kind), ["user", "turnProcess", "text"]);
+  });
+
+  test("reply_subsession 报错：留在折叠外（红行）", () => {
+    const v = view(records("error"), false);
+    assert.equal(inProcess(v), false);
+    assert.ok(v.some((e) => e.kind === "toolCall" && e.toolName === "reply_subsession"));
+  });
+
+  test("report_to_parent 同样收进过程行", () => {
+    const rs = [
+      user("u1", 1),
+      assistant("a1", 2, [call("r1"), call("rp1", "report_to_parent", { kind: "done", text: "做完了" })]),
+      tool({ toolCallId: "r1", timestamp: 3 }),
+      tool({ toolCallId: "rp1", toolName: "report_to_parent", timestamp: 4 }),
+    ] as TranscriptItem[];
+    assert.equal(inProcess(view(rs, false)), true);
+  });
+
+  test("问询 / 失败标记是白卡单元（channelMark），不进折叠", () => {
+    const mark = (kind: string, id: string) => ({ role: "channel-mark", id, peerId: "c1", messageId: `m-${id}`, from: "child", kind, timestamp: 2 }) as unknown as TranscriptItem;
+    const v = view([user("u1", 1), mark("question", "q1"), mark("failed", "f1"), assistant("a1", 3, [{ type: "text", text: "好" }])], false);
+    assert.deepEqual(v.filter((e) => e.kind === "channelMark").length, 2);
+    assert.equal(procOf(v).length, 0);
+  });
+});
+
+describe("questionAnswered：问询答过没有", () => {
+  test("摘要状态还是 waiting 且这条就是最后一条：还在等；别的情况（后来有了回复 / 终态）：答过", () => {
+    assert.equal(questionAnswered({ status: "waiting", lastAt: 10 }, { createdAt: 10 }), false);
+    assert.equal(questionAnswered({ status: "waiting", lastAt: 20 }, { createdAt: 10 }), true);
+    assert.equal(questionAnswered({ status: "running", lastAt: 20 }, { createdAt: 10 }), true);
+    assert.equal(questionAnswered({ status: "done", lastAt: 20 }, undefined), true);
+  });
+  test("读不到摘要（旧样张没有账本）：按还在等，不编造「已回答」", () => {
+    assert.equal(questionAnswered(undefined, undefined), false);
+    assert.equal(questionAnswered({ status: "waiting", lastAt: 5 }, undefined), false);
+  });
+});
+
+describe("跑着时点开：列表只列已做完的步骤，正在做的是最后一行", () => {
+  // 一轮：旁白 → 读（做完）→ bash（还在跑，没有结果帧）
+  const live = [
+    user("u1", 1000),
+    assistant("a1", 2000, [{ type: "text", text: "先读一下。" }, call("r1")]),
+    tool({ toolCallId: "r1", timestamp: 2100 }),
+    assistant("a2", 3000, [{ type: "thinking", thinking: "再跑" }, call("b1", "bash", { command: "sleep 60" })]),
+  ];
+  const [proc] = procOf(view(live, true));
+
+  test("还在跑的工具调用不在列表里；旁白、思考、做完的步骤照旧", () => {
+    assert.ok(proc !== undefined);
+    const done = finishedSteps(proc.steps, indexToolResults(live));
+    assert.deepEqual(done.map((step) => step.kind), ["text", "toolCall", "thinking"]);
+    assert.ok(done.every((step) => step.kind !== "toolCall" || step.toolCallId === "r1"));
+  });
+
+  test("新步骤出现就地追加：bash 落定后列表多出它，前面的步骤顺序与对象不变", () => {
+    const next = [...live, tool({ toolCallId: "b1", toolName: "bash", timestamp: 3500 })];
+    const [procNext] = procOf(view(next, true));
+    assert.ok(proc !== undefined && procNext !== undefined);
+    const before = finishedSteps(proc.steps, indexToolResults(live));
+    const after = finishedSteps(procNext.steps, indexToolResults(next));
+    assert.deepEqual(after.map((step) => step.kind), ["text", "toolCall", "thinking", "toolCall"]);
+    assert.deepEqual(after.slice(0, before.length).map((step) => step.key), before.map((step) => step.key));
+  });
+
+  test("已中断的调用不算还在跑（没有结果也不会来）：留在列表里", () => {
+    assert.ok(proc !== undefined);
+    const done = finishedSteps(proc.steps, indexToolResults(live), new Set(["b1"]));
+    assert.equal(done.filter((step) => step.kind === "toolCall").length, 2);
+  });
+
+  test("工具组里还在跑的成员剔掉，剔空的组整个不要", () => {
+    const grouped = [
+      user("u1", 1000),
+      assistant("a1", 2000, [call("r1"), call("r2")]),
+      tool({ toolCallId: "r1", timestamp: 2100 }),
+    ];
+    const [p] = procOf(view(grouped, true));
+    assert.ok(p !== undefined);
+    const done = finishedSteps(p.steps, indexToolResults(grouped));
+    const group = done.find((step) => step.kind === "toolGroup");
+    assert.ok(group !== undefined && group.kind === "toolGroup");
+    assert.deepEqual(group.calls.map((c) => c.toolCallId), ["r1"]);
+    assert.deepEqual(finishedSteps(p.steps, new Map()).filter((step) => step.kind === "toolGroup"), []);
+  });
+
+  test("展开状态跨 live → 落定保持：过程块 key 不变（TurnProcessLine 用同一个 fold key，不重挂）", () => {
+    const settled = [...live, tool({ toolCallId: "b1", toolName: "bash", timestamp: 3500 }), assistant("a3", 4000, [{ type: "text", text: "好了。" }])];
+    assert.equal(procOf(view(live, true))[0]?.key, procOf(view(settled, false))[0]?.key);
   });
 });

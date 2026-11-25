@@ -7,7 +7,7 @@
  * 纯模块：不 import React、不 import `@shared/*` 的值（只用类型），可被
  * `node --test` 直接加载。
  */
-import type { ChannelMessage, ChannelStatus } from "@shared/channel";
+import type { ChannelEndInfo, ChannelMessage, ChannelStatus } from "@shared/channel";
 import type { Messages } from "../../messages-en.ts";
 
 /**
@@ -20,6 +20,7 @@ import type { Messages } from "../../messages-en.ts";
  *     用户的裁决压过审批 / 在跑这些瞬时态：停都停了，不该再引导用户去批一个死轮
  *   done     = 通道 closed 于 done（success）
  *   failed   = 通道 closed 于 failed（danger）
+ *   interrupted = 主进程确认轮没有收尾（danger；与 failed 一样需要恢复动作）
  *   idle     = 都不是（tertiary）——子会话建了但通道还没有除 task 外的往来，也没在跑
  */
 export type SubSessionRowStatus =
@@ -28,6 +29,7 @@ export type SubSessionRowStatus =
   | "approval"
   | "done"
   | "failed"
+  | "interrupted"
   | "stopped"
   | "idle";
 
@@ -50,99 +52,8 @@ export function subSessionRowStatus(input: {
   if (input.running) return "running";
   if (input.channelStatus === "done") return "done";
   if (input.channelStatus === "failed") return "failed";
+  if (input.channelStatus === "interrupted") return "interrupted";
   return "idle";
-}
-
-/**
- * 排序优先级：数字越小越靠前——**等你（question / 审批）最前，其次 running，其次 failed，
- * 其次 done**；stopped / idle 收尾（终局或还没说话，都不需要用户动手）。
- * running 原在 done 之后（2026-10-12 收件箱裁决）；2026-11-06 用户改：子会话一多（十几二十个），
- * 新派出、正在跑的被已完成的压到底部，每次都得往下翻——在跑的才是此刻在盯的，提到等你之后。注意与 subSessionRowStatus 的支配关系不是一回事：
- * 那一处说的是这一行自己标什么，这里说的是它排在哪里。failed 压过 done：失败
- * 常要人善后，完成只是知会。
- */
-const STATUS_PRIORITY: Record<SubSessionRowStatus, number> = {
-  waiting: 0,
-  approval: 0,
-  running: 1,
-  failed: 2,
-  done: 3,
-  stopped: 4,
-  idle: 4,
-};
-
-/**
- * 列表层的行排序（收件箱）：**等你（question / 审批）最前，其次 running，其次
- * failed，其次 done**；同组之内**新的在前**（lastAt 倒序——通道里最后一条消息
- * 的时间，没有账本的按会话创建时间）。收件箱是待办清单：越新的越可能是你现在
- * 要处理的，老的沉下去。
- */
-export function sortSubSessionRows<T extends { status: SubSessionRowStatus; lastAt: number }>(
-  rows: readonly T[],
-): T[] {
-  return [...rows].sort(
-    (a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status] || b.lastAt - a.lastAt,
-  );
-}
-
-/**
- * 行首状态饼的档位（shell/StatusPie.tsx 的 `.status-pie`，与侧栏 / 铃铛清单同一个）：
- * running = 1/3 蓝、waiting / approval = 2/3 橙、done = 3/3 绿、failed = 3/3 红；
- * stopped / idle 不亮——「没什么要你做的」是整个东西退场，不是留一根灰杠。
- * stopped 是用户的裁决不是故障，与 idle 同槽。
- */
-export function subSessionBarFill(status: SubSessionRowStatus): "running" | "waiting" | "done" | "failed" | undefined {
-  switch (status) {
-    case "running":
-      return "running";
-    case "waiting":
-    case "approval":
-      return "waiting";
-    case "done":
-      return "done";
-    case "failed":
-      return "failed";
-    default:
-      return undefined;
-  }
-}
-
-/**
- * 收件箱行的「最新一句」（2026-10-12 用户裁决：只需要看到沟通，不需要看到子会话
- * 在干嘛）：通道里**最新一条非 task 消息**的一句话概括——问：…/ 进度：…/ 完成 /
- * 失败 / 回复：…（最新的是父侧回信时）。done / failed 不带结论（结论由父会话的
- * 模型转述，我们不过多控制）。还没有非 task 消息时按状态说「在跑 · 还没说话」
- * （idle / stopped 只说「还没说话」——它没在跑）。
- *
- * `messages` 为该子通道时间正序的全文（useParentChannels）；通道拉不到（undefined）
- * 与空列表同待遇——行不缺席，说「还没说话」。
- */
-export function latestChannelLine(
-  messages: readonly ChannelMessage[] | undefined,
-  status: SubSessionRowStatus,
-  t: Messages,
-): string {
-  const spoken = [...(messages ?? [])].reverse().find((message) => message.kind !== "task");
-  if (spoken === undefined) {
-    return status === "running" || status === "waiting" || status === "approval"
-      ? t.channel.notSpokenRunning
-      : t.channel.notSpoken;
-  }
-  switch (spoken.kind) {
-    case "question":
-      return t.channel.latestQuestion(firstLineOf(spoken.text));
-    case "progress":
-      return t.channel.latestProgress(firstLineOf(spoken.text));
-    case "done":
-      return t.channel.latestDone;
-    case "failed":
-      return t.channel.latestFailed;
-    case "reply":
-      return t.channel.latestReply(firstLineOf(spoken.text));
-    default:
-      // stop：账本里可能有（旧数据），行上不渲染裁决细节——状态条已经说了 stopped
-      return t.channel.notSpoken;
-  }
 }
 
 /** 多行正文取第一个非空行并压掉首尾空白——收件箱行里只放得下一句话。 */
@@ -183,4 +94,306 @@ export function subSessionStatusOf(
     needsApproval: (engine.states.get(childId)?.approvals.length ?? 0) > 0,
     running: engine.phaseOf(childId) !== "idle",
   });
+}
+
+// ───────────────────────── 列表层重做（2026-11-22）：分组、第二行、卡住、走表 ─────────────────────────
+//
+// 用户原话（2026-11-22 22:43）：「Composer 上面做了一个状态栏，会显示子会话正在进行的 bash 啥的。我就是在想
+// 这个子会话这个面板能不能做好看一点，现在好丑。」——列表层要回答两件事：哪几个要我看、在跑的此刻在干什么跑了多久。
+// 「此刻在跑什么 / 卡住 / 走表」三段照搬原型分支 proto/chat-workbench 的 chat-status.ts（状态卡的子会话行），
+// 第二行「计划在做的步优先、没有就退到最近的动作」照 #488 后台状态位（background-strip.ts 的 stepText），不另写一套。
+
+/** 子会话此刻正在跑的那次工具调用（照搬 proto/chat-workbench chat-status.ts 的 ChildActivity） */
+export interface ChildActivity {
+  toolName: string;
+  input: unknown;
+  /** 这次调用开始的时刻 */
+  since: number;
+}
+
+/** 转录尾巴的最小结构面（TranscriptRecord 的子集：测试拿字面量就能喂） */
+export type TailRecord =
+  | { role: "tool"; status: string; toolCallId: string; toolName: string; input: unknown; timestamp: number }
+  | {
+      role: "assistant";
+      timestamp: number;
+      content: readonly ({ type: string } & { toolCallId?: string; toolName?: string; input?: unknown })[];
+    }
+  | { role: string; timestamp: number };
+
+/**
+ * 子会话转录的尾巴 → 正在跑的那次工具调用（状态 running 的工具记录；或 assistant 发出了调用、结果还没来）。
+ * 没有在跑的调用 = null（在想、在写回答、已停）。照搬 chat-status.ts 的 childActivityOf。
+ */
+export function childActivityOf(records: readonly TailRecord[]): ChildActivity | null {
+  const resolved = new Set<string>();
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record === undefined) continue;
+    if (record.role === "tool" && "toolCallId" in record) {
+      if (record.status === "running") return { toolName: record.toolName, input: record.input, since: record.timestamp };
+      resolved.add(record.toolCallId);
+      continue;
+    }
+    if (record.role === "assistant" && "content" in record) {
+      for (const block of record.content) {
+        if (block.type === "toolCall" && block.toolCallId !== undefined && !resolved.has(block.toolCallId)) {
+          return { toolName: block.toolName ?? "", input: block.input, since: record.timestamp };
+        }
+      }
+      // 最后一条 assistant 的调用都有结果：此刻不在跑工具
+      return null;
+    }
+    if (record.role === "user") return null;
+  }
+  return null;
+}
+
+/** 同一个工具调用跑了这么久就算「卡住了」（转录空档 P97 是 28 秒；一条命令十分钟没动静，人该看一眼）——同状态卡 */
+export const STUCK_MS = 10 * 60_000;
+
+/** 面板行的状态：子会话七档之上多一档 stuck（在跑，但同一个调用跑太久了） */
+export type PanelRowState = SubSessionRowStatus | "stuck";
+
+/**
+ * 一行此刻的状态。**running 只认引擎活 phase**：转录尾巴只负责说明这次在跑什么，
+ * 不能因为昨夜留下一个 running 工具 / 未答 toolCall，就在重启后复活一轮早已不存在的运行。
+ */
+export function panelRowState(input: {
+  channelStatus: ChannelStatus | undefined;
+  needsApproval: boolean;
+  enginePhaseRunning: boolean;
+  activity: ChildActivity | null;
+  now: number;
+}): PanelRowState {
+  const status = subSessionRowStatus({
+    channelStatus: input.channelStatus,
+    needsApproval: input.needsApproval,
+    running: input.enginePhaseRunning,
+  });
+  if (status === "running" && input.activity !== null && input.now - input.activity.since > STUCK_MS) return "stuck";
+  return status;
+}
+
+/**
+ * 四组，按「要不要你」排：等你（在问你 / 待批 / 失败——要你看的）→ 在跑（含卡住）→ 已交回 → 已停止（你停的，
+ * 以及这一轮停了却没交回的 idle）。后两组默认收成一行（「15 个已交回 ›」）：做完的不需要你，自己退场。
+ */
+export type PanelGroup = "attention" | "running" | "handed" | "stopped";
+
+export const PANEL_GROUPS: readonly PanelGroup[] = ["attention", "running", "handed", "stopped"];
+
+/** 默认收起的组 */
+export const FOLDED_GROUPS: ReadonlySet<PanelGroup> = new Set(["handed", "stopped"]);
+
+export function panelGroupOf(state: PanelRowState): PanelGroup {
+  switch (state) {
+    case "waiting":
+    case "approval":
+    case "failed":
+    case "interrupted":
+      return "attention";
+    case "running":
+    case "stuck":
+      return "running";
+    case "done":
+      return "handed";
+    default:
+      return "stopped";
+  }
+}
+
+/** 组内次序：等你组里 在问你 / 待批 › 失败；在跑组里 卡住的在前、其余跑得久的在前；交回 / 停止组新的在前 */
+const IN_GROUP_ORDER: Record<PanelRowState, number> = {
+  waiting: 0,
+  approval: 0,
+  failed: 1,
+  interrupted: 1,
+  stuck: 0,
+  running: 1,
+  done: 0,
+  stopped: 0,
+  idle: 1,
+};
+
+/**
+ * 行 → 有序的组（空组不出现）。在跑组按「这次调用开始的时刻」正序（跑得最久的在前，离「卡住」最近），
+ * 其余组按 lastAt 倒序（新的在前）。
+ */
+export function groupPanelRows<T extends { state: PanelRowState; lastAt: number; since: number | null }>(
+  rows: readonly T[],
+): { group: PanelGroup; rows: T[] }[] {
+  const byGroup = new Map<PanelGroup, T[]>();
+  for (const row of rows) {
+    const group = panelGroupOf(row.state);
+    byGroup.set(group, [...(byGroup.get(group) ?? []), row]);
+  }
+  return PANEL_GROUPS.flatMap((group) => {
+    const list = byGroup.get(group);
+    if (list === undefined) return [];
+    const sorted = [...list].sort((a, b) => {
+      const order = IN_GROUP_ORDER[a.state] - IN_GROUP_ORDER[b.state];
+      if (order !== 0) return order;
+      if (group === "running") return (a.since ?? a.lastAt) - (b.since ?? b.lastAt);
+      return b.lastAt - a.lastAt;
+    });
+    return [{ group, rows: sorted }];
+  });
+}
+
+/** 第二行：text 是那句话；tool = 正在跑的调用（等宽显示，带走表）；tone 只给渲染挑色 */
+export interface PanelSecondLine {
+  text: string;
+  /** 句首的状态词（「卡住了」）：常规字，不随命令进等宽；没有 = null */
+  lead: string | null;
+  /** 正在跑的那次调用开始的时刻（行尾走表从它算）；不是在跑工具 = null */
+  since: number | null;
+  /** 机器内容（命令 / 路径）用等宽 */
+  mono: boolean;
+  tone: "default" | "warning" | "danger" | "quiet";
+}
+
+/** 系统收尾的分类是主信号；厂商原文留在 title / 通道正文里，不用一长串英文替换可读原因。 */
+export function channelEndText(
+  end: Pick<ChannelEndInfo, "text" | "endCause"> | undefined,
+  t: Messages,
+  fallback: string,
+): string {
+  if (end === undefined) return fallback;
+  if (end.endCause !== undefined) return t.subSessions.endCauses[end.endCause];
+  return firstLineOf(end.text) || fallback;
+}
+
+function endInfoOf(message: ChannelMessage | undefined, kind: ChannelEndInfo["kind"]): ChannelEndInfo | undefined {
+  if (message === undefined) return undefined;
+  return {
+    messageId: message.id,
+    kind,
+    text: message.text,
+    ...(message.endCause === undefined ? {} : { endCause: message.endCause }),
+  };
+}
+
+/** 给状态卡 / 派出卡复用：从一份通道消息里取对应终局。 */
+export function channelEndOf(
+  messages: readonly ChannelMessage[] | undefined,
+  kind: ChannelEndInfo["kind"],
+): ChannelEndInfo | undefined {
+  return endInfoOf([...(messages ?? [])].reverse().find((message) => message.kind === kind), kind);
+}
+
+/**
+ * 每个状态的第二行说有用的话（2026-11-22 任务单）：
+ *   在跑：正在执行的工具调用（「bash · bun run test」，行尾走表）；没在跑工具时，计划里在做的那一步；都没有 =「在想」
+ *   卡住：同上，前面多「卡住了」（文字是首选信号，黄色三角与黄字是第二信号）
+ *   在问你：问题第一行；待批：要批的那次调用
+ *   失败：原因第一行；已交回：报告第一行（不是「完成」两个字）
+ *   已停止（用户终止）：「你停止了它」；idle：「这一轮停了，没有交回」
+ * 通道正文拉不到时退到状态词，不显示「读取失败」。
+ */
+export function panelSecondLine(
+  input: {
+    state: PanelRowState;
+    activity: ChildActivity | null;
+    /** 子会话计划里 in_progress 那一步（没有计划 / 没有在做的步 = null） */
+    planStep: string | null;
+    messages: readonly ChannelMessage[] | undefined;
+    /** 挂着的第一个工具审批 */
+    approval: { toolName: string; input: unknown } | null;
+  },
+  /** 一次调用的一行字（「bash · bun run test」）：动词表在组件里，这里只拼 */
+  callLine: (toolName: string, toolInput: unknown) => string,
+  t: Messages,
+): PanelSecondLine {
+  const quiet = (text: string): PanelSecondLine => ({ text, lead: null, since: null, mono: false, tone: "quiet" });
+  const lastOf = (kind: ChannelMessage["kind"]): string | null => {
+    const found = [...(input.messages ?? [])].reverse().find((message) => message.kind === kind);
+    return found === undefined ? null : firstLineOf(found.text) || null;
+  };
+  switch (input.state) {
+    case "running":
+    case "stuck": {
+      const tone = input.state === "stuck" ? "warning" : "default";
+      if (input.activity !== null) {
+        const call = callLine(input.activity.toolName, input.activity.input);
+        return {
+          text: call,
+          lead: input.state === "stuck" ? t.subSessions.stuck : null,
+          since: input.activity.since,
+          mono: true,
+          tone,
+        };
+      }
+      return { text: input.planStep ?? t.subSessions.thinking, lead: input.state === "stuck" ? t.subSessions.stuck : null, since: null, mono: false, tone };
+    }
+    case "waiting":
+      return { text: lastOf("question") ?? t.subSessions.rowStatus.waiting, lead: null, since: null, mono: false, tone: "default" };
+    case "approval":
+      return {
+        text:
+          input.approval === null
+            ? t.subSessions.rowStatus.approval
+            : t.subSessions.approvalLine(callLine(input.approval.toolName, input.approval.input)),
+        lead: null,
+        since: null,
+        mono: false,
+        tone: "default",
+      };
+    case "failed": {
+      const end = channelEndOf(input.messages, "failed");
+      return {
+        text: channelEndText(end, t, t.subSessions.rowStatus.failed),
+        lead: null,
+        since: null,
+        mono: false,
+        tone: "danger",
+      };
+    }
+    case "interrupted": {
+      const end = channelEndOf(input.messages, "interrupted");
+      return {
+        text: channelEndText(end, t, t.subSessions.rowStatus.interrupted),
+        lead: null,
+        since: null,
+        mono: false,
+        tone: "danger",
+      };
+    }
+    case "done": {
+      const end = channelEndOf(input.messages, "done");
+      return quiet(channelEndText(end, t, t.subSessions.rowStatus.done));
+    }
+    case "stopped":
+      return quiet(t.subSessions.stoppedByYou);
+    default:
+      return quiet(t.subSessions.idleLine);
+  }
+}
+
+/**
+ * 下一次要重画的时间（毫秒后）：只有在跑项才走（since 列表为空 = null，不走表）；不到一分钟的每秒跳，
+ * 否则按分钟跳——对齐到最早一个「下一分钟」的边界，四十个计时也只醒一次。照搬 chat-status.ts 的 nextTickIn。
+ */
+export function nextTickIn(sinces: readonly number[], now: number): number | null {
+  if (sinces.length === 0) return null;
+  let wait = 60_000;
+  for (const since of sinces) {
+    const elapsed = Math.max(0, now - since);
+    if (elapsed < 60_000) return 1000 - (elapsed % 1000);
+    wait = Math.min(wait, 60_000 - (elapsed % 60_000));
+  }
+  return Math.max(250, wait);
+}
+
+/**
+ * 跑了多久的字：不到一分钟写秒，不到一小时写分，再长写时 + 分（分钟级，不写秒——秒在跳只会吸走眼睛；
+ * 走表超过一分钟也只按分钟跳，写秒就是写一个不会动的假数字）。
+ */
+export function elapsedText(ms: number, t: Messages): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (h > 0) return t.subSessions.elapsedHM(h, m);
+  if (m > 0) return t.subSessions.elapsedM(m);
+  return t.subSessions.elapsedS(total % 60);
 }

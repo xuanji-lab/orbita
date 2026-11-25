@@ -26,7 +26,7 @@ describe("章与页：照章节稿第三版", () => {
     const steps = Object.fromEntries(GUIDE.map((chapter) => [chapter.id, chapter.pages.filter((page) => page.kind !== "opener").length]));
     assert.deepEqual(steps, {
       start: 4, task: 4, progress: 3, files: 3, quote: 4, docs: 5, subsessions: 4, memory: 3,
-      terminal: 2, browser: 2, plugins: 4, automation: 3, board: 2, focus: 3, faq: 6,
+      terminal: 2, browser: 2, plugins: 4, automation: 3, board: 2, focus: 1, faq: 6,
     });
   });
 

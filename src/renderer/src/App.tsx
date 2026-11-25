@@ -4,8 +4,8 @@ import { LocaleContext, messagesOf } from "./locale.ts";
 import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
-import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type ProcessLayout, type SettingsPatch } from "@shared/settings";
-import { childSessions, rootSessions, type Carryover } from "@shared/session";
+import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type SettingsPatch } from "@shared/settings";
+import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
 import { effectiveIntentSettings } from "@shared/settings";
@@ -37,36 +37,37 @@ import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
-import { docScope, getLast } from "./features/doc-panel/view-memory.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import {
-  CLOSED_ENTRY,
   composeEntry,
   forgetMissing,
   hasEntry,
   hasSubLayer,
   mergeLoaded,
   panelFromHome,
+  pathOf,
   parseMemoryFile,
-  parsePath,
   recallEntry,
   rememberEntry,
   resolveSubSessionsSub,
+  subOf,
   taskTabOf,
   toMemoryFile,
   type PanelEntry,
   type PanelMemory,
   type PanelPath,
+  withPanelRoot,
 } from "./shell/right-panel-memory.ts";
 import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
-import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { archivedEntryLit, toggleArchivedEntry, type RailSubviewState } from "./shell/rail-subview.ts";
 import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
-import { ProcessLayoutContext, ProcessViewContext } from "./features/chat/process-view-context";
+import { ChatImageSizeContext } from "./features/chat/chat-file-scope.ts";
+import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { isUnclaimedEscape } from "./shell/escape-key.ts";
 import { AutomationPanel } from "./features/automation/AutomationPanel";
@@ -85,7 +86,7 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
 import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
-import { onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
+import { liveFileOpen, onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
 import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
@@ -122,12 +123,9 @@ import type { PanelUsageKey } from "@shared/panel-usage";
  * unbounded）。右抽屉（right-drawer-X）**是 pane 的子元素**——与会话列同一张卡，
  * 中间只有一根竖线（2026-09-12 裁决：不要间隔，一条竖线）。转帧式窗口的窗口键
  * 在自绘标题栏（Titlebar）上；抽屉开关住在右图标条顶部，底部是应用入口
- * （Archived / Carryovers / Settings，wafo 2026-09-22 裁决，覆盖同日之前的
+ * （Archived / Settings，wafo 2026-09-22 裁决，覆盖同日之前的
  * 「底部只放会话动作」——复制按钮已并入会话行的「导出」）。
  */
-/** 右栏「文档」入口发出的打开请求的 token 起点（与 focus.fileOpen 的自增 token 分开，避免撞号被当成已消费） */
-const DOC_OPEN_TOKEN_BASE = 1_000_000;
-
 export function App() {
   usePlatform();
   const [providers, setProviders] = useState<ProviderDto[]>([]);
@@ -140,11 +138,10 @@ export function App() {
   /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
   const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
   /**
-   * Archived / Carryovers 两个子视图的开关（入口在右栏底部，2026-09-22 裁决）。
-   * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。两者互斥：点一个退另一个。
+   * Archived 子视图的开关（入口在右栏底部，2026-09-22 裁决）。
+   * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。
    */
   const [showArchived, setShowArchived] = useState(false);
-  const [showCarryovers, setShowCarryovers] = useState(false);
   /** 窄窗（<960px）：并排分屏守不住 chat ≥480px 的底线，面板转右侧锚定覆盖层 */
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 959px)").matches);
   useEffect(() => {
@@ -163,9 +160,9 @@ export function App() {
     // 语言同理（main.tsx 首帧的 <html lang> 也是按它写的）：不对齐的话选了中文的人先看一帧英文
     ...(api.initialLanguage === null ? {} : { language: api.initialLanguage }),
   });
-  // 界面语言：单语主题说了算，双语主题听语言设置（shared 的 effectiveLanguage）
+  // 界面语言跟设置走（shared 的 effectiveLanguage）
   const resolvedTheme = useTheme(settings.theme, settings.language);
-  const locale = effectiveLanguage(resolvedTheme, settings.language);
+  const locale = effectiveLanguage(settings.language);
   const t = messagesOf(locale);
   const refresh = useCallback(async () => {
     try {
@@ -196,17 +193,20 @@ export function App() {
     void api.settings.set(patch).then(setSettings);
   }, []);
 
-  /** 一轮一行展开之后的排法（按段 / 平铺），在对话里切，全局生效 */
-  const processLayout = useMemo(
-    () => ({ layout: settings.processLayout ?? "chapters", setLayout: (next: ProcessLayout) => changeSettings({ processLayout: next }) }),
-    [settings.processLayout, changeSettings],
+  /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
+  const chatImageSize = useMemo(
+    () => ({
+      size: settings.chatImageSize ?? ("large" as const),
+      setSize: (next: "large" | "small") => changeSettings({ chatImageSize: next }),
+    }),
+    [settings.chatImageSize, changeSettings],
   );
 
-  /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
+  /** 文档 / 演示文稿面板的纸面：只用设置里的纸样，与应用主题无关 */
   const docPaper = useMemo(() => {
-    const { paper, locked } = effectivePaper(settings.docPaper, resolvedTheme);
-    return { paper, locked, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
-  }, [settings.docPaper, resolvedTheme, changeSettings]);
+    const paper = effectivePaper(settings.docPaper);
+    return { paper, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
+  }, [settings.docPaper, changeSettings]);
 
   /**
    * 星标是个**开关**：在库里就取消、不在就加到最后（新星的排在末尾，
@@ -310,7 +310,6 @@ export function App() {
   const leaveFocusSurfaces = useCallback((): void => {
     setOverlay(null);
     setShowArchived(false);
-    setShowCarryovers(false);
   }, []);
   /**
    * 响了一声就记一笔（`<userData>/chime-log.jsonl`，理由见 shared/notify.ts）：标题取此刻
@@ -327,10 +326,6 @@ export function App() {
   };
   const expandSidebar = useCallback((): void => setSidebarCollapsed(false), []);
   const openFilesPanel = useCallback((): void => setRightPanel("files"), []);
-  // 记忆里恢复出来的旧「文档」面板（合并之前存的）：并入文件面板
-  useEffect(() => {
-    if (rightPanel === "docs") setRightPanel("files");
-  }, [rightPanel]);
   const focus = useFocusShell({
     t,
     workspaces: session.workspaces,
@@ -349,15 +344,16 @@ export function App() {
   /** `<FilesPanel>` 那两行的别名：保持 B1 之前的原文，#281 要在它旁边插 `focusDone` */
   const focusFilesView = focus.filesView;
   /**
-   * 文件面板的「打开这个文件」请求：两个来源——左栏专注视图的双击（focus.fileOpen，token 自增）和右栏「文档」入口
-   * （railDocOpen，token 从 DOC_OPEN_TOKEN_BASE 起，两边不撞号）。谁最后来用谁
+   * 文件面板的「打开这个文件」请求：来自左栏专注视图的双击、内置命令、双链跳转（focus.fileOpen，token 自增）。
+   * 面板一离开 files 就作废当时那一条（liveFileOpen 的注释讲为什么）：不然 agent 打开过一份文件之后，
+   * 每次再点开文件面板都会把它重新打开。
    */
-  const [railDocOpen, setRailDocOpen] = useState<{ path: string; token: number } | null>(null);
-  const fileOpenRequest = railDocOpen ?? focus.fileOpen;
-  // 左栏专注视图又发了新的打开请求：它比右栏入口那条新，让位
+  const [dismissedFileOpen, setDismissedFileOpen] = useState<number | null>(null);
+  const focusFileOpen = focus.fileOpen;
   useEffect(() => {
-    if (focus.fileOpen !== null) setRailDocOpen(null);
-  }, [focus.fileOpen]);
+    if (rightPanel !== "files" && focusFileOpen !== null) setDismissedFileOpen(focusFileOpen.token);
+  }, [rightPanel, focusFileOpen]);
+  const fileOpenRequest = liveFileOpen(focusFileOpen, dismissedFileOpen);
 
   // ── 内置命令让右栏打开某个文件（聊天里的完成卡点击 / agent 新建·打开时自动开）──
   // 请求总线见 shell/open-panel.ts；slides 面板收到路径直接打开，文档走文件面板
@@ -396,29 +392,10 @@ export function App() {
     session.newTask();
   };
   /**
-   * 遗留事项带上下文开工（转成任务）：侧栏遗留面板的「带上下文继续」与右栏「这条任务 ›
-   * 留到以后」的「转成任务」共用这一条路（2026-10-30 之前它是侧栏里的一段内联回调）。
-   * 开工即回对话：退出遗留面板与整页盖层、展开侧栏；新会话落在来源会话的组里（cwd / 归属
-   * 跟随它，见 useChatSession.startCarryoverTask），那一组得展开——工作区组在新会话打开时由
-   * Sidebar 自己展开（「打开的会话落在收着的组里就展开」那条 effect），TASKS 组靠新任务信号。
-   */
-  const startCarryoverTask = (item: Carryover): void => {
-    setShowCarryovers(false);
-    setOverlay(null);
-    setSidebarCollapsed(false);
-    const source = session.sessions.find((meta) => meta.id === item.sourceSessionId);
-    if (source?.workspaceId == null) {
-      newTaskNonceRef.current += 1;
-      setNewTaskSignal(newTaskNonceRef.current);
-    }
-    session.startCarryoverTask(item);
-  };
-  /**
-   * 带着会话目标开新会话（右栏进度「目标」上的动作）：与转成任务同一条路——开工即回对话、侧栏展开、
-   * 新会话落在来源会话的组里。
+   * 带着会话目标开新会话（右栏进度「目标」上的动作）：开工即回对话、侧栏展开、
+   * 新会话落在来源会话的组里（cwd / 归属跟随来源会话，见 useChatSession.startGoalTask）。
    */
   const startGoalTask = (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null): void => {
-    setShowCarryovers(false);
     setOverlay(null);
     setSidebarCollapsed(false);
     const source = session.sessions.find((meta) => meta.id === sourceSessionId);
@@ -559,7 +536,7 @@ export function App() {
     if (rightPanel !== "review") setMemoryFocus(null);
   }, [rightPanel]);
   /**
-   * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
+   * PDF 引用的一次性跳转请求（正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
    * PDF 所在的根、打开预览、滚到原文并高亮。
    */
@@ -620,7 +597,13 @@ export function App() {
   /** 右栏此刻属于哪条会话（null = 首页 / 还没有会话，不写记忆）与第几次恢复；面板内容的 key 用 */
   const [railCtx, setRailCtx] = useState<{ owner: string | null; epoch: number }>(() => ({ owner: mainOpenId === "" ? null : mainOpenId, epoch: 0 }));
   /** 当前面板自己报上来的「停在哪一层」；panel 与 rightPanel 不一致的那份是过期的，下面的 effect 会清掉 */
-  const [railPath, setRailPath] = useState<PanelPath>(CLOSED_ENTRY);
+  const [railPath, setRailPath] = useState<PanelPath>({ panel: null });
+  /**
+   * 交给面板的路径：railPath 的 panel 与 rightPanel 不一致 = 刚换面板、面板还没报——这一拍直接取记忆里该面板
+   * 自己的 sub，面板挂载时就能从上次的位置起（不等 effect 把 railPath 换过去再重挂）
+   */
+  const livePath: PanelPath =
+    railPath.panel === rightPanel ? railPath : pathOf(recallEntry(panelMemoryRef.current, railCtx.owner), rightPanel);
   /**
    * 一次性：恢复成这个面板，而不是会话自己的记忆。`sessionId` 为 null = 下一条**还没记过面板的新会话**拿到 id 时
    * （「和智能体一起做一个」用）；给了 id = 只在切到**那一条**会话时（「正在做」的「回到对话」用：它早就有自己的面板记忆）。
@@ -649,7 +632,7 @@ export function App() {
     setSubSessionsNav(openSubSession(childId));
     setRightPanel("subsessions");
   }, []);
-  /** 头部「N sub-sessions」芯片：强制回列表层（不是「resume 到上次的位置」） */
+  /** 头部「N sub-sessions」与交回提示的「在面板里看」：强制回列表层（待讨论组在最上面） */
   const openSubSessionsList = useCallback(() => {
     setSubSessionsNav(SUB_SESSIONS_LIST);
     setRightPanel("subsessions");
@@ -913,31 +896,9 @@ export function App() {
   );
 
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
-   *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
-  const handlePanel = useCallback((next: RightPanelKind | null) => {
-    // 「文档」入口 = 在文件面板里打开最近的文档（没有就新建一份）：文档与文件合并成一个面板，不再有第二个
-    if (next === "docs") {
-      setRightPanel("files");
-      void openRecentDocument();
-      return;
-    }
-    setRightPanel(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.workspaceId, session.sessionId, session.opened?.id]);
-  /** 右栏「文档」入口：上次在这个工作区打开的文档 → 否则最近改的 .md → 否则新建一份空文档，在文件面板里打开 */
-  async function openRecentDocument(): Promise<void> {
-    const sessionId = session.sessionId ?? session.opened?.id ?? null;
-    const workspaceId = session.workspaceId;
-    try {
-      const docs = (await api.docs.list({ sessionId, workspaceId })).filter((entry) => entry.kind === "doc");
-      const last = getLast(docScope(workspaceId, "doc"));
-      const target =
-        docs.find((entry) => entry.path === last)?.path ?? docs[0]?.path ?? (await api.docs.create({ sessionId, workspaceId, kind: "doc" })).path;
-      setRailDocOpen((prev) => ({ path: target, token: Math.max(prev?.token ?? 0, DOC_OPEN_TOKEN_BASE) + 1 }));
-    } catch {
-      // 列 / 建都失败（工作区目录不在）：文件面板自己会显示根的状态，这里不另报错
-    }
-  }
+   *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。
+   *  「文档」「演示文稿」各是一个面板（同一套挑选 / 新建画面，见 DocsPanel）：点一下只是把它亮起来，不替用户开文件、不新建文件。 */
+  const handlePanel = useCallback((next: RightPanelKind | null) => setRightPanel(next), []);
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
@@ -959,7 +920,7 @@ export function App() {
 
   // ── 面板打开次数（shared/panel-usage.ts，本机的统计）──────
   // 只记用户自己打开的：右栏换成别的面板（不管从哪个入口：图标条、「更多」、对话里的
-  // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 遗留 / 归档
+  // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 归档
   // 打开，铃铛与内置浏览器在各自的入口记。按会话恢复的面板不记（panelRestoredRef）。
   // 只在本机、不上传；失败就算了——这是一份看个大概的统计，不值得打扰用户
   const countPanel = useCallback((key: PanelUsageKey) => {
@@ -1102,20 +1063,15 @@ export function App() {
   const mainMeta = mainSessionId === null ? undefined : session.sessions.find((meta) => meta.id === mainSessionId);
 
   /**
-   * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
+   * 右栏底部的应用入口（wafo 2026-09-22：设置、归档拸到右栏底部 stack，
    * 首页常驻——它们是应用入口不是会话动作）。点亮判定与互斥规则沿用侧栏
    * 底部行时代的行为：子视图互斥，设置盖着时谁也不亮。
    *
-   * 遗留事项入口**常驻**，0 条也在（wafo 2026-09-25）：以前 0 条不渲染，导入的会话
-   * 没走过收尾、一条遗留都没有，这个入口就整个不见了——用户不知道有这个功能，
-   * 也没法确认「现在确实没有遗留」。点进去是面板自己的空态。
-   *
    * 点亮判定与点击落点在 `rail-subview.ts`（纯函数，带测试）：没亮 = 打开该子视图
-   * 并**退出设置**——设置页里点这两个入口以前只是在底下翻转开关，界面不动。
+   * 并**退出设置**——设置页里点入口以前只是在底下翻转开关，界面不动。
    */
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
-  const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const experimentalFeatures = settings.experimentalFeatures ?? {};
   // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
   // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。这份只记在 renderer 内存里、只管「agent 预览时自动切右栏」；
@@ -1131,6 +1087,7 @@ export function App() {
         if (event.type !== "pluginDraft") return;
         setPluginDrafts((drafts) => putDraft(drafts, event.sessionId, event.path));
         if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: draftContext.current })) {
+          setOpenedDraft(null); // 新预览优先于早先点开、后来切走的那份
           setRightPanel("plugins");
         }
       }),
@@ -1219,9 +1176,6 @@ export function App() {
     if (overlay === "settings") countPanel("settings");
   }, [overlay, countPanel]);
   useEffect(() => {
-    if (showCarryovers) countPanel("carryovers");
-  }, [showCarryovers, countPanel]);
-  useEffect(() => {
     if (showArchived) countPanel("archived");
   }, [showArchived, countPanel]);
   // 自动化：数据钩子 App 持有一份，右栏面板与对话里的卡片共用
@@ -1237,12 +1191,11 @@ export function App() {
   sessionsRef.current = session.sessions;
   /** 面板换了：上一个面板报的第二层作废（面板自己挂上后会报新的） */
   useEffect(() => {
-    setRailPath((current) => (current.panel === rightPanel ? current : (parsePath({ panel: rightPanel }) ?? CLOSED_ENTRY)));
+    setRailPath((current) => (current.panel === rightPanel ? current : pathOf(recallEntry(panelMemoryRef.current, railCtx.owner), rightPanel)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- owner 只在切会话时变，那一拍由下面「按会话恢复」整批设好
   }, [rightPanel]);
-  /** 点开的草稿属于插件面板：面板换走就放下（同其余面板「换走回到根」） */
-  useEffect(() => {
-    if (rightPanel !== "plugins") setOpenedDraft(null);
-  }, [rightPanel]);
+  // 点开的草稿是插件面板的第二层：换到别的面板**不放下**它（放下就等于「关了」，切回来只剩列表）；
+  // 关草稿走 leavePluginDraft，由写穿把记忆里 subs.plugins.draft 清掉。切会话时按那条会话的记忆重设（见下）
   // 切主槽会话：恢复目标会话记着的路径（没记过 = 关着）。面板、页签、第二层、子会话面板的层、
   // 草稿在同一批里设好；epoch +1 让面板内容重挂。一次性信号（审查定位、记忆页签、「/ + 空格」选取态）
   // 都属于离开的那条会话，不带过去——否则重挂后会拿着旧会话的路径去定位
@@ -1254,25 +1207,24 @@ export function App() {
     let recalled: PanelEntry = recallEntry(panelMemoryRef.current, target);
     const carry = carryPanelRef.current;
     if (carry !== null && target !== null && (carry.sessionId === null ? !hasEntry(panelMemoryRef.current, target) : carry.sessionId === target)) {
-      const bare = parsePath({ panel: carry.panel }) ?? CLOSED_ENTRY;
-      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      recalled = withPanelRoot(recalled, carry.panel);
       carryPanelRef.current = null;
     }
     // 从首页发第一句：开着的是文档 / 演示文稿面板就留着（panelFromHome）
     const keepFromHome = panelFromHome(panelMemoryRef.current, previous, target, rightPanel);
     if (keepFromHome !== null) {
-      const bare = parsePath({ panel: keepFromHome }) ?? CLOSED_ENTRY;
-      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      recalled = withPanelRoot(recalled, keepFromHome);
     }
     const nextTab = taskTabOf(recalled);
     // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
     if (recalled.panel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
     const children = new Set(target === null ? [] : childSessions(sessionsRef.current, target).map((meta) => meta.id));
-    const nav = recalled.panel === "subsessions" ? resolveSubSessionsSub(recalled.sub, children) : undefined;
+    // 子会话层 / 草稿是各自面板的第二层：不论恢复出来开着哪个面板，都按记忆接回（切到别的面板不算关）
+    const nav = resolveSubSessionsSub(subOf(recalled, "subsessions"), children);
     setRightPanel(recalled.panel);
     setTaskTab(nextTab);
-    setRailPath(parsePath(recalled) ?? CLOSED_ENTRY);
-    setOpenedDraft(recalled.panel === "plugins" ? (recalled.sub?.draft ?? null) : null);
+    setRailPath(pathOf(recalled));
+    setOpenedDraft(subOf(recalled, "plugins")?.draft ?? null);
     setSubSessionsNav(nav === undefined ? SUB_SESSIONS_LIST : openSubSession(nav.sessionId));
     setReviewFocus(null);
     setMemoryFocus(null);
@@ -1299,7 +1251,7 @@ export function App() {
   const openedSubSessionId = subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
   useEffect(() => {
     if (railCtx.owner === null) return;
-    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab });
+    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab }, panelMemoryRef.current.get(railCtx.owner));
     const next = rememberEntry(panelMemoryRef.current, railCtx.owner, entry);
     if (next === panelMemoryRef.current) return;
     panelMemoryRef.current = next;
@@ -1395,11 +1347,10 @@ export function App() {
     () => new Set(runSessionKey === "" ? [] : runSessionKey.split("\n")),
     [runSessionKey],
   );
-  const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
+  const subviewState: RailSubviewState = { overlay, showArchived };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
     setShowArchived(next.showArchived);
-    setShowCarryovers(next.showCarryovers);
   };
   /**
    * 工具栏居中那颗胶囊的内容：设置页 = 标题（只有标题）；会话页 = SessionCapsule；
@@ -1419,20 +1370,6 @@ export function App() {
         title={capsuleTitle}
         shortId={capsuleShortId}
         onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
-        completion={
-          mainOpenId !== ""
-            ? {
-                state: mainOpenMeta?.completion ?? "open",
-                closing: session.closingScan,
-                busy: session.phase !== "idle",
-                scanless: mainOpenMeta?.piSessionFile == null,
-                onMark: session.startClosingRitual,
-                onSet: (next) => session.setCompletionSession(mainOpenId, next),
-              }
-            : null
-        }
-        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou } : null}
-        onOpenSubSessions={openSubSessionsList}
         crumb={
           capsuleParentId !== undefined
             ? {
@@ -1445,20 +1382,12 @@ export function App() {
     );
 
   const railEntries: RailEntry[] = [
-    // 遗留事项入口（收尾扫描的下游）
-    {
-      id: "carryovers",
-      icon: FEATURE_ICON.carryovers,
-      label: t.app.carryoversEntry(openCarryoverCount),
-      lit: railSubviewLit(subviewState, "carryovers"),
-      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
-    },
     {
       id: "archived",
       icon: FEATURE_ICON.archived,
       label: t.app.archivedEntry(archivedCount),
-      lit: railSubviewLit(subviewState, "archived"),
-      onClick: () => applySubviewState(toggleRailSubview(subviewState, "archived")),
+      lit: archivedEntryLit(subviewState),
+      onClick: () => applySubviewState(toggleArchivedEntry(subviewState)),
     },
     {
       // 受管浏览器是独立的沙盒窗口（不占右栏面板位）：点了就打开或聚焦它，没有「亮」的状态。
@@ -1493,8 +1422,8 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
-    <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
-    <ProcessLayoutContext.Provider value={processLayout}>
+    <ProcessViewContext.Provider value={settings.processView ?? "chapters"}>
+    <ChatImageSizeContext.Provider value={chatImageSize}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
@@ -1524,9 +1453,7 @@ export function App() {
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
           showArchived={showArchived}
-          showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
-          onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
           unread={new Set(unreadSessions.map((meta) => meta.id))}
           onWidthChange={setSidebarWidth}
@@ -1543,7 +1470,6 @@ export function App() {
           collapsed={sidebarCollapsed}
           onCollapsedChange={setSidebarCollapsed}
           newTaskSignal={newTaskSignal}
-          onStartCarryoverTask={startCarryoverTask}
           filesView={focus.filesView}
           onBrowseWorkspace={focus.browseWorkspace}
           onExitBrowse={focus.exitBrowse}
@@ -1607,8 +1533,8 @@ export function App() {
                 excerptJump={excerptJump}
                 onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
+                onOpenSubSessionsList={openSubSessionsList}
                 litSubSessionId={litSubSessionId}
-                theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}
                 onToggleStarModel={toggleStarModel}
                 onOpenProviders={openProvidersTab}
@@ -1680,12 +1606,15 @@ export function App() {
                 fileOpen={fileOpenRequest}
                 onDocShown={setFilesShowsDoc}
               />
-              ) : shownPanel === "slides" ? (
+              ) : shownPanel === "docs" || shownPanel === "slides" ? (
                 <DocsPanel
+                  kind={shownPanel === "docs" ? "doc" : "slides"}
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
                   workspaceId={session.workspaceId}
                   onQuote={session.addQuote}
-                  openRequest={docOpenRequest}
+                  onOpenFiles={openFilesPanel}
+                  onOpenInFiles={focus.openFile}
+                  openRequest={shownPanel === "slides" ? docOpenRequest : null}
                 />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
@@ -1698,7 +1627,7 @@ export function App() {
                   onJumpExcerpt={openExcerpt}
                   onOpenInFiles={focus.openFile}
                   memoryFocus={memoryFocus}
-                  {...(railPath.panel === "review" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "review" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "review", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "automation" ? (
@@ -1718,7 +1647,7 @@ export function App() {
                     void session.openSession(id);
                   }}
                   onAskInChat={() => session.setDraft(t.automation.addByChatDraft)}
-                  {...(railPath.panel === "automation" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "automation" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "automation", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "terminal" ? (
@@ -1753,13 +1682,9 @@ export function App() {
                   cwd={session.cwd ?? ""}
                   tab={taskTab}
                   onTab={setTaskTab}
-                  {...(railPath.panel === "context" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "context" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "context", ...(sub === undefined ? {} : { sub }) })}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
-                  carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status !== "done")}
-                  onSetCarryoverStatus={session.setCarryoverStatus}
-                  onStartCarryoverTask={startCarryoverTask}
-                  onDoCarryoverNow={session.continueCarryoverInSource}
                   onStartGoalTask={startGoalTask}
                 />
               ) : shownPanel === "plugins" ? (
@@ -1776,7 +1701,7 @@ export function App() {
                   onOpenDraft={openPluginDraft}
                   onOpenSession={openDraftSession}
                   picker={tokenPickerOn ? tokenPicker : undefined}
-                  {...(railPath.panel === "plugins" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "plugins" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "plugins", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "intent" ? (
@@ -1792,7 +1717,7 @@ export function App() {
                   liveTurnIds={intentLiveTurnIds}
                   openableSessionIds={intentOpenableIds}
                   onOpenSession={openInSideChat}
-                  {...(railPath.panel === "intent" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "intent" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "intent", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
@@ -1846,7 +1771,7 @@ export function App() {
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>
     </AutomationContext.Provider>
-    </ProcessLayoutContext.Provider>
+    </ChatImageSizeContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </DocPaperContext.Provider>

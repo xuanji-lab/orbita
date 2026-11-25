@@ -58,6 +58,18 @@ export function onOpenPluginBoardRequest(handler: (request: PluginBoardOpenReque
 }
 
 /**
+ * 文件面板的「打开这个文件」请求此刻还算不算数（2026-11-23 用户：「我每次点文件面板，他都要出现这个 handoff 文件，
+ * 即使我关了，离开文件面板，再次来文件面板，也还是记忆这刚写的」）。
+ *
+ * 请求（focus.fileOpen，token 自增）发出后一直挂在 App 的 state 里；文件面板每次重挂，它记「已处理」的 ref 归零，
+ * 旧请求就被重放一遍。请求的效力只到「那一次面板打开」为止：面板一离开 files，App 记下当时的 token（dismissed），
+ * 之后这条请求不再交给面板；新请求 token 不同，照常生效。与 citeFocus 的「面板离开即作废」同一条纪律。
+ */
+export function liveFileOpen<T extends { token: number }>(request: T | null, dismissedToken: number | null): T | null {
+  return request !== null && request.token !== dismissedToken ? request : null;
+}
+
+/**
  * 「滚回对话里那次看板结果并原地展开」的请求（状态卡里的看板缩略图点击）：对话里每次 show_plugin_board 的结果
  * 是一条带 toolCallId 的行，状态卡与对话隔着整棵树，同样走 window 事件。
  *

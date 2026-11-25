@@ -8,7 +8,7 @@ import { RequestBroker } from "./request-broker.ts";
 import type { PermissionMode } from "../shared/permission.ts";
 import type { PluginInstallRow } from "../shared/plugin.ts";
 import type { PluginBoardResult } from "../shared/plugin-board.ts";
-import { createPluginTools, describeBoard, describeInstalled, describePlugins, describePreview, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
+import { boardFailure, createPluginTools, describeBoard, describeInstalled, describePlugins, describePreview, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
 
 const setup = (mode: PermissionMode = "skip"): { tools: ReturnType<typeof createPluginTools>; sent: Record<string, unknown>[]; broker: RequestBroker } => {
   const sent: Record<string, unknown>[] = [];
@@ -284,6 +284,54 @@ describe("show_plugin_board", () => {
     assert.match(tuned, /Do not explain them again unless the user asks/);
     assert.doesNotMatch(tuned, /point out anything wrong/);
     assert.doesNotMatch(tuned, /Not shown/);
+  });
+});
+
+describe("show_plugin_board：画不出来要让模型看见", () => {
+  const card = { ...BOARD.cards[0]!, usingSample: false };
+
+  test("一张卡都没画出来：抛错，列出每张的原因（template / data 的 detail 原样带上）和下一步", async () => {
+    const { tools, broker, sent } = setup();
+    const tool = tools.find((each) => each.name === "show_plugin_board");
+    assert.ok(tool !== undefined);
+    const pending = tool.execute("c1", { plugin: "lit" }, undefined, undefined, undefined as never);
+    const broken: PluginBoardResult = {
+      ...BOARD,
+      cards: [],
+      skipped: [
+        { id: "today", reason: "template", detail: "not-found: ./board/today.html" },
+        { id: "papers", reason: "data", detail: "invalid-json: Unexpected token" },
+      ],
+    };
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: true, board: broken });
+    await assert.rejects(pending, (error: Error) => {
+      assert.match(error.message, /drew no cards/);
+      assert.match(error.message, /today: template \(not-found: \.\/board\/today\.html\)/);
+      assert.match(error.message, /papers: data \(invalid-json: Unexpected token\)/);
+      assert.match(error.message, /Fix the template or data file and call show_plugin_board again/);
+      assert.match(error.message, /ids from the plugin's board manifest/);
+      return true;
+    });
+  });
+
+  test("清单里一张卡都没声明：同样抛错，说去清单里加", () => {
+    const text = boardFailure({ ...BOARD, cards: [], skipped: [] });
+    assert.match(text ?? "", /declares no board cards/);
+    assert.equal(boardFailure(BOARD), null);
+  });
+
+  test("画出一部分、有卡因 template / data / 未知 id 没画：成功，但不再说「The cards are shown」，改成要求修好重调", () => {
+    const text = describeBoard({ ...BOARD, cards: [card], tuned: true, skipped: [{ id: "list", reason: "template", detail: "not-found: ./b.html" }, { id: "x", reason: "unknown-card", detail: "x" }] });
+    assert.match(text, /Not shown:\n- list: template \(not-found: \.\/b\.html\)/);
+    assert.match(text, /NOT drawn and can be fixed: list, x/);
+    assert.match(text, /call show_plugin_board again for those cards \(cards: \["list","x"\]\) before you finish this turn/);
+    assert.doesNotMatch(text, /The cards are shown/);
+  });
+
+  test("超上限（too-large / budget / repeat）不算错：话术照旧", () => {
+    const text = describeBoard({ ...BOARD, cards: [card], skipped: [{ id: "a", reason: "too-large", detail: "0: 1 bytes" }, { id: "b", reason: "budget", detail: "x" }, { id: "c", reason: "repeat", detail: "y" }] });
+    assert.match(text, /The cards are shown/);
+    assert.doesNotMatch(text, /before you finish this turn/);
   });
 });
 

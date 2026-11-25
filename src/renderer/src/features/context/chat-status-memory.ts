@@ -19,7 +19,7 @@ export const STATUS_VIEW_KEY = "orbita.chatStatus.view";
 export const STATUS_VIEW_LIMIT = 200;
 
 /** 产物分组的键（与 chat-status.ts 的 OutputGroupKey 同一批；这里不 import，保持本模块零依赖） */
-const GROUP_KEYS: ReadonlySet<string> = new Set(["slides", "doc", "web", "pdf", "image", "board", "file"]);
+const GROUP_KEYS: ReadonlySet<string> = new Set(["slides", "doc", "web", "pdf", "image", "video", "audio", "board", "file"]);
 const MAX_ID = 200;
 const MAX_LIST = 40;
 const MAX_PX = 1_000_000;

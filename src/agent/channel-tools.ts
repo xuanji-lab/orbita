@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
-import type { ChannelDelivery } from "../shared/channel.ts";
+import { DELEGATE_PLAN_STEP_MAX_CHARS, parseDelegatePlanStep, type ChannelDelivery } from "../shared/channel.ts";
+import type { ReplyLang } from "../shared/reply-language.ts";
 import type { ChannelSendOutcome, DelegateCard, DelegateOutcome, ModelCostsOutcome } from "../shared/agent-ipc.ts";
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from "../shared/thinking.ts";
 
@@ -20,9 +21,29 @@ export function createChannelTools(
   broker: RequestBroker,
   sessionId: string,
   role: "root" | "child",
+  /**
+   * 此刻用户的语言（runtime 按本会话的历史现算，shared/reply-language.ts）：派发 / 回信时随请求
+   * 交给主进程，写进通道消息，子会话据此写可见文字与汇报。缺省 = 不带（算不出 / 测试）。
+   */
+  replyLang: () => ReplyLang | undefined = () => undefined,
 ): ToolDefinition[] {
-  if (role === "child") return [reportToParentTool(broker, sessionId)];
-  return [delegateTool(broker, sessionId), replySubsessionTool(broker, sessionId), modelCostsTool(broker, sessionId)];
+  if (role === "child") return [reportToParentTool(broker, sessionId, replyLang)];
+  return [
+    delegateTool(broker, sessionId, replyLang),
+    replySubsessionTool(broker, sessionId, replyLang),
+    modelCostsTool(broker, sessionId),
+  ];
+}
+
+/**
+ * 工具结果末尾的一句语言提示。每条用户消息末尾的 <reply_language> 标记管不到「工具结果之后」的那段文字：
+ * report_to_parent 之后子会话收尾的一句话、delegate 之后主会话对用户说的话，前面紧挨着的是英文工具结果，
+ * 实测（2026-11-22，改后真模型）子会话汇报是中文、收尾那句却写成英文。这句提示由工具执行时按当时的语言生成、
+ * 随工具结果落进历史（之后每轮逐字节重放，不破前缀缓存）。算不出语言时没有这句。
+ */
+function languageHint(lang: ReplyLang | undefined): string {
+  if (lang === undefined) return "";
+  return ` Any text you write next must be in ${lang === "zh" ? "Chinese" : "English"} (the user's language).`;
 }
 
 /** 必填字符串：trim 非空，否则抛带字段名的说明——不合法的参数不发请求。 */
@@ -48,7 +69,7 @@ function isDelivery(value: unknown): value is ChannelDelivery {
   return value === "steer" || value === "followUp";
 }
 
-function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+function delegateTool(broker: RequestBroker, sessionId: string, replyLang: () => ReplyLang | undefined): ToolDefinition {
   return {
     name: "delegate",
     label: "delegate",
@@ -69,7 +90,13 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
       "running tests, research and data gathering rarely need a top-tier model; keep a mid tier at " +
       "medium thinking for design trade-offs; reserve the most expensive model with max thinking for " +
       "when the user names it or a cheaper tier has already failed. Project rules (AGENTS.md) that name " +
-      "a model for a kind of work take precedence.",
+      "a model for a kind of work take precedence. " +
+      "Write the title and task in the language of the <reply_language> marker at the end of the user's " +
+      "messages (the user's language); the sub-session is told that language too and writes its reports in it. " +
+      "When the sub-session is for a step of your plan (update_plan), pass planStep: that step's text, copied " +
+      "as written in the plan, so the user sees the sub-session under that step. Also mark that step waiting " +
+      "and name the sub-session in waitingFor (for example \"子会话 <first 8 chars of its id> 在做\"); if you " +
+      "delegate before you update the plan, still pass planStep with the text the step will have.",
     parameters: {
       type: "object",
       properties: {
@@ -94,6 +121,12 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
           enum: [...THINKING_LEVELS],
           description: "Optional thinking level override for the sub-session.",
         },
+        planStep: {
+          type: "string",
+          description:
+            "Optional. The update_plan step this sub-session does, copied from the plan (up to " +
+            `${DELEGATE_PLAN_STEP_MAX_CHARS} characters). Pass it whenever the sub-session serves a plan step.`,
+        },
       },
       required: ["title", "task"],
     } as never,
@@ -110,11 +143,14 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         }
         thinkingLevel = thinkingRaw;
       }
+      const lang = replyLang();
+      const planStep = parseDelegatePlanStep(args);
       const result = await broker.request<DelegateOutcome>({
         type: "delegateRequest",
         sessionId,
         title,
         task,
+        ...(lang === undefined ? {} : { replyLang: lang }),
         ...(model === undefined ? {} : { modelId: model }),
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       });
@@ -124,7 +160,11 @@ function delegateTool(broker: RequestBroker, sessionId: string): ToolDefinition 
         `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
         `(thinking: ${card.thinkingLevel}). Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
-        "not poll or wait for it.";
+        "not poll or wait for it." +
+        (planStep === null
+          ? ""
+          : ` It is shown under the plan step "${planStep}"; if that is not a step of your plan yet, the next update_plan must contain it, with the same text.`) +
+        languageHint(lang);
       return {
         content: [{ type: "text", text }],
         details: { delegate: card satisfies DelegateCard },
@@ -162,7 +202,11 @@ function modelCostsTool(broker: RequestBroker, sessionId: string): ToolDefinitio
   };
 }
 
-function replySubsessionTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+function replySubsessionTool(
+  broker: RequestBroker,
+  sessionId: string,
+  replyLang: () => ReplyLang | undefined,
+): ToolDefinition {
   return {
     name: "reply_subsession",
     label: "reply_subsession",
@@ -202,17 +246,19 @@ function replySubsessionTool(broker: RequestBroker, sessionId: string): ToolDefi
         }
         delivery = deliveryRaw;
       }
+      const lang = replyLang();
       const result = await broker.request<ChannelSendOutcome>({
         type: "channelSendRequest",
         sessionId,
         to: { childId },
         kind: "reply",
         text,
+        ...(lang === undefined ? {} : { replyLang: lang }),
         ...(delivery === undefined ? {} : { delivery }),
       });
       if (!result.ok) throw new Error(result.error);
       return {
-        content: [{ type: "text", text: "Reply sent to the sub-session." }],
+        content: [{ type: "text", text: `Reply sent to the sub-session.${languageHint(lang)}` }],
         // 落账那条通道消息的 id：renderer 的发送侧标记凭它点了能定位到这一条
         // （tool-results.ts 的 channelSendMessageId）；给模型看的正文不带
         details: { messageId: result.messageId },
@@ -221,7 +267,11 @@ function replySubsessionTool(broker: RequestBroker, sessionId: string): ToolDefi
   };
 }
 
-function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefinition {
+function reportToParentTool(
+  broker: RequestBroker,
+  sessionId: string,
+  replyLang: () => ReplyLang | undefined,
+): ToolDefinition {
   return {
     name: "report_to_parent",
     label: "report_to_parent",
@@ -232,7 +282,9 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
       'continue. "progress": occasional update, use sparingly. "done": you finished — say what you ' +
       'concluded, what you changed, and where the output is, then end this turn. Include absolute paths ' +
       'to important output (especially for done). "failed": you cannot ' +
-      "complete the task — say why, then end this turn.",
+      "complete the task — say why, then end this turn. " +
+      "Write the report text in the language of the <reply_language> marker at the end of your messages " +
+      "(the user's language), not in the language of this tool description or of tool output.",
     parameters: {
       type: "object",
       properties: {
@@ -264,7 +316,7 @@ function reportToParentTool(broker: RequestBroker, sessionId: string): ToolDefin
       if (!result.ok) throw new Error(result.error);
       const suffix = kindRaw === "done" || kindRaw === "failed" ? " Task handed back — end this turn." : "";
       return {
-        content: [{ type: "text", text: `Reported to parent.${suffix}` }],
+        content: [{ type: "text", text: `Reported to parent.${suffix}${languageHint(replyLang())}` }],
         // 同 reply_subsession：子会话工作记录里的标记凭它定位到父子会话面板里的这一条
         details: { messageId: result.messageId },
       };
@@ -313,6 +365,8 @@ under the parent session workbench in subsessions/<your-short-id>-<short-english
 8 characters of your own session id (the last component of your Session workbench path) so concurrent
 sub-sessions do not collide. In report_to_parent, especially done, give the absolute paths of those
 files. Requested code and repository deliverables still belong in cwd and are unaffected by this rule.
+Write everything the user will read — your visible text, progress notes and every report_to_parent text — in the
+language of the <reply_language> marker that ends each message you receive; that is the user's language.
 </orbita-sub-sessions>`;
 
 /** 按角色选一段通道使用说明；root/child 各自固定，不随 related 内容变化。 */

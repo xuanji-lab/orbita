@@ -1,7 +1,7 @@
 :root {
   --shadow-border: 0 0 0 1px var(--color-border-subtle);
   /* 方向 N（2026-11-07）：静止的面零阴影，输入卡贴在井底成台沿，层次让给发丝线与壳 / 井的色阶
-     （Claude：「几乎没有阴影」）。只有真浮起来的弹层 / 对话框留影。纸面两档保持旧值（下面）。 */
+     （Claude：「几乎没有阴影」）。只有真浮起来的弹层 / 对话框留影。 */
   --shadow-card: none;
   --shadow-composer: none;
   --shadow-popover: 0 12px 32px rgba(20, 24, 31, 0.12);
@@ -25,12 +25,4 @@
   --focus-ring: 0 0 0 2px rgba(214, 194, 69, 0.28);
   --overlay-backdrop: rgba(0, 0, 0, 0.48);
   --overlay-backdrop-subtle: rgba(0, 0, 0, 0.24);
-}
-
-/* 纸面两档不套方向 N：纸是有阴影的东西，会话卡与输入卡保持原先的浮起（2026-11-07 前的值） */
-:root[data-theme="copybook"],
-:root[data-theme="typescript"] {
-  --shadow-border: 0 0 0 1px rgba(20, 24, 31, 0.06);
-  --shadow-card: 0 1px 2px rgba(20, 24, 31, 0.06), 0 4px 12px rgba(20, 24, 31, 0.06);
-  --shadow-composer: 0 8px 28px rgba(20, 24, 31, 0.08);
 }

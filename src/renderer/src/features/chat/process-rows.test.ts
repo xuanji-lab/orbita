@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
-import { outsideFailure, allOutputs, assignImages, groupOutputs, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
+import { mergeOutputs, outsideFailure, allOutputs, assignImages, groupOutputs, deckPagesFrom, imagesOf, processHeadline, processRows, stepVerb, turnOutputs } from "./process-rows.ts";
 import type { ProcessStep, ToolCallUnit, ToolResultIndex } from "./tool-results.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
@@ -61,7 +61,7 @@ describe("turnOutputs：一轮交给用户的东西，一份一行", () => {
       done("f", "slides_export", { details: { card: { kind: "export", path: "/w/a.pdf", title: "a.pdf", subtitle: "PDF · 3 页" } } }),
       done("x", "doc_export", { status: "error", isError: true, details: card("export", "/w/a.docx", "a.docx") } as Partial<ToolTranscriptItem>),
     ]);
-    assert.deepEqual(turnOutputs(calls, results), [{ kind: "file", path: "/w/a.pdf", title: "a.pdf", pages: null, format: "PDF", detail: "PDF · 3 页" }]);
+    assert.deepEqual(turnOutputs(calls, results), [{ kind: "pdf", path: "/w/a.pdf", title: "a.pdf", pages: null, format: "PDF", detail: "PDF · 3 页" }]);
   });
 
   test("「the deck now has N slide(s)」两种写法都认", () => {
@@ -144,14 +144,14 @@ describe("allOutputs：结尾这一摞产物", () => {
     const outputs = allOutputs(calls, results, ["/w/周报.md", "/w/a.md"], ["/w/index.html"]);
     assert.deepEqual(
       outputs.map((output) => `${output.kind}:${output.title}`),
-      ["doc:周报", "doc:a.md", "file:周报.pdf", "web:index.html"],
+      ["doc:周报", "doc:a.md", "pdf:周报.pdf", "web:index.html"],
     );
   });
 });
 
 describe("groupOutputs：同一类三份以上收成一张", () => {
   test("12 个网页收成一组；演示文稿不收；两份文档不收", () => {
-    const o = (kind: "slides" | "doc" | "web", title: string) => ({ kind, path: `/w/${title}`, title, pages: null, format: null, detail: null });
+    const o = (kind: "slides" | "doc" | "pdf" | "web", title: string) => ({ kind, path: `/w/${title}`, title, pages: null, format: null, detail: null });
     const outputs = [o("slides", "演示"), o("doc", "a.md"), o("doc", "b.md"), ...Array.from({ length: 12 }, (_, i) => o("web", `p${i}.html`))];
     const slots = groupOutputs(outputs);
     assert.deepEqual(
@@ -178,5 +178,126 @@ describe("outsideFailure：留在过程外的行失败时行首是中文动作�
     for (const name of ["install_plugin", "show_plugin_board", "show_image", "delegate", "reply_subsession", "report_to_parent", "automation_create", "automation_update", "request_user_action"]) {
       assert.ok(zh.chat.outsideFail.actions[name] !== undefined && en.chat.outsideFail.actions[name] !== undefined, name);
     }
+  });
+});
+
+describe("stepVerb：装插件 / 放插件看板有自己的动作词", () => {
+  test("收进过程行的 show_plugin_board / install_plugin 不露工具原名", () => {
+    assert.equal(stepVerb("show_plugin_board", { plugin: "p" }, zh.chat.stepVerb).verb, "放插件看板");
+    assert.equal(stepVerb("install_plugin", { path: "/p" }, zh.chat.stepVerb).verb, "装插件");
+    assert.equal(stepVerb("show_plugin_board", { plugin: "p" }, en.chat.stepVerb).raw, null);
+  });
+});
+
+describe("导出的文件按文件类型分（不再有「导出的文件」一类）", () => {
+  const exportResult = (id: string, tool: string, path: string, subtitle: string) =>
+    done(id, tool, { details: { card: { kind: "export", path, title: path.split("/").pop() ?? path, subtitle } } });
+  const calls = [
+    call("a", "slides_export", { format: "pdf" }),
+    call("b", "slides_export", { format: "pptx" }),
+    call("c", "doc_export", { format: "docx" }),
+    call("d", "doc_export", { format: "md" }),
+  ];
+  const results: ToolResultIndex = new Map([
+    exportResult("a", "slides_export", "/w/d.pdf", "PDF · 3 页 · 261 KB"),
+    exportResult("b", "slides_export", "/w/d.pptx", "PPTX · 3 页 · 80 KB"),
+    exportResult("c", "doc_export", "/w/r.docx", "Word · 10.0 KB"),
+    exportResult("d", "doc_export", "/w/r.md", "Markdown · 2 KB"),
+  ]);
+  test("PDF 自成一类；PPTX 并进演示文稿（类型字 PowerPoint）；Word / Markdown 并进文档", () => {
+    const out = turnOutputs(calls, results);
+    assert.deepEqual(
+      out.map((o) => [o.kind, o.format, o.detail]),
+      [
+        ["pdf", "PDF", "PDF · 3 页 · 261 KB"],
+        ["slides", "PowerPoint", "PowerPoint · 3 页 · 80 KB"],
+        ["doc", "Word", "Word · 10.0 KB"],
+        ["doc", "Markdown", "Markdown · 2 KB"],
+      ],
+    );
+  });
+  test("入参没写格式时按扩展名认", () => {
+    const out = turnOutputs([call("x", "doc_export", {})], new Map([exportResult("x", "doc_export", "/w/z.docx", "Word · 1 KB")]));
+    assert.deepEqual(out.map((o) => [o.kind, o.format]), [["doc", "Word"]]);
+  });
+  test("三份 PDF 收成「3 个 PDF」；导出的 PowerPoint 与演示文稿一样一份一张不收", () => {
+    const pdf = (n: number) => ({ kind: "pdf" as const, path: `/w/${n}.pdf`, title: `${n}.pdf`, pages: null, format: "PDF", detail: null });
+    const slots = groupOutputs([pdf(1), pdf(2), pdf(3), { kind: "slides", path: "/w/a.pptx", title: "a.pptx", pages: null, format: "PowerPoint", detail: null }]);
+    assert.deepEqual(slots.map((s) => (s.kind === "one" ? s.output.title : `${s.type}×${s.outputs.length}`)), ["pdf×3", "a.pptx"]);
+    assert.equal(zh.chat.outputGroup("pdf", 3), "3 个 PDF");
+    assert.ok(!JSON.stringify(zh.chat).includes("导出的文件"));
+  });
+  test("折叠行一句话：导出来的单算「导出 N 个文件」，不算进做出的演示文稿 / 打开的文档", () => {
+    const text = processHeadline(calls, results, 0, zh.chat.headline);
+    assert.equal(text, "导出 4 个文件");
+  });
+});
+
+describe("mergeOutputs：子会话交回的产物与主会话自己的摆进同一摞", () => {
+  const o = (kind: "slides" | "doc" | "pdf" | "web", name: string, source?: { sessionId: string; title: string; modelName: string }) => ({
+    kind,
+    path: `/w/${name}`,
+    title: name,
+    pages: null,
+    format: null,
+    detail: null,
+    ...(source === undefined ? {} : { source }),
+  });
+  const child = { sessionId: "c1", title: "调研", modelName: "GLM-5.3" };
+
+  test("主会话的在前、子会话的在后，再按类稳定排序（同一类相邻）", () => {
+    const out = mergeOutputs([o("doc", "a.md"), o("web", "i.html")], [o("doc", "b.md", child), o("pdf", "c.pdf", child)]);
+    assert.deepEqual(out.map((x) => x.title), ["a.md", "b.md", "c.pdf", "i.html"]);
+    assert.equal(out[0]?.source, undefined);
+    assert.equal(out[1]?.source?.title, "调研");
+  });
+
+  test("同一路径只留主会话的那份", () => {
+    const out = mergeOutputs([o("doc", "a.md")], [o("doc", "a.md", child), o("doc", "b.md", child)]);
+    assert.deepEqual(out.map((x) => [x.title, x.source === undefined]), [["a.md", true], ["b.md", false]]);
+  });
+
+  test("收组合计算：主会话 1 份 + 子会话 2 份文档 = 3 份，收成一张，展开的每行仍带 source", () => {
+    const slots = groupOutputs(mergeOutputs([o("doc", "a.md")], [o("doc", "b.md", child), o("doc", "c.md", child)]));
+    assert.equal(slots.length, 1);
+    const [slot] = slots;
+    assert.ok(slot !== undefined && slot.kind === "group");
+    assert.deepEqual(slot.outputs.map((x) => x.source?.title ?? null), [null, "调研", "调研"]);
+  });
+});
+
+describe("stepVerb：子会话来往在过程行里的动作词", () => {
+  test("回复子会话：回复了「标题」；报告给主会话按 kind 说，对象是报告第一行", () => {
+    const peer = (id: string) => (id === "c1" ? "调研" : "");
+    assert.deepEqual(stepVerb("reply_subsession", { childId: "c1", text: "只看桌面端" }, zh.chat.stepVerb, [], peer), { verb: "回复了", object: "「调研」", raw: null });
+    assert.equal(stepVerb("reply_subsession", { childId: "x" }, zh.chat.stepVerb, [], peer).object, null);
+    assert.deepEqual(stepVerb("report_to_parent", { kind: "done", text: "\n做完了\n细节" }, zh.chat.stepVerb), { verb: "报告给主会话", object: "做完了", raw: null });
+    assert.equal(stepVerb("report_to_parent", { kind: "question", text: "范围？" }, zh.chat.stepVerb).verb, "问了主会话");
+    assert.equal(stepVerb("report_to_parent", { kind: "failed", text: "崩了" }, zh.chat.stepVerb).verb, "报告失败");
+  });
+});
+
+describe("音视频产物行（回答点了名的）", () => {
+  const media = [{ path: "/w/audio/final.mp3", duration: 231 }, { path: "/w/clip.mp4" }, { path: "/w/notes.txt" }];
+  test("按扩展名定音频 / 视频，带上量到的时长；认不得的扩展名不进", () => {
+    const outputs = allOutputs([], new Map(), [], [], media);
+    assert.deepEqual(outputs.map((o) => [o.kind, o.title, o.duration]), [["audio", "final.mp3", 231], ["video", "clip.mp4", undefined]]);
+  });
+  test("摆在 PDF 之后、网页之前；与文档同路径不重复", () => {
+    const outputs = allOutputs([], new Map(), ["/w/a.md"], ["/w/p.html"], [{ path: "/w/final.mp3" }]);
+    assert.deepEqual(outputs.map((o) => o.kind), ["doc", "audio", "web"]);
+  });
+  test("同类三份以上收成一张「3 段音频」", () => {
+    const slots = groupOutputs(allOutputs([], new Map(), [], [], [{ path: "/a/1.mp3" }, { path: "/a/2.mp3" }, { path: "/a/3.mp3" }]));
+    assert.equal(slots.length, 1);
+    const [slot] = slots;
+    assert.ok(slot !== undefined && slot.kind === "group" && slot.type === "audio");
+    assert.equal(zh.chat.outputGroup("audio", 3), "3 段音频");
+    assert.equal(en.chat.outputGroup("video", 2), "2 videos");
+  });
+  test("类型字：音频 · 3:51；量不到时长只写类型", () => {
+    assert.equal(zh.chat.outputMedia("audio", "3:51"), "音频 · 3:51");
+    assert.equal(zh.chat.outputMedia("video", null), "视频");
+    assert.equal(en.chat.outputMedia("audio", "3:51"), "Audio · 3:51");
   });
 });

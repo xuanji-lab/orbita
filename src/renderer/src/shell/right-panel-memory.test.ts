@@ -19,16 +19,19 @@ import {
   parsePluginsSub,
   parseReviewSub,
   parseSubSessionsSub,
+  pathOf,
   recallEntry,
   rememberEntry,
   resolveAutomationSub,
   resolvePluginsSub,
   resolveSubSessionsSub,
   reviewSubOf,
+  subOf,
   taskTabOf,
   toMemoryFile,
   type PanelEntry,
   type PanelMemory,
+  withPanelRoot,
 } from "./right-panel-memory.ts";
 
 /**
@@ -37,7 +40,7 @@ import {
  */
 
 const files: PanelEntry = { panel: "files" };
-const pluginDetail: PanelEntry = { panel: "plugins", sub: { selected: "plugin:demo@ws1" } };
+const pluginDetail: PanelEntry = { panel: "plugins", subs: { plugins: { selected: "plugin:demo@ws1" } } };
 
 describe("rememberEntry / recallEntry：记、取、互不串", () => {
   it("A 的路径记下，回到 A 原样取回（含第二层）", () => {
@@ -72,7 +75,7 @@ describe("rememberEntry / recallEntry：记、取、互不串", () => {
 
   it("内容没变且已是最近的一条：原样返回（引用不变，调用方据此不重复落盘）", () => {
     const memory = rememberEntry(new Map(), "a", pluginDetail);
-    strictEqual(rememberEntry(memory, "a", { panel: "plugins", sub: { selected: "plugin:demo@ws1" } }), memory);
+    strictEqual(rememberEntry(memory, "a", { panel: "plugins", subs: { plugins: { selected: "plugin:demo@ws1" } } }), memory);
   });
 
   it("记 / 取之间不改入参 Map", () => {
@@ -157,9 +160,9 @@ describe("各面板第二层的解析：坏数据丢字段、默认值不落盘"
 
 describe("parseEntry：整条校验与旧格式兼容", () => {
   it("认识的面板 + 第二层 + 页签", () => {
-    deepStrictEqual(parseEntry({ panel: "context", sub: { scope: "task" }, taskTab: "context" }), {
+    deepStrictEqual(parseEntry({ panel: "context", subs: { context: { scope: "task" } }, taskTab: "context" }), {
       panel: "context",
-      sub: { scope: "task" },
+      subs: { context: { scope: "task" } },
       taskTab: "context",
     });
     strictEqual(taskTabOf({ panel: null, taskTab: "context" }), "context");
@@ -174,11 +177,36 @@ describe("parseEntry：整条校验与旧格式兼容", () => {
   it("不认识的面板 / 非对象：整条丢；无第二层的面板带了 sub：sub 被丢弃", () => {
     strictEqual(parseEntry({ panel: "bogus" }), null);
     strictEqual(parseEntry(42), null);
-    deepStrictEqual(parseEntry({ panel: "files", sub: { x: 1 } }), { panel: "files" });
+    deepStrictEqual(parseEntry({ panel: "files", sub: { x: 1 }, subs: { bogus: { x: 1 } } }), { panel: "files" });
   });
 
   it("sub 全是坏字段：退成「面板根」而不是报错", () => {
-    deepStrictEqual(parseEntry({ panel: "automation", sub: { detail: 5, scope: "mars" } }), { panel: "automation" });
+    deepStrictEqual(parseEntry({ panel: "automation", subs: { automation: { detail: 5, scope: "mars" } } }), { panel: "automation" });
+  });
+
+  it("v1 旧格式：条目上的 sub 归到它那个面板名下（subs[panel]）；v2 同名项优先", () => {
+    deepStrictEqual(parseEntry({ panel: "plugins", sub: { selected: "p1", board: true } }), {
+      panel: "plugins",
+      subs: { plugins: { selected: "p1", board: true } },
+    });
+    deepStrictEqual(parseEntry({ panel: "automation", sub: { detail: "a1" }, taskTab: "context" }), {
+      panel: "automation",
+      subs: { automation: { detail: "a1" } },
+      taskTab: "context",
+    });
+    deepStrictEqual(parseEntry({ panel: "plugins", sub: { selected: "old" }, subs: { plugins: { selected: "new" } } }), {
+      panel: "plugins",
+      subs: { plugins: { selected: "new" } },
+    });
+  });
+
+  it("subs 里每个面板各自校验：好的留、坏的丢，键序规范（落盘比较稳）", () => {
+    const entry = parseEntry({
+      panel: null,
+      subs: { intent: { round: 2 }, plugins: { selected: 9 }, automation: { detail: "a1" }, review: "junk" },
+    });
+    deepStrictEqual(entry, { panel: null, subs: { automation: { detail: "a1" }, intent: { round: 2 } } });
+    strictEqual(JSON.stringify(entry), JSON.stringify({ panel: null, subs: { automation: { detail: "a1" }, intent: { round: 2 } } }));
   });
 });
 
@@ -187,17 +215,25 @@ describe("落盘往返", () => {
     let memory: PanelMemory = rememberEntry(new Map(), "a", pluginDetail);
     memory = rememberEntry(memory, "closed", { panel: null });
     memory = rememberEntry(memory, "tab", { panel: null, taskTab: "context" });
-    memory = rememberEntry(memory, "b", { panel: "review", sub: { tab: "excerpts" } });
+    memory = rememberEntry(memory, "b", { panel: "review", subs: { review: { tab: "excerpts" } } });
+    memory = rememberEntry(memory, "away", { panel: "docs", subs: { plugins: { selected: "p1", board: true } } });
     const file = toMemoryFile(memory);
-    strictEqual(file.entries.length, 3);
+    strictEqual(file.version, 2);
+    strictEqual(file.entries.length, 4);
     const back = parseMemoryFile(JSON.parse(JSON.stringify(file)));
-    deepStrictEqual([...back.keys()], ["a", "tab", "b"]);
+    deepStrictEqual([...back.keys()], ["a", "tab", "b", "away"]);
     deepStrictEqual(recallEntry(back, "a"), pluginDetail);
-    deepStrictEqual(recallEntry(back, "b"), { panel: "review", sub: { tab: "excerpts" } });
+    deepStrictEqual(recallEntry(back, "b"), { panel: "review", subs: { review: { tab: "excerpts" } } });
+    // 开着别的面板、只留着插件面板位置的条目也要落盘（不是「关着」）
+    deepStrictEqual(recallEntry(back, "away"), { panel: "docs", subs: { plugins: { selected: "p1", board: true } } });
   });
 
   it("读回的坏条目丢掉、好的保留；null（文件不在）= 空记忆；旧的 [id, 面板] 二元组也认", () => {
     strictEqual(parseMemoryFile(null).size, 0);
+    // v1 整份文件：旧条目迁成 v2 的形状
+    const migrated = parseMemoryFile({ version: 1, entries: [{ id: "m", panel: "plugins", sub: { selected: "p1" } }] });
+    deepStrictEqual(recallEntry(migrated, "m"), { panel: "plugins", subs: { plugins: { selected: "p1" } } });
+    strictEqual(toMemoryFile(migrated).version, 2);
     const back = parseMemoryFile({
       version: 1,
       entries: [{ id: "a", panel: "bogus" }, { panel: "files" }, 7, ["old", "terminal"], { id: "ok", panel: "files" }],
@@ -256,34 +292,85 @@ describe("composeEntry：App 写穿时拼出的完整条目", () => {
       path: { panel: "plugins", sub: { selected: "p1", draft: { path: "/old", workspaceId: null } } },
       openedDraft: { path: "/new", workspaceId: "w" },
     });
-    deepStrictEqual(entry, { panel: "plugins", sub: { selected: "p1", draft: { path: "/new", workspaceId: "w" } } });
+    deepStrictEqual(entry, { panel: "plugins", subs: { plugins: { selected: "p1", draft: { path: "/new", workspaceId: "w" } } } });
     // 草稿被放下后：旧草稿不会从路径里复活
     deepStrictEqual(
       composeEntry({ ...base, rightPanel: "plugins", path: { panel: "plugins", sub: { selected: "p1", draft: { path: "/old", workspaceId: null } } } }),
-      { panel: "plugins", sub: { selected: "p1" } },
+      { panel: "plugins", subs: { plugins: { selected: "p1" } } },
     );
   });
 
-  it("路径属于别的面板（刚换面板、还没来得及报）：当作该面板的根", () => {
-    deepStrictEqual(composeEntry({ ...base, rightPanel: "review", path: { panel: "plugins", sub: { selected: "p1" } } }), { panel: "review" });
+  it("路径属于别的面板（刚换面板、还没来得及报）：这一拍不改任何 sub，原有的原样带着", () => {
+    const prev: PanelEntry = { panel: "plugins", subs: { plugins: { selected: "p1", board: true } } };
+    deepStrictEqual(composeEntry({ ...base, rightPanel: "review", path: { panel: "plugins", sub: { selected: "p1" } } }, prev), {
+      panel: "review",
+      subs: { plugins: { selected: "p1", board: true } },
+    });
+    // 换回插件面板、面板还没报：同样不把「没报」当成「回到列表」
+    deepStrictEqual(composeEntry({ ...base, rightPanel: "plugins", path: { panel: "docs" } }, { panel: "docs", subs: prev.subs }), {
+      panel: "plugins",
+      subs: { plugins: { selected: "p1", board: true } },
+    });
+  });
+
+  it("切换面板各记各的：插件 → 文档 → 自动化 → 回插件，插件与自动化的位置都在", () => {
+    let entry = composeEntry({ ...base, rightPanel: "plugins", path: { panel: "plugins", sub: { selected: "p1", board: true } } });
+    entry = composeEntry({ ...base, rightPanel: "docs", path: { panel: "docs" } }, entry);
+    deepStrictEqual(entry, { panel: "docs", subs: { plugins: { selected: "p1", board: true } } });
+    entry = composeEntry({ ...base, rightPanel: "automation", path: { panel: "automation", sub: { detail: "a1" } } }, entry);
+    deepStrictEqual(entry, { panel: "automation", subs: { plugins: { selected: "p1", board: true }, automation: { detail: "a1" } } });
+    // 回到插件面板：取回插件那一份，自动化那一份仍在
+    deepStrictEqual(pathOf(entry, "plugins"), { panel: "plugins", sub: { selected: "p1", board: true } });
+    entry = composeEntry({ ...base, rightPanel: "plugins", path: pathOf(entry, "plugins") }, entry);
+    deepStrictEqual(entry, { panel: "plugins", subs: { plugins: { selected: "p1", board: true }, automation: { detail: "a1" } } });
+    deepStrictEqual(pathOf(entry, "automation"), { panel: "automation", sub: { detail: "a1" } });
+  });
+
+  it("主动退回列表：面板报空 sub，这个面板的位置清掉，其他面板的不动", () => {
+    const prev: PanelEntry = { panel: "plugins", subs: { plugins: { selected: "p1", board: true }, automation: { detail: "a1" } } };
+    const entry = composeEntry({ ...base, rightPanel: "plugins", path: { panel: "plugins" } }, prev);
+    deepStrictEqual(entry, { panel: "plugins", subs: { automation: { detail: "a1" } } });
+    // 草稿关掉（openedDraft 空、面板报上来的也没有）：同理清掉，回列表
+    const withDraft: PanelEntry = { panel: "plugins", subs: { plugins: { draft: { path: "/d", workspaceId: null } } } };
+    deepStrictEqual(composeEntry({ ...base, rightPanel: "plugins", path: { panel: "plugins" } }, withDraft), { panel: "plugins" });
+    // 全清空：subs 字段也不留
+    deepStrictEqual(composeEntry({ ...base, rightPanel: "automation", path: { panel: "automation" } }, entry), { panel: "automation" });
   });
 
   it("子会话面板：第二层来自 App 的子会话层；这条任务页签随条目记（面板关着也记）", () => {
     deepStrictEqual(composeEntry({ ...base, rightPanel: "subsessions", path: { panel: null }, subSessionId: "c1" }), {
       panel: "subsessions",
-      sub: { sessionId: "c1" },
+      subs: { subsessions: { sessionId: "c1" } },
     });
     deepStrictEqual(composeEntry({ ...base, rightPanel: null, path: { panel: null }, taskTab: "context" }), { panel: null, taskTab: "context" });
+  });
+
+  it("关掉右栏：开着的面板记成关着，各面板的位置还在（重开接着看）", () => {
+    const prev: PanelEntry = { panel: "plugins", subs: { plugins: { selected: "p1", board: true } } };
+    deepStrictEqual(composeEntry({ ...base, rightPanel: null, path: { panel: null } }, prev), { panel: null, subs: prev.subs });
   });
 
   it("没有第二层的面板：只记种类，路径里的 sub 被丢", () => {
     deepStrictEqual(composeEntry({ ...base, rightPanel: "files", path: { panel: "files" } }), { panel: "files" });
   });
+});
 
-  it("同一条会话换面板再回来：A 面板的第二层不会跟到 B 面板上", () => {
-    const a = composeEntry({ ...base, rightPanel: "automation", path: { panel: "automation", sub: { detail: "x" } } });
-    deepStrictEqual(a, { panel: "automation", sub: { detail: "x" } });
-    deepStrictEqual(composeEntry({ ...base, rightPanel: "intent", path: { panel: "automation", sub: { detail: "x" } } }), { panel: "intent" });
+describe("pathOf / withPanelRoot / subOf", () => {
+  const entry: PanelEntry = { panel: "docs", subs: { plugins: { selected: "p1" }, intent: { round: 2 } }, taskTab: "context" };
+
+  it("pathOf：取某个面板自己那份 sub；没记过 = 根；无第二层面板只有 panel", () => {
+    deepStrictEqual(pathOf(entry, "plugins"), { panel: "plugins", sub: { selected: "p1" } });
+    deepStrictEqual(pathOf(entry, "review"), { panel: "review" });
+    deepStrictEqual(pathOf(entry), { panel: "docs" });
+    deepStrictEqual(pathOf({ panel: null }), { panel: null });
+    deepStrictEqual(subOf(entry, "intent"), { round: 2 });
+    strictEqual(subOf(undefined, "intent"), undefined);
+  });
+
+  it("withPanelRoot：换成目标面板并让它从根开（清它自己的 sub），其余 sub 与页签保留", () => {
+    deepStrictEqual(withPanelRoot(entry, "plugins"), { panel: "plugins", subs: { intent: { round: 2 } }, taskTab: "context" });
+    deepStrictEqual(withPanelRoot(entry, "slides"), { panel: "slides", subs: entry.subs, taskTab: "context" });
+    deepStrictEqual(withPanelRoot({ panel: "files" }, "docs"), { panel: "docs" });
   });
 });
 

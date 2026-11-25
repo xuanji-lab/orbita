@@ -1,6 +1,6 @@
 /**
  * 工作区选择条的纯逻辑：选项、默认选中、按工作区分桶。
- * 已归档 / 以后再做 / 能力面板三处共用——三处各写一份，「哪些算任务组、选中的工作区被删了怎么办」
+ * 已归档 / 能力面板共用——各写一份，「哪些算任务组、选中的工作区被删了怎么办」
  * 迟早走出分叉。单独成文件只为可测（`node --test` 只加载 .ts）。
  */
 import type { Workspace } from "@shared/workspace";
@@ -120,7 +120,7 @@ export interface WsOption {
 
 /**
  * 选择条的选项：全部、各工作区（侧栏顺序）、任务、全局。
- * `hideEmpty`：条数为 0 的工作区 / 任务不出（归档、以后再做里一排空胶囊比没有更吵），但选中的那档恒在——
+ * `hideEmpty`：条数为 0 的工作区 / 任务不出（归档里一排空胶囊比没有更吵），但选中的那档恒在——
  * 默认选中当前工作区而它恰好没有归档时，用户要看得到自己停在哪。`tasks` / `global` 为 null = 这一处没有这一档。
  */
 export function buildOptions(input: {
@@ -131,21 +131,16 @@ export function buildOptions(input: {
   global: number | null;
   selected: WsFilter;
   hideEmpty: boolean;
-  /**
-   * 「有没有东西可看」的判据，缺省就是上面的条数。条数与「列着多少」不是一回事时才传——
-   * 以后再做的条数只数没办完的，办结的也列着：一个工作区只剩办结的事项，条数是 0 但不能把它藏了。
-   */
-  present?: { perWorkspace: ReadonlyMap<string, number>; tasks: number };
 }): WsOption[] {
   const options: WsOption[] = [{ filter: FILTER_ALL, count: input.total }];
-  const keep = (filter: WsFilter, count: number, present: number): boolean =>
-    !input.hideEmpty || Math.max(count, present) > 0 || sameFilter(filter, input.selected);
+  const keep = (filter: WsFilter, count: number): boolean =>
+    !input.hideEmpty || count > 0 || sameFilter(filter, input.selected);
   for (const workspace of input.workspaces) {
     const filter: WsFilter = { kind: "workspace", id: workspace.id };
     const count = input.perWorkspace.get(workspace.id) ?? 0;
-    if (keep(filter, count, input.present?.perWorkspace.get(workspace.id) ?? 0)) options.push({ filter, count });
+    if (keep(filter, count)) options.push({ filter, count });
   }
-  if (input.tasks !== null && keep({ kind: "tasks" }, input.tasks, input.present?.tasks ?? 0)) {
+  if (input.tasks !== null && keep({ kind: "tasks" }, input.tasks)) {
     options.push({ filter: { kind: "tasks" }, count: input.tasks });
   }
   if (input.global !== null) options.push({ filter: { kind: "global" }, count: input.global });

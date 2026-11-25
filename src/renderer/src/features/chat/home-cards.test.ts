@@ -1,12 +1,10 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { Carryover, SessionMeta } from "@shared/session";
+import type { SessionMeta } from "@shared/session";
 import type { SessionRunState } from "../notify/completion-notice.ts";
 import {
-  HOME_CARD_QUERY_ROWS,
   homeCardLine,
-  selectHomeCards,
   selectHomeLog,
   visibleAsk,
   type HomeCardLineText,
@@ -31,104 +29,6 @@ const meta = (over: { id: string; updatedAt: number } & Partial<SessionMeta>): S
   ...over,
 });
 
-/** 行文本速取 */
-const texts = (rows: readonly { text: string }[]): string[] => rows.map((row) => row.text);
-
-describe("selectHomeCards", () => {
-  test("按最近活跃取三张，行位吃 recentQueries（最多 3 条）", () => {
-    const sessions = [
-      meta({ id: "a", updatedAt: 30, recentQueries: ["q1", "q2", "q3"] }),
-      meta({ id: "b", updatedAt: 20, recentQueries: ["q4"] }),
-      meta({ id: "c", updatedAt: 10 }),
-      meta({ id: "d", updatedAt: 5, recentQueries: ["q5"] }),
-    ];
-    const cards = selectHomeCards(sessions);
-    assert.deepEqual(
-      cards.map((card) => card.sessionId),
-      ["a", "b", "c"],
-    );
-    assert.deepEqual(texts(cards[0]!.rows), ["q1", "q2", "q3"]);
-    assert.deepEqual(texts(cards[1]!.rows), ["q4"]);
-    assert.deepEqual(cards[2]!.rows, []);
-    assert.equal(cards[0]!.rows.length, HOME_CARD_QUERY_ROWS);
-  });
-
-  test("归档与空标题会话排除", () => {
-    const sessions = [
-      meta({ id: "archived", updatedAt: 40, archived: true }),
-      meta({ id: "untitled", updatedAt: 35, title: "" }),
-      meta({ id: "normal", updatedAt: 30 }),
-      meta({ id: "filler", updatedAt: 20 }),
-    ];
-    assert.deepEqual(
-      selectHomeCards(sessions).map((card) => card.sessionId),
-      ["normal", "filler"],
-    );
-  });
-
-  test("子会话不进首页卡，即使它最活跃（子会话 PR4c 2.3）", () => {
-    const sessions = [
-      meta({ id: "child", updatedAt: 99, parentId: "root-a" }),
-      meta({ id: "root-a", updatedAt: 30 }),
-      meta({ id: "root-b", updatedAt: 20 }),
-    ];
-    assert.deepEqual(
-      selectHomeCards(sessions).map((card) => card.sessionId),
-      ["root-a", "root-b"],
-    );
-  });
-
-  test("遗留事项不再让位：旧会话身上挂多少遗留，都不抬它上卡（2026-10-30 推翻 2026-09-22 的优先占卡）", () => {
-    const sessions = [
-      meta({ id: "a", updatedAt: 50 }),
-      meta({ id: "b", updatedAt: 40 }),
-      meta({ id: "c", updatedAt: 30 }),
-      meta({ id: "d", updatedAt: 20, recentQueries: ["问 d"] }),
-    ];
-    // selectHomeCards 已不接收遗留清单——类型上就不可能让位；这里钉住最旧的 d 没有被抬上来
-    assert.deepEqual(
-      selectHomeCards(sessions).map((card) => card.sessionId),
-      ["a", "b", "c"],
-    );
-  });
-});
-
-describe("selectHomeCards —— 要你注意的先占卡（原型：等你 > 出错 > 在跑 > 最近）", () => {
-  const sessions = [
-    meta({ id: "recent", updatedAt: 50 }),
-    meta({ id: "idle", updatedAt: 40 }),
-    meta({ id: "run", updatedAt: 30 }),
-    meta({ id: "fail", updatedAt: 20 }),
-    meta({ id: "wait", updatedAt: 10 }),
-  ];
-  const states: Record<string, SessionRunState> = { run: "running", fail: "failed", wait: "waiting" };
-  const stateOf = (m: SessionMeta): SessionRunState => states[m.id] ?? null;
-
-  test("等你 > 出错 > 在跑，压过最近", () => {
-    assert.deepEqual(
-      selectHomeCards(sessions, stateOf).map((card) => card.sessionId),
-      ["wait", "fail", "run"],
-    );
-  });
-
-  test("要注意的不满三张：其余按最近活跃补齐", () => {
-    assert.deepEqual(
-      selectHomeCards(sessions, (m) => (m.id === "run" ? "running" : null)).map((card) => card.sessionId),
-      ["run", "recent", "idle"],
-    );
-  });
-
-  test("跑完没看不算要注意（它在「最近」里排）；不给 stateOf 就是旧口径", () => {
-    assert.deepEqual(
-      selectHomeCards(sessions, (m) => (m.id === "wait" ? "done" : null)).map((card) => card.sessionId),
-      ["recent", "idle", "run"],
-    );
-    assert.deepEqual(
-      selectHomeCards(sessions).map((card) => card.sessionId),
-      ["recent", "idle", "run"],
-    );
-  });
-});
 
 describe("homeCardLine —— 卡上「此刻在干什么」那一句", () => {
   const text: HomeCardLineText = {
@@ -231,7 +131,7 @@ describe("selectHomeLog", () => {
     (m: SessionMeta): SessionRunState =>
       map[m.id] ?? null;
 
-  test("按运行态分三组：等你（含出错）> 进行中 > 最近（含跑完没看），组内保持列表序", () => {
+  test("按运行态分两组：等你（含出错）> 进行中，组内保持列表序；闲置与跑完没看的不进首页", () => {
     const sessions = [
       meta({ id: "idle1", updatedAt: 90 }),
       meta({ id: "run", updatedAt: 80 }),
@@ -246,21 +146,17 @@ describe("selectHomeLog", () => {
       [
         ["waiting", ["wait", "fail"]],
         ["running", ["run"]],
-        ["recent", ["idle1", "done", "idle2"]],
       ],
     );
   });
 
-  test("没有行的组不返回；全是闲置会话只剩「最近」", () => {
+  test("没有行的组不返回；全是闲置会话就一组都没有（首页输入框下面留白）", () => {
     const groups = selectHomeLog([meta({ id: "a", updatedAt: 2 }), meta({ id: "b", updatedAt: 1 })], stateById({}));
-    assert.deepEqual(
-      groups.map((g) => g.group),
-      ["recent"],
-    );
+    assert.deepEqual(groups, []);
     assert.deepEqual(selectHomeLog([], stateById({})), []);
   });
 
-  test("子会话 / 归档 / 无标题不进记录；每组各有上限（等你 4、进行中 4、最近 5）", () => {
+  test("子会话 / 归档 / 无标题不进记录；每组各有上限（等你 4、进行中 4）", () => {
     const many = (prefix: string, n: number, base: number): SessionMeta[] =>
       Array.from({ length: n }, (_, i) => meta({ id: `${prefix}${i}`, updatedAt: base - i }));
     const sessions = [
@@ -275,7 +171,7 @@ describe("selectHomeLog", () => {
       m.id.startsWith("w") ? "waiting" : m.id.startsWith("r") ? "running" : null;
     const groups = selectHomeLog(sessions, state);
     const sizes = Object.fromEntries(groups.map((g) => [g.group, g.rows.length]));
-    assert.deepEqual(sizes, { waiting: 4, running: 4, recent: 5 });
+    assert.deepEqual(sizes, { waiting: 4, running: 4 });
     const ids = groups.flatMap((g) => g.rows.map((r) => r.sessionId));
     for (const bad of ["child", "arch", "blank"]) assert.ok(!ids.includes(bad), `${bad} 不该出现`);
   });
@@ -301,6 +197,8 @@ describe("visibleAsk / 首页记录行的「此刻」一格不露系统提示", 
     );
     assert.equal(visibleAsk('<referenced_task id="x" title="y" />继续做这个'), "继续做这个");
     assert.equal(visibleAsk("普通的一句话"), "普通的一句话");
+    // 句中展开的任务引用被截断在标签中间（最近提问只存前若干字）：残片不外露
+    assert.equal(visibleAsk('请看， <referenced_task id="1b4f3bdb-473f-4894-a2b2-91b7'), "请看，");
   });
 
   test("HTML 注释剥掉；没闭合的注释吞到结尾（它之后全是系统文字）", () => {

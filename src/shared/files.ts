@@ -21,7 +21,14 @@
 
 import { pathTail } from "./path.ts";
 
-export type FileRootKind = "session" | "workspace" | "attached" | "attachments" | "cited";
+/**
+ * 根的种类。attachments / cited / subsession 三种**不进树**，只进白名单：
+ * - attachments：拖入的外部文件发送时复制进会话的副本；
+ * - cited：本会话 cite_pdf 核验过的 PDF（根就是文件本身）；
+ * - subsession：本会话派出的子会话（含子会话再派的）各自的工作台——子会话交回的产物在那里，
+ *   结尾那摞的「预览」要打得开（2026-11-23 用户：「我想看子会话交回的文件，但是不让我预览」）。
+ */
+export type FileRootKind = "session" | "workspace" | "attached" | "attachments" | "cited" | "subsession";
 
 export interface FileRoot {
   kind: FileRootKind;
@@ -101,7 +108,7 @@ export function sortFileEntries(entries: readonly FileEntry[]): FileEntry[] {
  * 空标题（会话还没命名）退回 fallback，不留空行。
  */
 export function fileRootLabel(kind: FileRootKind, path: string, title: string, fallback: string): string {
-  if (kind === "attached" || kind === "attachments" || kind === "cited") {
+  if (kind === "attached" || kind === "attachments" || kind === "cited" || kind === "subsession") {
     const last = pathTail(path);
     return last === "" ? path : last;
   }
@@ -237,6 +244,23 @@ export function isWebArtifactFile(path: string): boolean {
 }
 
 /**
+ * 轮尾「音视频产物」判定：agent 的轮内 mtime 扫描（web-artifacts.ts）与卡片的音频 / 视频行用同一张表。
+ * 与文件面板播放器能播的格式一致（点开就能播），不收 Chromium 播不了的容器（mkv / avi / wma）。
+ */
+const AUDIO_ARTIFACT_EXTENSIONS = /\.(?:mp3|wav|m4a|aac|flac|ogg|opus)$/i;
+const VIDEO_ARTIFACT_EXTENSIONS = /\.(?:mp4|mov|webm|m4v)$/i;
+
+export function mediaArtifactKind(path: string): "audio" | "video" | null {
+  if (AUDIO_ARTIFACT_EXTENSIONS.test(path)) return "audio";
+  if (VIDEO_ARTIFACT_EXTENSIONS.test(path)) return "video";
+  return null;
+}
+
+export function isMediaArtifactFile(path: string): boolean {
+  return mediaArtifactKind(path) !== null;
+}
+
+/**
  * 盘上一条路径的类型（`fs:stat-kind` 的回执字段）。与 `PromptFileRef` / `SentFileRef`
  * （prompt-attachments.ts）的 `kind` 同一套词汇，不与面板的 `FileEntryKind`
  * （还有 symlink / other）混用：这边只回答输入框附件分拣要问的那一问——
@@ -256,7 +280,7 @@ export interface FsEntryFact {
 }
 
 /**
- * PDF 预览（`fs:read-pdf` 的回执，实验功能「PDF 引用」）。字节原样过 IPC
+ * PDF 预览（`fs:read-pdf` 的回执，PDF 引用）。字节原样过 IPC
  * （Uint8Array 走结构化克隆，不转 base64），renderer 交给 pdf.js 渲染。白名单与
  * fs:read 同一道。上限与外部附件的复制上限同值：再大的 PDF 本来也不会被复制进会话。
  */
@@ -273,6 +297,64 @@ export interface WebThumb {
 
 export function isPdfFile(path: string): boolean {
   return /\.pdf$/i.test(path);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// 音视频播放（`fs:media-url` 与 `orbita-media://` 协议）
+//
+// 大文件不能 base64 过 IPC，也要支持 Range（视频拖进度）。所以不读字节：renderer 问主进程要一个
+// 「播放地址」，主进程过完与 fs:read 同一道白名单后发一个不透明 token、映射到 realpath 之后的真实路径，
+// 回 `orbita-media://stream/<token>`；协议只认 token，URL 里没有路径，renderer 没有任何办法借它读别的文件。
+// ───────────────────────────────────────────────────────────────────────────────
+
+/** 自定义协议名与固定主机段（地址形如 `orbita-media://stream/<token>`） */
+export const MEDIA_SCHEME = "orbita-media";
+export const MEDIA_HOST = "stream";
+
+export type MediaKind = "audio" | "video";
+
+/** 面板里能播的扩展名 → MIME（Chromium 的 <audio> / <video> 播得了的；大小写不敏感，调用方先转小写） */
+const MEDIA_TYPES: Readonly<Record<string, { kind: MediaKind; mime: string }>> = {
+  mp3: { kind: "audio", mime: "audio/mpeg" },
+  wav: { kind: "audio", mime: "audio/wav" },
+  m4a: { kind: "audio", mime: "audio/mp4" },
+  aac: { kind: "audio", mime: "audio/aac" },
+  flac: { kind: "audio", mime: "audio/flac" },
+  ogg: { kind: "audio", mime: "audio/ogg" },
+  opus: { kind: "audio", mime: "audio/ogg" },
+  mp4: { kind: "video", mime: "video/mp4" },
+  m4v: { kind: "video", mime: "video/mp4" },
+  mov: { kind: "video", mime: "video/quicktime" },
+  webm: { kind: "video", mime: "video/webm" },
+};
+
+function mediaTypeOf(path: string): { kind: MediaKind; mime: string } | null {
+  const base = path.split(/[\\/]/).pop() ?? "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return null;
+  return MEDIA_TYPES[base.slice(dot + 1).toLowerCase()] ?? null;
+}
+
+/** 这个路径是不是面板能播的音 / 视频；不是回 null */
+export function mediaKindOf(path: string): MediaKind | null {
+  return mediaTypeOf(path)?.kind ?? null;
+}
+
+/** 协议应答用的 Content-Type；不是媒体扩展名回 null */
+export function mediaMimeOf(path: string): string | null {
+  return mediaTypeOf(path)?.mime ?? null;
+}
+
+/**
+ * `fs:media-url` 的回执。`url` 只在本次应用运行内有效（token 在主进程内存里、有条数上限），
+ * 面板每次打开文件现要一个，不落盘不缓存。
+ */
+export interface FileMediaUrl {
+  kind: MediaKind;
+  url: string;
+  mime: string;
+  size: number;
+  modifiedAt: number;
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
