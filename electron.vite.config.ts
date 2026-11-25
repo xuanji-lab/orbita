@@ -101,9 +101,10 @@ export default defineConfig({
       // 会把整套图标塞进主包（shell/FileTypeIcon.tsx）
       assetsInlineLimit: (file: string) => (file.includes("material-icon-theme") ? false : undefined),
       rollupOptions: {
-        // 两个页面入口：主窗口，与受管浏览器沙盒窗口的工具条（main/browser/sandbox.ts）
+        // 三个页面入口：主窗口、生产 renderer 的 fixture 预览、受管浏览器沙盒工具条。
         input: {
           index: resolve(__dirname, "src/renderer/index.html"),
+          preview: resolve(__dirname, "src/renderer/preview.html"),
           "browser-toolbar": resolve(__dirname, "src/renderer/browser-toolbar.html"),
         },
       },

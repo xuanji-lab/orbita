@@ -78,6 +78,13 @@ const ALLOWED_LATIN = new Set([
   "Co-Authored-By",
   // 迁移来源（其他应用的名字）
   "Proma",
+  // 手机端设计稿（2026-11-25）：组网工具、主机与设备的产品名，原样照写
+  "Tailscale",
+  "Linux",
+  "MacBook",
+  "iPhone",
+  "iPad",
+  "mini",
   // 价格 · 能力图的分数出处（榜单名、数据集名、授权名、数据集版本号——署名义务，原样照写）
   "Arena",
   "arena.ai",

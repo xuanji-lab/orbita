@@ -1,0 +1,773 @@
+/*
+ * 手机端设计稿（preview/mobile/，2026-11-25）。颜色、字号、间距、圆角全部取设计系统 token；
+ * 行、按钮、输入框、空态、气泡、过程行复用桌面配方类（.option-row、.btn-accent、.text-field、
+ * .panel-empty、.user-bubble、.assistant-prose、.proc-*、.run-agg），这里只写手机特有的版式。
+ *
+ * 手机特有的值只有三类，作为局部变量挂在 .m-device 上（不进 tokens/：只服务这一处）：
+ * - --m-touch：触控目标的最小边长 44（手指，不是鼠标；桌面的 24 / 28 / 32 台阶在这里都太小）；
+ * - --m-safe-top / --m-safe-bottom：刘海与手势条的安全区（实现时由 React Native 的 SafeAreaView 给真值）；
+ * - --m-radius：外框圆角，属于预览道具，不是界面。
+ */
+
+.m-stage {
+  box-sizing: border-box;
+  min-height: 100vh;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-8);
+  padding: var(--space-8);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+}
+
+.m-figure {
+  margin: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.m-caption {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 外框 ------------------------------------------------------------- */
+
+.m-device {
+  --m-touch: 44px;
+  --m-safe-top: 32px;
+  --m-safe-bottom: 24px;
+  --m-radius: 32px;
+  position: relative;
+  flex: none;
+  width: 412px;
+  height: 915px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--m-radius);
+  background: var(--color-bg-app);
+}
+
+.m-device[data-device="android-s"] {
+  width: 360px;
+  height: 780px;
+}
+
+.m-device[data-device="ipad"] {
+  --m-safe-top: 24px;
+  --m-safe-bottom: 20px;
+  --m-radius: 24px;
+  width: 744px;
+  height: 1133px;
+}
+
+.m-device[data-tall] {
+  height: auto;
+}
+
+.m-statusbar {
+  flex: none;
+  height: var(--m-safe-top);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-6);
+}
+
+.m-clock {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+/* 手势条压在屏幕最底下，不另占一条底色：各屏自己把底部留出 --m-safe-bottom */
+.m-gesture {
+  position: absolute;
+  inset: auto 0 0;
+  height: var(--m-safe-bottom);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.m-gesture > span {
+  width: 120px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+}
+
+.m-viewport {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- 屏幕骨架：壳上的顶栏 + 可滚动的内容 ------------------------------ */
+
+.m-screen {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-app);
+}
+
+.m-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.m-device[data-tall] .m-scroll {
+  overflow: visible;
+}
+
+.m-list .m-scroll {
+  padding-bottom: calc(var(--m-safe-bottom) + var(--space-4));
+}
+
+.m-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: calc(var(--m-touch) + var(--space-3));
+  padding: 0 var(--space-4);
+}
+
+.m-bar-glyph {
+  display: inline-flex;
+  width: var(--space-5);
+  justify-content: center;
+  color: var(--color-text-secondary);
+}
+
+.m-bar-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+
+.m-bar-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-ui);
+}
+
+.m-bar-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+/* ---- 清单：三组 + 工作区 --------------------------------------------- */
+
+.m-group {
+  display: grid;
+}
+
+.m-group-head {
+  margin: 0;
+  padding: var(--space-4) var(--space-4) var(--space-1);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+/*
+ * 一种行、三种高：两行的记录行 56、工作区头 48、单行会话 44。列是同一套——
+ * 行首 20 宽的槽（状态饼 / 文件夹 / 展开键）、名字列、行尾（.row-trailing 推到右内边距）——
+ * 所以组名、图标、名字、行尾在整页上只有三条竖线。
+ */
+.m-row,
+.m-ws-head,
+.m-trow,
+.m-more {
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: var(--space-5) minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--space-2);
+  min-height: var(--m-touch);
+  padding: 0 var(--space-4);
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.m-row {
+  min-height: calc(var(--m-touch) + var(--space-3));
+  padding-block: var(--space-2);
+}
+
+.m-ws-head {
+  min-height: calc(var(--m-touch) + var(--space-1));
+}
+
+/* 槽里的图标、状态饼都靠左：组名、文件夹图标、饼在同一条左缘上（同桌面侧栏：组名与文件夹图标一条线） */
+.m-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  color: var(--color-text-tertiary);
+}
+
+/* 「另有 N 件在上面」：说明，不是能点的行 */
+.m-above {
+  cursor: default;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.m-above .m-trow-title {
+  font-size: var(--font-size-sm);
+}
+
+/*
+ * 断线：主机条与对话顶栏写的是断线前的旧状态，状态饼一律退成三级灰（颜色是「此刻」的信号，
+ * 断线时它不再是此刻）；图标换成 wifi-off，字说「正在重连 · 最后同步」。
+ */
+[data-stale] .status-pie[data-fill] {
+  color: var(--color-text-tertiary);
+}
+
+.m-bar[data-stale] .m-bar-glyph {
+  color: var(--color-text-tertiary);
+}
+
+.m-row-main {
+  display: grid;
+  min-width: 0;
+}
+
+.m-row-title,
+.m-row-line,
+.m-trow-title,
+.m-ws-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.m-row-title {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-height-ui);
+}
+
+.m-row-line {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.m-row-where {
+  color: var(--color-text-tertiary);
+}
+
+.m-trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+.m-more {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.m-ws-name {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+
+.m-trow-title {
+  font-size: var(--font-size-base);
+}
+
+.m-older .m-trow-title {
+  color: var(--color-text-secondary);
+}
+
+.m-empty {
+  padding: var(--space-4);
+}
+
+/* ---- iPad：左清单、右对话 -------------------------------------------- */
+
+.m-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.m-split > .m-list .m-bar {
+  padding-right: var(--space-2);
+}
+
+.m-pane-empty .m-bar {
+  display: none;
+}
+
+.m-pane-empty .m-well {
+  margin-top: calc(var(--m-touch) + var(--space-3));
+  padding-top: var(--space-4);
+}
+
+/* ---- 对话：壳上的顶栏，下面是顶部圆角的纸面井，井底是输入台 ------------ */
+
+.m-chat-bar {
+  padding-left: var(--space-1);
+}
+
+.m-split .m-chat-bar {
+  padding-left: var(--space-4);
+}
+
+.m-back {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+/* 停止：只有在跑时出现在顶栏右侧；红只给图标（同桌面停止的 danger 语义），不铺底 */
+/* 两个类压过 .quiet-control 的次级墨（它按 hover 才升主墨，这里的红要常显） */
+.m-chat-bar .m-stop {
+  flex: none;
+  color: var(--color-danger);
+}
+
+.m-chat-bar .m-stop:disabled {
+  color: var(--color-text-tertiary);
+}
+
+.m-well {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-panel);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+
+.m-split .m-well {
+  border-radius: var(--radius-xl) 0 0 0;
+}
+
+.m-notice {
+  flex: none;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.m-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-4) var(--space-6);
+}
+
+.m-tail {
+  padding: 0;
+}
+
+.m-user {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-1);
+}
+
+.m-time {
+  font-family: var(--font-family-business);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.m-proc {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-height-sm);
+  padding: 0 var(--content-hem);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/*
+ * 窄屏里的表格：整张表横向滚动，不让自动排版把短列挤成一字一行（「步骤」被拆成「步 / 骤」）。
+ * 单元格至少 5 个字宽，表头不折行；代码块同样横向滚动。以后 WebView 里跑的正文带上这几条。
+ */
+.m-transcript .chat-md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.m-transcript .chat-md th {
+  white-space: nowrap;
+}
+
+.m-transcript .chat-md td {
+  min-width: 5em;
+  word-break: keep-all;
+}
+
+.m-transcript .chat-md pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.m-ledge {
+  flex: none;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) calc(var(--m-safe-bottom) + var(--space-2));
+}
+
+.m-hint {
+  display: grid;
+  grid-template-columns: var(--space-4) minmax(0, 1fr);
+  column-gap: var(--space-2);
+  margin: 0;
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.m-hint > .orbita-icon {
+  margin-top: var(--space-0-5);
+  color: var(--color-text-tertiary);
+}
+
+.m-queue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.m-queue > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.m-queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.m-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+}
+
+.m-input {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--m-touch);
+  box-sizing: border-box;
+  padding: var(--space-2-5) 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+}
+
+.m-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.m-send {
+  flex: none;
+  width: var(--m-touch);
+  height: var(--m-touch);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+}
+
+/* ---- 配对 ------------------------------------------------------------- */
+
+.m-pair {
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.m-pair-col {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  padding: var(--space-8) var(--space-6) calc(var(--m-safe-bottom) + var(--space-6));
+}
+
+.m-pair[data-wide] .m-pair-col {
+  width: 420px;
+  margin: 0 auto;
+  padding-top: calc(var(--space-8) * 4);
+}
+
+.m-pair-title {
+  margin: var(--space-8) 0 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-height-tight);
+}
+
+.m-pair-lead {
+  margin: calc(var(--space-3) * -1) 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+
+.m-field {
+  display: grid;
+  gap: var(--space-1-5);
+}
+
+.m-field-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.m-input-line {
+  height: var(--m-touch);
+}
+
+.m-input-line[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.m-code {
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2em;
+}
+
+.m-field-hint {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+.m-primary {
+  height: var(--m-touch);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+
+.m-pair-note .panel-empty {
+  padding: 0;
+}
+
+/* ---- 同屏对照的桌面框 ------------------------------------------------- */
+
+.m-desk {
+  width: 896px;
+  height: 560px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xl);
+}
+
+.m-desk iframe {
+  width: 1280px;
+  height: 800px;
+  border: 0;
+  transform: scale(0.7);
+  transform-origin: 0 0;
+}
+
+/* ---- 总览图 ----------------------------------------------------------- */
+
+.m-ov {
+  width: 1200px;
+  display: grid;
+  gap: var(--space-8);
+}
+
+.m-ov-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-medium);
+  line-height: var(--line-height-tight);
+}
+
+.m-ov-map {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 340px;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+.m-ov-node {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+}
+
+.m-ov-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+}
+
+.m-ov-sub,
+.m-ov-keeps {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.m-ov-sub > .orbita-icon,
+.m-ov-keeps > .orbita-icon,
+.m-ov-head > .orbita-icon {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.m-ov-later {
+  color: var(--color-text-tertiary);
+}
+
+.m-ov-keeps {
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.m-ov-quiet {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 中间一列：上面写走什么网，中间一根线穿过「四个口」把两张卡连起来，下面写怎么配对 */
+.m-ov-link {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  row-gap: var(--space-3);
+  margin-inline: calc(var(--space-6) * -1);
+}
+
+.m-ov-net,
+.m-ov-pairing {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
+
+.m-ov-net {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.m-ov-pairing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.m-ov-wire {
+  height: 1px;
+  background: var(--color-border-strong);
+}
+
+.m-ov-ports {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.m-ov-ports-head {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.m-ov-port {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-base);
+}
+
+.m-ov-port > .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+
+.m-ov-notnow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+}
+
+.m-ov-notnow .m-ov-ports-head,
+.m-ov-off {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
