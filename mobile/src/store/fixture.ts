@@ -4,7 +4,7 @@
  * 打开方式：开发版里 `adb shell am start -a android.intent.action.VIEW -d "orbita-mobile://fixture?scene=full&screen=list"`。
  * 参数：scene = empty | typical | full；screen = pair | list | chat；chat = 会话 id；
  * pair = expired | offline | wrongCode | hijacked；offline = 1（断线态）；open = 工作区 id（先展开它）；
- * draft = 1（对话页输入框里放一句草稿）。
+ * draft = 1（对话页输入框里放一句草稿）；slow = 1（清单与尾部迟迟不回，截加载态）。
  *
  * 量级照用户的真实用量（任务书与设计稿同一口径）：12 个工作区、近 2000 条根会话——电脑一次只给最近
  * 30 天、最多 200 条（`sessions.list` 的窗口，见 src/main/mobile/summaries.ts），所以满载清单是 200 条、
@@ -24,6 +24,8 @@ export interface FixtureParams {
   offline: boolean;
   open: string | null;
   draft: boolean;
+  /** 清单与尾部迟迟不回（截加载态） */
+  slow: boolean;
 }
 
 /** `orbita-mobile://fixture?…` → 参数；不是样例链接回 null */
@@ -47,6 +49,7 @@ export function parseFixtureUrl(url: string | null): FixtureParams | null {
     offline: query.get("offline") === "1",
     open: query.get("open") ?? null,
     draft: query.get("draft") === "1",
+    slow: query.get("slow") === "1",
   };
 }
 
@@ -205,6 +208,8 @@ class FixtureTransport implements Transport {
   private readonly sessions: SessionSummary[];
   private readonly tails: Map<string, TailEntry[]>;
   private readonly offline: boolean;
+  /** 迟迟不回的那个方法：清单屏卡在清单上、对话屏卡在尾部上 */
+  private readonly slowMethod: MobileMethod | null;
   private readonly now: number;
 
   constructor(callbacks: TransportCallbacks, params: FixtureParams, now: number) {
@@ -213,6 +218,7 @@ class FixtureTransport implements Transport {
     this.sessions = params.scene === "empty" ? [] : params.scene === "full" ? full(now) : typical(now);
     this.tails = tails(now);
     this.offline = params.offline;
+    this.slowMethod = !params.slow ? null : params.screen === "chat" ? "tail.load" : "sessions.list";
   }
 
   start(): void {
@@ -229,6 +235,7 @@ class FixtureTransport implements Transport {
   retryNow(): void {}
 
   async request<M extends MobileMethod>(method: M, params: MobileMethodParams[M]): Promise<unknown> {
+    if (method === this.slowMethod) await new Promise((resolve) => setTimeout(resolve, 120_000));
     switch (method) {
       case "sessions.list":
         return { sessions: this.sessions, truncated: this.sessions.length >= 200 };

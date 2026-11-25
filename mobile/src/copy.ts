@@ -2,8 +2,8 @@
  * 手机端的界面文字（第一刀只有中文）。
  *
  * 出处：设计稿分支 `proto/mobile-look` 的 `messages-zh.ts` 里 `mobile` 一节（用户认可的那一版），
- * 改了两处：配对码的有效期从 5 分钟改成 3 分钟（契约 `MOBILE_CRYPTO.offerTtlMs`）；电脑设置页里
- * 重新生成配对码的那颗键叫「生成配对码」（桌面侧 PR #568 的实际叫法），不叫设计稿里的「换一组」。
+ * 改了两处：配对码的有效期从 5 分钟改成 3 分钟（契约 `MOBILE_CRYPTO.offerTtlMs`）；过期后电脑设置页
+ * 那颗键叫「再生成一组」（桌面侧 PR #568 的实际叫法：生成配对码 / 换一组 / 再生成一组），过期提示照它写。
  * 另补了设计稿没画到的几句（配对码不对、被劫持、被电脑忘掉、回复没发出去）。
  *
  * 规矩照桌面的中文表：全角标点；中文与数字 / 拉丁字母之间留一个空格。
@@ -25,7 +25,7 @@ export const copy = {
     connecting: "正在配对…",
     deriving: (percent: number) => `正在核对配对码… ${percent}%`,
     expired: "配对码已过期。",
-    expiredHint: "在电脑上点「生成配对码」，再输一次。",
+    expiredHint: "在电脑的 设置 › 手机 里再生成一组，再输一次。",
     wrongCode: "配对码不对。",
     wrongCodeHint: "对一下电脑上 设置 › 手机 里的 6 位数字。",
     offline: (host: string) => `连不上 ${host}。`,

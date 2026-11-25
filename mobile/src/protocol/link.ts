@@ -93,8 +93,8 @@ export class HostLink {
   private attempt = 0;
   private silentRejects = 0;
   private shutdownSeen = false;
-  /** 最后一次握手成功的时刻（断线时界面写「最后同步」） */
-  private lastOpenAt: number | null = null;
+  /** 最后一次从电脑收到东西（握手应答或任何一帧）的时刻：断线时界面写「最后同步」 */
+  private lastSeenAt: number | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private statusValue: LinkStatus = { kind: "stopped" };
@@ -172,7 +172,7 @@ export class HostLink {
   private async connect(): Promise<void> {
     const generation = (this.generation += 1);
     this.attempt += 1;
-    this.setStatus({ kind: "connecting", attempt: this.attempt, since: this.lastOpenAt });
+    this.setStatus({ kind: "connecting", attempt: this.attempt, since: this.lastSeenAt });
     const { credentials } = this.deps;
     const url = hostUrl(credentials.address, credentials.port, MOBILE_PATH);
     let socket: FrameSocket;
@@ -218,7 +218,7 @@ export class HostLink {
       this.shutdownSeen = false;
       const live: Live = { socket, channel, nextId: 2, pending: new Map(), pingTimer: null };
       this.live = live;
-      this.lastOpenAt = this.deps.now();
+      this.lastSeenAt = this.deps.now();
       socket.onClose(() => {
         if (this.live !== live) return;
         this.drop(new Error("closed"));
@@ -226,7 +226,7 @@ export class HostLink {
       });
       socket.listen((text) => this.onFrame(live, text));
       live.pingTimer = setInterval(() => this.ping(live), this.timing.pingEveryMs);
-      this.setStatus({ kind: "open", hostName: outcome.result.host.name, since: this.lastOpenAt });
+      this.setStatus({ kind: "open", hostName: outcome.result.host.name, since: this.lastSeenAt });
       this.deps.onOpen();
     } catch (cause) {
       socket.close();
@@ -251,6 +251,7 @@ export class HostLink {
       return;
     }
     const plain = live.channel.openInbound(frame);
+    if (plain !== null) this.lastSeenAt = this.deps.now();
     if (plain === null) {
       // 解不开、跳号、重号：按协议断开重连
       this.breakLink(live, "bad sequence or ciphertext");
@@ -322,7 +323,7 @@ export class HostLink {
       ? this.timing.shutdownRetryMs
       : (backoff[Math.min(this.attempt - 1, backoff.length - 1)] ?? backoff[backoff.length - 1] ?? 15_000);
     const retryAt = this.deps.now() + delay;
-    this.setStatus({ kind: "waiting", attempt: this.attempt, retryAt, since: this.lastOpenAt, shutdown: this.shutdownSeen });
+    this.setStatus({ kind: "waiting", attempt: this.attempt, retryAt, since: this.lastSeenAt, shutdown: this.shutdownSeen });
     if (this.retryTimer !== null) clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
