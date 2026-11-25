@@ -879,6 +879,10 @@ a.exp-pr:hover {
     font-size: var(--font-size-base);
     font-weight: var(--weight-semibold);
     text-align: right;
+    /* 节名折行只在空格处折（「ElevenLabs 语音合成」折成两行整词，不剩一个「成」字在第二行）；
+       一整段放不下时才任意处折，不溢出 */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
   .set-page > .set-group > :not(.section-label) {
     grid-column: 2;
@@ -908,4 +912,24 @@ a.exp-pr:hover {
       grid-column: 1;
     }
   }
+}
+
+/* 外观 › 星系倾角：滑块 + 读数；下面一小块同一个星系组件的预览，拖滑块时跟着变 */
+.set-galaxy-tilt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 220px;
+}
+.set-galaxy-tilt-value {
+  flex: 0 0 auto;
+  min-width: 3ch;
+  text-align: right;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.set-galaxy-preview {
+  grid-column: 1 / -1;
+  height: 240px;
 }

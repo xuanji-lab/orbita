@@ -1,6 +1,10 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
+import { GALAXY_TILT, galaxyBatterySaverOf, galaxyZoomOf, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
+  APP_MODE_DEFAULT,
+  ORCHESTRA_VIEW_DEFAULT,
+  ORCHESTRA_ENTRY_DEFAULT,
+  sessionCompaction,
   BOARD_DAYS_DEFAULT,
   effectiveLanguage,
   clampRightPanelWidth,
@@ -603,6 +607,52 @@ describe("parseSettings 的 boardDays（周看板一屏几天）", () => {
   });
 });
 
+describe("parseSettings 的 appMode（侧栏单智能体 / 编排）", () => {
+  it("只认 agent / orchestrate；缺席与坏值不落键（读侧缺席 = 单智能体）", () => {
+    for (const mode of ["agent", "orchestrate"]) deepStrictEqual(parseSettings({ appMode: mode }).appMode, mode);
+    for (const bad of ["Orchestrate", "", null, 1, ["agent"], "multi"]) deepStrictEqual("appMode" in parseSettings({ appMode: bad }), false);
+    deepStrictEqual("appMode" in parseSettings({}), false);
+    deepStrictEqual(APP_MODE_DEFAULT, "agent");
+  });
+});
+
+describe("parseSettings 的编排面板视图", () => {
+  it("orchestraView 只认 tree / galaxy / graph；缺席与坏值不落键（读侧缺席 = 树状图）", () => {
+    for (const view of ["tree", "galaxy", "graph"]) deepStrictEqual(parseSettings({ orchestraView: view }).orchestraView, view);
+    for (const bad of ["Tree", "", null, 2, ["graph"], "dag"]) deepStrictEqual("orchestraView" in parseSettings({ orchestraView: bad }), false);
+    deepStrictEqual(ORCHESTRA_VIEW_DEFAULT, "tree");
+  });
+});
+
+describe("parseSettings 的常驻对话指针与入口选择（按工作区记）", () => {
+  it("orchestraMain 只留「非空键 → 非空字符串」；一项不剩就不落键", () => {
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", ws2: "s2" } }).orchestraMain, { ws1: "s1", ws2: "s2" });
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", ws2: "", ws3: 3, "": "x" } }).orchestraMain, { ws1: "s1" });
+    for (const bad of [null, "s1", ["s1"], {}, { ws: null }]) deepStrictEqual("orchestraMain" in parseSettings({ orchestraMain: bad }), false);
+  });
+
+  it("orchestraEntry 只认 new / main；默认 new（入口页原来的行为：每句开一条新会话）", () => {
+    deepStrictEqual(parseSettings({ orchestraEntry: { ws1: "main", ws2: "new", ws3: "both" } }).orchestraEntry, { ws1: "main", ws2: "new" });
+    deepStrictEqual("orchestraEntry" in parseSettings({ orchestraEntry: { ws1: "Main" } }), false);
+    deepStrictEqual(ORCHESTRA_ENTRY_DEFAULT, "new");
+  });
+});
+
+describe("sessionCompaction（会话级自动压缩开关 × 全局偏好）", () => {
+  it("会话关了自动压缩：只关 enabled，阈值照全局；没关 / 缺席：原样是全局", () => {
+    const global = { reservePercent: 30, enabled: true };
+    deepStrictEqual(sessionCompaction(global, false), { reservePercent: 30, enabled: false });
+    deepStrictEqual(sessionCompaction(global, undefined), global);
+    deepStrictEqual(sessionCompaction(global, true), global);
+  });
+
+  it("全局缺席退 COMPACTION_DEFAULT；全局关了，会话打开也不会越过全局", () => {
+    deepStrictEqual(sessionCompaction(undefined, undefined), COMPACTION_DEFAULT);
+    deepStrictEqual(sessionCompaction(undefined, false), { ...COMPACTION_DEFAULT, enabled: false });
+    deepStrictEqual(sessionCompaction({ reservePercent: 20, enabled: false }, true).enabled, false);
+  });
+});
+
 describe("parseSettings 的 sidebarAgeDays（左栏时间范围）", () => {
   it("只认 1 / 3 / 5 / 7；缺席、旧数据、坏值与 null 都不落键（读侧缺席 = 不限）", () => {
     for (const days of [1, 3, 5, 7]) deepStrictEqual(parseSettings({ sidebarAgeDays: days }).sidebarAgeDays, days);
@@ -762,5 +812,46 @@ describe("parseSettings 的 processView（三档：按块 / 铺开 / 逐步铺�
   });
   it("processLayout 不再写回：解析结果里没有这个字段", () => {
     ok(!("processLayout" in parseSettings({ processView: "turn", processLayout: "flat" })));
+  });
+});
+
+describe("parseSettings 的 galaxyTilt（设置 › 外观 › 星系倾角）", () => {
+  it("缺席 = 默认 40°；区间 10–60、步长 5 的整数才留下，别的丢掉", () => {
+    deepStrictEqual(parseSettings({}).galaxyTilt, undefined);
+    deepStrictEqual(galaxyTiltOf(parseSettings({})), GALAXY_TILT.default);
+    deepStrictEqual(GALAXY_TILT.default, 40);
+    // 1° 精度（拖动是无极的，松手按整数度存）
+    for (const ok of [10, 12, 15, 37, 40, 60]) deepStrictEqual(parseSettings({ galaxyTilt: ok }).galaxyTilt, ok);
+    for (const bad of [5, 9, 65, "40", null, Number.NaN, 40.5]) deepStrictEqual(parseSettings({ galaxyTilt: bad }).galaxyTilt, undefined, String(bad));
+    deepStrictEqual(galaxyTiltOf(parseSettings({ galaxyTilt: 25 })), 25);
+  });
+});
+
+describe("parseSettings 的 galaxyAzimuth / galaxyTurntable（星系转台）", () => {
+  it("方位角只认 0–359 的整数；缺席 = 0；转台开关只认布尔，缺席 = 开", () => {
+    deepStrictEqual(galaxyAzimuthOf(parseSettings({})), 0);
+    for (const ok of [0, 1, 120, 359]) deepStrictEqual(parseSettings({ galaxyAzimuth: ok }).galaxyAzimuth, ok);
+    for (const bad of [-1, 360, 12.5, "90", null]) deepStrictEqual(parseSettings({ galaxyAzimuth: bad }).galaxyAzimuth, undefined, String(bad));
+    deepStrictEqual(galaxyTurntableOf(parseSettings({})), true);
+    deepStrictEqual(galaxyTurntableOf(parseSettings({ galaxyTurntable: false })), false);
+    deepStrictEqual(parseSettings({ galaxyTurntable: "no" }).galaxyTurntable, undefined);
+  });
+});
+
+describe("parseSettings 的 galaxyZoom（星系缩放）", () => {
+  it("只认 0.5–3 之间、两位小数的数；缺席 = 1", () => {
+    deepStrictEqual(galaxyZoomOf(parseSettings({})), 1);
+    for (const ok of [0.5, 0.57, 1, 1.25, 2.4, 3]) deepStrictEqual(parseSettings({ galaxyZoom: ok }).galaxyZoom, ok);
+    for (const bad of [0.49, 3.01, 1.234, "1.2", null, Number.NaN, Number.POSITIVE_INFINITY]) deepStrictEqual(parseSettings({ galaxyZoom: bad }).galaxyZoom, undefined, String(bad));
+  });
+});
+
+describe("parseSettings 的 galaxyBatterySaver / galaxyBatteryNoticeSeen（离电省电）", () => {
+  it("开关缺席 = 开，只认布尔；提示只记「出过了」", () => {
+    deepStrictEqual(galaxyBatterySaverOf(parseSettings({})), true);
+    deepStrictEqual(galaxyBatterySaverOf(parseSettings({ galaxyBatterySaver: false })), false);
+    deepStrictEqual(parseSettings({ galaxyBatterySaver: "no" }).galaxyBatterySaver, undefined);
+    deepStrictEqual(parseSettings({ galaxyBatteryNoticeSeen: true }).galaxyBatteryNoticeSeen, true);
+    deepStrictEqual(parseSettings({ galaxyBatteryNoticeSeen: "yes" }).galaxyBatteryNoticeSeen, undefined);
   });
 });

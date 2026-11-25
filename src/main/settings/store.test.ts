@@ -84,6 +84,16 @@ describe("SettingsStore", () => {
     assert.equal((await store.read()).providersPage, undefined);
   });
 
+  test("常驻对话指针与入口选择按工作区合并：记第二个不抹第一个，重开 store 还在，改别的设置不抹它们", async () => {
+    await store.write({ orchestraMain: { ws1: "s1" }, orchestraEntry: { ws1: "main" } });
+    await store.write({ orchestraMain: { ws2: "s2" }, orchestraEntry: { ws2: "new" } });
+    await store.write({ orchestraMain: { ws1: "s3" } });
+    await store.write({ theme: "light" });
+    const reopened = await new SettingsStore(dir).read();
+    assert.deepEqual(reopened.orchestraMain, { ws1: "s3", ws2: "s2" });
+    assert.deepEqual(reopened.orchestraEntry, { ws1: "main", ws2: "new" });
+  });
+
   test("向量设置按键合并：只切模式不抹掉模型、卸载时间与电池偏好", async () => {
     await store.write({
       vector: { model: "qwen3-embedding-0.6b", idleUnloadMin: 9, deferOnBattery: false },
@@ -130,6 +140,26 @@ describe("SettingsStore", () => {
     assert.equal("titleModel" in raw, false);
     assert.deepEqual(raw["choreModel"], { providerId: "kimi", modelId: "kimi-k3" });
     assert.deepEqual((await new SettingsStore(dir).read()).choreModel, { providerId: "kimi", modelId: "kimi-k3" });
+  });
+
+  test("星系倾角：写进去重开还在；改别的设置不抹它；坏值不落盘", async () => {
+    await store.write({ galaxyTilt: 25 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
+    await store.write({ sidebarWidth: 300 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
+    await store.write({ galaxyTilt: 37, galaxyAzimuth: 123, galaxyTurntable: false });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 37, "1° 精度");
+    assert.equal((await new SettingsStore(dir).read()).galaxyAzimuth, 123);
+    assert.equal((await new SettingsStore(dir).read()).galaxyTurntable, false);
+    await store.write({ galaxyZoom: 1.4 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyZoom, 1.4, "缩放与倾角、方位一起存");
+    await store.write({ galaxyDustDensity: "tenth" });
+    assert.equal((await new SettingsStore(dir).read()).galaxyDustDensity, "tenth", "碎石密度写进去重开还在");
+    assert.equal((await new SettingsStore(dir).read()).galaxyAzimuth, 123);
+    await store.write({ galaxyTilt: 37.5, galaxyAzimuth: 400 });
+    const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("galaxyTilt" in raw, false, "不是整数度的值丢掉，回到默认");
+    assert.equal("galaxyAzimuth" in raw, false, "越界的方位角丢掉");
   });
 
   test("lastUsed 的部分更新按键合并——只改模型 id 不抹已记的服务商", async () => {

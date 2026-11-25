@@ -17,6 +17,8 @@ import { storeToolsGuideline } from "./store-tools.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
 import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
+import { describeSubAgentIdentity, SUB_AGENTS_MAIN_GUIDELINE } from "./sub-agent-tools.ts";
+import type { SubAgentTurnIdentity } from "../shared/sub-agent.ts";
 
 /**
  * bash 的 timeout 指引。数字与权限闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
@@ -58,6 +60,10 @@ export interface SystemPromptInput {
   memoryToolsGuideline: boolean;
   /** 本会话注册了 automation_create（根会话且自动化开着）：讲长任务放后台、建自动化回来看的指引 */
   longTaskAutomationGuideline: boolean;
+  /** 本会话注册了子智能体工具（编排形态的主智能体）：讲一段「有子智能体可派、怎么建」；缺席 = 不讲 */
+  subAgentsGuideline?: boolean;
+  /** 这条会话替哪个子智能体干活（指名派活）：它的职能整段进提示；缺席 = 普通会话 */
+  subAgent?: SubAgentTurnIdentity;
 }
 
 export interface PromptSegment {
@@ -72,6 +78,9 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     { name: "permission", text: describeProtectedData() },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
     { name: "channel-role", text: describeChannelRole(input.role) },
+    // 子智能体两段只在用到时出现：普通会话的整份提示逐字节不变（不打断已有会话的前缀缓存）
+    ...(input.subAgent === undefined ? [] : [{ name: "sub-agent", text: describeSubAgentIdentity(input.subAgent) }]),
+    ...(input.subAgentsGuideline === true ? [{ name: "sub-agents", text: SUB_AGENTS_MAIN_GUIDELINE }] : []),
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),
     { name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) },
     { name: "tool-guidelines", text: TOOL_GUIDELINES },

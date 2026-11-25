@@ -127,6 +127,12 @@ function delegateTool(broker: RequestBroker, sessionId: string, replyLang: () =>
             "Optional. The update_plan step this sub-session does, copied from the plan (up to " +
             `${DELEGATE_PLAN_STEP_MAX_CHARS} characters). Pass it whenever the sub-session serves a plan step.`,
         },
+        subAgentId: {
+          type: "string",
+          description:
+            "Optional id of one of this workspace's persistent sub-agents (from list_sub_agents) to run the task as. Its role prompt " +
+            "goes into the sub-session's system prompt and its default model is used unless you pass model. Omit for a one-off sub-session.",
+        },
       },
       required: ["title", "task"],
     } as never,
@@ -143,6 +149,10 @@ function delegateTool(broker: RequestBroker, sessionId: string, replyLang: () =>
         }
         thinkingLevel = thinkingRaw;
       }
+      const subAgentId = optionalNonEmptyString(args["subAgentId"]);
+      if (subAgentId !== undefined && !/^[\w-]{1,64}$/.test(subAgentId)) {
+        throw new Error(`"subAgentId" is not a valid sub-agent id: ${JSON.stringify(subAgentId)} (call list_sub_agents for the ids).`);
+      }
       const lang = replyLang();
       const planStep = parseDelegatePlanStep(args);
       const result = await broker.request<DelegateOutcome>({
@@ -153,11 +163,12 @@ function delegateTool(broker: RequestBroker, sessionId: string, replyLang: () =>
         ...(lang === undefined ? {} : { replyLang: lang }),
         ...(model === undefined ? {} : { modelId: model }),
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        ...(subAgentId === undefined ? {} : { subAgentId }),
       });
       if (!result.ok) throw new Error(result.error);
       const card = result.card;
       const text =
-        `Sub-session "${result.title}" (id ${result.childId}) started, running on ${card.modelId} ` +
+        `Sub-session "${result.title}" (id ${result.childId}) started${card.subAgentId === undefined ? "" : ` as sub-agent ${card.subAgentId}`}, running on ${card.modelId} ` +
         `(thinking: ${card.thinkingLevel}). Its private scratch workbench is ${card.workbench}. It is now working; its messages will arrive as <channel> ` +
         "blocks in a later turn. Unless you have unrelated work to do right now, end this turn — do " +
         "not poll or wait for it." +

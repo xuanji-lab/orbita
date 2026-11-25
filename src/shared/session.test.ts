@@ -149,6 +149,12 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta([]), null);
   });
 
+  it("会话级自动压缩开关只认布尔：false / true 原样，缺席与坏值不落键（= 跟随全局）", () => {
+    strictEqual(parseSessionMeta({ ...valid, autoCompact: false })?.autoCompact, false);
+    strictEqual(parseSessionMeta({ ...valid, autoCompact: true })?.autoCompact, true);
+    for (const bad of [undefined, null, "false", 0]) strictEqual("autoCompact" in (parseSessionMeta({ ...valid, autoCompact: bad }) ?? {}), false);
+  });
+
   it("标题可以缺——建了还没发消息的会话就是这样", () => {
     strictEqual(parseSessionMeta({ ...valid, title: undefined })?.title, "");
   });

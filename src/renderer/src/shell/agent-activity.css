@@ -1,0 +1,103 @@
+/*
+ * 编排侧栏智能体行的「谁在干活」（AgentActivity.tsx）。版式登记：
+ * | 版式 | 用途 | 结构 | 现有最近的同类 |
+ * | 行首脸串 | 子智能体在干活 | 第二行最前面（状态饼之前）14px 行星脸，并排间隔 2px，有几个画几个 | 头像栈（Claude / Linear 的成员栈），但不叠 |
+ *
+ * 颜色：只用墨色三档与 warning（等你的那颗子智能体描一圈）；不用 accent。
+ * 动效：只有 opacity 与 transform（交给合成器），都带 .anim-continuous——失焦 / 隐藏时 styles.css 统一暂停；
+ * 减少动效时不演，静止的样子本身也读得出状态（日冕圈常亮、插入符常亮）。
+ */
+
+.aa-avatar {
+  position: relative;
+}
+
+/* ── 子智能体小脸 ───────────────────────────────── */
+/*
+ * 有几个画几个（不折 +N）。放不下时（实测 288 宽第二行到第 10 个、240 宽到第 7 个）整张不画、不留半张：
+ * 脸串可换行，高度只有一行，折到第二行的那几张被裁掉（行距拉开，等你那一圈的外溢也碰不到它们）；
+ * 脸串自己可以缩，所以状态词与行尾小圆点永远在。
+ */
+.aa-faces {
+  display: inline-flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-0-5);
+  min-width: 0;
+  margin-right: var(--space-0-5);
+  overflow: clip;
+  overflow-clip-margin: 3px;
+}
+.aa-face {
+  display: grid;
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius-pill);
+}
+/* 等你的那颗子智能体：描一圈 warning（颜色是第二信号，第一信号是它排在最前、状态词说「等你」）；
+   描在外面、隔 1px，不压它的脸；旁边多留一点位置给这一圈 */
+.aa-face[data-state="waiting"] {
+  outline: 1.5px solid var(--color-warning);
+  outline-offset: 1px;
+  margin: 0 var(--space-0-5);
+}
+.aa-face-svg {
+  display: block;
+}
+
+/* ── 会话在跑：插入符 ────────────────────────────── */
+.aa-caret {
+  display: inline-block;
+  flex: none;
+  width: 1.5px;
+  height: 0.95em;
+  border-radius: 1px;
+  background: var(--color-text-secondary);
+  animation: aa-caret 1.1s steps(1, end) infinite;
+}
+@keyframes aa-caret {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* ── 主智能体在干活：一圈细日冕慢慢呼吸（设计系统里已有的「呼吸」一类，只是慢一档） ── */
+.aa-corona {
+  position: absolute;
+  inset: -2px;
+  border: 1.5px solid var(--color-text-secondary);
+  border-radius: var(--radius-pill);
+  pointer-events: none;
+  animation: aa-corona 2.4s var(--ease-in-out) infinite;
+}
+@keyframes aa-corona {
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+}
+
+/* 「等你」必须仍是最醒目的：等你那一行的状态词升到主墨、中等字重（在跑 / 空闲照旧淡墨） */
+.agent-row[data-activity][data-waiting="true"] .agent-status-word {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-medium);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aa-corona,
+  .aa-caret {
+    animation: none;
+  }
+  .aa-corona {
+    opacity: 0.5;
+  }
+}

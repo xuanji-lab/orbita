@@ -49,7 +49,14 @@ export type RightPanelKind =
   | "context"
   | "automation"
   /** 插件页的右栏单列版；全屏版是设置页的「插件」页签 */
-  | "plugins";
+  | "plugins"
+  /**
+   * 星系设计（原型 proto/planet-designer）：不在右图标条上，入口是侧栏工作区行悬停出现的画笔键；
+   * 工作区级的面板，不进按会话的右栏记忆
+   */
+  | "galaxy"
+  /** 编排（编排形态才有入口）：这个工作区的树状图 / 星系图 / 协作图。工作区级，不进按会话的右栏记忆 */
+  | "orchestra";
 
 /**
  * App 传给右栏的应用级入口（右栏上其余入口由面板状态推出，不走这里）。
@@ -78,6 +85,8 @@ export function RightRail(props: {
    */
   /** 意图面板入口（实验功能 intent-system）：null = 不出现（实验开关关着） */
   intentAvailable: boolean;
+  /** 编排面板入口：只在编排形态出现（单智能体的右栏一个像素都不变） */
+  orchestraAvailable?: boolean;
   /**
    * 自动化面板入口：running 是正在跑的自动化数，
    * 角标只在有运行时出现（没有「未读」这类计数——自动化的结果在面板里那条任务下面看）。
@@ -171,6 +180,19 @@ export function RightRail(props: {
             badge: props.subSessions.waiting,
           },
         ]),
+    // 编排：这个工作区的全景（树状图 / 星系图 / 协作图），排在「智能体」组第一个
+    ...(props.orchestraAvailable === true
+      ? [
+          {
+            id: "orchestra",
+            group: "agent" as const,
+            icon: FEATURE_ICON.orchestra,
+            label: t.orchestra.railLabel,
+            lit: props.panel === "orchestra",
+            onSelect: toggle("orchestra"),
+          },
+        ]
+      : []),
     // 终端（人工验收自己的开发）：收起面板不杀 PTY
     { id: "terminal", group: "agent", icon: FEATURE_ICON.terminal, label: t.rail.terminal, lit: props.panel === "terminal", onSelect: toggle("terminal") },
     ...fromApp("browser", { group: "agent" }),

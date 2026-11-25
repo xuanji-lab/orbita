@@ -189,6 +189,36 @@ export interface AppSettings {
    * 拖动中不落盘，松手才写。
    */
   sidebarWidth?: number;
+  /**
+   * 星系的相机俯角（度，设置 › 外观 › 星系倾角）：单智能体首页、编排 New Task 页、右栏星系图、设计面板的轨道预览同一个值
+   * （2026-11-24 用户：「可以多给我几种倾斜角度的星系吗，我来选一个舒服的，或者我们也可以直接 provide 这个 option」）。
+   * 只认 GALAXY_TILT 区间内、步长整数倍的值，别的丢掉；缺席 = GALAXY_TILT.default
+   */
+  galaxyTilt?: number;
+  /**
+   * 星系的方位角（度，0–359 整数，转台：绕竖直的 z 轴转）：星系空白处左右拖动 / 左右方向键改，四处星系同一个值。
+   * 全局存、不按工作区存：它与倾角是同一个「从哪个方向看星系」，用户要的是四处一致（2026-11-24）。缺席 = 0
+   */
+  galaxyAzimuth?: number;
+  /** 左右拖动旋转星系（转台）：缺席 = 开；关掉后左右拖动与左右方向键不改方位角，只能上下改倾角 */
+  galaxyTurntable?: boolean;
+  /**
+   * 离电时省电（设置 › 外观）：缺席 = 开。开着时用电池就进省电档——星系停转、碎石带隐藏、眼睛不跟指针；插上电恢复。
+   * （2026-11-24 用户：「能离电就默认关掉吗？」）
+   */
+  galaxyBatterySaver?: boolean;
+  /** 「已切到省电」那条轻提示出过了（只提示一次） */
+  galaxyBatteryNoticeSeen?: boolean;
+  /**
+   * 星系缩放（倍，GALAXY_ZOOM 区间，两位小数）：星系上滚轮 / 双指缩放，与倾角、方位一起全局存。缺席 = 1。
+   * 平移（以指针为中心缩放带出来的）不存：它按像素算，换一块画布就没意义；重开回到主星居中
+   */
+  galaxyZoom?: number;
+  /**
+   * 碎石密度（设置 › 外观）：星系碎石带里普通会话画多少——全部 / 一半 / 十分之一 / 不显示。显示越多越耗电
+   * （2026-11-24 用户：「session 太多了，有太多粒子要计算……这个可能得是可以调的」）。缺席 = 一半
+   */
+  galaxyDustDensity?: GalaxyDustDensity;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -326,6 +356,29 @@ export interface AppSettings {
    */
   boardDays?: BoardDays;
   /**
+   * 侧栏顶部「单智能体 / 编排」切换停在哪一侧（2026-11-23 用户定：运行时仍一套内核，产品上两种形态有入口可切）。
+   * 缺席 = 单智能体（升级后行为与此前完全一致）；只认 "agent" / "orchestrate"，别的值丢掉。
+   */
+  appMode?: AppMode;
+  /**
+   * 编排右栏「编排」面板停在哪种视图（2026-11-24）：树状图 / 星系图 / 协作图，同一份数据三种看法。
+   * 缺席 = 树状图（窄右栏也看得清）；只认三个值。
+   */
+  orchestraView?: OrchestraView;
+  /**
+   * 每个工作区主智能体的「常驻对话」指针（2026-11-24 用户：入口页发送时可选「继续和主智能体聊」，进的是这个工作区
+   * 主智能体那条持久化的会话）。键 = 工作区 id，值 = 会话 id；首次选「常驻对话」发出时建，之后每次都进同一条。
+   * **放设置里、不写会话 meta**：它是工作区的属性，不是那条会话的；指向的会话被删 / 归档 / 移出工作区时由读的一方
+   * 当作没有、重建一条并提示（不在这里清）。按工作区键合并写入（SettingsStore.write），记一个不抹掉别的。
+   * 顶替：旧内核没有常驻主智能体，先拿一条普通会话（照常自动压缩）当它；迁 pi-durable 后由内核的常驻 agent 接管。
+   */
+  orchestraMain?: Readonly<Record<string, string>>;
+  /**
+   * 入口页「发到哪」的上次选择，按工作区记（同 orchestraMain 按键合并写入）：new = 新开专门的会话，
+   * main = 继续和主智能体的常驻对话聊。缺席 = new（见 ORCHESTRA_ENTRY_DEFAULT）。
+   */
+  orchestraEntry?: Readonly<Record<string, OrchestraEntry>>;
+  /**
    * 左栏会话列表的「时间范围」筛选（用户 2026-11-07：「会话生命周期如果可以有一个用最近一天、
    * 最近三天、最近五天、最近七天来筛选要显示的会话就好了」）：只列最后活动（updatedAt）落在
    * 最近 N 天内的会话。**缺席 = 不限**（打开后行为与此前完全一致）；只认 1 / 3 / 5 / 7，其余丢掉。
@@ -375,6 +428,63 @@ export interface ProvidersPageSettings {
 export const BOARD_DAYS_CHOICES = [3, 5, 7] as const;
 export type BoardDays = (typeof BOARD_DAYS_CHOICES)[number];
 export const BOARD_DAYS_DEFAULT: BoardDays = 5;
+
+/** 应用形态：单智能体（工作区 → 会话树）/ 编排（工作区 = 一座星系，只和它的主智能体沟通）。缺席 = 单智能体 */
+export const APP_MODES = ["agent", "orchestrate"] as const;
+export type AppMode = (typeof APP_MODES)[number];
+export const APP_MODE_DEFAULT: AppMode = "agent";
+
+export function isAppMode(value: unknown): value is AppMode {
+  return (APP_MODES as readonly unknown[]).includes(value);
+}
+
+/** 编排面板的三种视图：树状图（层级）/ 星系图（每颗行星一个智能体）/ 协作图（有向、允许成环的交接图） */
+export const ORCHESTRA_VIEWS = ["tree", "galaxy", "graph"] as const;
+export type OrchestraView = (typeof ORCHESTRA_VIEWS)[number];
+export const ORCHESTRA_VIEW_DEFAULT: OrchestraView = "tree";
+
+export function isOrchestraView(value: unknown): value is OrchestraView {
+  return (ORCHESTRA_VIEWS as readonly unknown[]).includes(value);
+}
+
+/**
+ * 入口页发送的两种去处：new = 新开一条专门处理这件事的会话（不自动压缩，上下文干净）；
+ * main = 接着和主智能体的常驻对话聊（持久化，照常自动压缩）。
+ */
+export const ORCHESTRA_ENTRIES = ["new", "main"] as const;
+export type OrchestraEntry = (typeof ORCHESTRA_ENTRIES)[number];
+/**
+ * 默认 new：入口页原来每发一句就开一条新会话（Claude Projects 的「New session in X」也是这样），
+ * 第一次看到二选一的人不选就和以前一样；不会把一件新事悄悄塞进一条已经很长的对话里。
+ */
+export const ORCHESTRA_ENTRY_DEFAULT: OrchestraEntry = "new";
+
+export function isOrchestraEntry(value: unknown): value is OrchestraEntry {
+  return (ORCHESTRA_ENTRIES as readonly unknown[]).includes(value);
+}
+
+/** 只留「非空字符串键 → 合法值」的项；一项都不剩就当没有（不落键） */
+function parseKeyed<V>(value: unknown, valid: (item: unknown) => item is V): Record<string, V> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const out: Record<string, V> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key !== "" && valid(item)) out[key] = item;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+function isSessionId(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/**
+ * 一条会话这一轮实际用的压缩偏好：全局设置打底，会话自己关了自动压缩（meta.autoCompact === false，
+ * 入口页「新开专门的会话」）就只认手动 `/compact`。阈值百分比照全局（手动压缩不看它，自动开回来时沿用）。
+ */
+export function sessionCompaction(global: CompactionSetting | undefined, autoCompact: boolean | undefined): CompactionSetting {
+  const base = global ?? COMPACTION_DEFAULT;
+  return autoCompact === false ? { ...base, enabled: false } : base;
+}
 
 /** 左栏时间范围筛选的可选天数（缺席 = 不限） */
 export const SIDEBAR_AGE_CHOICES = [1, 3, 5, 7] as const;
@@ -528,6 +638,64 @@ function parseProvidersPage(raw: unknown, legacyCardSize: unknown): ProvidersPag
 }
 
 /**
+ * 星系倾角的区间与默认（度）：10° 几乎贴着盘面看，60° 接近俯视；默认 40° 是编排页改成可调之前在常用窗口下实际画出来的俯角
+ * （New Task 页 39–41°，屏幕安全布局按画框抬过的值）
+ */
+export const GALAXY_TILT = { min: 10, max: 60, step: 1, default: 40 } as const;
+
+/** 存盘的倾角：区间内的整数度（拖动时是无极的，松手按 1° 存——与设置页滑块同一个精度） */
+export function isGalaxyTilt(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= GALAXY_TILT.min && value <= GALAXY_TILT.max;
+}
+
+export function galaxyTiltOf(settings: Pick<AppSettings, "galaxyTilt">): number {
+  return settings.galaxyTilt ?? GALAXY_TILT.default;
+}
+
+/** 方位角：0–359 的整数度；默认 0 = 原来的朝向（近日点在画面右侧） */
+export const GALAXY_AZIMUTH_DEFAULT = 0;
+
+export function isGalaxyAzimuth(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < 360;
+}
+
+export function galaxyAzimuthOf(settings: Pick<AppSettings, "galaxyAzimuth">): number {
+  return settings.galaxyAzimuth ?? GALAXY_AZIMUTH_DEFAULT;
+}
+
+export type GalaxyDustDensity = "all" | "half" | "tenth" | "none";
+export const GALAXY_DUST_DENSITIES: readonly GalaxyDustDensity[] = ["all", "half", "tenth", "none"];
+export const GALAXY_DUST_DEFAULT: GalaxyDustDensity = "half";
+/** 每档实际画出的比例 */
+export const GALAXY_DUST_KEEP: Readonly<Record<GalaxyDustDensity, number>> = { all: 1, half: 0.5, tenth: 0.1, none: 0 };
+
+export function isGalaxyDustDensity(value: unknown): value is GalaxyDustDensity {
+  return typeof value === "string" && (GALAXY_DUST_DENSITIES as readonly string[]).includes(value);
+}
+
+export function galaxyDustDensityOf(settings: Pick<AppSettings, "galaxyDustDensity">): GalaxyDustDensity {
+  return settings.galaxyDustDensity ?? GALAXY_DUST_DEFAULT;
+}
+
+export const GALAXY_ZOOM = { min: 0.5, max: 3, default: 1 } as const;
+
+export function isGalaxyZoom(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= GALAXY_ZOOM.min && value <= GALAXY_ZOOM.max && Math.abs(Math.round(value * 100) - value * 100) < 1e-6;
+}
+
+export function galaxyZoomOf(settings: Pick<AppSettings, "galaxyZoom">): number {
+  return settings.galaxyZoom ?? GALAXY_ZOOM.default;
+}
+
+export function galaxyBatterySaverOf(settings: Pick<AppSettings, "galaxyBatterySaver">): boolean {
+  return settings.galaxyBatterySaver ?? true;
+}
+
+export function galaxyTurntableOf(settings: Pick<AppSettings, "galaxyTurntable">): boolean {
+  return settings.galaxyTurntable ?? true;
+}
+
+/**
  * 从磁盘上的任意 JSON 解出设置。
  *
  * **只认识的字段留下，别的一律丢掉**，坏值退回默认。理由是这个文件在用户目录里、
@@ -543,6 +711,13 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     docPanelWidth?: unknown;
     sidebarWidth?: unknown;
+    galaxyTilt?: unknown;
+    galaxyAzimuth?: unknown;
+    galaxyTurntable?: unknown;
+    galaxyBatterySaver?: unknown;
+    galaxyBatteryNoticeSeen?: unknown;
+    galaxyZoom?: unknown;
+    galaxyDustDensity?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     chatImageSize?: unknown;
@@ -567,6 +742,10 @@ export function parseSettings(raw: unknown): AppSettings {
     providersPage?: unknown;
     pluginsPage?: unknown;
     boardDays?: unknown;
+    appMode?: unknown;
+    orchestraView?: unknown;
+    orchestraMain?: unknown;
+    orchestraEntry?: unknown;
     sidebarAgeDays?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
@@ -580,6 +759,8 @@ export function parseSettings(raw: unknown): AppSettings {
   const sidebar = record.sidebarWidth;
   const docWidth = record.docPanelWidth;
   const compaction = parseCompaction(record.compaction);
+  const orchestraMain = parseKeyed(record.orchestraMain, isSessionId);
+  const orchestraEntry = parseKeyed(record.orchestraEntry, isOrchestraEntry);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
   const choreModel = parseModelPair(record.choreModel) ?? parseModelPair(record.titleModel);
@@ -616,6 +797,13 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
       : {}),
+    ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
+    ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
+    ...(typeof record.galaxyTurntable === "boolean" ? { galaxyTurntable: record.galaxyTurntable } : {}),
+    ...(typeof record.galaxyBatterySaver === "boolean" ? { galaxyBatterySaver: record.galaxyBatterySaver } : {}),
+    ...(record.galaxyBatteryNoticeSeen === true ? { galaxyBatteryNoticeSeen: true } : {}),
+    ...(isGalaxyZoom(record.galaxyZoom) ? { galaxyZoom: record.galaxyZoom } : {}),
+    ...(isGalaxyDustDensity(record.galaxyDustDensity) ? { galaxyDustDensity: record.galaxyDustDensity } : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),
@@ -655,6 +843,12 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(pluginsPage === undefined ? {} : { pluginsPage }),
     // 只认 3 / 5 / 7：别的数当作没选过（缺席 = 5）
     ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
+    // 只认两种形态：别的值当作没选过（缺席 = 单智能体）
+    ...(isAppMode(record.appMode) ? { appMode: record.appMode } : {}),
+    // 只认三种视图：别的值当作没选过（缺席 = 树状图）
+    ...(isOrchestraView(record.orchestraView) ? { orchestraView: record.orchestraView } : {}),
+    ...(orchestraMain === undefined ? {} : { orchestraMain }),
+    ...(orchestraEntry === undefined ? {} : { orchestraEntry }),
     // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
     ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设

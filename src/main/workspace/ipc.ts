@@ -53,6 +53,13 @@ export function registerWorkspaceIpc(
     ipcChannels.workspaceDetachDir,
     (_event, id: string | null, dir: string): Promise<string[]> => store.detachDir(id, dir),
   );
+  // 联星：id 与 partner 必须是字符串（partner 可为 null = 解除）；别的形状一律拒绝，不写盘
+  ipcMain.handle(ipcChannels.workspaceSetBinary, (_event, id: unknown, partner: unknown): Promise<Workspace[]> => {
+    if (typeof id !== "string" || id === "" || (partner !== null && typeof partner !== "string")) {
+      return Promise.reject(new Error("workspace:set-binary 参数要是 (id: string, partner: string | null)"));
+    }
+    return store.setBinary(id, partner);
+  });
   ipcMain.handle(ipcChannels.workspaceRemove, async (_event, id: string) => {
     await store.remove(id);
     // 连带清理失败不拦工作区移除（那是一件更主要的事），但必须留日志——

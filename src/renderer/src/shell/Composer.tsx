@@ -111,6 +111,8 @@ export function Composer(props: {
   disabled?: boolean;
   running?: boolean;
   bottomSlot?: React.ReactNode;
+  /** 麦克风左边的一枚键（编排对话页的「通话」）。不传就没有 */
+  callSlot?: React.ReactNode;
   /** 有文件正拖在聊天面板上方：亮起落点虚线。拖放由外层 ChatView 接（整个面板都是落点） */
   dropActive?: boolean;
   /** 输入框里待发的文字引用（按会话隔离，状态在 useChatSession）；展开显示全文 */
@@ -808,13 +810,16 @@ export function Composer(props: {
           }}
         />
         <div className="composer-bottom-bar">{props.bottomSlot}</div>
+        {props.callSlot !== undefined && (
+          <span style={{ marginInlineStart: "auto", flex: "0 0 auto", display: "inline-flex" }}>{props.callSlot}</span>
+        )}
         <IconButton
           label={dictating ? t.voice.dictateFinish : t.voice.dictate}
           size={28}
           active={dictation.phase === "listening"}
           disabled={disabled || dictation.phase === "finishing"}
           onClick={dictation.toggle}
-          style={{ marginInlineStart: "auto", flex: "0 0 auto" }}
+          style={{ marginInlineStart: props.callSlot !== undefined ? undefined : "auto", flex: "0 0 auto" }}
         >
           {dictation.phase === "connecting" || dictation.phase === "finishing" ? (
             <Icon name="loader-circle" size={15} spin />

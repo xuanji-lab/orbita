@@ -80,6 +80,7 @@ import {
 } from "./retry-policy.ts";
 import { AUTOMATION_TOOL_NAMES, createAutomationTools } from "./automation-tools.ts";
 import { createChannelTools } from "./channel-tools.ts";
+import { createSubAgentTools, SUB_AGENT_TOOL_NAMES } from "./sub-agent-tools.ts";
 import { McpHub } from "./mcp.ts";
 import { createImageTools } from "./image-tools.ts";
 import { attachGoalLedger, type LedgerAttachCache } from "./goal-compaction.ts";
@@ -763,6 +764,7 @@ function extraToolNames(
   memoryTools: boolean,
   automationTools: boolean,
   pluginTools: boolean,
+  subAgentTools: boolean,
 ): string[] {
   return [
     ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
@@ -774,6 +776,7 @@ function extraToolNames(
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
     ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
     ...(pluginTools ? PLUGIN_TOOL_NAMES : []),
+    ...(subAgentTools ? SUB_AGENT_TOOL_NAMES : []),
   ];
 }
 
@@ -911,6 +914,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   const automationTools = "automationTools" in command && command.automationTools === true && role === "root";
   // 插件工具：命令带 pluginTools 才注册 install_plugin / preview_plugin / list_plugins（子会话不装插件，只有根会话注册）
   const pluginTools = command.pluginTools === true && role === "root";
+  // 子智能体工具：主进程只在编排形态 + 有工作区 + 根会话时带 subAgentTools；这里再叠一道「只给根会话」
+  const subAgentTools = "subAgentTools" in command && command.subAgentTools === true && role === "root";
+  // 替哪个子智能体干活（指名派活的子会话）：主进程每轮现读档案带来；它的职能进系统提示
+  const subAgentIdentity = "subAgent" in command ? command.subAgent : undefined;
 
   // 工具闸门只剩抬超时与受保护路径；不再判档或问人。
   const gate = createToolCallGate(command.protectedPaths, command.cwd);
@@ -1008,7 +1015,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools);
+              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools, subAgentTools);
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 role,
@@ -1022,6 +1029,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 intentGuideline: "intent" in command && command.intent !== undefined,
                 memoryToolsGuideline: memoryTools,
                 longTaskAutomationGuideline: automationTools,
+                subAgentsGuideline: subAgentTools,
+                ...(subAgentIdentity === undefined ? {} : { subAgent: subAgentIdentity }),
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
               // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
@@ -1359,6 +1368,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
         })
       : []),
     ...(automationTools ? createAutomationTools(requestBroker, command.sessionId) : []),
+    ...(subAgentTools ? createSubAgentTools(requestBroker, command.sessionId) : []),
   ];
   const { session } = await createAgentSessionFromServices({
     services,
@@ -2262,6 +2272,11 @@ async function handle(command: AgentCommand): Promise<void> {
         ? { ok: true, childId: command.childId, title: command.title, card: command.card }
         : { ok: false, error: command.error ?? "Delegate failed" },
     );
+    return;
+  }
+  if (command.type === "subAgentResult") {
+    // 子智能体工具的回执：形状即契约（ok 双分支），原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "automationResult") {
