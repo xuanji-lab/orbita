@@ -28,7 +28,13 @@
 /** 监听的默认端口 */
 export const MOBILE_DEFAULT_PORT = 47620;
 
-/** WebSocket 的路径；别的路径不握手 */
+/**
+ * WebSocket 的路径；别的路径不握手。
+ *
+ * 握手的 Origin 口径（两端统一）：**Origin 缺席或为空串放行，任何非空 Origin 一律 403**——挡的是
+ * 能跨源连 WebSocket 的浏览器网页，不是「原生 app 一定不带 Origin」（安卓端就显式带一个空串，见
+ * mobile 的 `rn-socket.ts`）。Origin 只是传输层标记，不是认证凭据；认证走配对与握手。
+ */
 export const MOBILE_PATH = "/orbita";
 
 /**
