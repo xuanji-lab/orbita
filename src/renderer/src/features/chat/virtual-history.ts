@@ -64,6 +64,18 @@ export function rowIndexByKey(rows: readonly VirtualHistoryRow[]): Map<string, n
   return map;
 }
 
+/**
+ * 工具调用 id → 虚拟行下标：只认顶层的 toolCall 条目（show_plugin_board 是钉住工具，永远单独成行，不进工具组 / 折叠）。
+ * 状态卡里点看板缩略图时，按它找对话里那次结果所在的行；没有 = 那一轮不在已加载的窗口里。
+ */
+export function toolCallRowIndex(rows: readonly VirtualHistoryRow[]): Map<string, number> {
+  const map = new Map<string, number>();
+  rows.forEach((row, index) => {
+    if (row.entry.kind === "toolCall") map.set(row.entry.toolCallId, index);
+  });
+  return map;
+}
+
 /** 历史段视图下标 → 虚拟行下标（回退预演切点按视图下标算） */
 export function viewRowIndex(rows: readonly VirtualHistoryRow[]): Map<number, number> {
   const map = new Map<number, number>();
@@ -239,4 +251,27 @@ export function createHeightCache(limit = 4000): HeightCache {
       map.clear();
     },
   };
+}
+
+/**
+ * 一次测高要不要补偿进 scrollTop，补多少（只补「整行都在视口上方」的变化，与虚拟器默认补偿同口径）。
+ *
+ * prev 必须是**虚拟器此刻对这一行的实际假设**，否则差额会被当成「上方行变高了」白白补进 scrollTop，视口里的内容凭空跳：
+ * - `cached`：这一行测过（同一次挂载的第二次测高回调也算）——虚拟器的假设就是上次测的值，再补一次会重复计数；
+ * - `assumed`：没测过——measurementsCache 里的 size，即 estimateSize 当时给的（看板结果行有自己的估值 boardRowEstimate）；
+ * - 之后才是 kind 估值 / 默认值（量不到 measurementsCache 项时的兜底）。
+ * 旧写法没测过时直接取「此刻的 kind 估值」：EMA 每测一行就挪一点，与虚拟器当时用的估值对不上，
+ * 实测往上滚 220 步，73 次整行在上方的测高里累计白补 −2070px，表现为 12 次视口跳变（最大 171px）。
+ */
+export function rowResizeCompensation(input: {
+  height: number;
+  cached: number | undefined;
+  assumed: number | undefined;
+  kindEstimate: number | undefined;
+  itemEnd: number | undefined;
+  scrollTop: number;
+}): number {
+  if (input.itemEnd === undefined || input.itemEnd > input.scrollTop + 1) return 0;
+  const prev = input.cached ?? input.assumed ?? input.kindEstimate ?? DEFAULT_ROW_ESTIMATE;
+  return input.height - prev;
 }

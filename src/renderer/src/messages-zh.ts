@@ -809,9 +809,12 @@ export const zh: Messages = {
     plannedTip: "排好的自动化，到点会跑",
     openSession: (caption: string) => `${caption}，打开这次运行的会话`,
     scrollHint: "按住 Shift 滚动滚轮，左右滑动看别的天",
-    /** 会话里的看板结果限高约半屏，底部「展开」去右栏看完整的 */
+    /** 会话里的看板结果收起时限高约半屏，底部「展开」原地展开；展开后底部「收起」；右上角小图标去插件页看现在的看板 */
     expand: "展开",
-    expandHint: "在右栏看完整的看板",
+    expandHint: "在这里展开完整的看板",
+    collapse: "收起",
+    collapseHint: "收起看板",
+    openInPlugin: "在插件里打开",
     /** 会话里的看板结果：被跳过的卡（每张一句原因） */
     skipped: (items: string) => `没有显示：${items}`,
     skipReason: {
