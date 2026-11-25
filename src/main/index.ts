@@ -9,9 +9,9 @@ import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell,
 import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
-import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { AgentEventTap, SessionPhases } from "./agent/run-state.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
@@ -518,8 +518,17 @@ void app.whenReady().then(async () => {
   mainWindows.onLastClosed(() => browserSandbox.dispose());
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
-  // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
-  const phases = new Map<string, SessionPhase>();
+  // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）。手机「回一句」的队列也看它
+  const phases = new SessionPhases();
+  /**
+   * agent 事件的订阅点（主进程里别处想旁听事件泵）。**放在泵的入口、所有 return 之前**，
+   * 而不是只挂在 broadcastAgentEvent 上：泵里有几条路事件到不了它，或者到的不是原样——
+   * `failed`（回合级）要先异步补额度提示才广播，会晚于紧随的 `phase idle`；`fileTurn` 广播的
+   * 是落盘之后的视图；`created` 根本不广播。手机「回一句」要按 agent 进程发出的**原始顺序**
+   * 拿到原始事件（failed 一定先于它那一轮的 idle），否则会把失败算到下一条回复头上。
+   * 窗口照旧只收 broadcastAgentEvent 的那一份，这里不改窗口看到的东西。
+   */
+  const agentEvents = new AgentEventTap();
   const channelReconciler = new ChannelReconciler({ sessions, channels, phases, broadcast: broadcastChannelEvent });
   const channelIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const cancelChannelIdleClose = (sessionId: string): void => {
@@ -539,7 +548,7 @@ void app.whenReady().then(async () => {
     channelIdleTimers.set(sessionId, timer);
   };
   const closeChannelsForLostProcess = (): void => {
-    const lost = [...phases].filter(([, phase]) => phase !== "idle").map(([sessionId]) => sessionId);
+    const lost = phases.runningIds();
     phases.clear();
     for (const sessionId of lost) {
       cancelChannelIdleClose(sessionId);
@@ -597,6 +606,8 @@ void app.whenReady().then(async () => {
     ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
   };
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
+    // 先给主进程里的旁听者（见 agentEvents 的说明）：原始事件、原始顺序
+    agentEvents.emit(event);
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
     // 4-3：agent 工具的写盘请求——主进程落盘、回执、广播刷新。
@@ -1149,10 +1160,7 @@ void app.whenReady().then(async () => {
           sessions,
           workspaces,
           host: agentHost,
-          isRunning: (id) => {
-            const phase = phases.get(id);
-            return phase !== undefined && phase !== "idle";
-          },
+          isRunning: (id) => phases.isRunning(id),
         },
         ids,
         workspaceId,
@@ -1386,7 +1394,7 @@ void app.whenReady().then(async () => {
     launch: (input) => launchAutomationRun(launchDeps, input),
     deliver: (input) => deliverAutomationRun(launchDeps, input),
     sessionExists: async (sessionId) => (await sessions.readMeta(sessionId)) !== null,
-    isSessionBusy: (sessionId) => (phases.get(sessionId) ?? "idle") !== "idle",
+    isSessionBusy: (sessionId) => phases.isRunning(sessionId),
     abort: (sessionId) => agentHost.abort(sessionId),
     notify: broadcastAutomationEvent,
     onActiveChange: (count) => void keepAwake.sync(count).catch((cause: unknown) => console.error("[automation] 阻止睡眠同步失败", cause)),
