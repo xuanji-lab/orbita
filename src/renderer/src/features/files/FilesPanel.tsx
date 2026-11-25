@@ -1,6 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, type IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
+import { SplitHandle } from "../../shell/SplitHandle";
+import {
+  clampPaperPdfRatio,
+  PAPER_PDF_MIN_WIDTH,
+  PAPER_SOURCE_MIN_WIDTH,
+  paperPdfRatioFromLeftWidth,
+} from "../../shell/split-limits.ts";
+import { PAPER_PDF_RATIO, type AppSettings, type SettingsPatch } from "@shared/settings";
 import { RowHoverAction } from "../../shell/RowHoverAction";
 import { ContextMenu } from "../../shell/ContextMenu";
 import type { MenuItem } from "../../shell/Menu";
@@ -197,8 +205,21 @@ export function FilesPanel(props: {
    * 都要先知道这一点，而项目事实住在本面板里。
    */
   onPaperReady?: (ready: boolean) => void;
+  /**
+   * 源码与 PDF 此刻是不是**并排**（tex | pdf 两块）。布局 B 的对话栏上限要知道：
+   * 并排时稿件区得留下两块的最小宽，不能被对话栏吃光。
+   */
+  onPaperSplit?: (split: boolean) => void;
   /** 当前激活的标签是不是一份文档（md / txt）：App 据此给面板「写东西」的宽度（与演示文稿面板同一套规则） */
   onDocShown?: (shown: boolean) => void;
+  /**
+   * 盘上的设置（这里只读论文工作台的三条拆分记忆：paperPdfRatio / latexProblemsHeight /
+   * pptxPagesWidth）。之前面板没有这个入口，那是因为它没有需要跨启动记的尺寸；
+   * 拆分条一加就有了。**不加新 IPC**：写走已有的 settings:set 通道。
+   */
+  settings: AppSettings;
+  /** 拆分尺寸落盘（拖动中不写，松手才写——同侧栏 / 右栏的纪律） */
+  onSettingsChange: (patch: SettingsPatch) => void;
 }) {
   const t = useT();
   const session = props.session;
@@ -792,6 +813,36 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   /** 并排的右半 / 单栏占满的那一块（none = 不渲染 PDF 那一栏） */
   const pdfSidePath = pdfPane.kind === "none" ? null : pdfPane.path;
   const pdfSolo = pdfPane.kind === "solo";
+
+  /**
+   * 源码 ↔ PDF 的宽度比例（存比例不存像素）。拖动中只改本地，松手才落 settings；
+   * 盘上的值变了（别处改了 / 重启恢复）再回填。
+   */
+  const [pdfRatio, setPdfRatio] = useState(props.settings.paperPdfRatio ?? PAPER_PDF_RATIO.default);
+  useEffect(() => {
+    setPdfRatio(props.settings.paperPdfRatio ?? PAPER_PDF_RATIO.default);
+  }, [props.settings.paperPdfRatio]);
+  /** 并排容器的实测宽：每侧最小宽按它现算（量不到时按比例直接分） */
+  const panesRef = useRef<HTMLDivElement | null>(null);
+  const [panesWidth, setPanesWidth] = useState(0);
+  useEffect(() => {
+    const el = panesRef.current;
+    if (el === null) return undefined;
+    const measure = (): void => setPanesWidth(Math.round(el.getBoundingClientRect().width));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [splitOn, shownTab?.path]);
+  const splitRatio = clampPaperPdfRatio(pdfRatio, panesWidth);
+  const sourceWidth = panesWidth > 0 ? Math.round(splitRatio * panesWidth) : 0;
+  const pdfDragFrom = useRef<{ pane: number; left: number } | null>(null);
+  /** 比例落盘：拖动中只改本地，commit 才写（与侧栏 / 右栏同一条纪律） */
+  const applyPdfRatio = (left: number, pane: number, commit: boolean): void => {
+    const ratio = paperPdfRatioFromLeftWidth(left, pane);
+    setPdfRatio(ratio);
+    if (commit) props.onSettingsChange({ paperPdfRatio: ratio });
+  };
   /** 左栏真正显示的文件：不并排时就是激活标签（含「激活标签是 PDF」那种单栏） */
   const leftPath = splitOn ? splitLeftPath : (activeTab?.path ?? null);
   /** 左栏显示的是不是一份 PDF 产物（决定它要不要走 PDF 预览与编译后重载） */
@@ -806,6 +857,10 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   useEffect(() => {
     reportPaperReady?.(paperReady);
   }, [paperReady, reportPaperReady]);
+  const reportPaperSplit = props.onPaperSplit;
+  useEffect(() => {
+    reportPaperSplit?.(splitOn);
+  }, [splitOn, reportPaperSplit]);
 
   /**
    * 编译前强制保存：未落盘的改动先写盘，编译用的就是你眼前这一版（原型场景 1 第 5 步 / 场景 4）。
@@ -2072,9 +2127,21 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
               同一个根的白名单，只挡左块等于让右块拿刚失效的根再读一次 */}
           {shownTab !== null && (
             <div
+              ref={panesRef}
               className={`files-panel-panes${splitOn ? " split" : ""}${pdfSolo ? " pdf-solo" : ""}`}
             >
-              <div className="files-panel-pane">
+              {/* key 必须稳定：中间插了拆分条之后，无 key 的兄弟会按 index 重挂，
+                  右块（PDF）会丢掉缩放与滚动位置 */}
+              <div
+                key="source"
+                data-pane="source"
+                className="files-panel-pane"
+                style={
+                  splitOn && panesWidth > 0
+                    ? { flex: `0 0 ${sourceWidth}px`, width: `${sourceWidth}px` }
+                    : undefined
+                }
+              >
                 <FilePreviewPane
                   key={`left:${leftPath ?? shownTab.path}`}
                   sessionId={sessionId}
@@ -2143,10 +2210,43 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     setTabs((prev) => openTab(prev, root, path));
                     setActivePath(path);
                   }}
+                  // .pptx 大纲的页列表宽（拖动落在 settings，与另三条拆分同一个通道）
+                  pptxPagesWidth={props.settings.pptxPagesWidth}
+                  onPptxPagesWidth={(width) => props.onSettingsChange({ pptxPagesWidth: width })}
                 />
               </div>
+              {/* 源码 ↔ PDF 的拆分条：只在真的并排时渲染（pdf-solo 下没有两块可分） */}
+              {splitOn && (
+                <SplitHandle
+                  orientation="vertical"
+                  label={t.paper.sourcePdfHandle}
+                  onDragStart={() => {
+                    pdfDragFrom.current = { pane: panesWidth, left: sourceWidth };
+                  }}
+                  onDrag={(delta) => {
+                    const from = pdfDragFrom.current;
+                    if (from === null) return;
+                    applyPdfRatio(from.left + delta, from.pane, false);
+                  }}
+                  onDragEnd={(delta) => {
+                    const from = pdfDragFrom.current;
+                    pdfDragFrom.current = null;
+                    if (from === null) return;
+                    applyPdfRatio(from.left + delta, from.pane, true);
+                  }}
+                  onStep={(delta) => applyPdfRatio(sourceWidth + delta, panesWidth, true)}
+                  onEdge={(edge) =>
+                    applyPdfRatio(
+                      edge === "min" ? PAPER_SOURCE_MIN_WIDTH : panesWidth - PAPER_PDF_MIN_WIDTH,
+                      panesWidth,
+                      true,
+                    )
+                  }
+                  onReset={() => applyPdfRatio(panesWidth * PAPER_PDF_RATIO.default, panesWidth, true)}
+                />
+              )}
               {pdfSidePath !== null && (
-                <div className="files-panel-pane">
+                <div key="pdf" data-pane="pdf" className="files-panel-pane">
                   {/* 右块：开着的那个 PDF 标签（多产物时是 activePdfPath 那一份）。
                       宽到容得下并排时是右半（split），窄窗时是整块（pdf-solo）。
                       编译成功后按 pdfReloadToken 重载——同一块面板刷新，不重开标签 */}
@@ -2181,6 +2281,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             onToggle={() => setProblemsOpen((open) => !open)}
             onHandToAgent={handProblemToAgent}
             onJump={jumpToProblem}
+            height={props.settings.latexProblemsHeight ?? null}
+            onHeightCommit={(height) => props.onSettingsChange({ latexProblemsHeight: height })}
             {...(citeLibrary === null ? {} : { verify: { ...verifyState, onRun: runVerify } })}
             {...(citeUnused === null ? {} : { unused: citeUnused })}
             resolved={resolvedPackages}

@@ -118,6 +118,10 @@ export function FilePreviewPane(props: {
   onOpenTarget?: (root: string, path: string) => void;
   /** 文档文件被移走时横幅上的「关闭」：关掉这个标签 */
   onCloseTab?: () => void;
+  /** `.pptx` 大纲页列表的宽度（settings.pptxPagesWidth）；缺席 = 184 */
+  pptxPagesWidth?: number;
+  /** 页列表拖动结束落盘（与另三条拆分同一个 settings 通道） */
+  onPptxPagesWidth?: (width: number) => void;
 }) {
   const t = useT();
   const { sessionId, workspaceId, root, path } = props;
@@ -457,6 +461,8 @@ export function FilePreviewPane(props: {
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={pptxReload}
             onOpenDefault={openDefault}
+            {...(props.pptxPagesWidth === undefined ? {} : { pagesWidth: props.pptxPagesWidth })}
+            {...(props.onPptxPagesWidth === undefined ? {} : { onPagesWidthCommit: props.onPptxPagesWidth })}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
           />
         ) : legacyPpt ? (

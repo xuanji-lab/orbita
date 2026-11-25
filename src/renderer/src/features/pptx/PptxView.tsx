@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "../../shell/Icon";
+import { SplitHandle } from "../../shell/SplitHandle";
+import { clampPptxPagesWidth } from "../../shell/split-limits.ts";
+import { PPTX_PAGES_WIDTH } from "@shared/settings";
 import { PanelButton, PanelLine } from "../../shell/RightPanel";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
@@ -35,6 +38,10 @@ export function PptxView(props: {
   onOpenDefault: () => void;
   /** 点形状 / 表格 / 图表出的标注进输入框（Office 渲染视图里；缺席 = 只显示、不引用） */
   onQuote?: (quote: TextQuote) => void;
+  /** 页列表宽度（settings.pptxPagesWidth）；缺席 = 184 */
+  pagesWidth?: number;
+  /** 页列表拖动结束落盘（拖动中只改本地） */
+  onPagesWidthCommit?: (width: number) => void;
 }) {
   const t = useT();
   const { request } = props;
@@ -57,6 +64,20 @@ export function PptxView(props: {
   const deck = state.data?.kind === "deck" ? state.data : null;
   const index = deck === null ? 0 : Math.min(active, deck.slides.length - 1);
   const slide = deck?.slides[index];
+
+  /**
+   * 页列表宽（只有大纲视图才有这一栏）：拖动中只改本地，松手才落 settings；
+   * 容器 <420 时 CSS 转上下堆叠、把手隐藏，这里不需要知道宽度。
+   */
+  const [livePagesWidth, setLivePagesWidth] = useState<number | null>(null);
+  const committedPagesWidth = props.pagesWidth;
+  useEffect(() => {
+    setLivePagesWidth(null);
+  }, [committedPagesWidth]);
+  const pagesWidth = clampPptxPagesWidth(livePagesWidth ?? committedPagesWidth ?? PPTX_PAGES_WIDTH.default);
+  /** 拖动起点：此刻实际的列表宽 */
+  const pagesDragFrom = useRef<number>(pagesWidth);
+  const commitPagesWidth = props.onPagesWidthCommit;
 
   // roving tabindex：300 个分页键不该全在 Tab 序里。Tab 只停在当前页，
   // ↑↓ / Home / End 在列表内移动选中并带着焦点走（与常见 tablist 一致）
@@ -148,7 +169,12 @@ export function PptxView(props: {
     return (
       <div className="pptx-split">
         {/* 页列表：页码 + 版式名是定位用的坐标，标题是「这页在讲什么」 */}
-        <nav className="pptx-slide-list" aria-label={t.files.pptxSlides} ref={listRef}>
+        <nav
+          className="pptx-slide-list"
+          aria-label={t.files.pptxSlides}
+          ref={listRef}
+          style={{ "--pptx-pages-w": `${pagesWidth}px` } as React.CSSProperties}
+        >
           {data.slides.map((item, itemIndex) => (
             <button
               key={`${item.number}:${itemIndex}`}
@@ -167,6 +193,39 @@ export function PptxView(props: {
             </button>
           ))}
         </nav>
+        {/* 页列表 ↔ 大纲的拆分条：容器 <420 转上下堆叠时由 CSS 隐藏（.pptx-pages-handle） */}
+        {commitPagesWidth !== undefined && (
+          <SplitHandle
+            orientation="vertical"
+            className="pptx-pages-handle"
+            label={t.files.pptxPagesHandle}
+            onDragStart={() => {
+              pagesDragFrom.current = pagesWidth;
+            }}
+            onDrag={(delta) =>
+              setLivePagesWidth(clampPptxPagesWidth(pagesDragFrom.current + delta))
+            }
+            onDragEnd={(delta) => {
+              const next = clampPptxPagesWidth(pagesDragFrom.current + delta);
+              setLivePagesWidth(next);
+              commitPagesWidth(next);
+            }}
+            onStep={(delta) => {
+              const next = clampPptxPagesWidth(pagesWidth + delta);
+              setLivePagesWidth(next);
+              commitPagesWidth(next);
+            }}
+            onEdge={(edge) => {
+              const next = edge === "min" ? PPTX_PAGES_WIDTH.min : PPTX_PAGES_WIDTH.max;
+              setLivePagesWidth(next);
+              commitPagesWidth(next);
+            }}
+            onReset={() => {
+              setLivePagesWidth(null);
+              commitPagesWidth(PPTX_PAGES_WIDTH.default);
+            }}
+          />
+        )}
         <section className="pptx-outline" aria-label={t.files.pptxOutline}>
           <h2 className="pptx-outline-title">
             {slide.title === "" ? t.files.pptxUntitled : slide.title}

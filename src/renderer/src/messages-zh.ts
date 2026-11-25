@@ -3025,6 +3025,7 @@ export const zh: Messages = {
     xlsUnsupported: "旧版 .xls 工作簿看不了预览，用默认应用打开。",
     /* ---------- .pptx 只读大纲（契约见 shared/pptx.ts） ---------- */
     pptxSlides: "幻灯片",
+    pptxPagesHandle: "拖动调整页列表宽度 · 双击复原",
     pptxOutline: "大纲",
     pptxSlideLabel: (number, layout) =>
       layout === "" ? `第 ${number} 页` : `第 ${number} 页 · ${layout}`,
@@ -3113,6 +3114,7 @@ export const zh: Messages = {
     noSession: "编译没能开始：这个文件面板还没有绑定会话——先发一条消息，或把文件挂到工作区再编",
     stalePdf: (time) => `显示的是 ${time} 编译的那一版`,
     problems: "问题",
+    problemsHandle: "拖动调整问题抽屉高度 · 双击复原",
     noProblems: "无问题",
     errorCount: (n) => `${n} 个错误`,
     warningCount: (n) => `${n} 个警告`,
@@ -3268,6 +3270,8 @@ export const zh: Messages = {
     chatTitle: "对话",
     toPaper: "稿件为主：源码和 PDF 并排，对话收到右边一栏",
     toChat: "回到对话为主",
+    sourcePdfHandle: "拖动调整源码与 PDF 的宽度 · 双击复原",
+    chatHandle: "拖动调整对话栏宽度 · 双击复原",
   },
 
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */

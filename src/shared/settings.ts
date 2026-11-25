@@ -207,6 +207,29 @@ export interface AppSettings {
    * 拖动中不落盘，松手才写。
    */
   sidebarWidth?: number;
+  /**
+   * 论文工作台并排（源码 ↔ PDF）的宽度比例：**左块（源码）占面板的比例**。
+   * 0.2–0.8，缺席 = 0.5。存比例不存像素——面板宽随布局 / 窗口变化，像素值换个
+   * 窗口就不再是用户要的那个比例。每侧的最小宽（源码 320 / PDF 280）由渲染层
+   * 按当前面板宽夹取，存储层只拦明显越界的坏值。
+   */
+  paperPdfRatio?: number;
+  /**
+   * 布局 B「稿件为主」里对话栏的宽度（px），缺席 = PAPER_CHAT_WIDTH（340）。
+   * **真正的上限是动态的**：容器宽的一半（见 split-limits.ts 的 clampPaperChatWidth），
+   * 存储层只做 280 的下界与 4096 的硬上界——换个窄窗口打开时渲染层会按当前容器再夹一次。
+   * 只在这个布局生效；布局 A 的对话栏仍然吃满主区。
+   */
+  paperChatWidth?: number;
+  /**
+   * 问题抽屉被拖出来的高度（px）。**缺席 = 按内容自适应**（现状），不给默认值——
+   * 大多数时候抽屉只有一行或几行，写死一个高度反而更差。
+   * 下界 96（一行头部 + 一条问题）；上界在这里只做硬校验（2400），真正的
+   * 「不超过视口 70%」由渲染层按当前窗口高夹取。
+   */
+  latexProblemsHeight?: number;
+  /** `.pptx` 大纲页列表的宽度（px）：140–360，缺席 = 184。容器 <420 时布局转上下，不生效。 */
+  pptxPagesWidth?: number;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -459,11 +482,13 @@ export const isDocPaper = (value: unknown): value is DocPaper =>
 export type SettingsPatch = Partial<
   Omit<
     AppSettings,
-    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays"
+    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays" | "latexProblemsHeight"
   >
 > & {
   /** `null` = 清除，退回「不限」（同 choreModel：undefined 在补丁里是「没改」，选不回默认） */
   sidebarAgeDays?: SidebarAgeDays | null;
+  /** `null` = 清除，抽屉回到按内容自适应（同 sidebarAgeDays 的 null 语义） */
+  latexProblemsHeight?: number | null;
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
   /**
@@ -492,6 +517,18 @@ export const RIGHT_PANEL_WIDTH_DEFAULT = 320;
 export const SIDEBAR_WIDTH_MIN = 240;
 export const SIDEBAR_WIDTH_MAX = 400;
 export const SIDEBAR_WIDTH_DEFAULT = 288;
+
+/**
+ * 论文工作台三处拆分条的区间（与渲染层拖拽 / 键盘的夹取同源）。
+ * - `PAPER_PDF_RATIO`：源码 ↔ PDF 的宽度**比例**（左块占整块面板的比例）；
+ * - `PAPER_CHAT_WIDTH_RANGE`：布局 B 的对话栏宽（px，280 起；上限由容器宽的一半现算）；
+ * - `PROBLEMS_HEIGHT`：问题抽屉高（px，上界 2400 只是存储层的硬校验，渲染层按 70vh 夹）；
+ * - `PPTX_PAGES_WIDTH`：`.pptx` 大纲页列表宽（px）。
+ */
+export const PAPER_PDF_RATIO = { min: 0.2, max: 0.8, default: 0.5 } as const;
+export const PAPER_CHAT_WIDTH_RANGE = { min: 280, max: 4096, default: 340 } as const;
+export const PROBLEMS_HEIGHT = { min: 96, max: 2400 } as const;
+export const PPTX_PAGES_WIDTH = { min: 140, max: 360, default: 184 } as const;
 
 /**
  * 右栏宽度的硬地板（px）。小窗口保护：窗口再窄，右栏也不能收成一条看不出内容的缝。
@@ -610,6 +647,10 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     docPanelWidth?: unknown;
     sidebarWidth?: unknown;
+    paperPdfRatio?: unknown;
+    paperChatWidth?: unknown;
+    latexProblemsHeight?: unknown;
+    pptxPagesWidth?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
     completionSound?: unknown;
@@ -650,6 +691,10 @@ export function parseSettings(raw: unknown): AppSettings {
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
   const docWidth = record.docPanelWidth;
+  const pdfRatio = record.paperPdfRatio;
+  const chatWidth = record.paperChatWidth;
+  const problemsHeight = record.latexProblemsHeight;
+  const pptxPages = record.pptxPagesWidth;
   const compaction = parseCompaction(record.compaction);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
@@ -686,6 +731,32 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar >= SIDEBAR_WIDTH_MIN &&
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
+      : {}),
+    // 论文工作台的三处拆分：同样是「越界直接丢」，每侧最小宽 / 70vh 由渲染层按
+    // 当前面板与窗口尺寸夹——存储层拿不到那些数字
+    ...(typeof pdfRatio === "number" &&
+    Number.isFinite(pdfRatio) &&
+    pdfRatio >= PAPER_PDF_RATIO.min &&
+    pdfRatio <= PAPER_PDF_RATIO.max
+      ? { paperPdfRatio: pdfRatio }
+      : {}),
+    ...(typeof chatWidth === "number" &&
+    Number.isFinite(chatWidth) &&
+    chatWidth >= PAPER_CHAT_WIDTH_RANGE.min &&
+    chatWidth <= PAPER_CHAT_WIDTH_RANGE.max
+      ? { paperChatWidth: Math.round(chatWidth) }
+      : {}),
+    ...(typeof problemsHeight === "number" &&
+    Number.isFinite(problemsHeight) &&
+    problemsHeight >= PROBLEMS_HEIGHT.min &&
+    problemsHeight <= PROBLEMS_HEIGHT.max
+      ? { latexProblemsHeight: Math.round(problemsHeight) }
+      : {}),
+    ...(typeof pptxPages === "number" &&
+    Number.isFinite(pptxPages) &&
+    pptxPages >= PPTX_PAGES_WIDTH.min &&
+    pptxPages <= PPTX_PAGES_WIDTH.max
+      ? { pptxPagesWidth: Math.round(pptxPages) }
       : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),

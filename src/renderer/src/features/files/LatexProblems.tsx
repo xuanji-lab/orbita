@@ -11,8 +11,12 @@
  * 反查没回来之前只显示文件名；回来且没查到，就明说「未知包」，不给安装按钮——
  * 猜一条装不上的命令比不给更坏。
  */
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
+import { SplitHandle } from "../../shell/SplitHandle";
+import { clampProblemsHeight, problemsHeightCeiling } from "../../shell/split-limits.ts";
+import { PROBLEMS_HEIGHT } from "@shared/settings";
 import type { LatexIssue, LatexResolvedPackage } from "@shared/latex";
 import type { CiteUnusedReport, CiteVerification } from "@shared/cite";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
@@ -69,6 +73,10 @@ export function LatexProblems(props: {
   unused?: CiteUnusedReport;
   /** 把安装命令填进可见终端（不按回车） */
   onInstall: (command: string) => void;
+  /** 拖出来的高度（px）；null / 缺席 = 按内容自适应 */
+  height?: number | null;
+  /** 松手落盘；null = 复位回自适应（双击 / Enter） */
+  onHeightCommit?: (height: number | null) => void;
 }) {
   const t = useT();
   const { groups } = props;
@@ -84,6 +92,24 @@ export function LatexProblems(props: {
   /** 没有编译问题也允许打开抽屉：核验文献常常发生在「编译全绿」之后、投稿之前 */
   const unusedCount = props.unused?.entries.length ?? 0;
   const openable = total > 0 || props.verify !== undefined || props.unused !== undefined;
+  /**
+   * 抽屉高度：拖动中只改本地，松手才落 settings；双击 / Enter 复位回自适应。
+   * 盘上值变了（重启恢复）再回填；**未设置时保持自适应**，不给默认高度。
+   */
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [liveHeight, setLiveHeight] = useState<number | null>(null);
+  const committedHeight = props.height ?? null;
+  useEffect(() => {
+    setLiveHeight(null);
+  }, [committedHeight]);
+  const commitHeight = props.onHeightCommit;
+  const draggedHeight = props.open && openable ? (liveHeight ?? committedHeight) : null;
+  const fixedHeight =
+    draggedHeight === null ? null : clampProblemsHeight(draggedHeight, window.innerHeight);
+  /** 拖动起点：抽屉此刻实际渲染的高度（自适应时是内容高） */
+  const dragFrom = useRef<number>(0);
+  const heightNow = (): number =>
+    rootRef.current?.getBoundingClientRect().height ?? fixedHeight ?? PROBLEMS_HEIGHT.min;
   const rows: { item: ProblemItem; pkg?: MissingPackage }[] = [
     // 引擎在等用户确认：排在缺包前面——它不是「缺了什么」，是「编译正卡在这里」
     ...groups.pending.map((item) => ({ item: toItem(item, "pending") })),
@@ -96,7 +122,46 @@ export function LatexProblems(props: {
   ];
 
   return (
-    <div className="latex-problems" data-open={props.open ? "true" : undefined}>
+    <div
+      ref={rootRef}
+      className="latex-problems"
+      data-open={props.open ? "true" : undefined}
+      data-fixed={fixedHeight === null ? undefined : "true"}
+      style={fixedHeight === null ? undefined : { height: `${fixedHeight}px` }}
+    >
+      {/* 拆分条：只在展开且确实有内容时出现。它占自己的一行（不是压在标题按钮上），
+          所以「展开 / 收起」仍可点；拖动 / 键盘的限位见 split-limits.ts */}
+      {props.open && openable && commitHeight !== undefined && (
+        <SplitHandle
+          orientation="horizontal"
+          label={t.latex.problemsHandle}
+          onDragStart={() => {
+            dragFrom.current = heightNow();
+          }}
+          onDrag={(delta) => {
+            setLiveHeight(clampProblemsHeight(dragFrom.current - delta, window.innerHeight));
+          }}
+          onDragEnd={(delta) => {
+            const next = clampProblemsHeight(dragFrom.current - delta, window.innerHeight);
+            setLiveHeight(next);
+            commitHeight(next);
+          }}
+          onStep={(delta) => {
+            const next = clampProblemsHeight(heightNow() - delta, window.innerHeight);
+            setLiveHeight(next);
+            commitHeight(next);
+          }}
+          onEdge={(edge) => {
+            const next = edge === "min" ? PROBLEMS_HEIGHT.min : problemsHeightCeiling(window.innerHeight);
+            setLiveHeight(next);
+            commitHeight(next);
+          }}
+          onReset={() => {
+            setLiveHeight(null);
+            commitHeight(null);
+          }}
+        />
+      )}
       <button
         type="button"
         className="latex-problems-head quiet-control"

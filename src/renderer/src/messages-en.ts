@@ -3231,6 +3231,7 @@ export const en = {
     xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
     /* ---------- .pptx 只读大纲（pptx.ts 契约） ---------- */
     pptxSlides: "Slides",
+    pptxPagesHandle: "Drag to resize the slide list · double-click to reset",
     pptxOutline: "Outline",
     /** 页列表的坐标：页码 + 版式名（版式读不到时只留页码） */
     pptxSlideLabel: (number: number, layout: string) =>
@@ -3324,6 +3325,7 @@ export const en = {
     noSession: "The compile did not start: this panel is not bound to a session yet — send a message, or attach the folder to a workspace, then compile",
     stalePdf: (time: string) => `still showing the ${time} build`,
     problems: "Problems",
+    problemsHandle: "Drag to resize the problems drawer · double-click to reset",
     noProblems: "No problems",
     errorCount: (n: number) => (n === 1 ? "1 error" : `${n} errors`),
     warningCount: (n: number) => (n === 1 ? "1 warning" : `${n} warnings`),
@@ -3485,6 +3487,8 @@ export const en = {
     chatTitle: "Chat",
     toPaper: "Paper first — sources and PDF side by side, chat moves to the right column",
     toChat: "Back to chat first",
+    sourcePdfHandle: "Drag to resize source and PDF · double-click to reset",
+    chatHandle: "Drag to resize the chat column · double-click to reset",
   },
 
   /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */

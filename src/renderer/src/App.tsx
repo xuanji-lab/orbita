@@ -90,6 +90,14 @@ import {
   shouldSplitPaper,
   type PaperLayout,
 } from "./features/files/paper-layout.ts";
+import { SplitHandle } from "./shell/SplitHandle.tsx";
+import {
+  clampPaperChatWidth,
+  PAPER_SOURCE_MIN_WIDTH,
+  PAPER_SPLIT_MIN_TOTAL,
+} from "./shell/split-limits.ts";
+import { PAPER_CHAT_WIDTH_RANGE } from "@shared/settings";
+
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
@@ -472,6 +480,44 @@ export function App() {
   const workbenchOpen = rightPanel === "files";
   const paperColumn = effectivePaperLayout({ wanted: paperLayout, windowWidth, workbenchOpen });
   const paperMode = paperColumn === "paper";
+  /**
+   * 布局 B 的对话栏宽（settings.paperChatWidth，默认沿用 paper-layout.ts 的 340）。
+   * **上限是动态的**（2026-11-25 用户裁决）：容器宽的一半，且要给稿件区留下
+   * tex / pdf 的最小宽。存的是「上次拖到的 px」，读取 / 应用 / 拖动时都按当前
+   * 容器再夹一次——换个窄窗口打开不会超出一半。拖动中只改本地，松手才落盘。
+   */
+  const [paperChatWidth, setPaperChatWidth] = useState(
+    settings.paperChatWidth ?? PAPER_CHAT_WIDTH,
+  );
+  useEffect(() => {
+    setPaperChatWidth(settings.paperChatWidth ?? PAPER_CHAT_WIDTH);
+  }, [settings.paperChatWidth]);
+  /** 布局 B 的容器（`.pane` = 稿件区 + 对话栏）实测宽：一半上限按它现算 */
+  const paneRef = useRef<HTMLElement | null>(null);
+  const [paneMeasuredWidth, setPaneMeasuredWidth] = useState(0);
+  useEffect(() => {
+    const el = paneRef.current;
+    if (el === null) return undefined;
+    const measure = (): void => setPaneMeasuredWidth(Math.round(el.getBoundingClientRect().width));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  /** 稿件区此刻是不是并排（tex | pdf）：并排时对话栏要给它留下两块的最小宽 */
+  const [paperSplit, setPaperSplit] = useState(false);
+  const paperChatReserved = paperSplit ? PAPER_SPLIT_MIN_TOTAL : PAPER_SOURCE_MIN_WIDTH;
+  const clampChat = (width: number): number =>
+    clampPaperChatWidth(width, paneMeasuredWidth, paperChatReserved);
+  /** 实际渲染 / 拖动的宽：盘上的值按当前容器再夹一次 */
+  const effectivePaperChatWidth = clampChat(paperChatWidth);
+  /** 对话栏拖动起点（px）：对话在右，指针左移 = 变宽 */
+  const paperChatDragFrom = useRef(effectivePaperChatWidth);
+  const commitPaperChatWidth = (width: number): void => {
+    const next = clampChat(width);
+    setPaperChatWidth(next);
+    changeSettings({ paperChatWidth: next });
+  };
   /**
    * 文件面板里真有带 PDF 的 LaTeX 项目（由 FilesPanel 上报）。布局 A 的自动并排与
    * 「并排前把右栏拉宽」都要先知道这一点，而项目事实住在面板里。
@@ -1707,16 +1753,38 @@ export function App() {
         />
 
         <main
+          ref={paneRef}
           className="pane"
           data-layout={paperMode ? "paper" : "chat"}
-          // 布局 B：对话栏宽由 paper-layout.ts 的常量注入（CSS 只读变量，不再写一遍 340）
+          // 布局 B：对话栏宽由设置注入（CSS 只读变量；默认值仍是 paper-layout.ts 的 340）
           style={
             paperMode
-              ? ({ "--paper-chat-w": `${PAPER_CHAT_WIDTH}px` } as React.CSSProperties)
+              ? ({ "--paper-chat-w": `${effectivePaperChatWidth}px` } as React.CSSProperties)
               : undefined
           }
         >
           <div className="pane-main">
+            {/* 稿件区 ↔ 对话栏的拆分条：布局 B 才有（对话在右，拖它改对话栏宽）。
+                绝对定位骑在对话卡片左缘的竖线上，不吃对话栏的 7px */}
+            {paperMode && (
+              <SplitHandle
+                orientation="vertical"
+                className="paper-chat-handle"
+                label={t.paper.chatHandle}
+                onDragStart={() => {
+                  paperChatDragFrom.current = effectivePaperChatWidth;
+                }}
+                onDrag={(delta) => setPaperChatWidth(clampChat(paperChatDragFrom.current - delta))}
+                onDragEnd={(delta) => commitPaperChatWidth(paperChatDragFrom.current - delta)}
+                onStep={(delta) => commitPaperChatWidth(effectivePaperChatWidth - delta)}
+                onEdge={(edge) =>
+                  commitPaperChatWidth(
+                    edge === "min" ? PAPER_CHAT_WIDTH_RANGE.min : Number.MAX_SAFE_INTEGER,
+                  )
+                }
+                onReset={() => commitPaperChatWidth(PAPER_CHAT_WIDTH)}
+              />
+            )}
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
@@ -1829,6 +1897,9 @@ export function App() {
                 onCompileRun={() => setLatexInstallNotice(false)}
                 installNotice={latexInstallNotice}
                 paperLayout={paperMode}
+                settings={settings}
+                onSettingsChange={changeSettings}
+                onPaperSplit={setPaperSplit}
                 autoSplit={autoSplit}
                 onTogglePaperLayout={togglePaperLayout}
                 onPaperReady={setPaperReady}
