@@ -197,13 +197,22 @@ export interface HostInfo {
 export const MOBILE_PROTOCOL_VERSION = 1;
 
 /**
- * 手机 → 电脑的单帧上限（按 UTF-8 字节算，明文帧与加密帧都算）。
+ * 单帧上限。先说清两个词（2026-11-25 审查 N8）：**线上字节**是整帧 JSON 的 UTF-8 字节数——加密帧里是
+ * base64 之后的密文，比明文长 4/3；**明文字节**是密封之前那段 JSON 的 UTF-8 字节数。
  *
- * 电脑入站按这个数卡（`ws` 的 `maxPayload`，覆盖面比它小得多：未认证的连接也发不了大帧）。
- * 电脑 → 手机的出站帧可以到 `MOBILE_OUTBOUND_FRAME_MAX_BYTES`，**手机端的入站上限得按它设**。
+ * **手机 → 电脑**：电脑入站按**线上字节**卡 `MOBILE_FRAME_MAX_BYTES` = 64 KB（`ws` 的 `maxPayload` 与
+ * `parseInboundFrame` 两道都按它；未认证的连接也发不了大帧）。折成明文约 48 KB。合法请求里最大的是一条
+ * 4000 字的回复（`MOBILE_LIMITS.replyText`），每字 4 个字节写满，线上也才 21 KB 左右——手机端按 64 KB
+ * 设发出上限就够，别硬凑更大的帧。
+ *
+ * **电脑 → 手机**：电脑保证**明文字节**不超过 `MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES` = 256 KB（超了那一帧
+ * 就不发）。**线上字节**最多 `MOBILE_OUTBOUND_WIRE_MAX_BYTES` = 384 KB：明文加 16 字节 tag、按 base64
+ * 膨胀 4/3、再加帧外壳，向上留了余量。**手机端的入站上限（WebSocket 客户端的单帧上限、自己的缓冲区）
+ * 必须不小于这个数**；按 256 KB 设的话，电脑发得出、手机收不下。
  */
 export const MOBILE_FRAME_MAX_BYTES = 64 * 1024;
-export const MOBILE_OUTBOUND_FRAME_MAX_BYTES = 256 * 1024;
+export const MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES = 256 * 1024;
+export const MOBILE_OUTBOUND_WIRE_MAX_BYTES = 384 * 1024;
 
 /** 一页尾部最多给几条 */
 export const MOBILE_TAIL_PAGE = 60;

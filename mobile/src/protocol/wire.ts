@@ -4,7 +4,8 @@
  * 电脑侧的 `mobile-wire.ts` 管的是反方向（手机 → 电脑），而且会拖进电脑侧的一串模块，手机只
  * `import type`。这里只做手机要依赖的形状：帧的四种外壳、密文里的应答 / 通知、各方法的结果。
  * 规矩：
- * - 帧按**线上字节**卡上限（电脑出站明文上限 256 KB，加密、base64、外壳之后的长度）。
+ * - 帧按**线上字节**卡上限：契约的 `MOBILE_OUTBOUND_WIRE_MAX_BYTES` = 384 KB（电脑出站明文上限 256 KB，
+ *   加 16 字节 tag、base64 膨胀 4/3、再加帧外壳，向上留余量）。
  * - 缺字段、类型不对：这一帧不认（调用方断开或丢弃）。多出来的字段不拒——电脑比手机新时
  *   加字段是加法，手机照旧能用；形状变了电脑会抬协议版本，那时握手就对不上。
  * - 清单里单条会话坏了只丢那一条，不让一条坏数据挡住整张清单。
@@ -25,10 +26,16 @@ import type {
   SessionSummary,
   TailEntry,
 } from "../../../src/shared/mobile.ts";
-import { MOBILE_OUTBOUND_FRAME_MAX_BYTES, MOBILE_PROTOCOL_VERSION } from "../../../src/shared/mobile.ts";
+import { MOBILE_OUTBOUND_WIRE_MAX_BYTES, MOBILE_PROTOCOL_VERSION } from "../../../src/shared/mobile.ts";
 
-/** 线上一帧的字节上限：明文 256 KB + tag，base64 膨胀 4/3，再加外壳的余量 */
-export const INBOUND_WIRE_MAX_BYTES = Math.ceil((MOBILE_OUTBOUND_FRAME_MAX_BYTES + 16) / 3) * 4 + 256;
+/**
+ * 线上一帧的字节上限，直接取契约的 `MOBILE_OUTBOUND_WIRE_MAX_BYTES`（384 KB）。
+ *
+ * 两层的关系：电脑保证**明文**不超过 256 KB，**线上** = base64(明文 + 16 字节 tag) + 帧外壳，契约按
+ * 384 KB 给手机卡。这里必须直接用契约的线上数，不能从 256 KB 明文自己折算——折算出来的数比契约小，
+ * 会把落在余量里的合法大帧（比如线上 300 KB 出头）误拒。
+ */
+export const INBOUND_WIRE_MAX_BYTES = MOBILE_OUTBOUND_WIRE_MAX_BYTES;
 
 const encoder = new TextEncoder();
 

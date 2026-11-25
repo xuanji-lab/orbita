@@ -41,6 +41,19 @@ test("出站上限 256 KB 的明文加密后仍在入站上限之内", () => {
   assert.ok(`{"v":1,"n":9007199254740991,"ct":""}`.length + ct <= INBOUND_WIRE_MAX_BYTES);
 });
 
+test("入站上限就是契约的线上 384 KB：贴上线的合法大帧收，超 1 字节拒", () => {
+  // 两层关系钉死：电脑出站明文 ≤ 256 KB；线上 = base64(明文 + 16 字节 tag) + 帧外壳，契约给手机卡的是 384 KB
+  assert.equal(INBOUND_WIRE_MAX_BYTES, 384 * 1024);
+  const empty = `{"v":1,"n":1,"ct":""}`.length;
+  // 整帧正好 384 KB：收。旧算法从 256 KB 明文自行折算（约 342 KB），比契约小，这样的帧会被误拒
+  const atCap = `{"v":1,"n":1,"ct":"${"A".repeat(INBOUND_WIRE_MAX_BYTES - empty)}"}`;
+  assert.equal(new TextEncoder().encode(atCap).length, INBOUND_WIRE_MAX_BYTES);
+  assert.equal(parseHostFrame(atCap)?.kind, "sealed");
+  // 超上限 1 字节：拒
+  const overCap = `{"v":1,"n":1,"ct":"${"A".repeat(INBOUND_WIRE_MAX_BYTES - empty + 1)}"}`;
+  assert.equal(parseHostFrame(overCap), null);
+});
+
 test("应答与五种通知；清单里坏的那条丢掉、好的照收", () => {
   assert.deepEqual(parseSealedPayload('{"id":3,"ok":true,"result":null}'), { kind: "reply", id: 3, ok: true, result: null });
   const changed = parseSealedPayload(JSON.stringify({ event: "sessions.changed", params: { sessions: [session, { id: 1 }], removed: ["x", 2] } }));
