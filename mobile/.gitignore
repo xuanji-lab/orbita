@@ -1,0 +1,9 @@
+# 依赖与 expo prebuild 生成的原生工程（每次由 app.json 重新生成，不进仓）
+node_modules/
+android/
+ios/
+.expo/
+# gradle 出的 APK 与 metro 缓存
+*.apk
+*.aab
+.metro-health-check*

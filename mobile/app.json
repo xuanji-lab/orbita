@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "璇玑",
+    "slug": "orbita-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "../build/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.xuanjilab.orbita",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "../build/icon.png",
+        "backgroundColor": "#f5f5f5"
+      },
+      "softwareKeyboardLayoutMode": "resize",
+      "allowBackup": false
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
