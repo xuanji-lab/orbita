@@ -10,6 +10,7 @@
  * （规范形：带填充、末位不含冗余位、没有空白）——同一个密文只有一种写法，省得两端各算各的。
  */
 import type {
+  HelloBody,
   HelloFrame,
   MobileError,
   MobileMethod,
@@ -45,6 +46,9 @@ export function isClearFrame(frame: InboundFrame): frame is ClearFrame {
 export function isSealedFrame(frame: InboundFrame): frame is SealedFrame {
   return !("type" in frame);
 }
+
+/** 明文段手机能发的三种帧类型 */
+const CLEAR_TYPES = ["pair.start", "pair.prove", "hello"] as const;
 
 // ————————————————————————————————————————————————————————————————
 // 小工具
@@ -128,11 +132,14 @@ function b64Of(value: unknown, name: string, size: { exactly?: number; min?: num
   return { ok: true, value };
 }
 
+/** 子会话投递信封的开头：首行以 `<channel` 加空白起（`parseChannelPrompt` / `parseChannelBatch` 认的信封头都长这样） */
+const CHANNEL_ENVELOPE = /^<channel\s/;
 const sessionIdOf = (value: unknown): Checked<string> =>
   stringOf(value, "sessionId", { max: 36, pattern: SESSION_ID_PATTERN });
-const DEVICE_ID_PATTERN = /^[0-9a-f]{32}$/;
 const deviceIdOf = (value: unknown, name = "d"): Checked<string> =>
-  stringOf(value, name, { max: 32, pattern: DEVICE_ID_PATTERN });
+  stringOf(value, name, { max: 32, pattern: MOBILE_CRYPTO.deviceIdPattern });
+/** 解码后恰好 `bytes` 字节的 base64（定长，长度不对是形状错） */
+const fixedB64 = (value: unknown, name: string, bytes: number): Checked<string> => b64Of(value, name, { exactly: bytes });
 
 // ————————————————————————————————————————————————————————————————
 // 帧
@@ -163,64 +170,64 @@ function versionOf(fields: Record<string, unknown>): MobileError | null {
   return fields["v"] === MOBILE_PROTOCOL_VERSION ? null : { code: "bad_request", message: "unsupported protocol version" };
 }
 
-/** `d` / `n` / `ct` 三个字段：加密帧与 hello 帧共用 */
-function sealedBody(fields: Record<string, unknown>): Checked<Pick<SealedFrame, "d" | "n" | "ct">> {
-  const d = deviceIdOf(fields["d"]);
-  if (!d.ok) return d;
+/** `n` / `ct` 两个字段：加密帧与 hello 帧共用 */
+function sealedBody(fields: Record<string, unknown>): Checked<Pick<SealedFrame, "n" | "ct">> {
   const n = intOf(fields["n"], "n", 1, Number.MAX_SAFE_INTEGER);
   if (!n.ok) return n;
   // 密文至少是一个 tag；上限由帧大小管（密文永远比它解出来的明文长）
   const ct = b64Of(fields["ct"], "ct", { min: MOBILE_CRYPTO.tagBytes });
   if (!ct.ok) return ct;
-  return { ok: true, value: { d: d.value, n: n.value, ct: ct.value } };
+  return { ok: true, value: { n: n.value, ct: ct.value } };
 }
 
 function shapeClearFrame(raw: Record<string, unknown>): Wire<InboundFrame> {
   const type = raw["type"];
+  if (typeof type !== "string" || !(CLEAR_TYPES as readonly string[]).includes(type)) {
+    return bad(`unknown frame type "${echo(typeof type === "string" ? type : "")}"`);
+  }
+  const required = type === "pair.start" ? ["v", "type", "id"] : type === "pair.prove" ? ["v", "type", "id", "params"] : ["v", "type", "id", "d", "n", "ct"];
+  const fields = fieldsOf(raw, required, type === "pair.start" ? ["params"] : []);
+  if (!fields.ok) return fields;
+  const version = versionOf(fields.value);
+  if (version !== null) return { ok: false, error: version };
+  const id = intOf(fields.value["id"], "id", 0, 0x7fffffff);
+  if (!id.ok) return id;
   if (type === "pair.start") {
-    const fields = fieldsOf(raw, ["v", "type", "id", "params"]);
-    if (!fields.ok) return fields;
-    const version = versionOf(fields.value);
-    if (version !== null) return { ok: false, error: version };
-    const id = intOf(fields.value["id"], "id", 0, 0x7fffffff);
-    if (!id.ok) return id;
-    const params = fieldsOf(fields.value["params"], ["deviceName"]);
-    if (!params.ok) return params;
-    const deviceName = stringOf(params.value["deviceName"], "deviceName", { max: MOBILE_LIMITS.deviceName, min: 1, trim: true });
-    if (!deviceName.ok) return deviceName;
-    return { ok: true, value: { v: MOBILE_PROTOCOL_VERSION, type: "pair.start", id: id.value, params: { deviceName: deviceName.value } } };
+    const params = noParams(fields.value["params"]);
+    return params.ok ? { ok: true, value: { v: MOBILE_PROTOCOL_VERSION, type: "pair.start", id: id.value, params: params.value } } : params;
   }
   if (type === "pair.prove") {
-    const fields = fieldsOf(raw, ["v", "type", "id", "params"]);
-    if (!fields.ok) return fields;
-    const version = versionOf(fields.value);
-    if (version !== null) return { ok: false, error: version };
-    const id = intOf(fields.value["id"], "id", 0, 0x7fffffff);
-    if (!id.ok) return id;
-    const params = fieldsOf(fields.value["params"], ["offerId", "sig"]);
+    const params = fieldsOf(fields.value["params"], ["offerId", "deviceBoxPublic", "deviceName", "proof"]);
     if (!params.ok) return params;
-    const offerId = stringOf(params.value["offerId"], "offerId", { max: MOBILE_LIMITS.offerId, min: 1, pattern: /^[A-Za-z0-9_-]+$/ });
+    const offerId = stringOf(params.value["offerId"], "offerId", { max: MOBILE_LIMITS.offerId, pattern: MOBILE_CRYPTO.offerIdPattern });
     if (!offerId.ok) return offerId;
-    const sig = b64Of(params.value["sig"], "sig", { exactly: 64 });
-    if (!sig.ok) return sig;
-    return { ok: true, value: { v: MOBILE_PROTOCOL_VERSION, type: "pair.prove", id: id.value, params: { offerId: offerId.value, sig: sig.value } } };
+    const deviceBoxPublic = fixedB64(params.value["deviceBoxPublic"], "deviceBoxPublic", MOBILE_CRYPTO.keyBytes);
+    if (!deviceBoxPublic.ok) return deviceBoxPublic;
+    const deviceName = stringOf(params.value["deviceName"], "deviceName", { max: MOBILE_LIMITS.deviceName, min: 1, trim: true });
+    if (!deviceName.ok) return deviceName;
+    const proof = fixedB64(params.value["proof"], "proof", 32);
+    if (!proof.ok) return proof;
+    return {
+      ok: true,
+      value: {
+        v: MOBILE_PROTOCOL_VERSION,
+        type: "pair.prove",
+        id: id.value,
+        params: { offerId: offerId.value, deviceBoxPublic: deviceBoxPublic.value, deviceName: deviceName.value, proof: proof.value },
+      },
+    };
   }
-  if (type === "hello") {
-    const fields = fieldsOf(raw, ["v", "type", "id", "d", "n", "ct"]);
-    if (!fields.ok) return fields;
-    const version = versionOf(fields.value);
-    if (version !== null) return { ok: false, error: version };
-    const id = intOf(fields.value["id"], "id", 0, 0x7fffffff);
-    if (!id.ok) return id;
-    const body = sealedBody(fields.value);
-    if (!body.ok) return body;
-    return { ok: true, value: { v: MOBILE_PROTOCOL_VERSION, type: "hello", id: id.value, ...body.value } };
-  }
-  return bad(`unknown frame type "${echo(typeof type === "string" ? type : "")}"`);
+  const d = deviceIdOf(fields.value["d"]);
+  if (!d.ok) return d;
+  // hello 是手机方向的第一个加密帧：seq 必须是 1
+  if (fields.value["n"] !== 1) return bad('"n" must be 1 for hello');
+  const body = sealedBody(fields.value);
+  if (!body.ok) return body;
+  return { ok: true, value: { v: MOBILE_PROTOCOL_VERSION, type: "hello", id: id.value, d: d.value, n: 1, ct: body.value.ct } };
 }
 
 function shapeSealedFrame(raw: Record<string, unknown>): Wire<SealedFrame> {
-  const fields = fieldsOf(raw, ["v", "d", "n", "ct"]);
+  const fields = fieldsOf(raw, ["v", "n", "ct"]);
   if (!fields.ok) return fields;
   const version = versionOf(fields.value);
   if (version !== null) return { ok: false, error: version };
@@ -291,6 +298,8 @@ function paramsOf(method: MobileMethod, raw: unknown, id: number): Wire<MobileRe
       if (!sessionId.ok) return sessionId;
       const text = stringOf(fields.value["text"], "text", { max: MOBILE_LIMITS.replyText, min: 1, trim: true, multiline: true });
       if (!text.ok) return text;
+      // 子会话投递信封的开头：会被当成「父会话发来的话」而不是用户说的，跳过指令预处理——手机这条路直接拒
+      if (CHANNEL_ENVELOPE.test(text.value)) return bad('"text" looks like a channel delivery envelope');
       const requestId = stringOf(fields.value["requestId"], "requestId", { max: MOBILE_LIMITS.requestId, min: 1 });
       if (!requestId.ok) return requestId;
       return ok({ id, method, params: { sessionId: sessionId.value, text: text.value, requestId: requestId.value } });
@@ -299,12 +308,15 @@ function paramsOf(method: MobileMethod, raw: unknown, id: number): Wire<MobileRe
   return bad("unknown method");
 }
 
-/** `hello` 的密文里解开的东西：`{ name }`。名字可以是空串（设备没起名） */
-export function parseHelloName(raw: unknown): Wire<{ name: string }> {
-  const fields = fieldsOf(raw, ["name"]);
+/** `hello` 的密文里解开的东西：`{ pn, name? }`。名字想改才带，可以是空串 */
+export function parseHelloBody(raw: unknown): Wire<HelloBody> {
+  const fields = fieldsOf(raw, ["pn"], ["name"]);
   if (!fields.ok) return fields;
+  const pn = fixedB64(fields.value["pn"], "pn", MOBILE_CRYPTO.nonceBytes);
+  if (!pn.ok) return pn;
+  if (fields.value["name"] === undefined) return { ok: true, value: { pn: pn.value } };
   const name = stringOf(fields.value["name"], "name", { max: MOBILE_LIMITS.deviceName, trim: true });
-  return name.ok ? { ok: true, value: { name: name.value } } : name;
+  return name.ok ? { ok: true, value: { pn: pn.value, name: name.value } } : name;
 }
 
 // ————————————————————————————————————————————————————————————————

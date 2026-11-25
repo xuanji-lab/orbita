@@ -15,6 +15,9 @@
  * **安全边界**：现有 IPC 通道没有调用方鉴权，其中一条能取回明文密钥——手机的连接不桥接它们，
  * 只开下面列出的十个方法。所有从网络进来的对象都要过 `mobile-wire.ts` 的手写校验。
  *
+ * 配对与信道的形状按 2026-11-25 的安全审查改过（原规格的初稿在 git 历史里）：设备的长期私钥
+ * 不再从配对码加密的种子里派生、配对要双向确认、每条连接一把信道密钥。理由见第五节。
+ *
  * 纯模块：不 import electron / node，preload 与 renderer 也能引。
  */
 
@@ -184,8 +187,14 @@ export interface HostInfo {
 /** 协议版本。两边对不上就握手失败——形状变了抬这个数，不在线上兼容旧形状 */
 export const MOBILE_PROTOCOL_VERSION = 1;
 
-/** 单帧上限（按 UTF-8 字节算，明文帧与加密帧都算） */
-export const MOBILE_FRAME_MAX_BYTES = 256 * 1024;
+/**
+ * 手机 → 电脑的单帧上限（按 UTF-8 字节算，明文帧与加密帧都算）。
+ *
+ * 电脑入站按这个数卡（`ws` 的 `maxPayload`，覆盖面比它小得多：未认证的连接也发不了大帧）。
+ * 电脑 → 手机的出站帧可以到 `MOBILE_OUTBOUND_FRAME_MAX_BYTES`，**手机端的入站上限得按它设**。
+ */
+export const MOBILE_FRAME_MAX_BYTES = 64 * 1024;
+export const MOBILE_OUTBOUND_FRAME_MAX_BYTES = 256 * 1024;
 
 /** 一页尾部最多给几条 */
 export const MOBILE_TAIL_PAGE = 60;
@@ -217,12 +226,15 @@ export interface MobileError {
 export const MOBILE_LIMITS = {
   /** 配对时手机自报的名字 */
   deviceName: 80,
-  /** 提议的 id */
-  offerId: 64,
+  /** 提议的 id：32 个小写十六进制字符 */
+  offerId: 32,
   /** 手机给一次「回一句」铸的 id，用来对 `reply.sent` / `reply.failed` */
   requestId: 64,
-  /** 回复的正文（字符） */
-  replyText: 8000,
+  /**
+   * 回复的正文（字符）。四个字节一个的 emoji 写满也才 16 KB，加 base64 的膨胀与外壳远不到
+   * 单帧上限。手机是回一句，不是写文章。
+   */
+  replyText: 4000,
   /** 记录 id（翻页的 `before` 锚点） */
   recordId: 128,
 } as const;
@@ -256,42 +268,90 @@ export function deriveMobileSessionState(input: {
 // ————————————————————————————————————————————————————————————————
 
 /**
- * 连接分两段。
+ * 一条连接分三段。
  *
- * **明文段**（还没认出设备）：只认 `pair.start`、`pair.prove`、`hello` 三种帧，别的一来就断开。
- * 电脑的应答是 `{ v, id, ok, result | error }`。
+ * **明文段（一）**：刚连上，电脑先发 `host.hello`。手机要配对就发 `pair.start` / `pair.prove`，
+ * 这两帧必须在同一条连接上先后发出（不然旁听的第三方可以抢在手机前面把同一个证明再发一遍，
+ * 电脑会登记一台谁也没有私钥的孤儿设备）。
+ * 明文段只认 `pair.start`、`pair.prove`、`hello` 三种帧，别的一来就断开。电脑的应答是
+ * `{ v, id, ok, result | error }`。
  *
- * **加密段**：之后每一帧都是 `SealedFrame`，里面是请求 / 应答 / 通知。电脑给手机的应答与通知
- * 也包在 SealedFrame 里（同一把信道密钥，电脑自己方向的 seq）。
+ * **握手**：已配对的手机发 `hello`（它的第一个加密帧，seq = 1），用握手密钥 Kh 密封；电脑的
+ * 应答也是密封帧（同一个 Kh，电脑方向 seq = 1）。握手之前手机并没有验证对面是电脑，所以电脑
+ * 这头的应答不能明文发。
+ *
+ * **加密段**：之后每一帧都是 `{ v, n, ct }`，用信道密钥 K（每条连接一把）。里面是请求 / 应答 /
+ * 通知。两个方向各自的 seq 从 1 起严格递增，**必须恰好加 1**——跳号、重号都断开。
  */
+/** 连上之后电脑发的第一帧（明文）：这一条连接的新鲜数 */
+export interface HostHelloFrame {
+  v: typeof MOBILE_PROTOCOL_VERSION;
+  type: "host.hello";
+  /** base64：32 字节随机 */
+  nonce: string;
+}
+
+/** 手机 → 电脑：要一份配对提议 */
 export interface PairStartFrame {
   v: typeof MOBILE_PROTOCOL_VERSION;
   type: "pair.start";
   id: number;
-  params: { deviceName: string };
+  /** 没有参数（缺席或空对象） */
+  params?: Record<string, never>;
 }
 
+/**
+ * 手机 → 电脑：证明自己拿到了种子 S，并登记自己的加密公钥（手机用安全随机数自己生成的 X25519）。
+ * 同一条连接上必须先发过 `pair.start`。
+ */
 export interface PairProveFrame {
   v: typeof MOBILE_PROTOCOL_VERSION;
   type: "pair.prove";
   id: number;
-  params: { offerId: string; sig: string };
+  params: {
+    offerId: string;
+    /** base64：手机的 X25519 公钥，32 字节 */
+    deviceBoxPublic: string;
+    deviceName: string;
+    /** base64：`HMAC-SHA256(Kp, M)`，32 字节（见 MOBILE_CRYPTO.pairProof） */
+    proof: string;
+  };
 }
 
-/** 回来认设备：`d` 是设备 id，`ct` 里是 `{ name }`（手机此刻的名字）。这是手机方向的第一个加密帧（n = 1） */
+/** 回来认设备：`d` 是设备 id，密文里有手机这一条连接的新鲜数。这是手机方向的第一个加密帧（n = 1） */
 export interface HelloFrame {
   v: typeof MOBILE_PROTOCOL_VERSION;
   type: "hello";
   id: number;
+  /** 设备 id（32 个小写十六进制字符） */
   d: string;
-  n: number;
+  n: 1;
+  /** base64：AES-256-GCM 的密文 ‖ 16 字节 tag */
   ct: string;
 }
 
+/** `hello` 的密文里的东西 */
+export interface HelloBody {
+  /** base64：手机这一条连接的新鲜数，32 字节随机，每条连接现生成、不重用 */
+  pn: string;
+  /** 手机此刻的名字（想改名才带） */
+  name?: string;
+}
+
+/**
+ * 握手应答（电脑 → 手机）：带 `d`，让手机确认电脑认出的正是自己这台设备。用 Kh、电脑方向 seq = 1。
+ * 明文是 `{ id, ok: true, result: { host, protocol } }` 或 `{ id, ok: false, error }`。
+ */
+export interface HandshakeReplyFrame {
+  v: typeof MOBILE_PROTOCOL_VERSION;
+  d: string;
+  n: 1;
+  ct: string;
+}
+
+/** 加密段的一帧（两个方向同一个形状）。线路上不再带设备 id：一条连接在握手时已经绑定了设备 */
 export interface SealedFrame {
   v: typeof MOBILE_PROTOCOL_VERSION;
-  /** 设备 id（32 个小写十六进制字符） */
-  d: string;
   /** 这个方向的序号，从 1 起严格递增 */
   n: number;
   /** base64：AES-256-GCM 的密文 ‖ 16 字节 tag */
@@ -304,22 +364,30 @@ export type ClearReply<T> =
   | { v: typeof MOBILE_PROTOCOL_VERSION; id: number; ok: false; error: MobileError };
 
 export interface PairStartResult {
+  /** 32 个小写十六进制字符 */
   offerId: string;
   /** Unix 毫秒 */
   expiresAt: number;
   kdf: { name: "scrypt"; N: number; r: number; p: number };
   salt: string;
   iv: string;
+  /** base64：被配对码包起来的一次性种子，32 字节密文 ‖ 16 字节 tag */
   box: string;
+  /** base64：电脑的 X25519 公钥，32 字节 */
   hostBoxPublic: string;
-  hostSignPublic: string;
 }
 
 export interface PairProveResult {
+  /** 电脑铸的设备 id（32 个小写十六进制字符） */
   deviceId: string;
-  /** 电脑用同一个种子算出的手机加密公钥；手机拿它和自己算的核对 */
-  deviceBoxPublic: string;
+  /** base64：`HMAC-SHA256(Kc, M ‖ utf8(deviceId))`——手机验不过就丢掉刚生成的私钥（见 MOBILE_CRYPTO） */
+  hostProof: string;
   host: HostInfo;
+}
+
+export interface HelloResult {
+  host: HostInfo;
+  protocol: number;
 }
 
 // ————————————————————————————————————————————————————————————————
@@ -385,7 +453,13 @@ export type MobileReply =
   | { id: number; ok: true; result: unknown }
   | { id: number; ok: false; error: MobileError };
 
-/** 电脑 → 手机的通知（在密文里） */
+/**
+ * 电脑 → 手机的通知（在密文里）。
+ *
+ * `reply.failed` 是一条回复的**终态**：它可能在 `reply.sent` **之后**到——话发出去了、agent 那头这一轮
+ * 却没跑成。手机按到达顺序处理：sent 之后来的 failed 也要显示。sent 之前来的 failed 说明根本没发出去。
+ * 手机断线期间错过的回执不补发（`reply` 的应答只说排没排上）。
+ */
 export interface MobileNotifications {
   /** 只带变过的会话；`removed` 是从列表里消失的 id */
   "sessions.changed": { sessions: SessionSummary[]; removed: string[] };
@@ -393,7 +467,7 @@ export interface MobileNotifications {
   "tail.changed": { sessionId: string; rev: number };
   /** 排队的回复发出去了 */
   "reply.sent": { requestId: string };
-  /** 回复没发出去，或 agent 那头这一轮没跑成 */
+  /** 回复没发出去，或者 agent 那头这一轮没跑成 */
   "reply.failed": { requestId: string; error: MobileError };
   /** 电脑要退出了，别再重连 */
   "host.shutdown": Record<string, never>;
@@ -422,60 +496,113 @@ export function mobileNotification<E extends keyof MobileNotifications>(
 // 五、配对与信道的约定（两端照此算；全部用标准原语，不自家发明）
 // ————————————————————————————————————————————————————————————————
 
-/** 字符串都是 UTF-8；`b64` 是标准 base64（带填充，RFC 4648 §4）；多字节整数是大端 */
+/**
+ * 通用约定：字符串都是 UTF-8；`b64` 是标准 base64（带填充，RFC 4648 §4）；多字节整数是大端；
+ * `x ‖ y` 是字节串拼接；「盐空」按 RFC 5869 的意思——空盐等于 HashLen 个零字节。
+ *
+ * 2026-11-25 的安全审查推翻了原规格的三处，这一版是改过之后的：
+ *
+ * 1. **设备的长期私钥不从种子派生。** 原设计让手机从 S 派生自己的两对密钥——于是抓到一次配对流量
+ *    就得到一道可以永远慢慢验的题（GCM 的 tag 对上就是猜中了），猜中即永久冒充这台手机。现在手机用
+ *    安全随机数自己生成 X25519 密钥对，S 只当「这一次配对的确认密钥」；提议过期 S 就作废，猜中也没用。
+ *    Ed25519 的两对钥匙因此都不需要。
+ * 2. **配对双向确认。** 原设计手机靠「电脑回的公钥和我自己算的一致」识破冒充者，第 1 条改完这个
+ *    检查就没有了。现在电脑的成功应答带 `hostProof`，手机验不过就丢掉刚生成的私钥。
+ * 3. **每条连接一把信道密钥。** 原设计的 K 永不变、seq 每条连接从 1 起——同一把钥匙反复配同一个 IV，
+ *    录一次就能原样重放让 agent 再干一遍。现在电脑每条连接给一个新鲜数，K 由它派生；电脑的握手
+ *    应答也是密的。
+ *
+ * **配对的流程**（电脑是权威，手机只存自己的私钥）：
+ *
+ * 1. 用户在电脑的设置页点「生成配对码」：电脑生成一次性种子 S（32 字节随机）、6 位配对码
+ *    （`100000–999999`，`crypto.randomInt` 铸、不许用户自定）、盐（16）、IV（12）。S 用配对码派生的
+ *    密钥 AES-256-GCM 包起来得到 `box`。提议 3 分钟过期，同一时刻只有一个，过期或用掉后立刻丢弃 S。
+ * 2. 手机 `pair.start` 拿到提议，自己算 `keyPin`、解开 `box` 得到 S——解不开就是配对码不对，别往下发。
+ * 3. 手机生成自己的 X25519 密钥对，对 M 算证明，`pair.prove`。
+ * 4. 电脑用同一个 S 重算证明并 `timingSafeEqual` 比对；验过就登记设备、铸设备 id、回 `hostProof`。
+ *    手机验 `hostProof`：验不过就丢掉刚生成的私钥，报「没连上你的电脑，地址可能被劫持」。
+ * 5. 之后手机每次连上先走握手：电脑给新鲜数，手机回自己的新鲜数，两边各自派生这条连接的 K。
+ *    **没有令牌**——电脑存的只有设备的公钥，忘掉设备就是删掉这条记录，之后它再也算不出 K。
+ *
+ * **手机侧要守的**：`kdf` 只接受 `N = 2^17, r = 8, p = 1`；每条连接的 `pn` 现生成、不重用；
+ * `@noble/*` 精确锁版本；定值向量见 `src/main/mobile/crypto.test.ts`。
+ */
 export const MOBILE_CRYPTO = {
   /** 配对码：6 位十进制，取值 100000–999999（首位不为 0，免得看着像 5 位） */
   codeDigits: 6,
-  /** 提议多久过期（毫秒） */
-  offerTtlMs: 5 * 60_000,
+  /** 提议多久过期（毫秒）。原规格写 5 分钟；离线猜码堵住之后这是在线猜中的窗口，短一点好 */
+  offerTtlMs: 3 * 60_000,
   /** 一次性种子 S 的字节数 */
   seedBytes: 32,
-  /** scrypt：`keyPin = scrypt(utf8(code), salt, N, r, p, 32 字节)` */
+  /** `keyPin = scrypt(utf8(code), salt, N, r, p, 32 字节)` */
   kdf: { name: "scrypt", N: 131072, r: 8, p: 1 } as const,
   saltBytes: 16,
   ivBytes: 12,
-  /** AES-256-GCM 的 tag 长度 */
+  /** AES-256-GCM 的 tag 长度（只认 16） */
   tagBytes: 16,
-  /** 手机加密私钥的种子：`HKDF-SHA256(ikm = S, salt = 空, info = "orbita-mobile-box", 32 字节)` */
-  boxSeedInfo: "orbita-mobile-box",
-  /** 配对时的挑战：`SHA-256(utf8("orbita-pair-v1") ‖ utf8(offerId) ‖ salt ‖ iv ‖ box ‖ hostBoxPublic)` */
-  pairChallengeLabel: "orbita-pair-v1",
-  /** 信道密钥：`HKDF-SHA256(ikm = X25519(自己的加密私钥, 对方的加密公钥), salt = utf8(label) ‖ utf8(deviceId), info = "channel", 32 字节)` */
-  channelSaltLabel: "orbita-mobile-v1",
-  channelInfo: "channel",
-  /** 加密帧的 IV = 方向前缀（4 字节）‖ seq（8 字节大端）；AAD = utf8(deviceId) */
+  /** 新鲜数：`host.hello` 的 nonce 与手机的 pn，各 32 字节 */
+  nonceBytes: 32,
+  /** 公钥 / 私钥的长度（X25519 原始形） */
+  keyBytes: 32,
+
+  /** 提议 id：16 字节随机写成 32 个小写十六进制字符（定长，拼接才无歧义） */
+  offerIdPattern: /^[0-9a-f]{32}$/,
+  /** 设备 id：16 字节随机写成 32 个小写十六进制字符 */
+  deviceIdPattern: /^[0-9a-f]{32}$/,
+
+  /** 配对的证明：`proof = HMAC-SHA256(Kp, M)`，`Kp = HKDF-SHA256(ikm = S, 盐空, info = "orbita-pair-proof", 32)` */
+  pairProofInfo: "orbita-pair-proof",
+  /** 配对的确认：`hostProof = HMAC-SHA256(Kc, M ‖ utf8(deviceId))`，`Kc = HKDF-SHA256(S, 盐空, "orbita-pair-confirm", 32)` */
+  pairConfirmInfo: "orbita-pair-confirm",
+  /**
+   * 配对时双方算的消息：`M = utf8("orbita-pair-v1") ‖ utf8(offerId) ‖ salt ‖ iv ‖ box ‖ hostBoxPublic
+   * ‖ deviceBoxPublic ‖ utf8(deviceName)`。定长字段在前、名字在最后，拼接无歧义。
+   */
+  pairProofLabel: "orbita-pair-v1",
+
+  /** 握手密钥：`Kh = HKDF-SHA256(ikm = DH, 盐 = nonce, info = "orbita-hello-v1", 32)` */
+  helloInfo: "orbita-hello-v1",
+  /**
+   * 信道密钥：`K = HKDF-SHA256(ikm = DH, 盐 = nonce ‖ pn ‖ utf8(deviceId), info = "orbita-channel-v1", 32)`。
+   * `DH = X25519(自己的加密私钥, 对方的加密公钥)`（原始输出，不再哈希）；`nonce` 是电脑给的新鲜数，
+   * `pn` 是手机的，都是解码后的 32 字节。
+   */
+  channelInfo: "orbita-channel-v1",
+
+  /** 加密帧的 IV = 方向前缀（4 字节 ASCII）‖ seq（8 字节大端）；AAD = utf8(deviceId) */
   ivDeviceToHost: "D2H>",
   ivHostToDevice: "H2D>",
-  /** 设备 id：16 字节随机，写成 32 个小写十六进制字符 */
-  deviceIdBytes: 16,
+
   /**
-   * 限速与上限
+   * 限速与上限（电脑侧执行）
    */
   maxProveAttemptsPerOffer: 5,
   pairStartPerMinutePerAddress: 10,
   maxOnlineDevices: 8,
+  /** 还没认出设备的连接同时最多几条 */
+  maxUnauthenticatedConnections: 8,
+  /** 所有连接（含未认证的）同时最多几条 */
+  maxConnections: 16,
+  /** 连上之后多久没过握手就断（毫秒） */
+  handshakeTimeoutMs: 10_000,
   /** 每条连接每秒最多收几帧 */
   maxFramesPerSecond: 20,
   /** 多久发一次心跳（WebSocket 协议级 ping 帧，手机端库会自动回 pong） */
   heartbeatMs: 30_000,
   /** 多久没收到任何帧（含 pong）就断开 */
   idleTimeoutMs: 90_000,
+  /** 同一台设备重复发同一个 `reply` 的 `requestId`：这段时间内回上次的结果，不再发一轮 */
+  replyDedupMs: 10 * 60_000,
+  /** 每台设备各方法的重活限速：`[次数, 窗口毫秒]` */
+  methodLimits: {
+    "sessions.list": [1, 2_000],
+    "tail.load": [2, 1_000],
+    "tail.watch": [5, Number.POSITIVE_INFINITY],
+    reply: [10, 60_000],
+  } as const,
+  /** 每台设备的出站上限（字节 / 秒），超出先攒着，超太久就断 */
+  outboundBytesPerSecond: 512 * 1024,
 } as const;
-
-/**
- * 配对的流程（电脑是权威，手机只存配对凭据）：
- *
- * 1. 用户在电脑的设置页点「生成配对码」：电脑生成一次性种子 S、6 位配对码、盐、IV，把 S 用
- *    `keyPin`（配对码经 scrypt 派生）AES-256-GCM 包起来得到 `box`。提议 5 分钟过期，同一时刻只有
- *    一个有效提议，过期或用掉后立刻丢弃 S。
- * 2. 手机 `pair.start` 拿到提议，自己算 `keyPin`、解开 `box` 得到 S——解不开就是配对码不对。
- * 3. 手机从 S 派生自己的两对密钥：**签名** Ed25519（种子 = S）；**加密** X25519（种子 = 上面的
- *    HKDF）。电脑拿同一个 S 能算出同样的公钥，所以手机不用自报公钥、电脑也不用信它自报的。
- * 4. 手机对挑战签名，`pair.prove`。电脑用从 S 派生的签名公钥验签：验过就登记设备、铸设备 id、
- *    回 `deviceBoxPublic`（手机拿它核对自己算的）。
- * 5. 之后手机每次连上先发 `hello`：电脑按设备 id 找到设备、算出信道密钥 K、解得开就算认出。
- *    **没有令牌**——电脑存的只有设备的公钥，忘掉设备就是删掉这条记录，之后它再也算不出 K。
- */
 
 // ————————————————————————————————————————————————————————————————
 // 六、给设置 IPC 的入参形状（主进程 handler 校验后的值）
