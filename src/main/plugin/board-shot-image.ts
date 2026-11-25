@@ -40,3 +40,7 @@ export function boardShotViewport(raw: unknown): { width: number; height: number
   return width > 0 && height > 0 ? { width, height } : null;
 }
 
+/** 原生取帧可能只回局部：尺寸必须对上期望的物理像素，缺一条边都不能进缓存 */
+export function boardShotSizeMatches(size: { width: number; height: number }, expected: { width: number; height: number }, tolerance = 1): boolean {
+  return Math.abs(size.width - expected.width) <= tolerance && Math.abs(size.height - expected.height) <= tolerance;
+}

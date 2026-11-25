@@ -6,14 +6,14 @@
  *   矩形必须整块落在这一页此刻的视口里；截到的图只回给调用方，不落盘、不进日志。
  * 入参一律当不可信：weekStart 非有限数回 null；哈希不过 /^[0-9a-f]{64}$/ 回 null。
  */
-import { ipcMain, nativeImage, type WebContents } from "electron";
+import { ipcMain, nativeImage, type NativeImage, type WebContents } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { BoardShotResponse, BoardWeekResponse } from "../../shared/plugin-board.ts";
 import { boardShotInViewport, boardShotRect } from "../../shared/plugin-board.ts";
 import { assembleBoardWeek, type BoardWeekDeps } from "./board-week.ts";
-import { cdp } from "../browser/cdp.ts";
+import { cdp, withTimeout } from "../browser/cdp.ts";
 import { captureFrame } from "../browser/frame-capture.ts";
-import { boardImagePainted, boardShotViewport } from "./board-shot-image.ts";
+import { boardImagePainted, boardShotSizeMatches, boardShotViewport } from "./board-shot-image.ts";
 import { boardFrameOf, type BoardTemplateStore } from "./board-snapshot.ts";
 import type { PanelFrames } from "./panel-frame.ts";
 import { mainWindows } from "../window/main-windows.ts";
@@ -27,18 +27,33 @@ export interface BoardIpcDeps {
 /** 同一页面里的多块看板可能一起画好；capturePage 并发会等不到帧，按 webContents 串行 */
 const boardShotQueues = new Map<number, Promise<BoardShotResponse>>();
 
-function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<typeof boardShotRect>>): Promise<BoardShotResponse> {
+/** 原生 capturePage 没有 deadline：只给它 2 秒，挂住就换 CDP 路，不让后台留图拖住 IPC */
+const NATIVE_SHOT_TIMEOUT_MS = 2_000;
+
+/** 整窗取帧但不传裁剪矩形：原生快路省掉整页 PNG 的编码、传输与解码；尺寸不合 / 取不到再回现有 CDP 整页取帧 */
+async function boardFullPage(contents: WebContents, viewport: { width: number; height: number }, ratio: number): Promise<NativeImage | null> {
+  try {
+    const page = await withTimeout(contents.capturePage(), NATIVE_SHOT_TIMEOUT_MS, "capturePage did not respond in time.");
+    if (!page.isEmpty() && boardShotSizeMatches(page.getSize(), { width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) }, 2)) return page;
+  } catch {
+    // 换下面的 CDP 路
+  }
+  const png = await captureFrame(contents);
+  return png === null ? null : nativeImage.createFromBuffer(png);
+}
+
+function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<typeof boardShotRect>>, viewport: { width: number; height: number }): Promise<BoardShotResponse> {
   const previous = boardShotQueues.get(contents.id) ?? Promise.resolve(null);
   const next = previous.then(async () => {
     try {
-      // CDP clip 在 Electron 里会留下一个等于裁剪区的仿真视口。整页取帧后只在内存里裁，页面布局不动。
-      const png = await captureFrame(contents);
-      if (png === null) return null;
-      const page = nativeImage.createFromBuffer(png);
       const ratio = await contents.executeJavaScript("window.devicePixelRatio || 1");
       if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 1 || ratio > 3) return null;
-      const image = page.crop({ x: Math.round(rect.x * ratio), y: Math.round(rect.y * ratio), width: Math.round(rect.width * ratio), height: Math.round(rect.height * ratio) });
-      if (image.isEmpty() || !boardImagePainted(image)) return null;
+      // 原生 capturePage(rect) 曾回局部图；这里绝不给它矩形，整窗尺寸也对不上就丢弃并走 CDP
+      const page = await boardFullPage(contents, viewport, ratio);
+      if (page === null) return null;
+      const expected = { width: Math.round(rect.width * ratio), height: Math.round(rect.height * ratio) };
+      const image = page.crop({ x: Math.round(rect.x * ratio), y: Math.round(rect.y * ratio), width: expected.width, height: expected.height });
+      if (image.isEmpty() || !boardShotSizeMatches(image.getSize(), expected) || !boardImagePainted(image)) return null;
       const size = image.getSize();
       return { base64: image.toPNG().toString("base64"), width: size.width, height: size.height };
     } catch {
@@ -72,6 +87,6 @@ export function registerBoardIpc(deps: BoardIpcDeps): void {
       return null;
     }
     if (viewport === null || !boardShotInViewport(rect, viewport)) return null;
-    return captureBoardShot(contents, rect);
+    return captureBoardShot(contents, rect, viewport);
   });
 }

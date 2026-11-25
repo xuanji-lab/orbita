@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { luminanceDeviation, boardShotViewport } from "./board-shot-image.ts";
+import { luminanceDeviation, boardShotSizeMatches, boardShotViewport } from "./board-shot-image.ts";
 
 function solid(red: number, green: number, blue: number): Uint8Array {
   const data = new Uint8Array(4 * 16 * 4);
@@ -36,3 +36,10 @@ test("CDP 视口只接受有限的正宽高；形状不对、零值、负值都�
   }
 });
 
+test("原生取帧与裁图尺寸必须完整；亚像素取整容差内通过，局部图拒绝", () => {
+  assert.equal(boardShotSizeMatches({ width: 1250, height: 900 }, { width: 1250, height: 900 }), true);
+  assert.equal(boardShotSizeMatches({ width: 1251, height: 899 }, { width: 1250, height: 900 }), true);
+  assert.equal(boardShotSizeMatches({ width: 1112, height: 496 }, { width: 1250, height: 900 }), false);
+  assert.equal(boardShotSizeMatches({ width: 2882, height: 1800 }, { width: 2880, height: 1800 }, 2), true);
+  assert.equal(boardShotSizeMatches({ width: 2883, height: 1800 }, { width: 2880, height: 1800 }, 2), false);
+});
