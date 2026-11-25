@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import {
   BOARD_SNAPSHOT_CARD_MAX_BYTES,
   BOARD_SNAPSHOT_TOTAL_MAX_BYTES,
+  boardShotInViewport,
   boardShotRect,
   parsePluginBoardDetails,
   type PluginBoardOutcome,
@@ -353,6 +354,16 @@ describe("board:shot", () => {
       { rect: { x: 0, y: 0, width: 4096, height: 4097 } },
     ];
     for (const raw of invalid) assert.equal(boardShotRect(raw), null, JSON.stringify(raw));
+  });
+
+  test("截图矩形只能整块落在这一页自己的视口里；留 1px 给取整", () => {
+    const viewport = { width: 1200, height: 800 };
+    assert.equal(boardShotInViewport({ x: 332, y: 104, width: 789, height: 400 }, viewport), true);
+    assert.equal(boardShotInViewport({ x: 411, y: 400, width: 789, height: 400 }, viewport), true);
+    assert.equal(boardShotInViewport({ x: 413, y: 400, width: 789, height: 400 }, viewport), false);
+    assert.equal(boardShotInViewport({ x: 332, y: 104, width: 870, height: 400 }, viewport), false);
+    assert.equal(boardShotInViewport({ x: 332, y: 104, width: 789, height: 698 }, viewport), false);
+    assert.equal(boardShotInViewport({ x: 0, y: 0, width: 1, height: 1 }, { width: 0, height: 800 }), false);
   });
 });
 

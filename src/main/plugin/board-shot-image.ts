@@ -1,5 +1,5 @@
 /**
- * 看板截图的内容 sanity check：空白外框不能进缓存。
+ * 看板截图（`board:shot`）在主进程里的两段纯逻辑：视口大小的解析、内容 sanity check。
  * nativeImage.toBitmap 是 BGRA；每 16 个像素取一个样本，避免每块看板都全图扫描。
  */
 import type { NativeImage } from "electron";
@@ -26,3 +26,17 @@ export function luminanceDeviation(bitmap: Uint8Array): number {
 export function boardImagePainted(image: NativeImage): boolean {
   return luminanceDeviation(image.toBitmap()) >= 12;
 }
+
+/**
+ * `Page.getLayoutMetrics` 的 cssVisualViewport → 这一页此刻的视口大小（CSS 像素）。问的是调试协议而不是页面脚本：
+ * 页面自己报的数不可信。形状不对、不是有限正数回 null。
+ */
+export function boardShotViewport(raw: unknown): { width: number; height: number } | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const viewport = raw as Record<string, unknown>;
+  const width = viewport["clientWidth"];
+  const height = viewport["clientHeight"];
+  if (typeof width !== "number" || typeof height !== "number" || !Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+

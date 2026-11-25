@@ -267,7 +267,10 @@ export type BoardFrameResult = { frameUrl: string } | null;
 
 // ---------- 切回会话时的看板位图（`board:shot`） ----------
 
-/** 宿主窗口里看板外框的矩形（CSS 像素；主进程按这个区域截自己这一页，不截别的窗口） */
+/**
+ * 宿主窗口里看板「此刻看得见的那一片」的矩形（CSS 像素；主进程按这个区域截自己这一页，不截别的窗口）。
+ * 整块看板比对话区高（原地展开）时只是其中一段，所以贴回去要钉在它从看板顶部往下的位置上。
+ */
 export interface BoardShotRect {
   x: number;
   y: number;
@@ -302,6 +305,19 @@ export function boardShotRect(raw: unknown): BoardShotRect | null {
   const height = Math.round(rect["height"] as number);
   if (x < 0 || y < 0 || width < 1 || height < 1 || width > 4096 || height > 4096 || width * height > 16_777_216) return null;
   return { x, y, width, height };
+}
+
+/**
+ * 矩形是不是整块落在这一页此刻的视口里（CSS 像素；留 1px 给取整）。视口之外的不是屏幕上已有的内容——
+ * 截出来只会是别的窗口或空白，所以不让截。
+ */
+export function boardShotInViewport(rect: BoardShotRect, viewport: { width: number; height: number }): boolean {
+  return (
+    viewport.width > 0 &&
+    viewport.height > 0 &&
+    rect.x + rect.width <= viewport.width + 1 &&
+    rect.y + rect.height <= viewport.height + 1
+  );
 }
 
 // ---------- 全局周看板（`board:week`） ----------

@@ -1,18 +1,22 @@
 /**
  * 看板的 IPC —— 四层契约的第 2 层（契约在 shared/plugin-board.ts）。
  * - `board:week`：全局周看板的数据（装配在 board-week.ts，纯核可测）；
- * - `board:frame`：按快照画卡——模板哈希 → 一次性 iframe 地址（模板仓库里读出来、内容对得上哈希才给）。
+ * - `board:frame`：按快照画卡——模板哈希 → 一次性 iframe 地址（模板仓库里读出来、内容对得上哈希才给）；
+ * - `board:shot`：截发起调用的这张主窗口自己页面上的一块（切回会话时看板先贴位图用）。只认主窗口的 webContents，
+ *   矩形必须整块落在这一页此刻的视口里；截到的图只回给调用方，不落盘、不进日志。
  * 入参一律当不可信：weekStart 非有限数回 null；哈希不过 /^[0-9a-f]{64}$/ 回 null。
  */
 import { ipcMain, nativeImage, type WebContents } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import type { BoardShotResponse, BoardWeekResponse } from "../../shared/plugin-board.ts";
-import { boardShotRect } from "../../shared/plugin-board.ts";
+import { boardShotInViewport, boardShotRect } from "../../shared/plugin-board.ts";
 import { assembleBoardWeek, type BoardWeekDeps } from "./board-week.ts";
+import { cdp } from "../browser/cdp.ts";
 import { captureFrame } from "../browser/frame-capture.ts";
-import { boardImagePainted } from "./board-shot-image.ts";
+import { boardImagePainted, boardShotViewport } from "./board-shot-image.ts";
 import { boardFrameOf, type BoardTemplateStore } from "./board-snapshot.ts";
 import type { PanelFrames } from "./panel-frame.ts";
+import { mainWindows } from "../window/main-windows.ts";
 
 export interface BoardIpcDeps {
   week: BoardWeekDeps;
@@ -53,10 +57,21 @@ export function registerBoardIpc(deps: BoardIpcDeps): void {
     return assembleBoardWeek(deps.week, weekStart);
   });
   ipcMain.handle(ipcChannels.boardFrame, (_e, raw: unknown) => boardFrameOf(deps, raw));
-  // 只截发起调用的这个 webContents：renderer 给的是看板在自己页面里的 CSS 矩形，不能借它截别人的窗口
+  // 只截发起调用的这个 webContents 自己的页面，而且只认主窗口：renderer 给的矩形只能落在这一页此刻的视口里，
+  // 借它截不到别的窗口，也截不到屏幕上没有的内容。截到的图只回给调用方
   ipcMain.handle(ipcChannels.boardShot, async (event, raw: unknown): Promise<BoardShotResponse> => {
     const rect = boardShotRect(raw);
     if (rect === null) return null;
-    return captureBoardShot(event.sender, rect);
+    const contents = event.sender;
+    if (contents.isDestroyed() || !mainWindows.list().some((window) => window.webContents === contents)) return null;
+    // 视口大小问调试协议（CSS 像素），不问页面脚本；问不到就不截
+    let viewport: { width: number; height: number } | null;
+    try {
+      viewport = boardShotViewport((await cdp(contents, "Page.getLayoutMetrics") as { cssVisualViewport?: unknown }).cssVisualViewport);
+    } catch {
+      return null;
+    }
+    if (viewport === null || !boardShotInViewport(rect, viewport)) return null;
+    return captureBoardShot(contents, rect);
   });
 }
