@@ -22,7 +22,7 @@ import type { CompactedRecord, IntentRecallRecord, SessionRecord, TranscriptReco
 import type { FileTurnRecord, FileTurnView, MediaArtifact, RevertRecord } from "@shared/revert";
 import type { PluginInstallRow } from "@shared/plugin";
 // 值导入必须走相对路径带 .ts 后缀：本文件被 node --test 直接加载，@shared 别名只能解析类型（AGENTS.md 硬规则）
-import { parseChannelPrompt } from "../../../../shared/channel.ts";
+import { parseChannelBatch } from "../../../../shared/channel.ts";
 import { parsePluginInstallRow } from "../../../../shared/plugin.ts";
 import { parseAutomationModeRow, type AutomationModeRow } from "../../../../shared/automation.ts";
 import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
@@ -115,6 +115,15 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
         mark: { peerId: record.peerId, messageId: record.messageId, from: record.from, kind: record.kind },
         timestamp: record.timestamp,
       });
+      // 合并投递的其余信封各画一行（key 带序号，首行 key 不变）
+      (record.also ?? []).forEach((more, index) => {
+        units.push({
+          kind: "channelMark",
+          key: `${record.id}:also${index}`,
+          mark: { peerId: more.peerId, messageId: more.messageId, from: more.from, kind: more.kind },
+          timestamp: record.timestamp,
+        });
+      });
       continue;
     }
     if (record.role === "tool") continue;
@@ -140,9 +149,16 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
       // 首个 text 块能解出信封就按同一条判定画成标记行、不产 user 单元——
       // key 与落盘后的 channel-mark 记录相同（都是这条 user item 的 id），
       // 重载前后 React key 保持稳定。
-      const envelope = channelEnvelopeOf(record);
-      if (envelope !== null) {
-        units.push({ kind: "channelMark", key: record.id, mark: envelope, timestamp: record.timestamp });
+      const envelopes = channelEnvelopesOf(record);
+      if (envelopes.length > 0) {
+        envelopes.forEach((envelope, index) => {
+          units.push({
+            kind: "channelMark",
+            key: index === 0 ? record.id : `${record.id}:also${index - 1}`,
+            mark: envelope,
+            timestamp: record.timestamp,
+          });
+        });
         continue;
       }
       units.push({ kind: "user", key: record.id, item: record });
@@ -173,16 +189,20 @@ export function flattenRenderUnits(records: readonly TranscriptRecord[]): Render
 /**
  * user 记录的首个 text 块能否解出通道信封——同 `main/session/recorder.ts` 的
  * `channelMarkOf` 判定，只是画在渲染层而不是落盘层（重载前的活会话还没走过
- * recorder，实时流里它仍是一条带信封文本的 user item）。
+ * recorder，实时流里它仍是一条带信封文本的 user item）。合并投递带几条信封就返回几条。
  */
-function channelEnvelopeOf(
+function channelEnvelopesOf(
   item: Extract<TranscriptItem, { role: "user" }>,
-): { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind } | null {
-  const text = item.content.find((block) => block.type === "text");
-  if (text === undefined || text.type !== "text") return null;
-  const parsed = parseChannelPrompt(text.text);
-  if (parsed === null) return null;
-  return { peerId: parsed.peerId, messageId: parsed.messageId, from: parsed.from, kind: parsed.kind };
+): { peerId: string; messageId: string; from: "parent" | "child"; kind: ChannelMessageKind }[] {
+  // 回显的正文按空行拆成多个 text 块：合并信封的各条信封落在不同的块里，要拼回全文再认
+  const joined = item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n");
+  if (joined === "") return [];
+  return parseChannelBatch(joined).map((parsed) => ({
+    peerId: parsed.peerId,
+    messageId: parsed.messageId,
+    from: parsed.from,
+    kind: parsed.kind,
+  }));
 }
 
 /**

@@ -229,6 +229,13 @@ function cleanEnvelopeTitle(title: string): string {
   return cleaned === "" ? "Untitled" : cleaned;
 }
 
+/** 信封结束后的说明行：解析批量信封时也用它定位**外层** `</channel>`。 */
+function channelPromptNotice(from: ChannelSide, peer: { id: string; title: string }): string {
+  return from === "parent"
+    ? "This message came from your parent session through the sub-session channel. Report back with report_to_parent (kind: question / progress / done / failed); text in your normal reply is not delivered to the parent."
+    : `This message came from your sub-session "${peer.title}" (id ${peer.id}) through its channel. To answer, call reply_subsession with that id; text in your normal reply is not delivered to the sub-session, so do not pretend to answer it here.`;
+}
+
 /**
  * 把一条通道消息包成投给模型看的信封。`peer` 是**接收方眼里的「对面」**：
  * 投给子时 peer 是父，投给父时 peer 是子——不是消息的 `from`（消息发送方）。
@@ -243,10 +250,7 @@ export function composeChannelPrompt(
     peer.workbench === undefined
       ? []
       : [`${message.from === "parent" ? "Parent session" : "Sub-session"} workbench: ${peer.workbench}`];
-  const notice =
-    message.from === "parent"
-      ? "This message came from your parent session through the sub-session channel. Report back with report_to_parent (kind: question / progress / done / failed); text in your normal reply is not delivered to the parent."
-      : `This message came from your sub-session "${title}" (id ${peer.id}) through its channel. To answer, call reply_subsession with that id; text in your normal reply is not delivered to the sub-session, so do not pretend to answer it here.`;
+  const notice = channelPromptNotice(message.from, { id: peer.id, title });
   // lang 属性放在首行末尾：parseChannelPrompt 的前缀锚点不受影响，旧信封没有它照常解析
   const lang = message.lang === undefined ? "" : ` lang="${message.lang}"`;
   return [
@@ -290,6 +294,62 @@ export function userRepliesNote(replies: readonly ChannelMessage[]): string {
     ...replies.map((reply) => `- "${reply.text}"`),
     "Treat them as the user's decisions, not as something the sub-session made up.",
   ].join("\n");
+}
+
+/**
+ * 合并信封：几个子会话的回报凑成**一条**用户消息投给父模型（「现在讨论」/ 积压合并）。
+ * 每条回报仍是 `composeChannelPrompt` 的原样信封，模型看到的格式不变；
+ * 用户代父回复过的话（`userRepliesNote`）紧跟在它所属那条信封后面。
+ * 信封之间空一行——`parseChannelBatch` 靠「空行 + 信封首行」切段。
+ * 只有一条时与单条投递逐字相同（不多不少），旧路径不受影响。
+ */
+export function composeChannelBatchPrompt(
+  entries: readonly { message: ChannelMessage; peer: { id: string; title: string; workbench?: string }; note?: string }[],
+): string {
+  return entries
+    .map(({ message, peer, note }) => {
+      const envelope = composeChannelPrompt(message, peer);
+      return note === undefined || note === "" ? envelope : `${envelope}\n${note}`;
+    })
+    .join("\n\n");
+}
+
+/**
+ * 合并信封里每条信封的首行属性，按出现顺序。
+ *
+ * **不按正文里的 `\n\n<channel` 切**：那会把子会话汇报 Orbita 通道实现时贴出的伪信封
+ * 当成新标记。这里沿 compose 产生的真实结构走：外层首行 → 与 peer/title 对应的
+ * `</channel> + 说明行` → 空行 → 下一条外层首行。正文里即使嵌了一整段假信封，
+ * 它的说明行指向另一个 peer，不会被当成外层边界。
+ */
+export function parseChannelBatch(
+  text: string,
+): NonNullable<ReturnType<typeof parseChannelPrompt>>[] {
+  const out: NonNullable<ReturnType<typeof parseChannelPrompt>>[] = [];
+  let rest = text;
+  while (rest !== "") {
+    const parsed = parseChannelPrompt(rest);
+    if (parsed === null) return out.length === 0 ? [] : out;
+    out.push(parsed);
+    const firstLine = rest.split("\n")[0] ?? "";
+    const title = / title="([^"]*)">$/.exec(firstLine)?.[1] ?? "Untitled";
+    const notice = channelPromptNotice(parsed.from, { id: parsed.peerId, title });
+    const boundary = `\n</channel>\n${notice}`;
+    const at = rest.indexOf(boundary);
+    // 单条旧信封保持 parseChannelPrompt 的兼容；没有下一条可认时到此为止
+    if (at === -1) return out;
+    const after = at + boundary.length;
+    if (rest.slice(after, after + 2) === "\n\n") {
+      rest = rest.slice(after + 2);
+      continue;
+    }
+    // 代父回复 note 跟在外层说明之后、下一条信封之前（composeChannelBatchPrompt 的结构）。
+    // 它不属于子会话正文；只跨过这一段，仍不回退到全文搜 `<channel`。
+    const separator = rest.indexOf("\n\n", after);
+    if (separator === -1 || !rest.startsWith("<channel ", separator + 2)) return out;
+    rest = rest.slice(separator + 2);
+  }
+  return out;
 }
 
 /** 信封首行的属性顺序固定（from / kind / peer / message），锚定在字符串开头——只认首行。 */
