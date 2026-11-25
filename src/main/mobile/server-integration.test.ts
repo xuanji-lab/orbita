@@ -580,7 +580,7 @@ describe("未认证的连接：全局最多 8 条，同一个来源地址最多�
 });
 
 
-describe("契约备注：形状不对的请求带回自己的 id", () => {
+describe("契约备注：形状不对的请求带回自己的 id；hello 之后要等握手应答", () => {
   test("形状不对的请求，应答带请求自己的 id（空文本、多带字段、未知方法）；读不出 id 才是 0，连接不断", async () => {
     const { port, store } = await fixture();
     const session = await openAuthenticated(port, store, 6);
@@ -622,5 +622,23 @@ describe("契约备注：形状不对的请求带回自己的 id", () => {
     assert.equal((await another.next())["id"], 0);
   });
 
-
+  test("hello 与第一个数据帧同拍发出：这条连接被断开（契约：收到握手应答再发数据帧）", async () => {
+    // 这条用例是给 mobile.ts 里那句契约说明把关的：电脑这头以后要是能容错了，同步改那句话
+    const { port, store } = await fixture();
+    const device = generateBoxKeyPair();
+    const deviceId = "cd".repeat(16);
+    await store.addDevice({ id: deviceId, name: "已配对", boxPublic: device.publicRaw.toString("base64"), pairedAt: 1, lastSeenAt: null });
+    const phone = await Phone.open(port);
+    phones.push(phone);
+    const hostHello = await phone.next();
+    const nonce = Buffer.from(hostHello["nonce"] as string, "base64");
+    const shared = sharedSecret(boxPrivateKeyFromRaw(device.privateRaw), HOST.publicRaw);
+    const pn = Buffer.alloc(32, 6);
+    // 不等握手应答，同一拍把 hello 和第一个数据帧都发出去
+    phone.send({ v: 1, type: "hello", id: 1, d: deviceId, n: 1, ct: sealFrame(helloKey(shared, nonce), "deviceToHost", 1, deviceId, JSON.stringify({ pn: pn.toString("base64") })).ct });
+    phone.send({ v: 1, n: 1, ct: sealFrame(channelKey(shared, nonce, pn, deviceId), "deviceToHost", 1, deviceId, '{"id":1,"method":"ping"}').ct });
+    const outcome = await Promise.race([phone.closed.then(() => "closed"), sleep(2_000).then(() => "still-open")]);
+    assert.equal(outcome, "closed");
+    assert.equal(server?.isConnected(deviceId), false);
+  });
 });
