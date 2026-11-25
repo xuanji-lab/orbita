@@ -9,10 +9,12 @@ import { LANGUAGES, type Language } from "../../../../shared/settings.ts";
  * - screen：pair（配对）/ list（会话清单）/ chat（对话）/ overview（总览图）/ sheet（某一屏的全部状态排一行）
  * - scene：清单的三档量 empty / typical / full
  * - state：pair 的 empty / expired / offline；chat 的 typical / full / loading / reconnecting / reply-running / waiting
- * - device：android（412×915）/ ipad（iPad mini 竖屏 744×1133）
+ * - device：android（412×915）/ android-s（小屏安卓 360×780）/ ipad（iPad mini 竖屏 744×1133）
  * - theme：light / black（玄）
  * - compare=desktop：手机旁边放一份同主题的桌面预览（同屏对照）
  * - tall=1：清单不裁到屏高，整列画出来（看满载时下面的工作区）
+ * - offline=1：和电脑断开（清单的主机条与状态饼退灰）；对话的 reconnecting 自带断线
+ * - open=<工作区 id>：清单里先展开这个工作区（例如 ws-orbita）
  */
 
 export const MOBILE_SCREENS = ["pair", "list", "chat", "overview", "sheet"] as const;
@@ -23,7 +25,7 @@ export const PAIR_STATES = ["empty", "expired", "offline"] as const;
 export type PairState = (typeof PAIR_STATES)[number];
 export const CHAT_STATES = ["typical", "full", "waiting", "loading", "reconnecting", "reply-running"] as const;
 export type ChatState = (typeof CHAT_STATES)[number];
-export const MOBILE_DEVICES = ["android", "ipad"] as const;
+export const MOBILE_DEVICES = ["android", "android-s", "ipad"] as const;
 export type MobileDevice = (typeof MOBILE_DEVICES)[number];
 export const MOBILE_THEMES = ["light", "black"] as const;
 export type MobileTheme = (typeof MOBILE_THEMES)[number];
@@ -40,6 +42,8 @@ export interface MobileOptions {
   language: Language;
   compare: boolean;
   tall: boolean;
+  offline: boolean;
+  open: string | null;
 }
 
 function pick<T extends string>(values: readonly T[], raw: string | null, fallback: T): T {
@@ -63,5 +67,7 @@ export function parseMobileOptions(search: string): MobileOptions | null {
     language: pick(LANGUAGES, query.get("lang"), "zh"),
     compare: query.get("compare") === "desktop",
     tall: query.get("tall") === "1",
+    offline: query.get("offline") === "1",
+    open: query.get("open"),
   };
 }

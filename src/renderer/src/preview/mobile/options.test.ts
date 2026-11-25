@@ -17,6 +17,8 @@ test("没有 surface=mobile 就不是手机设计稿；写错的参数退回确�
     language: "zh",
     compare: false,
     tall: false,
+    offline: false,
+    open: null,
   });
   const chat = parseMobileOptions("?surface=mobile&screen=chat&state=reply-running&device=ipad&theme=black&compare=desktop");
   assert.equal(chat?.chatState, "reply-running");

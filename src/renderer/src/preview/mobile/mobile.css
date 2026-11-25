@@ -53,6 +53,11 @@
   background: var(--color-bg-app);
 }
 
+.m-device[data-device="android-s"] {
+  width: 360px;
+  height: 780px;
+}
+
 .m-device[data-device="ipad"] {
   --m-safe-top: 24px;
   --m-safe-bottom: 20px;
@@ -220,10 +225,34 @@
   min-height: calc(var(--m-touch) + var(--space-1));
 }
 
+/* 槽里的图标、状态饼都靠左：组名、文件夹图标、饼在同一条左缘上（同桌面侧栏：组名与文件夹图标一条线） */
 .m-slot {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  color: var(--color-text-tertiary);
+}
+
+/* 「另有 N 件在上面」：说明，不是能点的行 */
+.m-above {
+  cursor: default;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.m-above .m-trow-title {
+  font-size: var(--font-size-sm);
+}
+
+/*
+ * 断线：主机条与对话顶栏写的是断线前的旧状态，状态饼一律退成三级灰（颜色是「此刻」的信号，
+ * 断线时它不再是此刻）；图标换成 wifi-off，字说「正在重连 · 最后同步」。
+ */
+[data-stale] .status-pie[data-fill] {
+  color: var(--color-text-tertiary);
+}
+
+.m-bar[data-stale] .m-bar-glyph {
   color: var(--color-text-tertiary);
 }
 
@@ -327,6 +356,17 @@
   color: var(--color-text-secondary);
 }
 
+/* 停止：只有在跑时出现在顶栏右侧；红只给图标（同桌面停止的 danger 语义），不铺底 */
+/* 两个类压过 .quiet-control 的次级墨（它按 hover 才升主墨，这里的红要常显） */
+.m-chat-bar .m-stop {
+  flex: none;
+  color: var(--color-danger);
+}
+
+.m-chat-bar .m-stop:disabled {
+  color: var(--color-text-tertiary);
+}
+
 .m-well {
   flex: 1;
   min-height: 0;
@@ -399,6 +439,7 @@
 
 .m-transcript .chat-md td {
   min-width: 5em;
+  word-break: keep-all;
 }
 
 .m-transcript .chat-md pre {
@@ -513,15 +554,8 @@
   padding-top: calc(var(--space-8) * 4);
 }
 
-.m-wordmark {
-  margin: 0;
-  font-family: var(--font-family-brand);
-  font-size: var(--font-size-wordmark);
-  color: var(--color-text-secondary);
-}
-
 .m-pair-title {
-  margin: var(--space-4) 0 0;
+  margin: var(--space-8) 0 0;
   font-size: var(--font-size-xl);
   font-weight: var(--weight-medium);
   line-height: var(--line-height-tight);
@@ -732,6 +766,8 @@
   color: var(--color-text-tertiary);
 }
 
-.m-ov-notnow .m-ov-port {
+.m-ov-notnow .m-ov-ports-head,
+.m-ov-off {
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }

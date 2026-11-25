@@ -9,7 +9,7 @@ import { FIXTURE_TEMPLATE_HASH, isPreviewPath, parsePreviewOptions } from "./sce
 const NOW = Date.parse("2026-11-19T06:30:00.000Z");
 
 function options(scene: "empty" | "typical" | "full" = "typical") {
-  return { scene, theme: "light" as const, language: "en" as const, now: NOW, onboarding: false };
+  return { scene, theme: "light" as const, language: "en" as const, now: NOW, onboarding: false, mirror: false };
 }
 
 test("preview URL 只认独立入口与稳定场景；未知参数安全退回 typical", () => {
@@ -23,6 +23,7 @@ test("preview URL 只认独立入口与稳定场景；未知参数安全退回 t
     language: "zh",
     now: NOW,
     onboarding: false,
+    mirror: false,
   });
   assert.deepEqual(parsePreviewOptions("?scene=typical&onboarding=1", NOW).onboarding, true);
   assert.deepEqual(parsePreviewOptions("?scene=unknown&theme=unknown&lang=unknown", NOW), options());
@@ -323,4 +324,21 @@ test("未接后端明确拒绝；所有场景数据只含 fixture 路径与无�
     assert.match(item.piSessionFile ?? "", /^\/fixtures\//);
   }
   for (const item of await api.provider.list()) assert.match(item.endpoint.baseUrl, /^https:\/\/fixture\.invalid\//);
+});
+
+test("mirror=mobile：手机稿的同一批任务进桌面 fixture，在跑与等你由 agent 事件点亮", async () => {
+  const opts = { ...options(), mirror: true };
+  assert.equal(parsePreviewOptions("?scene=typical&mirror=mobile", NOW).mirror, true);
+  const api = createPreviewApi(opts);
+  const sessions = await api.session.list();
+  assert.ok(sessions.some((item) => item.id === "orbita-night-2"));
+  assert.ok(sessions.some((item) => item.id === "m-review" && item.unread !== null));
+  const events: AgentEvent[] = [];
+  const off = api.agent.onEvent((event) => events.push(event));
+  await new Promise<void>((resolve) => setTimeout(resolve, 400));
+  off();
+  assert.ok(events.some((event) => event.type === "phase" && event.sessionId === "orbita-night-2" && event.phase === "turn"));
+  assert.ok(events.some((event) => event.type === "permission" && event.sessionId === "m-plan"));
+  const full = await api.session.load("orbita-night-2");
+  assert.ok((full?.transcript.length ?? 0) >= 8);
 });

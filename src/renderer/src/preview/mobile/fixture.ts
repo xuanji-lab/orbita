@@ -50,6 +50,8 @@ export interface MobileListData {
 
 /** 设计稿钉住的「现在」：一个工作日的晚上 23:40，所有相对时间从它算（截图可复现）。 */
 export const MOBILE_NOW = new Date(2026, 10, 25, 23, 40).getTime();
+/** 断线态里「最后同步」的钟点：断线前两分钟 */
+export const MOBILE_SYNCED = "23:38";
 /** 状态栏上的钟点，与 MOBILE_NOW 一致 */
 export const MOBILE_CLOCK = "23:40";
 /** 一个工作区展开后先露几条（再往下是「更早的 N 条」） */
@@ -78,10 +80,11 @@ function typicalList(): MobileListData {
   const orbita: MobileWorkspace = {
     id: "ws-orbita",
     name: "orbita",
-    total: 4,
+    total: 5,
     sessions: [
       s("m-plan", "手机端第一刀：配对与会话清单", "ws-orbita", "waiting", "计划写好了，等你确认后开工", 6 * MIN),
       s("m-typecheck", "修 Windows 打包脚本", "ws-orbita", "running", "运行 `bun run dist:win`", 2 * MIN),
+      s("orbita-night-2", "迁内核到 pi-durable：会话迁移脚本", "ws-orbita", "running", "第 3 步：把 1973 条旧会话写进 SQLite", MIN, 43),
       s("m-review", "审 PR 565：子会话残留的在跑标记", "ws-orbita", "done", "看完了，两处要改：通道关闭时没清 running", 48 * MIN),
       s("m-notes", "整理 11 月的验收清单", "ws-orbita", null, "把这周合进去的 PR 列一遍", 2 * DAY),
     ],
@@ -160,6 +163,13 @@ function idleSessions(workspaceId: string, count: number, startAgo: number): Mob
   return out;
 }
 
+/** orbita 里刚在电脑上看完、已经没有状态的几条：展开工作区时它们该排在最前面（审查 M3） */
+const ORBITA_RECENT: ReadonlyArray<readonly [string, string, number]> = [
+  ["调对话页的表格横向滚动", "表格在窄屏里横向滚动，不挤成一字一行", 3],
+  ["对一下 0.9.4 的发版清单", "把这周合进去的 17 个 PR 列一遍", 41],
+  ["复盘：切会话为什么卡了半秒", "看一下 session-states 的重渲染", 95],
+];
+
 /** 满载：12 个工作区、1973 条根会话；今晚 orbita 里十几件在跑，另有四五件大事在别处进行 */
 function fullList(): MobileListData {
   const workspaces = WORKSPACE_NAMES.map(([id, name, total]): MobileWorkspace => {
@@ -172,7 +182,11 @@ function fullList(): MobileListData {
     ELSEWHERE.forEach(([ws, title, state, line, ago, sub], i) => {
       if (ws === id) lit.push(s(`${id}-lit-${i}`, title, id, state, line, ago * MIN, sub));
     });
-    const firstPage = [...lit, ...idleSessions(id, Math.max(0, MOBILE_PAGE + 2 - lit.length), 9 * HOUR)];
+    // 第一页 = 亮着的全部 + 按最近活动排的空闲若干条：手机展开工作区时，亮着的已经在顶上几组里，名额留给空闲的
+    const recent = id === "ws-orbita"
+      ? ORBITA_RECENT.map(([title, line, ago], i) => s(`orbita-recent-${i}`, title, id, null, line, ago * MIN))
+      : [];
+    const firstPage = [...lit, ...recent, ...idleSessions(id, MOBILE_PAGE + 2 - recent.length, 9 * HOUR)];
     return { id, name, total, sessions: firstPage };
   });
   const loose = idleSessions("loose", MOBILE_PAGE + 2, 20 * HOUR);

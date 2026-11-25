@@ -92,6 +92,7 @@ import logOut from "../../../../design-system/assets/icons/lucide/log-out.svg?ra
 import globe from "../../../../design-system/assets/icons/lucide/globe.svg?raw";
 import graduationCap from "../../../../design-system/assets/icons/lucide/graduation-cap.svg?raw";
 import hardDrive from "../../../../design-system/assets/icons/lucide/hard-drive.svg?raw";
+import circleStop from "../../../../design-system/assets/icons/lucide/circle-stop.svg?raw";
 import laptop from "../../../../design-system/assets/icons/lucide/laptop.svg?raw";
 import server from "../../../../design-system/assets/icons/lucide/server.svg?raw";
 import smartphone from "../../../../design-system/assets/icons/lucide/smartphone.svg?raw";
@@ -245,6 +246,7 @@ const ICONS = {
   "log-in": logIn,
   "log-out": logOut,
   "hard-drive": hardDrive,
+  "circle-stop": circleStop,
   laptop,
   server,
   smartphone,

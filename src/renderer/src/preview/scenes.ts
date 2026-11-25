@@ -12,6 +12,7 @@ import {
 } from "../../../shared/settings.ts";
 import type { SessionMeta, SessionRecord } from "../../../shared/session.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import { MOBILE_NOW, mobileChat, mobileList, type MobileChat, type MobileSession } from "./mobile/fixture.ts";
 import { dateKeysBack } from "../../../shared/usage.ts";
 import type { UsageDayTotal } from "../../../shared/usage.ts";
 import type { Workspace } from "../../../shared/workspace.ts";
@@ -39,6 +40,11 @@ export interface PreviewOptions {
   now: number;
   /** 为 true 时首启引导自动弹出（?onboarding=1），复用生产 shouldAutoOpenOnboarding 路径。 */
   onboarding: boolean;
+  /**
+   * ?mirror=mobile：把手机端设计稿的同一批任务（同标题、同状态、同转录）混进桌面 fixture，
+   * 手机稿旁边的同屏对照才有亮着的状态饼与满载对话可比。只加不改，其余 fixture 原样。
+   */
+  mirror: boolean;
 }
 
 /** 虚拟文件树节点：text/image/binary/largeLog 四态覆盖文件面板全部预览路径。 */
@@ -102,6 +108,8 @@ export interface PreviewFixture {
   plugins: PreviewPluginsSet;
   board: BoardWeekResponse;
   focusChanges: FocusChanges;
+  /** 开场就该亮着的会话：fixture-api 在第一个 agent 监听者挂上后发 phase / permission 事件点亮它们 */
+  live: { running: string[]; waiting: string[] };
 }
 
 export function isPreviewPath(pathname: string): boolean {
@@ -123,7 +131,14 @@ export function parsePreviewOptions(search: string, now: number = Date.now()): P
     ? (rawLanguage as Language)
     : "en";
   const rawOnboarding = query.get("onboarding");
-  return { scene, theme, language, now, onboarding: rawOnboarding === "1" || rawOnboarding === "true" };
+  return {
+    scene,
+    theme,
+    language,
+    now,
+    onboarding: rawOnboarding === "1" || rawOnboarding === "true",
+    mirror: query.get("mirror") === "mobile",
+  };
 }
 
 const MINUTE = 60_000;
@@ -1038,12 +1053,89 @@ function fullData(now: number): Pick<PreviewFixture, "workspaces" | "sessions" |
   return { workspaces, sessions, transcripts, channels, profiles };
 }
 
+/** 手机稿的一份对话转成桌面的块数组转录：过程行 = 一次 read，现场块 = 一次还没回结果的 bash */
+function mirrorTranscript(chat: MobileChat, now: number): SessionRecord[] {
+  const shift = now - MOBILE_NOW;
+  const out: SessionRecord[] = [];
+  let at = MOBILE_NOW - HOUR + shift;
+  chat.entries.forEach((entry, index) => {
+    const id = `${chat.session.id}-m${index}`;
+    if (entry.kind === "user") {
+      at = entry.at + shift;
+      out.push({ id, role: "user", content: [{ type: "text", text: entry.text }], timestamp: at });
+      return;
+    }
+    at += 40_000;
+    if (entry.kind === "prose") {
+      out.push(assistant(id, at, [{ type: "text", text: entry.text }]));
+      return;
+    }
+    const callId = `${id}-call`;
+    const live = entry.kind === "live";
+    const toolName = live ? "bash" : "read";
+    const input: Record<string, string> = live
+      ? { command: "bun scripts/migrate.ts --step 3" }
+      : { path: "src/main/session/store.ts" };
+    out.push(assistant(id, at, [{ type: "toolCall", toolCallId: callId, toolName, input }], "toolUse"));
+    if (!live) {
+      out.push({
+        id: `${id}-tool`,
+        role: "tool",
+        toolCallId: callId,
+        toolName,
+        input,
+        content: [{ type: "text", text: "export function storeFixture() {}" }],
+        status: "complete",
+        isError: false,
+        timestamp: at + 2_000,
+      });
+    }
+  });
+  return out;
+}
+
+/** mirror=mobile：手机稿平常档的任务（含满载对话那一条）加进 orbita 与「博士论文」两个工作区 */
+function mirrorMobile(base: ReturnType<typeof typicalData>, now: number): ReturnType<typeof typicalData> & { live: PreviewFixture["live"] } {
+  const shift = now - MOBILE_NOW;
+  const list = mobileList("typical");
+  const chats = [mobileChat("typical"), mobileChat("waiting"), mobileChat("full")];
+  // 平常档清单里已经有满载对话那一条（orbita-night-2），两边是同一批任务
+  const rows: MobileSession[] = list.workspaces.flatMap((ws) => ws.sessions);
+  const workspaces = base.workspaces.map((ws) => (ws.id === "ws-orbita" ? { ...ws, name: "orbita" } : ws));
+  workspaces.push(workspace("ws-thesis", "博士论文", now));
+  const sessions = rows.map((row) =>
+    meta({
+      id: row.id,
+      title: row.title,
+      workspaceId: row.workspaceId,
+      createdAt: row.updatedAt + shift - HOUR,
+      updatedAt: row.updatedAt + shift,
+      ...(row.state === "done" || row.state === "failed" ? { unread: { at: row.updatedAt + shift, failed: row.state === "failed" } } : {}),
+    }),
+  );
+  const transcripts = new Map(base.transcripts);
+  for (const chat of chats) transcripts.set(chat.session.id, mirrorTranscript(chat, now));
+  return {
+    ...base,
+    workspaces,
+    sessions: [...base.sessions, ...sessions],
+    transcripts,
+    live: {
+      running: rows.filter((row) => row.state === "running").map((row) => row.id),
+      waiting: rows.filter((row) => row.state === "waiting").map((row) => row.id),
+    },
+  };
+}
+
 export function buildPreviewFixture(options: PreviewOptions): PreviewFixture {
-  const data = options.scene === "empty"
+  const plain = options.scene === "empty"
     ? { workspaces: [], sessions: [], transcripts: new Map<string, SessionRecord[]>(), channels: [], profiles: new Map<string, PreviewMainProfile>() }
     : options.scene === "full"
       ? fullData(options.now)
       : typicalData(options.now);
+  const data = options.mirror && options.scene !== "empty"
+    ? mirrorMobile(plain, options.now)
+    : { ...plain, live: { running: [], waiting: [] } };
   const availableProviders = options.scene === "empty" ? [] : providers();
   const settings = parseSettings({
     ...DEFAULT_SETTINGS,

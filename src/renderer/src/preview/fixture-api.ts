@@ -235,6 +235,7 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
   let mutation = 0;
   const tick = (): number => options.now + ++mutation * 1_000;
   const agentListeners = new Set<(event: AgentEvent) => void>();
+  let litOnce = false;
   const channelListeners = new Set<(event: ChannelEvent) => void>();
   const automationListeners = new Set<(event: AutomationEvent) => void>();
   const emitAgent = (event: AgentEvent): void => {
@@ -349,6 +350,17 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
       answerIntentConfirm: async () => undefined,
       onEvent: (listener) => {
         agentListeners.add(listener);
+        // 开场就亮着的会话（mirror=mobile）：第一个监听者挂上后点亮一次——在跑 = phase turn，
+        // 等你 = 一条待批准的请示。走生产归约器，侧栏与首页记录的状态饼由真实推导算出
+        if (!litOnce && (fixture.live.running.length > 0 || fixture.live.waiting.length > 0)) {
+          litOnce = true;
+          setTimeout(() => {
+            for (const sessionId of fixture.live.running) emitAgent({ type: "phase", sessionId, phase: "turn" });
+            for (const sessionId of fixture.live.waiting) {
+              emitAgent({ type: "permission", sessionId, requestId: `fixture-plan-${sessionId}`, toolName: "update_plan", input: {} });
+            }
+          }, 300);
+        }
         return () => agentListeners.delete(listener);
       },
     }),
