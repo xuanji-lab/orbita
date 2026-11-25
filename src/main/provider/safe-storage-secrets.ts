@@ -17,6 +17,12 @@ type SecretsFile = Record<string, string>;
 export class SafeStorageSecrets implements SecretsPort {
   private readonly dir: string;
   private readonly filePath: string;
+  /**
+   * 写操作排在这一条链上：set / delete 都是整文件的读改写，并发来两发会互相覆盖——
+   * 手机的主机密钥与 provider 的 API key 共用一个文件，一边写丢了另一边就是静默丢密钥
+   * （2026-11-25 手机端安全审查第 8 条）。读不排队：读到的要么是旧全量要么是新全量。
+   */
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(dir: string) {
     this.dir = dir;
@@ -29,9 +35,11 @@ export class SafeStorageSecrets implements SecretsPort {
         "OS secret storage is unavailable, refusing to store the API key in clear text",
       );
     }
-    const all = await this.readAll();
-    all[account] = safeStorage.encryptString(plaintext).toString("base64");
-    await this.persist(all);
+    await this.enqueue(async () => {
+      const all = await this.readAll();
+      all[account] = safeStorage.encryptString(plaintext).toString("base64");
+      await this.persist(all);
+    });
   }
 
   async get(account: string): Promise<string | null> {
@@ -46,10 +54,22 @@ export class SafeStorageSecrets implements SecretsPort {
   }
 
   async delete(account: string): Promise<void> {
-    const all = await this.readAll();
-    if (!(account in all)) return;
-    delete all[account];
-    await this.persist(all);
+    await this.enqueue(async () => {
+      const all = await this.readAll();
+      if (!(account in all)) return;
+      delete all[account];
+      await this.persist(all);
+    });
+  }
+
+  /** 排进写链；某一环失败不卡住后面的 */
+  private enqueue(run: () => Promise<void>): Promise<void> {
+    const next = this.writeChain.then(run, run);
+    this.writeChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   private async readAll(): Promise<SecretsFile> {

@@ -66,6 +66,15 @@ export interface MobileSettings {
   bind: { address: string; port: number } | null;
   /** 此刻本机上可绑的地址（主进程现算），按 kind 排好序 */
   candidates: MobileBindCandidate[];
+  /** 监听的真实状态；与 enabled 分开，地址失效 / 私钥不可用时要能如实显示 */
+  listening: boolean;
+  /** 没能启用 / 没能监听时给人看的一句原因；正常是 null */
+  message: string | null;
+  /**
+   * 主机私钥丢过的告示（换机 / 重装系统后从系统密钥库读不回）：设备已清空、钥匙已重铸，
+   * 等用户重新配对，配上第一台后清掉。与 message 分开：那条说「监听怎么了」，这条说「设备怎么了」
+   */
+  hostKeyNotice: string | null;
 }
 
 /** 「生成配对码」的结果。code 是 6 位数字；expiresAt 是 Unix 毫秒 */

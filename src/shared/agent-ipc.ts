@@ -174,6 +174,11 @@ export const ipcChannels = {
   automationEvent: "automation:event",
   sessionList: "session:list",
   /**
+   * 主进程 → renderer 推送：某条会话的 meta 在主进程被改了（今天唯一生产者：手机端
+   * `unread.clear` 清掉未读）。桌面窗口开着时照它单条重拉那一条，不整表刷新。
+   */
+  sessionMetaChanged: "session:meta-changed",
+  /**
    * 读**单条**会话的 meta（列表增量刷新用）：载荷是会话 id，回 `SessionMeta | null`。
    * null = 会话不存在 / meta 坏了——与 `list()` 跳过坏记录同口径，调用方据此从列表移除。
    * 不读 transcript、不排序，消费者只拿它替换列表里那一条。

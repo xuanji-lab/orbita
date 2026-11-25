@@ -151,6 +151,31 @@ export class ReplyQueue {
     });
   }
 
+  /**
+   * 忘掉一台设备（撤销）：清掉所有会话里来自它的待发回复，逐条回 `error`。
+   * 在飞的那几条不动——它们已经交给 agent 了，撤不回；但回执不会再发给它（连接已断）。
+   */
+  async cancelForSource(source: string, error: MobileError): Promise<number> {
+    let total = 0;
+    for (const sessionId of [...this.lanes.keys()]) {
+      total += await this.exclusive(sessionId, (lane) => {
+        const kept: MobileReply[] = [];
+        let dropped = 0;
+        for (const reply of lane.queue) {
+          if (reply.source === source) {
+            this.notifyFailed(reply, sessionId, error);
+            dropped += 1;
+          } else {
+            kept.push(reply);
+          }
+        }
+        lane.queue = kept;
+        return dropped;
+      });
+    }
+    return total;
+  }
+
   /** 璇玑退出：所有待发的、在飞的都回 `error`，之后不再接新的回复 */
   cancelAll(error: MobileError): void {
     this.disposed = true;

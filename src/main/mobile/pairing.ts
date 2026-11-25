@@ -115,6 +115,11 @@ export class PairingBook {
     return { offerId: offer.offerId, code: offer.code, expiresAt: offer.expiresAt };
   }
 
+  /** 此刻有效提议发给手机的那一半（`pair.start` 的应答）；没有有效提议回 null */
+  currentOfferWire(): PairingOffer["wire"] | null {
+    return this.liveOffer()?.wire ?? null;
+  }
+
   /** `pair.start` 要发给手机的那一半；不把种子交出去 */
   wire(): PairingOffer["wire"] | null {
     return this.liveOffer()?.wire ?? null;

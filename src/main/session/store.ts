@@ -9,7 +9,7 @@
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
  * **启动建 meta 索引只需读 N 个小 meta 文件，完全不碰日志；之后列会话走内存索引**。
  */
-import { appendFile, copyFile, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
+import { appendFile, copyFile, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
@@ -1104,7 +1104,7 @@ export class SessionStore {
    */
   private async readLog(id: string): Promise<SessionRecord[]> {
     // 生效视图 = 原始全量 + 回退界碑折叠（见 readRawLog 的注释：只有 task 来源要全量）
-    return this.foldReverts(await this.readLogEntries(id));
+    return foldRevertRecords(await this.readLogEntries(id));
   }
 
   /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
@@ -1137,6 +1137,21 @@ export class SessionStore {
    */
   async tailRecords(id: string, options: TailReadOptions = {}): Promise<SessionRecord[]> {
     return (await this.tailWindow(id, options))?.records ?? [];
+  }
+
+  /**
+   * 转录文件的 `(size, mtimeMs)`；文件不存在返回 null。给手机服务的尾部缓存判重用——
+   * 清单刷新时对每条会话 stat 一次，没变就不重读那 256 KB（`tailWindow` 自身也 stat，
+   * 但那是读了之后才报；这个是只 stat 不读的便宜版本）。id 同样过白名单。
+   */
+  async tailStat(id: string): Promise<{ size: number; mtimeMs: number } | null> {
+    try {
+      const info = await stat(this.logPath(id));
+      return { size: info.size, mtimeMs: Math.trunc(info.mtimeMs) };
+    } catch (cause) {
+      if (isNotFound(cause)) return null;
+      throw cause;
+    }
   }
 
   /**
@@ -1195,22 +1210,23 @@ export class SessionStore {
     }
   }
 
-  /**
-   * 回退界碑折叠：界碑把生效列表截到它的 targetMessageId 之前（该消息及之后全部
-   * 撤出），界碑自己留下（界面画「已回退」+ 还原卡）。目标不在列表里（自身已被更早
-   * 的回退折掉）只留界碑、不折叠——坏记录不该连带丢掉后面的真历史。
-   */
-  private foldReverts(records: readonly SessionRecord[]): SessionRecord[] {
-    const effective: SessionRecord[] = [];
-    for (const record of records) {
-      if (isRevertRecord(record)) {
-        const target = effective.findIndex((item) => item.id === record.targetMessageId);
-        if (target >= 0) effective.length = target;
-      }
-      effective.push(record);
+}
+
+/**
+ * 回退界碑折叠：界碑把生效列表截到它的 targetMessageId 之前（该消息及之后全部撤出），界碑自己留下。
+ * 目标不在列表里就只留界碑、不折叠——坏记录不该连带丢掉后面的真历史。
+ * 全量读取与手机尾窗共用；尾部窗口若缺了目标之前的记录，只能折叠窗口里看得到的部分。
+ */
+export function foldRevertRecords(records: readonly SessionRecord[]): SessionRecord[] {
+  const effective: SessionRecord[] = [];
+  for (const record of records) {
+    if (isRevertRecord(record)) {
+      const target = effective.findIndex((item) => item.id === record.targetMessageId);
+      if (target >= 0) effective.length = target;
     }
-    return effective;
+    effective.push(record);
   }
+  return effective;
 }
 
 /** 尾部倒读的默认窗口：字节数与条数（给手机用的那一档） */
