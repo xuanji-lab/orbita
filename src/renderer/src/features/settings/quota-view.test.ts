@@ -273,3 +273,58 @@ describe("quotaExhaustedText —— 账户额度那句副行（不是失败原�
     assert.equal(quotaExhaustedText(hint, hint.resetsAt + 1, en), "Account quota: 5-hour window exhausted");
   });
 });
+
+describe("Claude 的窗口名与登录态文案", () => {
+  test("型号周窗：「每周 · 型号名」，型号名原样（专有名词不翻译）", () => {
+    const fable = window({ kind: "weekly-model", label: "Fable" });
+    assert.equal(windowLabel(fable, zh), "每周 · Fable");
+    assert.equal(windowLabel(fable, en), "Weekly · Fable");
+    // 与总周窗是两个窗口，名字必须不同
+    assert.notEqual(windowLabel(fable, zh), windowLabel(window({ kind: "weekly" }), zh));
+  });
+
+  test("浏览器登录的订阅鉴权失败：说登录态，不让用户去找不存在的「API 密钥」", () => {
+    assert.match(quotaProblemText("auth", zh, true, true), /登录/);
+    assert.doesNotMatch(quotaProblemText("auth", zh, true, true), /密钥/);
+    assert.match(quotaProblemText("auth", zh, false, true), /先在上面登录/);
+    assert.match(quotaProblemText("auth", en, true, true), /sign-in/i);
+    // 非 OAuth 的口径不变
+    assert.equal(quotaProblemText("auth", zh, true), zh.quota.authRejected);
+    assert.equal(quotaProblemText("auth", zh, false), zh.quota.authMissing);
+  });
+
+  test("环菜单的账户段：Claude 的两个窗口 + 型号周窗，行序保持快照顺序，带进度", () => {
+    const now = Date.now();
+    const result: QuotaResult = {
+      status: "ok",
+      fromCache: true,
+      snapshot: {
+        fetchedAt: now,
+        windows: [
+          window({ id: "five_hour", kind: "5h", usedPercent: 92, resetsAt: now + 4 * 3_600_000 }),
+          window({ id: "seven_day", kind: "weekly", usedPercent: 34 }),
+          window({ id: "weekly_scoped:fable", kind: "weekly-model", label: "Fable", usedPercent: 26 }),
+        ],
+      },
+    };
+    const items = quotaMenuItems(result, "plan-windows", false, zh, "Claude", () => undefined, true);
+    assert.deepEqual(
+      items.filter((item) => item.fact === true && item.progress !== undefined).map((item) => item.label),
+      ["5 小时", "每周", "每周 · Fable"],
+    );
+  });
+
+  test("环菜单：OAuth 鉴权失败不给「立即查询」，文案说登录", () => {
+    const items = quotaMenuItems(
+      { status: "error", reason: "auth", cached: null },
+      "plan-windows",
+      false,
+      zh,
+      "Claude",
+      () => undefined,
+      true,
+    );
+    assert.match(items.find((item) => item.id === "quota-problem")?.label ?? "", /登录/);
+    assert.equal(items.some((item) => item.id === "quota-check"), false);
+  });
+});

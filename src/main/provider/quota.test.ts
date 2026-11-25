@@ -1,6 +1,6 @@
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { parseDeepseekBalance, probeQuota, type QuotaProbeInput } from "./quota.ts";
+import { parseClaudeUsage, parseDeepseekBalance, probeQuota, type QuotaProbeInput } from "./quota.ts";
 
 const DEEPSEEK = "https://api.deepseek.com";
 
@@ -822,5 +822,173 @@ describe("Kimi：200 + 空对象（2026-11-13 正式版真机）", () => {
   test("`{}` → empty，不是 protocol（空响应不等于「格式变了」）", async () => {
     stubFetch(() => okBody({}));
     assert.deepEqual(await probeQuota(kimiInput()), { status: "error", reason: "empty", cached: null });
+  });
+});
+
+const claudeInput = (overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput => ({
+  probe: "plan-windows",
+  kind: "claude",
+  baseUrl: "https://api.anthropic.com",
+  apiKey: "sk-ant-oat-test",
+  ...overrides,
+});
+
+/** 2026-11-23 用户真实账号的响应（只留与解析相关的字段；无关的内部字段全是 null） */
+const CLAUDE_REAL_BODY = {
+  five_hour: { utilization: 92, resets_at: "2026-11-23T18:00:00.617232+00:00", limit_dollars: null },
+  seven_day: { utilization: 34, resets_at: "2026-11-30T01:00:00.617257+00:00", limit_dollars: null },
+  seven_day_oauth_apps: null,
+  seven_day_opus: null,
+  seven_day_sonnet: null,
+  cinder_cove: null,
+  extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
+  limits: [
+    { kind: "session", group: "session", percent: 92, severity: "warning", resets_at: "2026-11-23T18:00:00.617232+00:00", scope: null, is_active: true },
+    { kind: "weekly_all", group: "weekly", percent: 34, severity: "normal", resets_at: "2026-11-30T01:00:00.617257+00:00", scope: null, is_active: false },
+    {
+      kind: "weekly_scoped",
+      group: "weekly",
+      percent: 26,
+      severity: "normal",
+      resets_at: "2026-11-30T00:59:59.617432+00:00",
+      scope: { model: { id: null, display_name: "Fable" }, surface: null },
+      is_active: false,
+    },
+  ],
+};
+
+describe("probeQuota —— Claude 订阅（OAuth）的 5 小时 / 每周窗口", () => {
+  test("真实响应：5h / 每周 / 型号周窗；utilization 是 0–100 的已用百分比；带微秒的 ISO 时间", async () => {
+    const stub = stubFetch(() => okBody(CLAUDE_REAL_BODY));
+    const result = await probeQuota(claudeInput());
+    assert.equal(result.status, "ok");
+    assert.deepEqual(result.status === "ok" ? result.snapshot.windows : [], [
+      {
+        id: "five_hour",
+        label: "5-hour window",
+        kind: "5h",
+        usedPercent: 92,
+        windowMinutes: 300,
+        resetsAt: Date.parse("2026-11-23T18:00:00.617Z"),
+      },
+      {
+        id: "seven_day",
+        label: "Weekly",
+        kind: "weekly",
+        usedPercent: 34,
+        windowMinutes: 10080,
+        resetsAt: Date.parse("2026-11-30T01:00:00.617Z"),
+      },
+      {
+        id: "weekly_scoped:fable",
+        // label 是厂商给的型号名，渲染层拼成「每周 · Fable」
+        label: "Fable",
+        kind: "weekly-model",
+        usedPercent: 26,
+        windowMinutes: 10080,
+        resetsAt: Date.parse("2026-11-30T00:59:59.617Z"),
+      },
+    ]);
+    // 地址固定在官方主机；Bearer + oauth beta + 与真会话同一套 claude-cli 身份
+    assert.equal(stub.calls[0]?.url, "https://api.anthropic.com/api/oauth/usage");
+    const headers = headersOf(stub.calls[0]);
+    assert.equal(headers.Authorization, "Bearer sk-ant-oat-test");
+    assert.match(headers["anthropic-beta"] ?? "", /oauth-2025-04-20/);
+    assert.match(headers["user-agent"] ?? "", /^claude-cli\//);
+  });
+
+  test("地址不跟用户填的 baseUrl 走：令牌只发给官方主机", async () => {
+    const stub = stubFetch(() => okBody(CLAUDE_REAL_BODY));
+    await probeQuota(claudeInput({ baseUrl: "https://evil.example.com/v1" }));
+    assert.equal(stub.calls[0]?.url, "https://api.anthropic.com/api/oauth/usage");
+  });
+
+  test("seven_day_opus / seven_day_sonnet 字段也认；与 limits 里同一型号只出一行", async () => {
+    stubFetch(() =>
+      okBody({
+        five_hour: { utilization: 10, resets_at: "2026-11-23T18:00:00Z" },
+        seven_day_opus: { utilization: 55.5, resets_at: "2026-11-30T01:00:00Z" },
+        seven_day_sonnet: { utilization: 3, resets_at: null },
+        limits: [
+          { kind: "weekly_scoped", percent: 55, resets_at: "2026-11-30T01:00:00Z", scope: { model: { display_name: "Opus" } } },
+        ],
+      }),
+    );
+    const result = await probeQuota(claudeInput());
+    const windows = result.status === "ok" ? result.snapshot.windows : [];
+    assert.deepEqual(
+      windows.map((window) => [window.id, window.label, window.usedPercent]),
+      [
+        ["five_hour", "5-hour window", 10],
+        // limits 先到，字段那条被去重
+        ["weekly_scoped:opus", "Opus", 55],
+        ["seven_day_sonnet", "Sonnet", 3],
+      ],
+    );
+    // resets_at 为 null：不编重置时刻
+    assert.equal("resetsAt" in (windows[2] ?? {}), false);
+  });
+
+  test("窗口缺字段：utilization 缺 / null / 不是数 → 跳过该窗口，不写 0%", async () => {
+    stubFetch(() =>
+      okBody({
+        five_hour: { utilization: null, resets_at: "2026-11-23T18:00:00Z" },
+        seven_day: { utilization: "62", resets_at: "不是时间" },
+        seven_day_opus: { resets_at: "2026-11-30T01:00:00Z" },
+      }),
+    );
+    const result = await probeQuota(claudeInput());
+    const windows = result.status === "ok" ? result.snapshot.windows : [];
+    // 字符串数字照收（厂商两种口径都见过）；坏时间只丢重置时刻
+    assert.deepEqual(
+      windows.map((window) => [window.id, window.usedPercent, "resetsAt" in window]),
+      [["seven_day", 62, false]],
+    );
+  });
+
+  test("已知窗口键都在但全是 null → empty（照实说，不赖格式）", async () => {
+    stubFetch(() => okBody({ five_hour: null, seven_day: null, seven_day_opus: null }));
+    const result = await probeQuota(claudeInput());
+    assert.deepEqual(result, { status: "error", reason: "empty", cached: null });
+  });
+
+  test("结构不认：一个已知键都没有 / 不是对象 → protocol", async () => {
+    stubFetch(() => okBody({ hello: "world" }));
+    assert.deepEqual(await probeQuota(claudeInput()), { status: "error", reason: "protocol", cached: null });
+    stubFetch(() => okBody([1, 2, 3]));
+    assert.deepEqual(await probeQuota(claudeInput()), { status: "error", reason: "protocol", cached: null });
+  });
+
+  test("401 → auth（登录失效）；403 → unsupported；404 → protocol；429 / 5xx → network；抛错 → network", async () => {
+    for (const [status, reason] of [
+      [401, "auth"],
+      [403, "unsupported"],
+      [404, "protocol"],
+      [429, "network"],
+      [503, "network"],
+    ] as const) {
+      stubFetch(() => new Response("{}", { status }));
+      assert.deepEqual(await probeQuota(claudeInput()), { status: "error", reason, cached: null }, String(status));
+    }
+    stubFetch(() => {
+      throw new TypeError("fetch failed");
+    });
+    assert.deepEqual(await probeQuota(claudeInput()), { status: "error", reason: "network", cached: null });
+  });
+
+  test("没有令牌 → auth，一次请求都不发", async () => {
+    const stub = stubFetch(() => okBody(CLAUDE_REAL_BODY));
+    assert.deepEqual(await probeQuota(claudeInput({ apiKey: null })), { status: "error", reason: "auth", cached: null });
+    assert.equal(stub.calls.length, 0);
+  });
+
+  test("200 但不是 JSON → protocol", async () => {
+    stubFetch(() => new Response("<html>", { status: 200 }));
+    assert.deepEqual(await probeQuota(claudeInput()), { status: "error", reason: "protocol", cached: null });
+  });
+
+  test("parseClaudeUsage：令牌不会出现在任何返回值里", () => {
+    const outcome = parseClaudeUsage(CLAUDE_REAL_BODY, 1);
+    assert.equal(JSON.stringify(outcome).includes("sk-ant"), false);
   });
 });

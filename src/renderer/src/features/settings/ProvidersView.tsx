@@ -1157,12 +1157,14 @@ export function ProvidersView(props: {
                 「这个 key 背后的账号还剩多少」，与上面那组身份字段同属「这个账号」这一层。
                 能力为 none 的厂商整块不渲染（QuotaBlock 自己返回 null），不留空块。
                 只给已落盘的实例查：查询靠 providerId 取密钥，新建表单里还没有 id。
+                「单独开关」关掉的服务商也不画、不查：关着就是「不用它」，对着一个不用的账号打探额度只会白耗它的限流。
               */}
-              {!isNew && editing !== undefined && knownProviderQuota(editing) !== "none" && (
+              {!isNew && editing !== undefined && isProviderEnabled(editing) && knownProviderQuota(editing) !== "none" && (
                 <QuotaBlock
                   providerId={editing.id}
                   probe={knownProviderQuota(editing)}
                   hasKey={hasCredentials(editing.auth)}
+                  oauth={editing.auth.scheme === "oauth"}
                 />
               )}
 

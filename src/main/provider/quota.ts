@@ -3,7 +3,7 @@
  *
  * 一个能力一个分支：
  *   balance      → DeepSeek 的余额（公开文档接口）
- *   plan-windows → 智谱 Coding Plan（国内站 / 国际站同一后端）+ Kimi Code 的套餐窗口
+ *   plan-windows → 智谱 Coding Plan（国内站 / 国际站同一后端）+ Kimi Code + Claude 订阅的套餐窗口
  *
  * 失败分类必须分清（decisions 15）：
  *   auth        = 钥匙不对 / 没填钥匙（用户能立刻改）
@@ -12,6 +12,7 @@
  *   unsupported = 这家就是查不了（团队账号 / 没有个人套餐）
  * 预算 8s：额度是「打开看一眼」的东西，宁可说失败也不让界面挂在转圈上。
  */
+import { anthropicOauthHeaders } from "./oauth.ts";
 import type {
   QuotaCredits,
   QuotaFailure,
@@ -35,6 +36,8 @@ const TIMEOUT_MS = 8_000;
 const KIND_LABELS = {
   "5h": "5-hour window",
   weekly: "Weekly",
+  // 型号周窗的 label 是厂商给的型号名（见 parseClaudeUsage），这里只是兜底
+  "weekly-model": "Weekly (model)",
   monthly: "Monthly",
   // MCP 工具额度：与 token 窗口不是同一种东西，标签必须分开
   mcp: "MCP monthly",
@@ -497,6 +500,136 @@ async function probeKimi(origin: string, apiKey: string): Promise<QuotaResult> {
 }
 
 /* ------------------------------------------------------------------ *
+ * Claude 订阅（浏览器登录 / OAuth）：5 小时 / 每周窗口
+ * ------------------------------------------------------------------ */
+
+const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+
+/**
+ * 响应里我们认的窗口，**固定顺序**（也是界面行序）：`five_hour` → `seven_day`，之后是型号周窗。
+ * 字段名与形状来自两处互相印证的证据：
+ *   - Claude Code 2.1.322 二进制里解析这个响应的 schema（`fetchUtilization` 那段）：
+ *     窗口是 `{ utilization: number | null, resets_at: string | null }`；
+ *   - 用户真实账号的实测响应（2026-11-23）：`five_hour.utilization = 92`、`limits[].percent = 92`
+ *     是同一个数 → `utilization` 就是 0–100 的**已用百分比**，不是 0–1 的小数。
+ *
+ * 其余窗口键（`seven_day_oauth_apps` / `cinder_cove` / `wattle_ember` 与一批无名字段）语义不明
+ * （Claude Code 自己也没给人读标签），不展示——宁可少一行，不猜名字。
+ */
+const CLAUDE_BASE_WINDOWS = [
+  { key: "five_hour", kind: "5h", minutes: 5 * 60 },
+  { key: "seven_day", kind: "weekly", minutes: 7 * 24 * 60 },
+] as const;
+
+/** 旧口径的型号周窗字段：账号有 Opus / Sonnet 专属周额度时给（实测账号里是 null） */
+const CLAUDE_MODEL_FIELDS = [
+  { key: "seven_day_opus", model: "Opus" },
+  { key: "seven_day_sonnet", model: "Sonnet" },
+] as const;
+
+function claudeModelWindow(
+  id: string,
+  model: string,
+  percent: number,
+  resetsAt: number | undefined,
+): QuotaWindow {
+  return {
+    id,
+    label: model,
+    kind: "weekly-model",
+    usedPercent: percent,
+    windowMinutes: 7 * 24 * 60,
+    ...(resetsAt === undefined ? {} : { resetsAt }),
+  };
+}
+
+/**
+ * 把 `GET /api/oauth/usage` 的响应翻成窗口。
+ *
+ * 纪律：
+ *   - `utilization` 缺了 / null = 这个窗口没在计量，**跳过，不写 0% 冒充**；
+ *   - `resets_at` 是带微秒的 ISO 字符串（`…00.617232+00:00`），认不出就不写重置时刻；
+ *   - 型号周窗两处来源：`limits[]` 里 `kind = weekly_scoped` 且带 `scope.model.display_name` 的行
+ *     （实测账号就是这样给的，26%），以及 `seven_day_opus` / `seven_day_sonnet` 字段；
+ *     按型号名（忽略大小写）去重，同一型号只出一行；
+ *   - 都拿不到：响应里**一个已知键都没有** = 厂商改版（protocol）；
+ *     已知键在但全是 null = 此刻没有可读的订阅用量（empty，照实说，别赖格式）。
+ * `extra_usage`（超额积分）与 `spend` 这一版不展示：用户问的是额度窗口。
+ */
+export function parseClaudeUsage(body: unknown, fetchedAt: number): ParseOutcome {
+  const record = asRecord(body);
+  if (record === null) return { ok: false, reason: "protocol" };
+
+  const windows: QuotaWindow[] = [];
+  let sawKnownKey = false;
+  for (const spec of CLAUDE_BASE_WINDOWS) {
+    if (!(spec.key in record)) continue;
+    sawKnownKey = true;
+    const entry = asRecord(record[spec.key]);
+    if (entry === null) continue;
+    const percent = asNumber(entry.utilization);
+    if (percent === undefined) continue;
+    const resetsAt = asTimestamp(entry.resets_at);
+    windows.push({
+      id: spec.key,
+      label: KIND_LABELS[spec.kind],
+      kind: spec.kind,
+      usedPercent: percent,
+      windowMinutes: spec.minutes,
+      ...(resetsAt === undefined ? {} : { resetsAt }),
+    });
+  }
+
+  const seenModels = new Set<string>();
+  const limits = record.limits;
+  if (Array.isArray(limits)) {
+    sawKnownKey = true;
+    for (const raw of limits) {
+      const row = asRecord(raw);
+      if (row === null || row.kind !== "weekly_scoped") continue;
+      const scope = asRecord(row.scope);
+      const modelInfo = scope === null ? null : asRecord(scope.model);
+      const model = modelInfo === null ? undefined : asString(modelInfo.display_name);
+      const percent = asNumber(row.percent);
+      if (model === undefined || percent === undefined || seenModels.has(model.toLowerCase())) continue;
+      seenModels.add(model.toLowerCase());
+      windows.push(claudeModelWindow(`weekly_scoped:${model.toLowerCase()}`, model, percent, asTimestamp(row.resets_at)));
+    }
+  }
+  for (const spec of CLAUDE_MODEL_FIELDS) {
+    if (!(spec.key in record)) continue;
+    sawKnownKey = true;
+    const entry = asRecord(record[spec.key]);
+    const percent = entry === null ? undefined : asNumber(entry.utilization);
+    if (entry === null || percent === undefined || seenModels.has(spec.model.toLowerCase())) continue;
+    seenModels.add(spec.model.toLowerCase());
+    windows.push(claudeModelWindow(spec.key, spec.model, percent, asTimestamp(entry.resets_at)));
+  }
+
+  if (windows.length === 0) {
+    // 只打字段名：响应里可能有额度数字或账号信息，一个值都不进日志
+    if (!sawKnownKey) console.warn("[quota] claude 未识别的响应字段", Object.keys(record));
+    return { ok: false, reason: sawKnownKey ? "empty" : "protocol" };
+  }
+  return parsed(windows, fetchedAt);
+}
+
+async function probeClaude(accessToken: string): Promise<QuotaResult> {
+  // 与真会话同一套 Claude Code 身份头（含 oauth beta）：同一应用报两种身份本身就是异常信号。
+  // `accessToken` 由调用方经 ProviderStore 取（到期会走现有的续期逻辑），这里只用一次，不落日志
+  const attempt = await fetchJson(
+    CLAUDE_USAGE_URL,
+    anthropicOauthHeaders(accessToken),
+    // 403：令牌缺 `user:profile` 范围 / 团队席位不带个人订阅——换登录方式，不是重试能解的
+    "unsupported",
+  );
+  if (!attempt.ok) return failure(attempt.reason);
+  const outcome = parseClaudeUsage(attempt.body, Date.now());
+  if (!outcome.ok) return failure(outcome.reason);
+  return { status: "ok", snapshot: outcome.snapshot, fromCache: false };
+}
+
+/* ------------------------------------------------------------------ *
  * OpenCode Go：订阅的三个用量窗口
  * ------------------------------------------------------------------ */
 
@@ -834,6 +967,9 @@ export async function probeQuota(input: QuotaProbeInput): Promise<QuotaResult> {
       return probeOpenCode(origin, input.apiKey);
     case "stepfun":
       return probeStepfun(origin, input.apiKey);
+    case "claude":
+      // 地址固定：OAuth 登录的 baseUrl 永远是官方主机，不拼用户填的地址（令牌只发给官方）
+      return probeClaude(input.apiKey);
     case "tokenrhythm":
       return probeTokenrhythm(origin, input.apiKey);
     default:
