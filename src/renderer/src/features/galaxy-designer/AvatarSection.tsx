@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { AVATAR_INSTRUCTION_MAX, isAvatarJobLive, type AvatarBackend, type AvatarHistory, type AvatarHistoryCandidate, type AvatarJob, type AvatarSlot } from "@shared/planet-avatar";
 import type { PlanetMix } from "@shared/planet-design";
+import { lastUsedPair, type AvatarModelChoice } from "@shared/settings";
 import { api } from "../../api";
+import { Chip } from "../../shell/Chip";
 import { Icon } from "../../shell/Icon";
 import { PanelButton, PanelGroupHead } from "../../shell/RightPanel";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
+import { inheritedRow, ModelPickerMenu, modelChipParts, usableProviders } from "../settings/model-menu";
+import { avatarModelFace, type AvatarModelSource } from "./avatar-model.ts";
 import { bodyArt, planetFaceDesign, type BodyKind, type GalaxyDesign } from "./design.ts";
 import { BodyFigure } from "./StarFigure.tsx";
 
@@ -14,6 +18,10 @@ import { BodyFigure } from "./StarFigure.tsx";
  * 按用户的出图原则出 2–3 张无脸地表候选 → 这里一张张显示生成中 / 出来了 / 没出来（原因、降级到什么）→ 挑一张「用这张」写进 planet/。
  * 候选上的眼睛是代码画的（与侧栏、星系同一个 BodyFigure），地表才是候选。
  * 挑完主进程推 selected，App 的 usePlanetFiles 重读盘：侧栏头像、页头、星系、右栏星系图、面板预览五处同源换上。
+ *
+ * 这一组用哪个模型：动作行左边的模型胶囊（与输入卡、子会话面板同一张 ModelPickerMenu）。**点之前就写明**取法与型号
+ * （跟会话栏 / 子会话模型 / 挑定的型号），胶囊上那一对 id 随请求发出去，主进程以请求为准——显示什么就用什么
+ * （2026-11-25 用户：在会话栏换了两次模型，出图两次都是子会话默认的那家，点了才发现）。取法记在设置里，跨重启保留。
  */
 export function AvatarSection(props: {
   workspaceId: string;
@@ -25,6 +33,8 @@ export function AvatarSection(props: {
   mix: PlanetMix;
   /** 这颗天体此刻有没有地表图（没有 = 待出图，显示代码画的默认球） */
   hasSurface: boolean;
+  /** 挑出图模型要用的东西（会话栏的模型、服务商、设置、星标），App 递下来 */
+  modelSource: AvatarModelSource;
 }) {
   const t = useT();
   const ta = t.galaxyDesigner.avatar;
@@ -76,14 +86,45 @@ export function AvatarSection(props: {
   }, [workspaceId, bodyId, refreshHistory]);
 
   const live = isAvatarJobLive(job);
+  // 下一组会用哪个模型：取法 → 型号 → 能不能用（与主进程兜底时同一个纯函数；型号名与模型菜单同一口径）
+  const modelSource = props.modelSource;
+  /** 换了取法 / 型号：上一回「挑不出型号 / 用不了」的红字说的已是另一个型号，收掉 */
+  const chooseModel = (choice: AvatarModelChoice | null): void => {
+    setError(null);
+    modelSource.onChoiceChange(choice);
+  };
+  const face = avatarModelFace({
+    choice: modelSource.settings.avatarModel,
+    // 会话栏此刻的模型；主槽还没有（没配服务商、刚打开还没有默认）才退到上次用的
+    session: modelSource.composerModel ?? lastUsedPair(modelSource.settings),
+    settings: modelSource.settings,
+    providers: modelSource.providers,
+    catalog: modelSource.catalog,
+    t,
+  });
   const start = async (instruction?: string): Promise<void> => {
     if (bodyId === null || live || busy) return;
+    // 挑不出型号、或它此刻用不了：就地报这一句，不开幕后会话（主进程那头同样的校验是给不带型号的调用方的）
+    const pair = face.pair;
+    if (pair === null || face.problem !== null) {
+      setError(pair === null ? ta.modelNoneHint : (face.problem ?? ""));
+      return;
+    }
     setBusy(true);
     setError(null);
     setPicked(null);
     // 「再来一组」始终不以旧图为基础；只有「按这个改」把当前高亮 / 在用的那张作为基础
     const baseCandidateId = instruction === undefined ? undefined : (picked ?? job?.selected ?? undefined);
-    const result = await api.planet.generateAvatar({ workspaceId, bodyId, mix: props.mix, name: props.name, ...(instruction === undefined ? {} : { instruction }), ...(baseCandidateId === undefined ? {} : { baseCandidateId }) });
+    const result = await api.planet.generateAvatar({
+      workspaceId,
+      bodyId,
+      // 胶囊上写的型号就是这一组用的型号：主进程以请求为准，不再自己挑
+      model: pair,
+      mix: props.mix,
+      name: props.name,
+      ...(instruction === undefined ? {} : { instruction }),
+      ...(baseCandidateId === undefined ? {} : { baseCandidateId }),
+    });
     setBusy(false);
     if (result.ok) {
       setJob(result.job);
@@ -121,6 +162,29 @@ export function AvatarSection(props: {
   // 每一位都因同一个原因没出来（停下、超时、会话断了）：原因只写一次，不在每张下面重复
   const failedReasons = slots.map((slot) => (slot.state === "failed" ? slot.reason : null));
   const sharedReason = slots.length > 1 && failedReasons.every((reason) => reason !== null && reason === failedReasons[0]) ? failedReasons[0] ?? null : null;
+  // 出图中：胶囊显示这一组实际在用的型号（主进程开轮时定的那一对），不许换——换了也只对下一组生效
+  const liveParts = live && job !== null && job.model !== null ? modelChipParts(modelSource.providers, modelSource.catalog, job.model) : null;
+  const pickedParts = face.pair === null ? null : modelChipParts(modelSource.providers, modelSource.catalog, face.pair);
+  const choice = modelSource.settings.avatarModel;
+  const chipParts = live ? liveParts : pickedParts;
+  const actsRef = useRef<HTMLSpanElement | null>(null);
+  /** 用户在这颗胶囊上换了取法：动作行可能因此从一行变两行（型号名长时主操作换到下一行）——把它带回可视区，别让「生成形象」掉到面板底下去 */
+  const choiceKey = JSON.stringify(choice ?? null);
+  const knownChoice = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const first = knownChoice.current === null;
+    const changed = knownChoice.current !== choiceKey;
+    knownChoice.current = choiceKey;
+    if (first || !changed) return;
+    actsRef.current?.scrollIntoView({ block: "nearest" });
+  }, [choiceKey]);
+  const chipTitle = live
+    ? chipParts === null
+      ? undefined
+      : `${chipParts.name} · ${chipParts.detail}\n${ta.modelLive(chipParts.name)}`
+    : chipParts === null
+      ? ta.modelNoneHint
+      : (face.problem ?? `${chipParts.name} · ${chipParts.detail}\n${face.hint}`);
 
   return (
     <div className="gd-avatar" data-avatar-state={job?.state ?? "none"} data-body-id={bodyId ?? undefined}>
@@ -203,12 +267,52 @@ export function AvatarSection(props: {
               <span>{ta.error(error)}</span>
             </p>
           )}
-          <span className="gd-avatar-acts">
+          <span className="gd-avatar-acts" ref={actsRef}>
+            <ModelPickerMenu
+              t={t}
+              providers={usableProviders(modelSource.providers)}
+              catalog={modelSource.catalog}
+              // 取法解析出的型号在列表里亮着（左栏也落在它那家）：一眼看得到「跟会话栏」此刻是哪一个
+              selected={live ? (job?.model ?? null) : face.pair}
+              starred={modelSource.starredModels}
+              onToggleStar={modelSource.onToggleStarModel}
+              onSelect={(providerId, modelId) => chooseModel({ providerId, modelId })}
+              leading={[
+                // 第一组是两种取法（同设置面「同会话 / 同父」那一行），下面才是型号；当前取法打勾
+                inheritedRow({
+                  id: "avatar-model-follow",
+                  label: ta.modelFollow,
+                  hint: ta.modelFollowHint,
+                  hintBelow: true,
+                  inherited: choice === undefined,
+                  onSelect: () => chooseModel(null),
+                }),
+                inheritedRow({
+                  id: "avatar-model-sub-session",
+                  label: t.settings.subSessionModel,
+                  hint: ta.modelSubSessionHint,
+                  hintBelow: true,
+                  inherited: choice === "sub_session",
+                  onSelect: () => chooseModel("sub_session"),
+                }),
+              ]}
+              trigger={({ open, toggle }) => (
+                <Chip
+                  className="gd-avatar-model"
+                  active={open}
+                  chevron
+                  disabled={live || busy}
+                  leading={chipParts?.avatar}
+                  title={chipTitle}
+                  onClick={toggle}
+                >
+                  {!live && face.sourceLabel !== null && <span className="gd-avatar-model-source">{face.sourceLabel} · </span>}
+                  {live ? (liveParts?.name ?? "") : face.name}
+                </Chip>
+              )}
+            />
             {live ? (
-              <>
-                <span className="gd-avatar-model">{job?.model === null || job?.model === undefined ? "" : ta.model(job.model.modelId)}</span>
-                <PanelButton onClick={cancel}>{ta.cancel}</PanelButton>
-              </>
+              <PanelButton onClick={cancel}>{ta.cancel}</PanelButton>
             ) : (
               <>
                 {chosen !== null && chosen !== job?.selected ? (

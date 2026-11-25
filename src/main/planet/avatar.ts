@@ -54,6 +54,7 @@ export interface ScriptResult {
   stderr: string;
 }
 
+/** 这一轮解析出来的模型（shared 的 resolveAvatarModel 的结果；这里只用三样）；错误是给面板看的一句话 */
 export type AvatarModel = { ok: true; providerId: string; modelId: string; thinkingLevel: ThinkingLevel } | { ok: false; error: string };
 
 export interface AvatarDeps {
@@ -61,8 +62,8 @@ export interface AvatarDeps {
   /** 插件「行星造物」的根目录；没装为 null（不看作用域：形象是每个工作区都要的，技能路径直接写进提示词） */
   pluginRoot(): Promise<string | null>;
   sessions: { ensureSession(meta: SessionMeta): Promise<void>; remove(id: string): Promise<void> };
-  /** 跑这一轮用哪个模型（子会话默认模型 → 上次用的模型；index.ts 接 resolveAutomationModel） */
-  resolveModel(): Promise<AvatarModel>;
+  /** 跑这一轮用哪个模型：请求里带的型号最优先，没带才按设置里的取法解析（index.ts 接 shared 的 resolveAvatarModel） */
+  resolveModel(request: AvatarGenerateRequest): Promise<AvatarModel>;
   submitTurn(input: SubmitAgentInput): Promise<void>;
   abort(sessionId: string): Promise<void> | void;
   /** 跑插件脚本（python3 <root>/<script> …args），带超时；不抛，退出码照实回 */
@@ -473,7 +474,7 @@ export class AvatarJobs {
     const place = located.place;
     const root = await this.deps.pluginRoot();
     if (root === null) return { ok: false, error: "没装插件「行星造物」（planet-forge）：出图走它的技能与脚本，装上后再试" };
-    const model = await this.deps.resolveModel();
+    const model = await this.deps.resolveModel(request);
     if (!model.ok) return { ok: false, error: model.error };
 
     const rounds = parseManifest(await readJson(join(place.dir, "manifest.json")));

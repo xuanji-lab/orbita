@@ -19,7 +19,8 @@ export const planetApi = {
   updateSubAgent: (request: SubAgentUpdateRequest): Promise<SubAgentMutationResult> => ipcRenderer.invoke(ipcChannels.subAgentUpdate, request),
   /** 删（用户在面板里确认过）：名单拿掉，档案目录挪进 planet/agents/.deleted/ */
   deleteSubAgent: (request: SubAgentDeleteRequest): Promise<SubAgentMutationResult> => ipcRenderer.invoke(ipcChannels.subAgentDelete, request),
-  /** 「生成形象」：开一组候选（幕后会话跑插件 planet-render）；同一颗正在出图时回错误 */
+  /** 「生成形象」：开一组候选（幕后会话跑插件 planet-render）；同一颗正在出图时回错误。
+   *  `model` 是面板解析好的具体型号（胶囊上显示的就是它），主进程以它为准、只校验可用 */
   generateAvatar: (request: AvatarGenerateRequest): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarGenerate, request),
   /** 这颗天体当前这一轮（活任务，或按盘上账本重建）；从没出过图为 null */
   avatarJob: (request: AvatarBodyRef): Promise<AvatarJobResult> => ipcRenderer.invoke(ipcChannels.planetAvatarGet, request),

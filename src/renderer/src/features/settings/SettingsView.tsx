@@ -37,7 +37,7 @@ import { useChatStatusFlag } from "../context/chat-status-flag.ts";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
-import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
+import { inheritedRow, ModelPickerMenu, type InheritedFallback, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
   DEFAULT_INTENT_BASE_URL,
@@ -236,22 +236,6 @@ function withInheritedFirst(
   return [inheritedRow(fallback), ...items];
 }
 
-/** 同上，只要那一行——模型卡片把它当 `leading` 传进去（卡片自己拿着过滤后的行） */
-function inheritedRow(fallback: InheritedFallback): MenuItem {
-  return {
-    id: fallback.id,
-    label: fallback.label,
-    /*
-     * 说明放哪儿分两档：模型卡片里放主行下面当副行（两行行）——卡片里其余行
-     * 都是两行行，而且右端 hint 会把那一行拉得很长、说明还被截断（2026-10-02
-     * 用户实测）；思考档菜单都是单行行，说明留在右端 hint。
-     */
-    ...(fallback.hintBelow === true ? { subLabel: fallback.hint } : { hint: fallback.hint }),
-    checked: fallback.inherited,
-    onSelect: fallback.onSelect,
-  };
-}
-
 /** 设置里选的模型指向了被关的服务商：旁边一行提示（不静默改选，运行时按既有兜底退回） */
 function ClosedProviderNote(props: { title: string; body: string }) {
   return (
@@ -264,7 +248,6 @@ function ClosedProviderNote(props: { title: string; body: string }) {
   );
 }
 
-type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
 
 function General(props: {
   settings: AppSettings;

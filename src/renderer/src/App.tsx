@@ -1973,7 +1973,22 @@ export function App() {
                   mainId={mainSessionOf(session.sessions, orchestraWsId, settings.orchestraMain)?.id ?? null}
                 />
               ) : shownPanel === "galaxy" ? (
-                <GalaxyDesigner workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null} focus={designerFocus} workspaces={session.workspaces} onWorkspacesChanged={session.reloadWorkspaces} />
+                <GalaxyDesigner
+                  workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null}
+                  focus={designerFocus}
+                  workspaces={session.workspaces}
+                  onWorkspacesChanged={session.reloadWorkspaces}
+                  // 形象一节的出图模型：默认跟会话栏（主槽此刻的模型），取法记在设置里
+                  avatarModel={{
+                    providers,
+                    catalog: session.catalog,
+                    composerModel: session.model,
+                    settings,
+                    starredModels: settings.starredModels ?? [],
+                    onToggleStarModel: toggleStarModel,
+                    onChoiceChange: (choice) => changeSettings(choice === null ? { avatarModel: null } : { avatarModel: choice }),
+                  }}
+                />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
                   sessionId={session.sessionId ?? session.opened?.id ?? null}

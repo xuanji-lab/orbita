@@ -16,7 +16,8 @@ import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
-import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
+import { resolveAvatarModel } from "../shared/planet-avatar.ts";
+import { effectiveLanguage, lastUsedPair, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
@@ -61,7 +62,7 @@ import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
 import { ChannelReconciler } from "./channel/reconcile.ts";
 import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
 import { KeepAwake } from "./automation/keep-awake.ts";
-import { deliverAutomationRun, launchAutomationRun, resolveAutomationModel, type LaunchDeps } from "./automation/launch.ts";
+import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
 import { applyAutomationRequest, type AutomationRequestDeps } from "./automation/requests.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { AutomationStore } from "./automation/store.ts";
@@ -1404,8 +1405,18 @@ void app.whenReady().then(async () => {
       return existsSync(join(root, AVATAR_SKILL)) ? root : null;
     },
     sessions,
-    // 模型：子会话默认模型 → 上次用的模型（同自动化的解析）；不用杂务模型——画 SVG、按退出码重画是正经的多步活
-    resolveModel: async () => resolveAutomationModel({ automation: {}, settings: await settings.read(), providers: await providers.list() }),
+    // 模型：面板随请求带来的型号最优先（它在胶囊上显示的就是这一对），没带才按设置里的取法解析——
+    // 没选过 = 会话栏的模型（主进程读得到的只有 lastUsed），选了「子会话模型」才走子会话默认那条链路。
+    // 不用杂务模型——画 SVG、按退出码重画是正经的多步活
+    resolveModel: async (request) => {
+      const current = await settings.read();
+      return resolveAvatarModel({
+        requested: request.model,
+        session: lastUsedPair(current),
+        settings: { avatarModel: current.avatarModel, subSessionModel: current.subSessionModel, subSessionThinking: current.subSessionThinking },
+        providers: await providers.list(),
+      });
+    },
     submitTurn: (input) => agentIpc.submitTurn(input),
     abort: (sessionId) => agentHost.abort(sessionId),
     runScript: execPluginScript,

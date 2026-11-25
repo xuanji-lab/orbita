@@ -53,6 +53,7 @@ import { NewSubAgentForm, RoleSection } from "./SubAgentRole.tsx";
 import { PLANET_AGENTS_MAX } from "@shared/planet-design";
 import { MixSection } from "./MixSection.tsx";
 import { AvatarSection } from "./AvatarSection.tsx";
+import type { AvatarModelSource } from "./avatar-model.ts";
 import { BinarySection } from "./BinarySection.tsx";
 import type { PlanetMix } from "@shared/planet-design";
 import { cssColorOf, mixColor } from "./mix.ts";
@@ -84,6 +85,8 @@ export function GalaxyDesigner(props: {
   /** 全部工作区与刷新入口：主星页「结成联星」用（BinarySection）；缺席不显示那一行 */
   workspaces?: readonly Workspace[];
   onWorkspacesChanged?: () => void;
+  /** 形象一节挑出图模型要用的东西（会话栏的模型、服务商、设置、星标），App 递下来 */
+  avatarModel: AvatarModelSource;
 }) {
   const t = useT();
   const tg = t.galaxyDesigner;
@@ -103,11 +106,12 @@ export function GalaxyDesigner(props: {
       workspace={props.workspace}
       focus={props.focus ?? null}
       binary={props.workspaces === undefined || props.onWorkspacesChanged === undefined ? null : { workspaces: props.workspaces, onChanged: props.onWorkspacesChanged }}
+      avatarModel={props.avatarModel}
     />
   );
 }
 
-function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; binary: { workspaces: readonly Workspace[]; onChanged: () => void } | null }) {
+function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; binary: { workspaces: readonly Workspace[]; onChanged: () => void } | null; avatarModel: AvatarModelSource }) {
   const t = useT();
   const tg = t.galaxyDesigner;
   const id = props.workspace.id;
@@ -376,6 +380,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
                 name={(body.name.trim() || nameFallback).slice(0, 200)}
                 mix={kind === "planet" && design.planet !== null ? mixOf(design.planet) : starMixOf(design.star, id)}
                 hasSurface={body.surface !== null && body.surface !== undefined}
+                modelSource={props.avatarModel}
               />
             )}
 

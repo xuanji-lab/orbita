@@ -1192,13 +1192,28 @@
 }
 .gd-avatar-acts {
   display: flex;
+  /* 放得下就同一行（胶囊在左、主操作钉行尾）；放不下时主操作换到下一行、照旧钉行尾——取法与型号名不省、不挤 */
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
 }
-.gd-avatar-model {
+/*
+ * 动作行左边的模型胶囊（Chip + ModelPickerMenu 的锚）：行尾留给主操作（生成形象 / 用这张 / 停下）。
+ * 型号名长过 Chip 的上限才省略（chip-label 自带省略号，全名在悬停提示里）。
+ */
+.gd-avatar-acts > :has(> .gd-avatar-model) {
+  flex: 0 1 auto;
+  min-width: 0;
   margin-right: auto;
-  font-size: var(--font-size-xs);
+}
+/* Chip 自带上限 260px（内联）；这一行放得下更长的「取法 · 型号名」（换行后独占一行时有 277+），上限交给这一行的宽度 */
+.gd-avatar-model {
+  min-width: 0;
+  max-width: none !important;
+}
+/* 取法那一截（「跟会话栏 · 」）比型号名弱一级：先靠颜色分层 */
+.gd-avatar-model-source {
   color: var(--color-text-tertiary);
 }
 .gd .gd-avatar-generate,

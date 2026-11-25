@@ -7,9 +7,11 @@ import { AvatarJobs, parseManifest, policySlots, type AvatarDeps, type ScriptRes
 import { applySubAgentRequest } from "./sub-agent-requests.ts";
 import { SubAgentStore } from "./sub-agents.ts";
 import type { SubmitAgentInput } from "../../shared/agent-ipc.ts";
-import type { AvatarJob } from "../../shared/planet-avatar.ts";
+import { defaultThinkingLevel } from "../../shared/model-defaults.ts";
+import { resolveAvatarModel, type AvatarGenerateRequest, type AvatarJob } from "../../shared/planet-avatar.ts";
+import type { ProviderDto } from "../../shared/provider.ts";
 import type { SessionMeta } from "../../shared/session.ts";
-import { DEFAULT_SETTINGS } from "../../shared/settings.ts";
+import { DEFAULT_SETTINGS, type AvatarModelChoice } from "../../shared/settings.ts";
 import type { Workspace } from "../../shared/workspace.ts";
 
 async function readJsonFile(path: string): Promise<Record<string, unknown>> {
@@ -202,6 +204,83 @@ describe("AvatarJobs：生成", () => {
     const b = await noModel.jobs.generate({ workspaceId: "w1", bodyId: "main" });
     assert.deepEqual(b, { ok: false, error: "没有可用模型" });
     assert.equal(noModel.metas.length, 0);
+  });
+});
+
+/** 出图用的模型由面板解析后随请求带来（或主进程按设置兜底）：这里把真解析器接进任务表，验「发出去的这一轮用的是哪个模型」 */
+function modelProvider(id: string, displayName: string, modelIds: string[], disabled = false): ProviderDto {
+  return {
+    id,
+    displayName,
+    disabled,
+    endpoint: { baseUrl: "https://x.example", api: "anthropic-messages" },
+    auth: { scheme: "api_key", hasSecret: true, masked: "abc…xyz" },
+    models: { declared: modelIds.map((modelId) => ({ id: modelId })) },
+  };
+}
+
+describe("AvatarJobs：这一轮用哪个模型", () => {
+  const providers = [
+    modelProvider("zhipu-coding", "智谱 Coding Plan", ["glm-5.4"]),
+    modelProvider("kimi-coding", "Kimi Code", ["kimi-for-coding", "k3.1-pro"]),
+  ];
+  /** 用户正式版设置的那一段：子会话默认模型是 Kimi，会话栏用的是智谱 */
+  const settings = {
+    avatarModel: undefined,
+    subSessionModel: { providerId: "kimi-coding", modelId: "kimi-for-coding" },
+    lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.4" },
+  } as const;
+  const withResolver =
+    (choice: AvatarModelChoice | undefined = undefined, overrides: Partial<AvatarDeps> = {}): Partial<AvatarDeps> => ({
+      resolveModel: async (request: AvatarGenerateRequest) =>
+        resolveAvatarModel({
+          requested: request.model,
+          session: settings.lastUsed,
+          settings: { avatarModel: choice, subSessionModel: settings.subSessionModel },
+          providers,
+        }),
+      ...overrides,
+    });
+
+  it("请求里带的型号就是幕后会话用的型号：meta 与开轮是同一对 id，不被子会话默认模型压住", async () => {
+    const { ws, root } = await fixture();
+    const h = harness(ws, root, withResolver());
+    const result = await h.jobs.generate({ workspaceId: "w1", bodyId: "main", model: { providerId: "kimi-coding", modelId: "k3.1-pro" } });
+    assert.equal(result.ok, true);
+    assert.equal(((result as { ok: true; job: AvatarJob }).job).model?.modelId, "k3.1-pro");
+    assert.deepEqual(h.metas.map((meta) => [meta.providerId, meta.modelId]), [["kimi-coding", "k3.1-pro"]]);
+    assert.deepEqual(h.submitted.map((input) => [input.providerId, input.modelId, input.thinkingLevel]), [["kimi-coding", "k3.1-pro", defaultThinkingLevel("k3.1-pro")]]);
+    await h.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+  });
+
+  it("请求没带型号：主进程按设置兜底——没选过跟会话栏（lastUsed），选了「子会话模型」才用子会话默认模型", async () => {
+    const { ws, root } = await fixture();
+    const follow = harness(ws, root, withResolver());
+    const a = await follow.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(a.ok, true);
+    assert.deepEqual(follow.submitted.map((input) => [input.providerId, input.modelId]), [["zhipu-coding", "glm-5.4"]]);
+    await follow.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+
+    const { ws: ws2, root: root2 } = await fixture();
+    const sub = harness(ws2, root2, withResolver("sub_session"));
+    const b = await sub.jobs.generate({ workspaceId: "w1", bodyId: "main" });
+    assert.equal(b.ok, true);
+    assert.deepEqual(sub.submitted.map((input) => [input.providerId, input.modelId]), [["kimi-coding", "kimi-for-coding"]]);
+    await sub.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
+  });
+
+  it("型号不可用（服务商被关 / 型号没了）：报错说清怎么办，不换成别家，也不开幕后会话", async () => {
+    const { ws, root } = await fixture();
+    const closed = harness(ws, root, withResolver(undefined));
+    const a = await closed.jobs.generate({ workspaceId: "w1", bodyId: "main", model: { providerId: "zhipu-coding", modelId: "glm-5.3" } });
+    assert.equal(a.ok, false);
+    assert.match((a as { error: string }).error, /zhipu-coding\/glm-5\.3/);
+    assert.equal(closed.metas.length, 0);
+    assert.equal(closed.submitted.length, 0);
+    // 没有活任务：同一颗可以接着再试
+    const again = await closed.jobs.generate({ workspaceId: "w1", bodyId: "main", model: { providerId: "zhipu-coding", modelId: "glm-5.4" } });
+    assert.equal(again.ok, true);
+    await closed.jobs.cancel({ workspaceId: "w1", bodyId: "main" });
   });
 });
 
