@@ -6,6 +6,9 @@ import { resolveTheme } from "@shared/theme-resolve";
 import { htmlLang } from "./locale.ts";
 import { effectiveLanguage } from "@shared/settings";
 import { watchWindowActivity } from "./shell/window-activity.ts";
+import { isPreviewPath } from "./preview/scenes.ts";
+import { parseMobileOptions } from "./preview/mobile/options.ts";
+import { MobilePreview } from "./preview/mobile/MobilePreview";
 import "./styles.css";
 
 // 窗口不在前台（失焦 / 标签页隐藏）时暂停持续动效（styles.css 的
@@ -40,8 +43,11 @@ if (api.initialTheme !== null) {
 const container = document.getElementById("root");
 if (!container) throw new Error("root container missing in index.html");
 
+// 手机端设计稿（preview.html?surface=mobile…）：同一个入口、同一套 token 与组件，只是不起桌面 App
+const mobile = isPreviewPath(window.location.pathname) ? parseMobileOptions(window.location.search) : null;
+
 createRoot(container).render(
   <StrictMode>
-    <App />
+    {mobile === null ? <App /> : <MobilePreview options={mobile} />}
   </StrictMode>,
 );

@@ -44,7 +44,16 @@ export interface PreviewOptions {
 /** 虚拟文件树节点：text/image/binary/largeLog 四态覆盖文件面板全部预览路径。 */
 export type VfsNode =
   | { kind: "dir"; children: Map<string, VfsNode> }
-  | { kind: "file"; text: string | null; image: boolean; binary: boolean; largeLog: boolean; modifiedAt: number };
+  | {
+      kind: "file";
+      text: string | null;
+      image: boolean;
+      binary: boolean;
+      largeLog: boolean;
+      modifiedAt: number;
+      /** 图片节点的真实内容：同源 public/ 下的一张 PNG（缺席 = 1×1 占位）。手机设计稿里对话中的截图用它 */
+      url?: string;
+    };
 
 export interface PreviewReviewSet {
   lists: Record<ReviewSource, ReviewList>;
@@ -387,7 +396,7 @@ function usage(scene: PreviewSceneId, now: number): UsageDayTotal[] {
 }
 
 /** 组1素材：虚拟文件树。字符串=文本文件；三个标记分别走图片/二进制/大文本分段预览。 */
-type TreeSpec = { [name: string]: TreeSpec | string | { image: true } | { binary: true } | { largeLog: true } };
+type TreeSpec = { [name: string]: TreeSpec | string | { image: true; url?: string } | { binary: true } | { largeLog: true } };
 
 function addTree(vfs: Map<string, VfsNode>, base: string, spec: TreeSpec, now: number): void {
   const existing = vfs.get(base);
@@ -400,7 +409,10 @@ function addTree(vfs: Map<string, VfsNode>, base: string, spec: TreeSpec, now: n
     if (typeof value === "string") {
       vfs.set(path, { kind: "file", text: value, image: false, binary: false, largeLog: false, modifiedAt: at });
     } else if ("image" in value) {
-      vfs.set(path, { kind: "file", text: null, image: true, binary: false, largeLog: false, modifiedAt: at });
+      vfs.set(path, {
+        kind: "file", text: null, image: true, binary: false, largeLog: false, modifiedAt: at,
+        ...(typeof value.url === "string" ? { url: value.url } : {}),
+      });
     } else if ("binary" in value) {
       vfs.set(path, { kind: "file", text: null, image: false, binary: true, largeLog: false, modifiedAt: at });
     } else if ("largeLog" in value) {
@@ -423,6 +435,8 @@ function workspaceTree(): TreeSpec {
     },
     docs: { "plan.md": "# Plan\n\n1. Open the preview.\n2. Click every surface once.\n" },
     assets: { "logo.png": { image: true }, "archive.zip": { binary: true } },
+    // 手机端设计稿的对话里引用的截图（桌面预览自己截的一张，放在 public/preview-fixtures/）
+    shots: { "desktop-home.png": { image: true, url: "/preview-fixtures/desktop-home.png" } },
     data: { "dump.csv": "id,name\n1,fixture\n", "server.log": { largeLog: true } },
     scratch: { "rewrite.md": "# Rewrite\n\nLong draft with too many lines to preview inline.\n", "notes.md": "# Notes\n\nRestored to the task baseline.\n" },
   };

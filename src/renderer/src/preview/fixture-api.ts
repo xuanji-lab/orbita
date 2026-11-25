@@ -131,6 +131,16 @@ function sessionWindow(records: SessionRecord[]): { total: number; hasMore: bool
 
 
 /** 1×1 透明 PNG 的 base64（fixture 图片预览；不含 data: 前缀）。 */
+/** 同源 public/ 下的一张图读成 base64（预览页才会走到；读不到如实报错，不退回占位） */
+async function fetchBase64(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Preview fixture: ${url} returned ${response.status}.`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
 const FIXTURE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
@@ -904,6 +914,10 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
         if (!req.dir.startsWith(req.root)) throw unsupported(`files.read outside root (${req.dir})`);
         const node = vfsGet(fixture, req.dir);
         if (node?.kind !== "file") throw new Error(`Preview fixture: ${req.dir} is not a file.`);
+        if (node.image && node.url !== undefined) {
+          const base64 = await fetchBase64(node.url);
+          return { kind: "image", mime: "image/png", base64, size: Math.floor(base64.length * 3 / 4), modifiedAt: node.modifiedAt };
+        }
         if (node.image) return { kind: "image", mime: "image/png", base64: FIXTURE_PNG_BASE64, size: vfsFileSize(node), modifiedAt: node.modifiedAt };
         if (node.binary) return { kind: "binary", size: vfsFileSize(node), modifiedAt: node.modifiedAt };
         if (node.largeLog || node.text === null) return { kind: "large-text", size: vfsFileSize(node), modifiedAt: node.modifiedAt };
