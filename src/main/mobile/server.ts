@@ -166,7 +166,13 @@ export class MobileServer {
     wss.on("error", (cause: NodeJS.ErrnoException) => {
       if (this.server !== wss) return;
       // 地址不在本机（换了网络 / Tailscale 断了）、端口被占：如实记下，设置页显示
-      this.listenError = cause.code === "EADDRNOTAVAIL" ? "这个地址现在不在本机上" : `监听失败：${cause.message}`;
+      // 设置页只显示用户的话：Node 的原文（listen EADDRINUSE: address already in use …）只进下面那行日志
+      this.listenError =
+        cause.code === "EADDRNOTAVAIL"
+          ? "这个地址现在不在本机上"
+          : cause.code === "EADDRINUSE"
+            ? `端口 ${state.bind?.port} 被别的程序占着，换一个端口。`
+            : "没能在这个地址和端口上接手机的连接，换一个端口或地址再试。详细原因在电脑的日志里。";
       this.deps.log?.(`[mobile] 监听失败（${state.bind?.address}:${state.bind?.port}）：${cause.message}`);
     });
     wss.on("listening", () => {

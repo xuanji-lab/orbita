@@ -8,7 +8,10 @@ import {
   bindView,
   formatCountdown,
   groupPairingCode,
+  isStaleDevice,
+  needsInterfaceName,
   newlyPaired,
+  STALE_DEVICE_MS,
   offerSecondsLeft,
   parsePortInput,
   sortDevices,
@@ -24,6 +27,13 @@ const device = (id: string, patch: Partial<MobileDevice> = {}): MobileDevice => 
   ...patch,
 });
 
+/** 一节文案摊平成一段字：函数文案代入一个占位参数（数字参数的拿到 "X" 也照样拼得出句子） */
+function copyText(copy: object): string {
+  const flat = (value: unknown): unknown =>
+    typeof value === "function" ? (value as (arg: string) => unknown)("X") : value !== null && typeof value === "object" ? Object.values(value).map(flat) : value;
+  return JSON.stringify(Object.values(copy).map(flat));
+}
+
 describe("设置 › 手机：页签登记", () => {
   test("「手机」页签在、图标走 FEATURE_ICON，中英都有名字", () => {
     const tab = SETTINGS_TABS.find((entry) => entry.id === "mobile");
@@ -37,6 +47,24 @@ describe("设置 › 手机：页签登记", () => {
     assert.ok(zh.settings.mobile.pairInfo.includes("3 分钟"));
     assert.ok(!zh.settings.mobile.pairInfo.includes("5 分钟"));
     assert.ok(en.settings.mobile.pairInfo.includes("3 minutes"));
+  });
+
+  test("设备的动作叫「移除」，不叫「撤销」（「撤销」在本应用里是 undo），确认条两钮是「移除」「保留」", () => {
+    const copy = zh.settings.mobile;
+    assert.equal(copy.remove, "移除…");
+    assert.equal(copy.removeAsk("iPad mini"), "移除「iPad mini」？");
+    assert.equal(copy.removeAction, "移除");
+    assert.equal(copy.removeKeep, "保留");
+    const all = copyText(copy);
+    assert.ok(!all.includes("撤销"), "手机页文案里不该再有「撤销」");
+  });
+
+  test("用户看得到的文案不露实现词：放行、监听、密钥库、keyring、主机私钥", () => {
+    const copy = zh.settings.mobile;
+    const all = copyText(copy);
+    for (const word of ["放行", "监听", "密钥库", "keyring", "主机私钥", "手机服务"]) {
+      assert.ok(!all.includes(word), `手机页文案里出现了「${word}」`);
+    }
   });
 });
 
@@ -81,6 +109,15 @@ describe("设置 › 手机：绑定地址的处境", () => {
     });
   });
 
+  test("网卡名只在同类地址不止一个时才需要写", () => {
+    const [tailscale, lan] = candidates;
+    assert.ok(tailscale && lan);
+    assert.equal(needsInterfaceName(lan, candidates), false);
+    const twoLans = [...candidates, { address: "10.0.0.15", kind: "private" as const, interfaceName: "en5" }];
+    assert.equal(needsInterfaceName(lan, twoLans), true);
+    assert.equal(needsInterfaceName(tailscale, twoLans), false);
+  });
+
   test("地址此刻不在本机：如实标缺，类别按地址本身认，不换成别的候选", () => {
     const view = bindView({ bind: { address: "100.88.1.2", port: 47620 }, candidates });
     assert.equal(view?.address, "100.88.1.2");
@@ -105,6 +142,17 @@ describe("设置 › 手机：设备", () => {
     const before = new Set(["a"]);
     assert.equal(newlyPaired(before, [device("a")]), null);
     assert.equal(newlyPaired(before, [device("a"), device("b", { pairedAt: 3 }), device("c", { pairedAt: 9 })])?.id, "c");
+  });
+
+  test("很久没用：不在线、最近一次连上（没连过按配对时间）早于 30 天前", () => {
+    const now = 100 * STALE_DEVICE_MS;
+    const old = now - STALE_DEVICE_MS - 1;
+    assert.equal(isStaleDevice(device("a", { lastSeenAt: old }), now), true);
+    assert.equal(isStaleDevice(device("b", { lastSeenAt: now - STALE_DEVICE_MS }), now), false);
+    assert.equal(isStaleDevice(device("c", { pairedAt: old, lastSeenAt: null }), now), true);
+    assert.equal(isStaleDevice(device("d", { pairedAt: now - 1_000, lastSeenAt: null }), now), false);
+    // 此刻在线的哪怕记录旧也不算
+    assert.equal(isStaleDevice(device("e", { lastSeenAt: old, connected: true }), now), false);
   });
 
   test("端口输入：1–65535 的整数才收", () => {

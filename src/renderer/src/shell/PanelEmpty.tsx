@@ -29,6 +29,8 @@ export function PanelEmpty(props: {
   busy?: boolean;
   /** 宿主的版式微调（如侧栏把字对到行名那一列） */
   className?: string;
+  /** 悬停才看得到的原始细节（如 IPC 报错原文）：给查问题的人，不进正文 */
+  title?: string;
 }) {
   const danger = props.tone === "danger";
   const icon: IconName | undefined =
@@ -38,6 +40,7 @@ export function PanelEmpty(props: {
       className={props.className === undefined ? "panel-empty" : `panel-empty ${props.className}`}
       role={danger ? "alert" : undefined}
       data-tone={danger ? "danger" : undefined}
+      title={props.title}
     >
       <span className="panel-empty-glyph" aria-hidden="true">
         {icon !== undefined && <Icon name={icon} size={14} strokeWidth={1.8} spin={props.busy === true} />}

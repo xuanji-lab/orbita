@@ -64,6 +64,26 @@ export function sortDevices(devices: readonly MobileDevice[]): MobileDevice[] {
   });
 }
 
+/** 「很久没用了」的门槛：最近一次连上（没连过的按配对时间）早于 30 天前 */
+export const STALE_DEVICE_MS = 30 * 24 * 3600_000;
+
+/**
+ * 很久没用的设备：此刻不在线，且最近一次连上（没连过的按配对时间）在 30 天以前。
+ * 设置页把它整行退成三级灰、行尾写「很久没用了」——丢了的、换掉的手机多半就是它，提醒用户可以移除。
+ */
+export function isStaleDevice(device: MobileDevice, now: number): boolean {
+  if (device.connected) return false;
+  return now - (device.lastSeenAt ?? device.pairedAt) > STALE_DEVICE_MS;
+}
+
+/**
+ * 地址菜单里要不要写网卡名：同一类（Tailscale / 局域网 / 仅本机）只有一个地址时，类名就够分了，
+ * utun4、en0 这种名字对用户是噪音；同类有两个以上，才靠网卡名区分。
+ */
+export function needsInterfaceName(candidate: MobileBindCandidate, candidates: readonly MobileBindCandidate[]): boolean {
+  return candidates.filter((other) => other.kind === candidate.kind).length > 1;
+}
+
 /** 生成配对码之后新冒出来的设备（配上了）：前后两份列表按 id 比，取最新配对的一台 */
 export function newlyPaired(before: ReadonlySet<string>, after: readonly MobileDevice[]): MobileDevice | null {
   const fresh = after.filter((device) => !before.has(device.id));

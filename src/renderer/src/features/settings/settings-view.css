@@ -931,17 +931,16 @@ a.exp-pr:hover {
   flex: none;
   margin-top: var(--space-0-5);
 }
+/* 句尾出口用一个空格隔开，不用 margin：折到下一行时才贴得住字的起线 */
+.mobile-reason .notice-exit {
+  margin-left: 0;
+}
 
 .mobile-ellipsis {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-/* 主机密钥丢过的告示：在「设备」节里、清单上方 */
-.pl-note.mobile-notice {
-  margin: var(--space-1) 0 var(--space-2);
 }
 
 /* 整页读不到 / 在读：空态一句话，左缘对到行名那一栏 */
@@ -986,7 +985,7 @@ a.exp-pr:hover {
   border-color: var(--color-danger);
 }
 
-/* 配对码：行底整幅一块。码 xl 等宽、字重 500（越大越轻）；下面一行倒计时与地址 sm；右边两颗按钮 */
+/* 配对码：行底整幅一块。码 xl 等宽、字重 500（越大越轻）；下面一行倒计时与地址 sm；右边两颗文字钮（不带描边） */
 .mobile-offer {
   grid-column: 1 / -1;
   display: flex;
@@ -1018,11 +1017,6 @@ a.exp-pr:hover {
   color: var(--color-text-primary);
   user-select: all;
 }
-.mobile-offer[data-expired] .mobile-offer-code {
-  color: var(--color-text-tertiary);
-  text-decoration: line-through;
-  user-select: none;
-}
 .mobile-offer-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1032,17 +1026,14 @@ a.exp-pr:hover {
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
-.mobile-offer-expired {
-  color: var(--color-text-secondary);
-  font-weight: var(--weight-medium);
-}
 .mobile-offer-acts {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
 
-/* 已配对设备：一行一台，行首 14 的手机图标、名字 + 一行状态、行尾「撤销…」钉在右血线上 */
+/* 已配对设备：一行一台，行首 14 的手机图标、名字 + 一行状态；行尾平时空着（很久没用的写一句），
+   「移除…」悬停 / 键盘聚焦时浮到行尾右血线上 */
 .mobile-devices-wrap {
   display: grid;
   gap: var(--space-2);
@@ -1054,6 +1045,7 @@ a.exp-pr:hover {
   list-style: none;
 }
 .mobile-device {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -1097,9 +1089,52 @@ a.exp-pr:hover {
   min-width: 0;
   padding: var(--space-1) 0;
 }
-/* 「撤销…」：安静文字钮（浏览器页「已导入的网站」的「移除」同一个），八台设备不排出一列框；红只在确认条里出现 */
-.mg-textbtn.mobile-device-revoke {
+/* 确认条：问句、后果在左（后果在按钮之前），两颗按钮在右 */
+.mobile-confirm-text {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.mobile-confirm-hint {
+  color: var(--color-text-secondary);
+}
+/* 很久没用了：整行退成三级灰，行尾一句说明 */
+.mobile-device[data-stale] .mobile-device-name {
+  color: var(--color-text-tertiary);
+}
+.mobile-device-stale {
   font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+/*
+ * 「移除…」：安静文字钮（浏览器页「已导入的网站」的「移除」同一个）。平时不占位、看不见，悬停或键盘聚焦到这一行时
+ * 浮到行尾（readme：A hover-only action cluster never occupies space at rest）；用 opacity + pointer-events，
+ * 不用 visibility——Tab 仍走得到它。行尾那句「很久没用了」此时让位。
+ */
+.mg-textbtn.mobile-device-remove {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  translate: 0 -50%;
+  font-size: var(--font-size-sm);
+  opacity: 0;
+  pointer-events: none;
+  transition: var(--transition-hover), opacity var(--duration-instant) var(--ease-standard);
+}
+.mobile-device:hover > .mg-textbtn.mobile-device-remove,
+.mobile-device:focus-within > .mg-textbtn.mobile-device-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+.mobile-device:hover > .mobile-device-stale,
+.mobile-device:focus-within > .mobile-device-stale {
+  opacity: 0;
+}
+/* 有一行在确认时别的行的「移除…」是灰的：不浮上来 */
+.mobile-device:hover > .mg-textbtn.mobile-device-remove:disabled {
+  opacity: 0;
+  pointer-events: none;
 }
 /* 窄窗（节宽 < 480）：地址下拉先收窄、省略地址尾巴，端口框不缩 */
 .mobile-bind > :first-child {
