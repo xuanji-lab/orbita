@@ -249,4 +249,88 @@ describe("provider:quota —— 换钥匙 / 换地址 / 删除之后，按旧配
     );
     assert.equal((await cache.read())["ds-inflight"]?.credits?.amount, "9.00", "盘上落的是新钥匙那份");
   });
+
+  test("作废还在删盘、没落定时来了一条查询：等删完再查，不把旧快照当「保留旧值」返回", async () => {
+    respond = (key) => (key === KEY_A ? balance("111.00") : unauthorized());
+    await addWithKey("ds-forgetting", KEY_A);
+    assert.equal(shownAmount(await quota("ds-forgetting")), "111.00");
+
+    // 把删盘卡住：作废已经开始（代数已加），盘上的删除要到测试放行才落定
+    let openGate: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    let removalAsked: (() => void) | undefined;
+    const removalAskedPromise = new Promise<void>((resolve) => {
+      removalAsked = resolve;
+    });
+    const realRemove = cache.remove.bind(cache);
+    cache.remove = async (id: string): Promise<void> => {
+      removalAsked?.();
+      await gate;
+      await realRemove(id);
+    };
+
+    const saving = upsert(deepseek("ds-forgetting", { apiKey: KEY_B })); // 不等它：它卡在删盘上
+    await removalAskedPromise;
+
+    const querying = quota("ds-forgetting");
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    assert.equal(probed.length, 1, "删盘没落定之前，这条查询连探测都不该发出去");
+
+    openGate?.();
+    await saving;
+    assert.deepEqual(await querying, { status: "error", reason: "auth", cached: null });
+    assert.equal(probed.at(-1)?.key, KEY_B, "删盘落定之后才按新钥匙去探");
+  });
+
+  test("等在途作废的时候又作废了一次：按新代数重来并等第二次删完，不多探、不回旧快照", async () => {
+    const KEY_C = "sk-review-key-CCCC";
+    respond = (key) => balance(key === KEY_A ? "111.00" : key === KEY_B ? "9.00" : "5.00");
+    await addWithKey("ds-twice", KEY_A);
+    await quota("ds-twice");
+
+    // 每次删盘各卡一道闸，按调用先后排队；放行第 n 道，第 n 次作废才落定
+    const gates: Array<() => void> = [];
+    let asked = 0;
+    const waiters: Array<() => void> = [];
+    const whenAsked = (count: number): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (asked >= count) resolve();
+        else waiters.push(resolve);
+      });
+    const realRemove = cache.remove.bind(cache);
+    cache.remove = async (id: string): Promise<void> => {
+      asked += 1;
+      waiters.splice(0).forEach((resolve) => resolve());
+      await new Promise<void>((resolve) => {
+        gates.push(resolve);
+      });
+      await realRemove(id);
+    };
+
+    const savingB = upsert(deepseek("ds-twice", { apiKey: KEY_B }));
+    await whenAsked(1);
+    const querying = quota("ds-twice"); // 进来就等第一道闸
+    const savingC = upsert(deepseek("ds-twice", { apiKey: KEY_C }));
+    await whenAsked(2);
+
+    gates[0]?.();
+    await savingB;
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(
+      probed.map((item) => item.key),
+      [KEY_A],
+      "第二次作废还没落定：不按中间那把钥匙去探",
+    );
+
+    gates[1]?.();
+    await savingC;
+    assert.equal(shownAmount(await querying), "5.00");
+    assert.deepEqual(
+      probed.map((item) => item.key),
+      [KEY_A, KEY_C],
+      "只按最新的钥匙探了一次",
+    );
+  });
 });

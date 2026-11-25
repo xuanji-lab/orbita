@@ -47,6 +47,12 @@ const quotaProbeState = new Map<string, QuotaProbeState>();
  */
 const quotaEpoch = new Map<string, number>();
 
+/**
+ * 在途的作废（按 providerId）。作废是「先同步加代数，再异步删盘上的缓存」：加完代数、删盘还没落定的
+ * 那一刻进来的查询，代数已经是新的，却会读到还没删掉的旧快照。所以查询进来先等它删完盘再去读缓存。
+ */
+const quotaForgetting = new Map<string, Promise<void>>();
+
 /** 密钥来源：表单里刚输入的优先，否则取已存的（api_key 或 OAuth 访问令牌——后者会自动续期，
  *  续期失败会抛错：调用方把它转成「请重新登录」而不是当成没有密钥） */
 async function resolveKey(
@@ -98,17 +104,24 @@ export function registerProviderIpc(
    * 「保留旧值」的名义继续显示。盘上那份删不掉只记一条：下次探测成功会整体覆盖。
    *
    * 等盘上的删除落定才返回：调用方（保存 / 删除）返回后界面紧接着就会来查额度，
-   * 不等的话那一次查询可能正好读到还没删掉的旧快照。
+   * 不等的话那一次查询可能正好读到还没删掉的旧快照。调用方还没返回就挤进来的查询，
+   * 由 provider:quota 等这里登记的在途 promise（见 quotaForgetting）。
    */
-  const forgetQuota = async (providerId: string): Promise<void> => {
+  const forgetQuota = (providerId: string): Promise<void> => {
     quotaProbeState.delete(providerId);
     quotaEpoch.set(providerId, (quotaEpoch.get(providerId) ?? 0) + 1);
-    if (quotaStore === null) return;
-    try {
-      await quotaStore.remove(providerId);
-    } catch (cause) {
-      console.error("[provider] 额度缓存清除失败", providerId, cause);
-    }
+    if (quotaStore === null) return Promise.resolve();
+    const removal = quotaStore
+      .remove(providerId)
+      .catch((cause: unknown) => {
+        console.error("[provider] 额度缓存清除失败", providerId, cause);
+      })
+      .finally(() => {
+        // 同一家连着作废两次时只认最后一个：它排在写入链的最后，落定即全部落定
+        if (quotaForgetting.get(providerId) === removal) quotaForgetting.delete(providerId);
+      });
+    quotaForgetting.set(providerId, removal);
+    return removal;
   };
 
   ipcMain.handle(ipcChannels.providerList, (): Promise<ProviderDto[]> => store.list());
@@ -310,7 +323,14 @@ export function registerProviderIpc(
     // 这一趟里换过钥匙 / 地址：刚拿到的（缓存也好、探测结果也好）是旧配置的，按新配置重查一遍。
     // 只重来一次——连着换两次不存在，不留没有底的循环
     for (let attempt = 0; ; attempt += 1) {
+      // 代数与「在途的作废」在同一拍里取，然后先等作废删完盘：作废是先同步加代数、再异步删盘，
+      // 挤在中间的查询若不等它，代数对得上号，读到的却还是没删掉的旧快照。
+      // 先取代数再等，是为了把「等的时候又来了一次作废」也挡住——那种情况代数会对不上，外层重来
       const epoch = quotaEpoch.get(query.providerId) ?? 0;
+      const forgetting = quotaForgetting.get(query.providerId);
+      if (forgetting !== undefined) await forgetting;
+      // 等的这会儿又作废了一次：这趟不用探了，按新代数重来（同样只重来一次）
+      if (attempt < 1 && (quotaEpoch.get(query.providerId) ?? 0) !== epoch) continue;
       const result = await readQuota(query, epoch);
       if (attempt >= 1 || (quotaEpoch.get(query.providerId) ?? 0) === epoch) return result;
     }
