@@ -10,7 +10,8 @@
  *   protocol    = 端点没了 / 格式变了（厂商改版的信号）
  *   network     = 连不上 / 超时 / 5xx（等等再试）
  *   unsupported = 这家就是查不了（团队账号 / 没有个人套餐）
- * 预算 8s：额度是「打开看一眼」的东西，宁可说失败也不让界面挂在转圈上。
+ * 单个请求的预算 8s：额度是「打开看一眼」的东西，宁可说失败也不让界面挂在转圈上。
+ * 例外只有智谱：配置的是它自己的官方主机时，失败会换同一家的另一台再试一次，最坏 16s。
  */
 import { anthropicOauthHeaders } from "./oauth.ts";
 import type {
@@ -308,10 +309,18 @@ function zhipuWindow(limit: Record<string, unknown> | null): QuotaWindow | null 
   };
 }
 
-async function probeZhipu(origin: string, apiKey: string, fallbacks: string[]): Promise<QuotaResult> {
-  // 探针只拿得到 providers 里那一行 baseUrl，用户填的可能是子路径 / 镜像；
-  // 官方主机依次兜底（最多两个），全失败按最后一次的原因归类。
-  const origins = [origin, ...fallbacks].filter((item, index, all) => all.indexOf(item) === index);
+async function probeZhipu(origin: string, apiKey: string, official: readonly string[]): Promise<QuotaResult> {
+  /*
+   * 钥匙只发给用户配置的那一台，或者**同一家**的官方主机（按 origin 精确比：协议 + 主机 + 端口，不看路径）：
+   *   - 配置的就是这家自己的官方主机 → 404 / 5xx / 超时 / 连不上时换同一家的另一台再试
+   *     （钥匙还是发给同一家，换来主机级故障时额度仍查得到）；全失败按最后一次的原因归类——
+   *     同一家的另一台回「密钥被拒」就是真的被拒；
+   *   - 配置的是第三方地址（镜像 / 中转）→ 不回退，只打它这一台，按它的原因归类。
+   *     把镜像的钥匙转送给官方主机，是发给用户没配过的主机。
+   */
+  const origins = official.includes(origin)
+    ? [origin, ...official].filter((item, index, all) => all.indexOf(item) === index)
+    : [origin];
   let lastReason: QuotaFailure = "network";
   for (const candidate of origins) {
     // ⚠ 这个接口要的是**裸 key**：带上 `Bearer ` 直接 401（Proma / ZCode 都是这么写的）
@@ -929,9 +938,12 @@ async function probeTokenrhythm(origin: string, apiKey: string): Promise<QuotaRe
  * 分发
  * ------------------------------------------------------------------ */
 
-/** 智谱 / Z.AI 的官方主机兜底（最多两个；`zai` 先自己，再回国内站） */
-const ZHIPU_FALLBACKS = ["https://open.bigmodel.cn", "https://bigmodel.cn"];
-const ZAI_FALLBACKS = ["https://api.z.ai", "https://open.bigmodel.cn"];
+/**
+ * 智谱 / Z.AI 各自的官方主机。回退只发生在同一家之内（见 probeZhipu）：
+ * 国内站（bigmodel.cn）与国际站（api.z.ai）账号不通用，互不为回退；Z.AI 只有一台，等于没有回退。
+ */
+const ZHIPU_OFFICIAL_ORIGINS = ["https://open.bigmodel.cn", "https://bigmodel.cn"];
+const ZAI_OFFICIAL_ORIGINS = ["https://api.z.ai"];
 
 export async function probeQuota(input: QuotaProbeInput): Promise<QuotaResult> {
   if (input.probe === "none") return { status: "none" };
@@ -958,9 +970,9 @@ export async function probeQuota(input: QuotaProbeInput): Promise<QuotaResult> {
 
   switch (input.kind) {
     case "zhipu-coding":
-      return probeZhipu(origin, input.apiKey, ZHIPU_FALLBACKS);
+      return probeZhipu(origin, input.apiKey, ZHIPU_OFFICIAL_ORIGINS);
     case "zai":
-      return probeZhipu(origin, input.apiKey, ZAI_FALLBACKS);
+      return probeZhipu(origin, input.apiKey, ZAI_OFFICIAL_ORIGINS);
     case "kimi-coding":
       return probeKimi(origin, input.apiKey);
     case "opencode-go":

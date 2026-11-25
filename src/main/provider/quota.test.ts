@@ -1,6 +1,7 @@
 import { test, describe, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { parseClaudeUsage, parseDeepseekBalance, probeQuota, type QuotaProbeInput } from "./quota.ts";
+import type { QuotaFailure } from "../../shared/quota.ts";
 
 const DEEPSEEK = "https://api.deepseek.com";
 
@@ -358,7 +359,7 @@ describe("probeQuota —— 智谱 / Z.AI 的套餐窗口", () => {
     assert.equal(stub.calls.length, 1, "鉴权失败不换主机重试");
   });
 
-  test("404 → 依次试官方主机，成功就用那一个（最多两次回退）", async () => {
+  test("404 → 换同一家的另一台官方主机，成功就用那一个", async () => {
     const stub = stubFetch((url) =>
       url.startsWith("https://open.bigmodel.cn")
         ? new Response("not found", { status: 404 })
@@ -392,6 +393,99 @@ describe("probeQuota —— 智谱 / Z.AI 的套餐窗口", () => {
       reason: "network",
       cached: null,
     });
+  });
+});
+
+describe("probeQuota —— 智谱 / Z.AI 的主机回退：钥匙只发给配置的那台，或同一家的官方主机", () => {
+  const ZHIPU_PATH = "/api/monitor/usage/quota/limit";
+  const OPEN = `https://open.bigmodel.cn${ZHIPU_PATH}`;
+  const APEX = `https://bigmodel.cn${ZHIPU_PATH}`;
+  const ZAI = `https://api.z.ai${ZHIPU_PATH}`;
+  const MIRROR = `https://mirror.example${ZHIPU_PATH}`;
+  const zaiInput = (overrides: Partial<QuotaProbeInput> = {}): QuotaProbeInput => ({
+    probe: "plan-windows",
+    kind: "zai",
+    baseUrl: "https://api.z.ai/api/coding/paas/v4",
+    apiKey: "sk-test",
+    ...overrides,
+  });
+
+  /** 三种「换个主机再试有意义」的失败，各带应有的归类 */
+  const retryable: Array<[string, () => Response, QuotaFailure]> = [
+    ["404", () => new Response("not found", { status: 404 }), "protocol"],
+    ["5xx", () => new Response("bad gateway", { status: 502 }), "network"],
+    [
+      "超时 / 连不上",
+      () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      },
+      "network",
+    ],
+  ];
+
+  for (const [label, fail, reason] of retryable) {
+    test(`配的是第三方地址（镜像 / 中转），遇到 ${label}：只打配置的那一台，别的任何主机零次`, async () => {
+      const stub = stubFetch(fail);
+      assert.deepEqual(
+        await probeQuota(planInput("zhipu-coding", { baseUrl: "https://mirror.example/api/coding/paas/v4" })),
+        { status: "error", reason, cached: null },
+        "按配置的那一台说的归类",
+      );
+      assert.deepEqual(stub.calls.map((call) => call.url), [MIRROR]);
+      assert.equal(headersOf(stub.calls[0]).Authorization, "sk-test", "钥匙只到镜像");
+    });
+  }
+
+  test("长得像官方主机的不算官方：按 origin 精确比，不做前缀匹配，协议不同也不算", async () => {
+    const stub = stubFetch(() => new Response("not found", { status: 404 }));
+    for (const baseUrl of ["https://open.bigmodel.cn.example.com/v1", "http://open.bigmodel.cn/api/coding/paas/v4"]) {
+      await probeQuota(planInput("zhipu-coding", { baseUrl }));
+    }
+    assert.deepEqual(
+      stub.calls.map((call) => call.url),
+      [`https://open.bigmodel.cn.example.com${ZHIPU_PATH}`, `http://open.bigmodel.cn${ZHIPU_PATH}`],
+      "各打一次，钥匙没有跟去任何官方主机",
+    );
+  });
+
+  for (const [label, fail] of retryable) {
+    test(`智谱配的是自己的官方主机，第一台 ${label}：换同一家的另一台再试，成功就用它`, async () => {
+      const stub = stubFetch((url) => (url === OPEN ? fail() : okBody(ZHIPU_OK)));
+      assert.equal((await probeQuota(planInput("zhipu-coding"))).status, "ok");
+      assert.deepEqual(stub.calls.map((call) => call.url), [OPEN, APEX]);
+    });
+  }
+
+  test("反过来也一样：配的是 bigmodel.cn，第一台连不上 → 回退到 open.bigmodel.cn", async () => {
+    const stub = stubFetch((url) => {
+      if (url === APEX) throw new DOMException("fetch failed", "TypeError");
+      return okBody(ZHIPU_OK);
+    });
+    const result = await probeQuota(planInput("zhipu-coding", { baseUrl: "https://bigmodel.cn/api/coding/paas/v4" }));
+    assert.equal(result.status, "ok");
+    assert.deepEqual(stub.calls.map((call) => call.url), [APEX, OPEN]);
+  });
+
+  test("回退后最后一台回 401：按最后一次归类 → 密钥被拒（同一家的官方主机说被拒就是被拒）", async () => {
+    const stub = stubFetch((url) =>
+      url === OPEN ? new Response("not found", { status: 404 }) : new Response("unauthorized", { status: 401 }),
+    );
+    assert.deepEqual(await probeQuota(planInput("zhipu-coding")), { status: "error", reason: "auth", cached: null });
+    assert.deepEqual(stub.calls.map((call) => call.url), [OPEN, APEX]);
+  });
+
+  for (const [label, fail, reason] of retryable) {
+    test(`Z.AI 配 api.z.ai，遇到 ${label}：只打这一个主机，不回退国内站`, async () => {
+      const stub = stubFetch(fail);
+      assert.deepEqual(await probeQuota(zaiInput()), { status: "error", reason, cached: null });
+      assert.deepEqual(stub.calls.map((call) => call.url), [ZAI]);
+    });
+  }
+
+  test("Z.AI 配的是第三方地址：同样只打那一台", async () => {
+    const stub = stubFetch(() => new Response("not found", { status: 404 }));
+    await probeQuota(zaiInput({ baseUrl: "https://mirror.example/api/coding/paas/v4" }));
+    assert.deepEqual(stub.calls.map((call) => call.url), [MIRROR]);
   });
 });
 
