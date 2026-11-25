@@ -24,7 +24,7 @@ import type { TerminalToolOutcome, TerminalToolRequest } from "../shared/termina
  *    委派）根本不该有这套工具，见 runtime.ts 的注册处。
  */
 
-/** 六个工具的名字。权限档描述（describePermissionMode）与测试都认这一份 */
+/** 六个工具的名字：runtime 的提示词稳定性指纹与测试都认这一份 */
 export const TERMINAL_TOOL_NAMES = [
   "terminal_open",
   "terminal_execute",

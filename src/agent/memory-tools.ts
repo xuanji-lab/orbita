@@ -7,13 +7,16 @@ import {
   type MemoryEntry,
 } from "../shared/memory.ts";
 
+/** 三个记忆工具的名字：runtime 的提示词稳定性指纹与测试都认这一份。 */
+export const MEMORY_TOOL_NAMES = ["memory_search", "memory_revise", "memory_retire"] as const;
+
 /**
  * agent 的记忆工具：memory_search / memory_revise / memory_retire。
  *
  * 为什么有它（2026-10-29 用户）：「比如有记忆召回是错误的，我一句话，agent 就可以找到错误
  * 东西，标记为过时，换上我新的陈述。一种一直在对齐的状态」「我不想去确认记忆，agent 应该
  * 自己有判断力吧」。所以：
- * - 写不过审批（shared/permission.ts 的 MEMORY_TOOLS 三档放行），每次改动都能在条目卡上撤；
+ * - 写不问人，每次改动都能在条目卡上撤；
  * - **只给根会话注册**（子会话读不写；主进程另按 meta 再拒一次子会话的写）；
  * - 存储在记忆服务进程（唯一写者），这里只把参数翻成 memoryToolRequest、把回执翻成工具结果
  *   （task-tools.ts 的 requestBroker 范式）。
@@ -25,9 +28,6 @@ export interface MemoryToolContext {
   /** 本轮轮号（revise 新条的出处）；runtime 在开轮回显时填 */
   turn: () => number;
 }
-
-/** 工具名（权限名单在 shared/permission.ts 的 MEMORY_TOOLS，两处同名） */
-export const MEMORY_TOOL_NAMES = ["memory_search", "memory_revise", "memory_retire"] as const;
 
 function formatDate(at: number): string {
   const date = new Date(at);

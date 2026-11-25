@@ -41,7 +41,7 @@ export class SettingsStore {
         ? current.drawer
         : parseSettings({ theme: current.theme, drawer: { ...current.drawer, ...patch.drawer } })
             .drawer;
-    // lastUsed 同款按键合并：切档只写 mode，不该把已记的 providerId/modelId 抹掉
+    // lastUsed 同款按键合并：只写给了的键，不该把已记的 providerId/modelId 抹掉
     const lastUsed =
       patch.lastUsed === undefined
         ? current.lastUsed

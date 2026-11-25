@@ -3,8 +3,8 @@
  * 「这条任务 › 进度」（renderer 的 task-progress.ts）用同一份规矩判「这是不是一张合法的计划」。
  *
  * 两边都要判：工具在执行时校验、坏了就拒（错误回灌给模型）；面板要在工具执行**之前**就认出
- * 这张计划——pi 的并行批次先让每个调用过审批闸门、全部过完才统一执行，手动档下 update_plan
- * 会和同批等你批准的工具一起挂着，面板若只认执行完的，就一直显示上一张计划。
+ * 这张计划——一批工具调用先逐个过闸门、全部过完才统一执行，update_plan 会和同批的慢工具一起等着，
+ * 面板若只认执行完的，就一直显示上一张计划。
  *
  * 纯模块：不 import electron / React，可被 node --test 直接加载。
  */
@@ -45,8 +45,8 @@ export const PLAN_WAITING_MAX_CHARS = 40;
 
 /**
  * update_plan 的结果 details（随转录落盘，只给界面、不进模型上下文）。
- * awaiting = 这一次调用让这一轮先停下、等用户在聊天框里回答（plan 档写完计划 / 带了 confirm 问题 /
- * 「先给我看计划」）；问题由 agent 在正文里问，界面没有确认按钮，awaiting 只用来画「等你」的状态。
+ * awaiting = 这一次调用让这一轮先停下、等用户在聊天框里回答（带了 confirm 问题 / 「先给我看计划」；
+ * 旧会话里还有当时 plan 档写完计划停下的）；问题由 agent 在正文里问，界面没有确认按钮，awaiting 只用来画「等你」的状态。
  */
 export interface PlanToolDetails {
   plan: PlanItem[];

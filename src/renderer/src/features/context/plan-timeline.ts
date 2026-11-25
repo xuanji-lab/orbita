@@ -346,7 +346,7 @@ export function planNoticeOf(timeline: PlanTimeline | null, toolCallIds: readonl
 
 /**
  * 这条会话此刻是不是停在「计划等你确认」上：从尾往前找，先碰到用户消息 = 已回应、不是；
- * 先碰到 update_plan 的完成记录 = 看它 details.awaiting（plan 档写完计划 / 带了 confirm / 先给我看计划）。
+ * 先碰到 update_plan 的完成记录 = 看它 details.awaiting（带了 confirm / 先给我看计划；旧会话里还有 plan 档写完计划的）。
  * 侧栏状态饼、铃铛、首页卡的「等你」与进度面板头一行都读它（sessionRunState 的计划来源）。
  */
 export function planAwaitingIn(records: readonly TranscriptRecord[]): boolean {

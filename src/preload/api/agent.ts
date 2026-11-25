@@ -10,7 +10,6 @@ import {
   type CompactAgentInput,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 
@@ -30,17 +29,12 @@ export const agentApi = {
   /** 手动压缩上下文（`/compact`）。忙碌态与界碑从 agent:event 的 compaction 事件回来 */
   compact: (input: CompactAgentInput): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentCompact, input),
-  setMode: (sessionId: string, mode: PermissionMode): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentSetMode, sessionId, mode),
   /** 会话内改思考档：下一轮生效，开轮时由 runtime 按 meta 装配 */
   setThinkingLevel: (sessionId: string, level: ThinkingLevel): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetThinkingLevel, sessionId, level),
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   setModel: (sessionId: string, providerId: string, modelId: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSetModel, sessionId, providerId, modelId),
-  /** 回答一次工具审批 */
-  answerPermission: (requestId: string, answer: PermissionAnswer): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.agentAnswerPermission, requestId, answer),
   /** 意图确认卡的回答（实验功能 intent-system）：对不上号的陈旧应答丢弃不串台 */
   answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentAnswerIntentConfirm, requestId, decision),

@@ -17,8 +17,6 @@ const dirs = (patch: Partial<TurnDirectories> = {}): TurnDirectories => ({
 
 const input = (patch: Partial<SystemPromptInput> = {}): SystemPromptInput => ({
   piBase: "pi base prompt (adapted)",
-  mode: "skip",
-  extraToolNames: ["create_skill", "delegate"],
   role: "root",
   workspace: { name: "orbita" },
   cwd: "/repo/orbita",

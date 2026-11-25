@@ -34,8 +34,6 @@ export interface DocToolsOptions {
   workspaceId: string | null;
   /** 读图额外允许的根（会话工作台、本会话附件副本、浏览器下载目录）；工作区与附加目录（writeRoots）恒允许 */
   imageReadRoots?: readonly string[];
-  /** 当前权限档（plan 档不许新建文件） */
-  mode: () => string;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -133,7 +131,6 @@ export function createDocTools(broker: RequestBroker, sessionId: string, options
       } catch (cause) {
         if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
         if (!create) fail(`Document not found: ${text(args["path"])}. Pass create:true to create it.`);
-        if (options.mode() === "plan") fail("Plan mode does not create files. Ask the user to leave plan mode, or just describe the document.");
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, "", { flag: "wx" });
         created = true;

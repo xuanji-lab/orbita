@@ -19,99 +19,53 @@ import {
 } from "./sub-sessions-rows.ts";
 
 describe("subSessionRowStatus", () => {
-  it("channelStatus waiting：不管 running/needsApproval 是什么都判 waiting", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "waiting", needsApproval: true, running: true }),
-      "waiting",
-    );
+  it("channelStatus waiting：不管 running 是什么都判 waiting", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "waiting", running: true }), "waiting");
   });
 
-  it("有未答审批、非 waiting：判 approval，即便同时在跑", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "running", needsApproval: true, running: true }),
-      "approval",
-    );
+  it("在跑、非 waiting：判 running", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "running", running: true }), "running");
   });
 
-  it("在跑、无审批、非 waiting：判 running", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "running", needsApproval: false, running: true }),
-      "running",
-    );
+  it("通道 done / failed、不在跑：判对应终态", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "done", running: false }), "done");
+    strictEqual(subSessionRowStatus({ channelStatus: "failed", running: false }), "failed");
   });
 
-  it("通道 done、不在跑、无审批：判 done", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "done", needsApproval: false, running: false }),
-      "done",
-    );
+  it("通道 running（只有 task）、不在跑：判 idle", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "running", running: false }), "idle");
   });
 
-  it("通道 failed、不在跑、无审批：判 failed", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "failed", needsApproval: false, running: false }),
-      "failed",
-    );
+  it("channelStatus 缺席：按 running 走，否则 idle", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: undefined, running: false }), "idle");
   });
 
-  it("通道 interrupted、不在跑、无审批：判 interrupted", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "interrupted", needsApproval: false, running: false }),
-      "interrupted",
-    );
+  it("通道 interrupted、不在跑：判 interrupted", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "interrupted", running: false }), "interrupted");
   });
 
-  it("通道 running（只有 task）、不在跑、无审批：判 idle", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "running", needsApproval: false, running: false }),
-      "idle",
-    );
-  });
-
-  it("channelStatus 缺席（还没有通道摘要）：按 running/needsApproval 走，否则 idle", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: undefined, needsApproval: false, running: false }),
-      "idle",
-    );
-  });
-
-  it("stopped 压过 needsApproval / running——用户终止了就别再拿待批 / 在跑引导用户", () => {
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "stopped", needsApproval: true, running: true }),
-      "stopped",
-    );
-    strictEqual(
-      subSessionRowStatus({ channelStatus: "stopped", needsApproval: false, running: false }),
-      "stopped",
-    );
+  it("stopped 压过 running——用户终止了就别再拿在跑引导用户", () => {
+    strictEqual(subSessionRowStatus({ channelStatus: "stopped", running: true }), "stopped");
+    strictEqual(subSessionRowStatus({ channelStatus: "stopped", running: false }), "stopped");
   });
 });
 
 describe("subSessionStatusOf", () => {
-  /** 假引擎：running 里的会话在跑，approving 里的有待答审批（两者可同时） */
-  const engine = (running: readonly string[], approving: readonly string[]): SubSessionEngineSlots => ({
-    states: new Map(approving.map((id) => [id, { approvals: [{}] }])),
+  const engine = (running: readonly string[]): SubSessionEngineSlots => ({
     phaseOf: (id: string) => (running.includes(id) ? "turn" : "idle"),
   });
 
   it("子在跑：通道只有 task（channelStatus running）也判 running", () => {
-    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], [])), "running");
+    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"])), "running");
   });
 
-  it("子不在跑、通道也没报终态：判 idle——通道开着不等于在跑（2026-10 bug 回归）", () => {
-    strictEqual(subSessionStatusOf("c1", "running", engine([], [])), "idle");
+  it("子不在跑、通道也没报终态：判 idle——通道开着不等于在跑", () => {
+    strictEqual(subSessionStatusOf("c1", "running", engine([])), "idle");
   });
 
-  it("审批槽优先于 phase：在跑但有待答审批判 approval", () => {
-    strictEqual(subSessionStatusOf("c1", "running", engine(["c1"], ["c1"])), "approval");
-  });
-
-  it("waiting 压过审批与 phase", () => {
-    strictEqual(subSessionStatusOf("c1", "waiting", engine(["c1"], ["c1"])), "waiting");
-  });
-
-  it("没有摘要（还没拉到）也按槽走，不因缺席先验成 idle", () => {
-    strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"], [])), "running");
+  it("waiting 压过 phase；没有摘要也按槽走", () => {
+    strictEqual(subSessionStatusOf("c1", "waiting", engine(["c1"])), "waiting");
+    strictEqual(subSessionStatusOf("c1", undefined, engine(["c1"])), "running");
   });
 });
 
@@ -160,36 +114,36 @@ describe("panelRowState（活 phase 决定在跑，尾巴只决定卡住与在�
   const activity = (since: number) => ({ toolName: "bash", input: {}, since });
   it("引擎没在跑：即使通道开着、尾巴有未答工具，也只能 idle——重启不能复活死轮", () => {
     strictEqual(
-      panelRowState({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
+      panelRowState({ channelStatus: "running", enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
       "idle",
     );
   });
   it("同一个调用超过十分钟：stuck；正好十分钟还不算", () => {
-    const base = { channelStatus: "running" as const, needsApproval: false, enginePhaseRunning: true };
+    const base = { channelStatus: "running" as const, enginePhaseRunning: true };
     strictEqual(panelRowState({ ...base, activity: activity(0), now: STUCK_MS + 1 }), "stuck");
     strictEqual(panelRowState({ ...base, activity: activity(0), now: STUCK_MS }), "running");
   });
   it("通道已关（done / failed / interrupted / stopped）时尾巴里残留的 running 记录不算在跑", () => {
     strictEqual(
-      panelRowState({ channelStatus: "done", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: 1 }),
+      panelRowState({ channelStatus: "done", enginePhaseRunning: false, activity: activity(0), now: 1 }),
       "done",
     );
     strictEqual(
-      panelRowState({ channelStatus: "failed", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
+      panelRowState({ channelStatus: "failed", enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
       "failed",
     );
     strictEqual(
-      panelRowState({ channelStatus: "interrupted", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
+      panelRowState({ channelStatus: "interrupted", enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
       "interrupted",
     );
     strictEqual(
-      panelRowState({ channelStatus: "stopped", needsApproval: false, enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
+      panelRowState({ channelStatus: "stopped", enginePhaseRunning: false, activity: activity(0), now: STUCK_MS * 2 }),
       "stopped",
     );
   });
   it("没有在跑的调用、引擎也闲着：idle（不是 running）", () => {
     strictEqual(
-      panelRowState({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity: null, now: 1 }),
+      panelRowState({ channelStatus: "running", enginePhaseRunning: false, activity: null, now: 1 }),
       "idle",
     );
   });
@@ -222,7 +176,6 @@ describe("groupPanelRows（要你看 → 在跑 → 已交回 → 已停止）",
   });
   it("已交回组新的在前；idle 与用户停的同在「已停止」组", () => {
     strictEqual(panelGroupOf("idle"), "stopped");
-    strictEqual(panelGroupOf("approval"), "attention");
     const rows = [
       { id: "a", state: "done" as const, lastAt: 1, since: null },
       { id: "b", state: "done" as const, lastAt: 2, since: null },
@@ -232,7 +185,7 @@ describe("groupPanelRows（要你看 → 在跑 → 已交回 → 已停止）",
 });
 
 describe("panelSecondLine（各状态第二行说什么）", () => {
-  const base = { activity: null, planStep: null, messages: undefined, approval: null };
+  const base = { activity: null, planStep: null, messages: undefined };
   it("在跑：正在执行的调用 + 走表起点，等宽", () => {
     const line = panelSecondLine(
       { ...base, state: "running", activity: { toolName: "bash", input: { command: "bun run test" }, since: 42 } },
@@ -283,12 +236,6 @@ describe("panelSecondLine（各状态第二行说什么）", () => {
     const stopped = [msg("task", "任务"), msg("stop", "", 2)];
     strictEqual(panelSecondLine({ ...base, state: "stopped", messages: stopped }, callLine, zh).text, "你停止了它");
     strictEqual(panelSecondLine({ ...base, state: "stopped" }, callLine, en).text, "You stopped it");
-  });
-  it("待批：要批的那次调用", () => {
-    strictEqual(
-      panelSecondLine({ ...base, state: "approval", approval: { toolName: "bash", input: { command: "rm -rf out" } } }, callLine, zh).text,
-      "等你批准 · bash · rm -rf out",
-    );
   });
 });
 

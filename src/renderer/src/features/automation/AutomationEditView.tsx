@@ -13,7 +13,6 @@ import { enabledProviders, isPairOnClosedProvider } from "../settings/providers-
 import type {
   Automation,
   AutomationCreateInput,
-  AutomationMode,
   AutomationOutcome,
   AutomationPatch,
   AutomationSchedule,
@@ -88,7 +87,6 @@ export function AutomationEditView(props: {
       ? modelOptionValue(automation.providerId, automation.modelId)
       : "",
   );
-  const [mode, setMode] = useState<AutomationMode>(automation?.mode ?? "skip");
   const [plugin, setPlugin] = useState(automation?.plugin?.name ?? "");
   const pluginOptions = useEnabledPlugins(automation?.target.workspaceId ?? props.workspaceId);
   const [error, setError] = useState<{ field: string; text: string } | null>(null);
@@ -142,7 +140,6 @@ export function AutomationEditView(props: {
         title: trimmed,
         prompt: prompt.trim(),
         schedule: parsed.schedule,
-        mode,
         ...(pair === null ? {} : pair),
         ...(endParsed.maxRuns === null ? {} : { maxRuns: endParsed.maxRuns }),
         ...(endParsed.until === null ? {} : { until: endParsed.until }),
@@ -152,7 +149,6 @@ export function AutomationEditView(props: {
       const patch: AutomationPatch = {
         title: trimmed,
         prompt: prompt.trim(),
-        mode,
         maxRuns: endParsed.maxRuns,
         until: endParsed.until,
         providerId: pair === null ? null : pair.providerId,
@@ -383,25 +379,6 @@ export function AutomationEditView(props: {
             <span className="auto-hint">{a.edit.pluginHint}</span>
           </label>
         )}
-
-        <div className="auto-field">
-          <span className="auto-label">{a.edit.mode}</span>
-          {followsSession ? (
-            <span className="auto-hint">{a.edit.modeFollow}</span>
-          ) : (
-            <>
-              <div className="auto-pills" role="group" aria-label={a.edit.mode}>
-                <button type="button" className="quiet-control auto-pill" aria-pressed={mode === "skip"} onClick={() => setMode("skip")}>
-                  {a.edit.modeSkip}
-                </button>
-                <button type="button" className="quiet-control auto-pill" aria-pressed={mode === "plan"} onClick={() => setMode("plan")}>
-                  {a.edit.modePlan}
-                </button>
-              </div>
-              <span className="auto-hint">{a.edit.modeHint}</span>
-            </>
-          )}
-        </div>
 
         {fieldError("server")}
       </div>
