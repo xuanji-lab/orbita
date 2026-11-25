@@ -10,7 +10,7 @@ import type { ProviderDto } from "../../../shared/provider.ts";
 import type { RightPanelMemoryFile } from "../../../shared/right-panel-memory.ts";
 import { deriveSessionTitle, sortSessions, type SessionMeta, type SessionRecord } from "../../../shared/session.ts";
 import { parseSettings, type AppSettings, type SettingsPatch } from "../../../shared/settings.ts";
-import type { TranscriptItem } from "../../../shared/transcript.ts";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { Workspace } from "../../../shared/workspace.ts";
 import { buildPreviewFixture, fallbackTranscript, fixtureDeckText, fixtureLogLine, FIXTURE_LOG_TOTAL_LINES, FIXTURE_TEMPLATE_HASH, type PreviewFixture, type PreviewOptions, type VfsNode } from "./scenes.ts";
 import type {
@@ -20,7 +20,7 @@ import type {
   FsEntryFact,
 } from "../../../shared/files.ts";
 import { PREVIEW_LINES_PER_READ, fileRootLabel, sortFileEntries } from "../../../shared/files.ts";
-import type { DocFile, DocListEntry, DocWriteResult } from "../../../shared/doc.ts";
+import type { DocFile, DocListEntry, DocListing, DocWriteResult } from "../../../shared/doc.ts";
 import { DOC_GONE, DOC_LIST_DEPTH, DOC_LIST_LIMIT, NEW_DECK_NAME, NEW_DOC_NAME } from "../../../shared/doc.ts";
 import type { ReviewDiff, ReviewList, ReviewSource } from "../../../shared/review.ts";
 import { reviewDiffError } from "../../../shared/review.ts";
@@ -35,7 +35,6 @@ import type { PluginBoardSnapshot, PluginPanelActionResult } from "../../../shar
 import type { SkillRestoreResult } from "../../../shared/skill.ts";
 import type { McpListResult } from "../../../shared/mcp.ts";
 import type { FocusChanges, FocusSummaryResult } from "../../../shared/focus.ts";
-import type { ExternalSourcesResult } from "../../../shared/external-sources.ts";
 import type { DictationSelection, DoubaoVoiceConfig, DoubaoVoiceInput, StepfunVoiceConfig, StepfunVoiceInput, VoiceResult } from "../../../shared/voice.ts";
 import { isDoubaoConfigured, isStepfunConfigured } from "../../../shared/voice.ts";
 
@@ -130,10 +129,6 @@ function sessionWindow(records: SessionRecord[]): { total: number; hasMore: bool
   return { total: records.length, hasMore: false, compactionsBefore: 0 };
 }
 
-function mainRole(fixture: PreviewFixture, sessionId: string, workspaceId: string | null): { role?: "main" } {
-  if (workspaceId === null) return {};
-  return fixture.profiles.get(workspaceId)?.sessionId === sessionId ? { role: "main" as const } : {};
-}
 
 /** 1×1 透明 PNG 的 base64（fixture 图片预览；不含 data: 前缀）。 */
 const FIXTURE_PNG_BASE64 =
@@ -262,6 +257,7 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
       workspaceId: input.workspaceId,
       providerId: input.providerId,
       modelId: input.modelId,
+      mode: input.mode,
       thinkingLevel: input.thinkingLevel,
       piSessionFile: `/fixtures/pi/${input.sessionId}.jsonl`,
       pinned: false,
@@ -270,8 +266,6 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
       unread: null,
       recentQueries: [title],
       stats: null,
-      durable: { since: at },
-      ...mainRole(fixture, input.sessionId, input.workspaceId),
       createdAt: at,
       updatedAt: at,
     } : {
@@ -342,7 +336,6 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
         patchSession(sessionId, { providerId, modelId });
         queueMicrotask(() => emitAgent({ type: "model", sessionId, providerId, modelId }));
       },
-      kernelInfo: async () => ({ running: [] }),
       answerIntentConfirm: async () => undefined,
       onEvent: (listener) => {
         agentListeners.add(listener);
@@ -381,21 +374,6 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
         const item = fixture.workspaces.find((candidate) => candidate.id === id);
         if (item !== undefined) item.attachedDirs = item.attachedDirs.filter((entry) => entry !== dir);
         return [...(item?.attachedDirs ?? [])];
-      },
-    }),
-    agents: fixtureDomain("agents", {
-      main: async (workspaceId) => {
-        const existing = fixture.profiles.get(workspaceId);
-        if (existing !== undefined) return clone(existing);
-        const created = { workspaceId, sessionId: `boss-${workspaceId}`, createdAt: tick() };
-        fixture.profiles.set(workspaceId, created);
-        return clone(created);
-      },
-      setMainModel: async (input) => {
-        const existing = fixture.profiles.get(input.workspaceId) ?? { workspaceId: input.workspaceId, sessionId: `boss-${input.workspaceId}`, createdAt: tick() };
-        const next = { ...existing, model: clone(input.model) };
-        fixture.profiles.set(input.workspaceId, next);
-        return clone(next);
       },
     }),
     session: fixtureDomain("session", {
@@ -471,7 +449,6 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
         emitChannel({ type: "message", parentId: input.parentId, childId: input.childId, message, childWorkbench: `/fixtures/workbenches/${input.childId}` });
         emitChannel({ type: "status", parentId: input.parentId, childId: input.childId, status: "stopped" });
       },
-      pending: async () => [],
       onEvent: (listener) => {
         channelListeners.add(listener);
         return () => channelListeners.delete(listener);
@@ -783,9 +760,6 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
         return () => undefined;
       },
     }),
-    externalSources: fixtureDomain("externalSources", {
-      list: async (): Promise<ExternalSourcesResult> => clone(fixture.externalSources),
-    }),
     voice: (() => {
       let provider: "doubao" | "stepfun" = "doubao";
       let doubao = { appId: "", resourceId: "", token: null as string | null };
@@ -970,11 +944,11 @@ export function createPreviewApi(options: PreviewOptions, platform: string = "da
       cancelLineIndex: () => undefined,
     }),
     docs: fixtureDomain("docs", {
-      list: async (req): Promise<DocListEntry[]> => {
+      list: async (req): Promise<DocListing> => {
         const root = req.workspaceId === null
           ? "/fixtures/Home"
           : fixture.workspaces.find((item) => item.id === req.workspaceId)?.path ?? `/fixtures/${req.workspaceId}`;
-        return docEntriesOf(fixture, root);
+        return { root, entries: docEntriesOf(fixture, root), more: false, rememberedExists: false };
       },
       read: async (req): Promise<DocFile> => {
         const node = vfsGet(fixture, req.path);

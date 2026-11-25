@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentEvent } from "../../../shared/agent-ipc.ts";
-import { selectTranscript } from "../../../shared/transcript-state.ts";
+import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { applyAgentEvent, createSessionStates } from "../features/chat/session-states.ts";
 import { createPreviewApi } from "./fixture-api.ts";
 import { FIXTURE_TEMPLATE_HASH, isPreviewPath, parsePreviewOptions } from "./scenes.ts";
@@ -30,10 +30,9 @@ test("preview URL 只认独立入口与稳定场景；未知参数安全退回 t
 
 test("typical：工作区档案打开真实 Boss 转录，子会话与通道等待态同源", async () => {
   const api = createPreviewApi(options());
-  const profile = await api.agents.main("ws-research");
-  assert.equal(profile.sessionId, "boss-research");
+  // 主智能体还没进 main：Boss 会话在 main 上就是普通会话，按 id 直接打开。
+  const profile = { sessionId: "boss-research" };
   const boss = await api.session.load(profile.sessionId);
-  assert.equal(boss?.meta.role, "main");
   assert.ok((boss?.transcript.length ?? 0) >= 4);
   assert.ok(boss?.transcript.some((record) => record.role === "tool"));
 
@@ -96,6 +95,7 @@ test("发送走生产 agent 事件序列并留下确定性回答，不触碰模�
     resume: { piSessionFile: "/fixtures/pi/task-sidebar.jsonl" },
     providerId: "kimi-coding",
     modelId: "k3.1-pro",
+    mode: "skip",
     thinkingLevel: "high",
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -160,7 +160,7 @@ test("组1 文件树：根清单 / 列目录 / 四种预览态 / 大文本按行
 
 test("组1 文档与演示文稿：列表 / 读写比较交换 / 冲突如实返回 / 新建进虚拟树", async () => {
   const api = createPreviewApi(options());
-  const list = await api.docs.list({ sessionId: "boss-research", workspaceId: "ws-research" });
+  const list = (await api.docs.list({ sessionId: "boss-research", workspaceId: "ws-research" })).entries;
   assert.ok(list.some((entry) => entry.name === "meeting-notes.md" && entry.kind === "doc"));
   assert.ok(list.some((entry) => entry.name === "pitch.slides.json" && entry.kind === "slides"));
   const target = list.find((entry) => entry.name === "meeting-notes.md");
@@ -242,7 +242,7 @@ test("组2 终端与自动化：终端走生产 spawn-failure 文案；自动化
   const deleted = await api.automation.act("auto-fixture-cleanup", { type: "delete" });
   assert.equal(deleted.ok, true);
   assert.equal((await api.automation.list()).length, 2);
-  const create = await api.automation.create({ workspaceId: null, title: "x", prompt: "y", schedule: { kind: "once", at: Date.now() + 60_000 } });
+  const create = await api.automation.create({ workspaceId: null, title: "x", prompt: "y", schedule: { kind: "once", at: Date.now() + 60_000 }, mode: "skip" });
   assert.equal(create.ok, false);
 });
 
@@ -295,12 +295,6 @@ test("组3 插件与看板与专注：已装列表 / 范围切换 / 草稿 / 周
 
 test("组4 外部来源与语音与意图与引导：八来源可见 / 凭证掩码 / 测试如实失败 / intent 连不上", async () => {
   const api = createPreviewApi(options());
-  const external = await api.externalSources.list();
-  assert.equal(external.sources.length, 8);
-  assert.ok(external.sources.some((source) => source.enabled === false));
-  assert.ok(external.sources.some((source) => source.problems.length > 0));
-  assert.equal(external.home, "/fixtures/home");
-
   const selection = await api.voice.dictationSelection();
   assert.equal(selection.configured, false);
   await api.voice.doubaoSave({ appId: "app-fixture", resourceId: "res-fixture", accessToken: "secret-token-1234" });

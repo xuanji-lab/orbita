@@ -1,6 +1,5 @@
 import type { AgentStats, BuiltinProvider } from "../../../shared/agent-ipc.ts";
 import type { ChannelMessage } from "../../../shared/channel.ts";
-import type { MainAgentProfile } from "../../../shared/main-agent.ts";
 import type { ProviderDto } from "../../../shared/provider.ts";
 import {
   DEFAULT_SETTINGS,
@@ -12,14 +11,12 @@ import {
   type ThemePreference,
 } from "../../../shared/settings.ts";
 import type { SessionMeta, SessionRecord } from "../../../shared/session.ts";
-import type { TranscriptItem } from "../../../shared/transcript.ts";
+import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { dateKeysBack } from "../../../shared/usage.ts";
 import type { UsageDayTotal } from "../../../shared/usage.ts";
 import type { Workspace } from "../../../shared/workspace.ts";
 import type { Automation } from "../../../shared/automation.ts";
 import type { ExcerptItem } from "../../../shared/excerpt.ts";
-import { EXTERNAL_SOURCE_IDS } from "../../../shared/external-sources.ts";
-import type { ExternalSourcesResult, ExternalSourceInfo } from "../../../shared/external-sources.ts";
 import type { FocusChanges } from "../../../shared/focus.ts";
 import type { PluginView } from "../../../shared/plugin.ts";
 import type { BoardWeekResponse, BoardWeekDay } from "../../../shared/plugin-board.ts";
@@ -69,6 +66,13 @@ export interface PreviewPluginsSet {
   draftView: PluginView | null;
 }
 
+/** 主智能体还没进 main：fixture 只留工作区到「主会话」的映射，供 typical / full 的会话排布用。 */
+export interface PreviewMainProfile {
+  workspaceId: string;
+  sessionId: string;
+  createdAt: number;
+}
+
 export interface PreviewFixture {
   options: PreviewOptions;
   settings: AppSettings;
@@ -76,7 +80,7 @@ export interface PreviewFixture {
   sessions: SessionMeta[];
   transcripts: Map<string, SessionRecord[]>;
   channels: ChannelMessage[];
-  profiles: Map<string, MainAgentProfile>;
+  profiles: Map<string, PreviewMainProfile>;
   providers: ProviderDto[];
   builtins: BuiltinProvider[];
   usage: UsageDayTotal[];
@@ -89,7 +93,6 @@ export interface PreviewFixture {
   plugins: PreviewPluginsSet;
   board: BoardWeekResponse;
   focusChanges: FocusChanges;
-  externalSources: ExternalSourcesResult;
 }
 
 export function isPreviewPath(pathname: string): boolean {
@@ -156,6 +159,7 @@ function meta(seed: MetaSeed): SessionMeta {
     cwd: seed.workspaceId === null ? "/fixtures/Home" : `/fixtures/${seed.workspaceId}`,
     workspaceId: seed.workspaceId,
     ...MODEL,
+    mode: "skip",
     thinkingLevel: "high",
     piSessionFile: `/fixtures/pi/${seed.id}.jsonl`,
     pinned: seed.pinned === true,
@@ -164,8 +168,6 @@ function meta(seed: MetaSeed): SessionMeta {
     unread: seed.unread ?? null,
     recentQueries: seed.role === "main" ? [] : [seed.title],
     stats: stats(seed.parentId === undefined ? 1 : 0.45),
-    durable: { since: seed.createdAt },
-    ...(seed.role === undefined ? {} : { role: seed.role }),
     ...(seed.parentId === undefined ? {} : { parentId: seed.parentId }),
     createdAt: seed.createdAt,
     updatedAt: seed.updatedAt,
@@ -639,6 +641,7 @@ function buildAutomations(scene: PreviewSceneId, now: number): Automation[] {
       schedule: { kind: "daily", time: "09:00" },
       target: { kind: "new_session", workspaceId: "ws-research" },
       plugin: { name: "reading" },
+      mode: "skip",
       status: "active",
       createdBy: { kind: "user" },
       nextRunAt: now + 4 * HOUR,
@@ -658,6 +661,7 @@ function buildAutomations(scene: PreviewSceneId, now: number): Automation[] {
       prompt: "Look at the latest CI run and report failures only.",
       schedule: { kind: "interval", unit: "minute", every: 30 },
       target: { kind: "new_session", workspaceId: null },
+      mode: "skip",
       status: "paused",
       createdBy: { kind: "agent", sessionId: "boss-orbita" },
       nextRunAt: null,
@@ -675,6 +679,7 @@ function buildAutomations(scene: PreviewSceneId, now: number): Automation[] {
       prompt: "Tidy the session workbenches and list what was archived.",
       schedule: { kind: "daily", time: "23:30", weekdays: [1, 2, 3, 4, 5] },
       target: { kind: "this_session", sessionId: "task-sidebar", workspaceId: null },
+      mode: "skip",
       status: "failed",
       failureReason: "Fixture: bound session cwd is missing.",
       createdBy: { kind: "agent", sessionId: "task-sidebar" },
@@ -938,63 +943,6 @@ function buildFocusChanges(scene: PreviewSceneId): FocusChanges {
 
 // ——————————— 组4素材：外部来源 ———————————
 
-function buildExternalSources(scene: PreviewSceneId): ExternalSourcesResult {
-  const base = (id: (typeof EXTERNAL_SOURCE_IDS)[number]): ExternalSourceInfo => ({
-    id,
-    roots: [],
-    expected: `/fixtures/home/.${id}`,
-    expectedExists: false,
-    sessions: 0,
-    enabled: true,
-    problems: [],
-  });
-  const sources = EXTERNAL_SOURCE_IDS.map(base);
-  if (scene !== "empty") {
-    const byId = new Map(sources.map((item) => [item.id, item]));
-    const claude = byId.get("claude-code");
-    if (claude !== undefined) {
-      claude.roots = [{ dir: "/fixtures/home/.claude/projects", custom: false, hasData: true }];
-      claude.expected = "/fixtures/home/.claude/projects";
-      claude.expectedExists = true;
-      claude.sessions = 12;
-    }
-    const codex = byId.get("codex");
-    if (codex !== undefined) {
-      codex.roots = [{ dir: "/fixtures/home/.codex", custom: false, hasData: true }];
-      codex.expected = "/fixtures/home/.codex";
-      codex.expectedExists = true;
-      codex.sessions = 4;
-    }
-    const kimiCode = byId.get("kimi-code");
-    if (kimiCode !== undefined) {
-      kimiCode.roots = [{ dir: "/fixtures/home/.kimi/sessions", custom: false, hasData: true }];
-      kimiCode.expected = "/fixtures/home/.kimi/sessions";
-      kimiCode.expectedExists = true;
-      kimiCode.sessions = 5;
-    }
-    const kimiWork = byId.get("kimi-work");
-    if (kimiWork !== undefined) kimiWork.problems = ["Fixture: store file is not readable."];
-    const zcode = byId.get("zcode");
-    if (zcode !== undefined) {
-      zcode.roots = [{ dir: "/fixtures/home/.zcode", custom: false, hasData: true }];
-      zcode.expected = "/fixtures/home/.zcode";
-      zcode.expectedExists = true;
-      zcode.sessions = 30;
-    }
-    const reasonix = byId.get("reasonix");
-    if (reasonix !== undefined) reasonix.sessions = 2;
-    const proma = byId.get("proma");
-    if (proma !== undefined) {
-      proma.roots = [{ dir: "/fixtures/home/.proma", custom: false, hasData: true }];
-      proma.expected = "/fixtures/home/.proma";
-      proma.expectedExists = true;
-      proma.sessions = 3;
-      proma.enabled = false;
-    }
-  }
-  return { home: "/fixtures/home", sources, customRoots: [] };
-}
-
 function typicalData(now: number): Pick<PreviewFixture, "workspaces" | "sessions" | "transcripts" | "channels" | "profiles"> {
   const workspaces = [
     workspace("ws-research", "Research atlas", now),
@@ -1020,8 +968,8 @@ function typicalData(now: number): Pick<PreviewFixture, "workspaces" | "sessions
     ...channel(boss.id, child.id, now - 2 * HOUR, "question"),
     ...channel(boss.id, done.id, now - 5 * HOUR, "done"),
   ];
-  const profiles = new Map<string, MainAgentProfile>([
-    ["ws-research", { workspaceId: "ws-research", sessionId: boss.id, createdAt: boss.createdAt, model: { ...MODEL, thinkingLevel: "high" } }],
+  const profiles = new Map<string, PreviewMainProfile>([
+    ["ws-research", { workspaceId: "ws-research", sessionId: boss.id, createdAt: boss.createdAt }],
     ["ws-orbita", { workspaceId: "ws-orbita", sessionId: orbitaBoss.id, createdAt: orbitaBoss.createdAt }],
   ]);
   return { workspaces, sessions, transcripts, channels, profiles };
@@ -1078,7 +1026,7 @@ function fullData(now: number): Pick<PreviewFixture, "workspaces" | "sessions" |
 
 export function buildPreviewFixture(options: PreviewOptions): PreviewFixture {
   const data = options.scene === "empty"
-    ? { workspaces: [], sessions: [], transcripts: new Map<string, SessionRecord[]>(), channels: [], profiles: new Map<string, MainAgentProfile>() }
+    ? { workspaces: [], sessions: [], transcripts: new Map<string, SessionRecord[]>(), channels: [], profiles: new Map<string, PreviewMainProfile>() }
     : options.scene === "full"
       ? fullData(options.now)
       : typicalData(options.now);
@@ -1107,6 +1055,5 @@ export function buildPreviewFixture(options: PreviewOptions): PreviewFixture {
     plugins: buildPlugins(options.scene, options.now),
     board: buildBoard(options.scene, options.now),
     focusChanges: buildFocusChanges(options.scene),
-    externalSources: buildExternalSources(options.scene),
   };
 }
