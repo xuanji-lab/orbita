@@ -41,6 +41,12 @@ type QuotaProbeState = { at: number } & ({ failed: false } | { failed: true; rea
 
 const quotaProbeState = new Map<string, QuotaProbeState>();
 
+/**
+ * 失效代数：每失效一次 +1。探测是异步的，出发时记下代数、回来时对号——对不上说明期间
+ * 换过钥匙 / 地址，那份结果是按旧配置查出来的，不能落进缓存与节流状态（见 provider:quota）。
+ */
+const quotaEpoch = new Map<string, number>();
+
 /** 密钥来源：表单里刚输入的优先，否则取已存的（api_key 或 OAuth 访问令牌——后者会自动续期，
  *  续期失败会抛错：调用方把它转成「请重新登录」而不是当成没有密钥） */
 async function resolveKey(
@@ -56,6 +62,25 @@ async function resolveKey(
 }
 
 /**
+ * 这次保存动没动到「额度是按什么查出来的」：钥匙、接口地址、条目种类、鉴权方式。
+ * 动了一样，旧快照就不再是这家的事实，得作废。只改显示名、型号清单、自定义请求头的不算，缓存留着。
+ * 新建也算：老版本删服务商时不清额度缓存，同一个 id 重建会吃到上一家的额度。
+ */
+function quotaInputsChanged(
+  before: ProviderDto | undefined,
+  input: ProviderUpsertInput,
+  after: ProviderDto,
+): boolean {
+  if (input.apiKey !== undefined && input.apiKey !== "") return true;
+  return (
+    before === undefined ||
+    before.kind !== after.kind ||
+    before.auth.scheme !== after.auth.scheme ||
+    before.endpoint.baseUrl !== after.endpoint.baseUrl
+  );
+}
+
+/**
  * `quotaCache` 由主进程传入（同一个实例还给 `failed` 事件的额度补丁用）：缓存是
  * 「上次看到的事实」，两处只能读同一份文件、同一个形状。
  */
@@ -64,15 +89,39 @@ export function registerProviderIpc(
   host?: AgentHostCore,
   quotaCache?: QuotaCache,
 ): void {
+  const quotaStore = quotaCache ?? null;
+
+  /**
+   * 让这一家的额度作废：按旧配置查到的快照、节流状态都清掉，在途的探测回来也对不上号。
+   * 缓存是「按某把钥匙、某个地址查出来的事实」，钥匙 / 地址一换它就不再是这家的事实——
+   * 不清的话换钥匙后 60 秒内还顶着上一家的余额，新钥匙探测失败时上一家的快照还会以
+   * 「保留旧值」的名义继续显示。盘上那份删不掉只记一条：下次探测成功会整体覆盖。
+   *
+   * 等盘上的删除落定才返回：调用方（保存 / 删除）返回后界面紧接着就会来查额度，
+   * 不等的话那一次查询可能正好读到还没删掉的旧快照。
+   */
+  const forgetQuota = async (providerId: string): Promise<void> => {
+    quotaProbeState.delete(providerId);
+    quotaEpoch.set(providerId, (quotaEpoch.get(providerId) ?? 0) + 1);
+    if (quotaStore === null) return;
+    try {
+      await quotaStore.remove(providerId);
+    } catch (cause) {
+      console.error("[provider] 额度缓存清除失败", providerId, cause);
+    }
+  };
+
   ipcMain.handle(ipcChannels.providerList, (): Promise<ProviderDto[]> => store.list());
 
   ipcMain.handle(
     ipcChannels.providerUpsert,
     async (_event, input: ProviderUpsertInput): Promise<UpsertResult> => {
       try {
+        const before = (await store.list()).find((item) => item.id === input.provider.id);
         const provider = await store.upsert(input);
         // 新添加的 / 改了条目的服务商：补刷它的目录，不等 4 小时循环
         host?.syncCatalogScope();
+        if (quotaInputsChanged(before, input, provider)) await forgetQuota(provider.id);
         return { ok: true, provider };
       } catch (error) {
         if (error instanceof ProviderValidationError) return { ok: false, issues: error.issues };
@@ -170,6 +219,7 @@ export function registerProviderIpc(
 
   ipcMain.handle(ipcChannels.providerRemove, async (_event, id: string): Promise<void> => {
     await store.remove(id);
+    await forgetQuota(id);
     // 删掉最后一个实例的那家目录退出刷新范围
     host?.syncCatalogScope();
   });
@@ -190,9 +240,10 @@ export function registerProviderIpc(
    *   - 失败**保留上一次成功的快照**（`cached`），不覆盖成 0；
    *   - `> 24h` 的旧值当作没有——一周前的余额比「不知道」更容易误导。
    * 密钥只在主进程用一次，不进任何返回值。
+   *
+   * `epoch` 是出发时的失效代数：探测期间换过钥匙 / 地址，这份结果就不落缓存、不记节流。
    */
-  const quotaStore = quotaCache ?? null;
-  ipcMain.handle(ipcChannels.providerQuota, async (_event, query: QuotaQuery): Promise<QuotaResult> => {
+  const readQuota = async (query: QuotaQuery, epoch: number): Promise<QuotaResult> => {
     if (quotaStore === null) return { status: "none" };
     const provider = (await store.list()).find((item) => item.id === query.providerId);
     if (provider === undefined) return { status: "none" };
@@ -235,6 +286,9 @@ export function registerProviderIpc(
       apiKey,
     });
 
+    // 探测期间换过钥匙 / 地址：这是按旧配置查出来的，缓存与节流状态都不落（调用方按新配置重查）
+    if ((quotaEpoch.get(query.providerId) ?? 0) !== epoch) return { status: "none" };
+
     if (result.status === "ok") {
       quotaProbeState.set(query.providerId, { at: now, failed: false });
       try {
@@ -250,6 +304,16 @@ export function registerProviderIpc(
       return { status: "error", reason: result.reason, cached };
     }
     return { status: "none" };
+  };
+
+  ipcMain.handle(ipcChannels.providerQuota, async (_event, query: QuotaQuery): Promise<QuotaResult> => {
+    // 这一趟里换过钥匙 / 地址：刚拿到的（缓存也好、探测结果也好）是旧配置的，按新配置重查一遍。
+    // 只重来一次——连着换两次不存在，不留没有底的循环
+    for (let attempt = 0; ; attempt += 1) {
+      const epoch = quotaEpoch.get(query.providerId) ?? 0;
+      const result = await readQuota(query, epoch);
+      if (attempt >= 1 || (quotaEpoch.get(query.providerId) ?? 0) === epoch) return result;
+    }
   });
 
   ipcMain.handle(ipcChannels.providerReorder, (_event, ids: string[]): Promise<void> =>
@@ -326,6 +390,8 @@ export function registerProviderIpc(
         ...(input.create === true ? { create: true } : {}),
       });
       await store.saveOauthCredential(input.id, credential);
+      // 重新登录 = 换了令牌（可能是另一个账号）：按旧令牌查到的额度作废
+      await forgetQuota(input.id);
       host?.syncCatalogScope();
       const fresh = (await store.list()).find((p) => p.id === input.id);
       return { ok: true, provider: fresh ?? saved };
