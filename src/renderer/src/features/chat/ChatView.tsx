@@ -226,6 +226,7 @@ import { AutomationModeLine } from "../automation/AutomationModeLine";
 import { AutomationRunBar } from "../automation/AutomationRunBar";
 import { AutomationToolLine } from "../automation/AutomationToolLine";
 import { AutomationWakeLine } from "../automation/AutomationWakeLine";
+import { joinWakeText } from "../automation/automation-view.ts";
 import { useAutomationRunSessions } from "../automation/automation-context.ts";
 import { parseAutomationHeader } from "../../../../shared/automation.ts";
 import {
@@ -3775,16 +3776,21 @@ function EntryView(props: {
   const { entry } = props;
   if (entry.kind === "compacted") return <CompactedLine record={entry.record} />;
   if (entry.kind === "user") {
-    // this_session 的自动化叫醒这条会话的那一轮：细分隔线（指令正文点开看）。
-    // 自动化新开的运行会话里第一条消息照常画气泡——那里顶部有「任务名 · 第 n 次」的条
-    const firstText = entry.item.content.find((block) => block.type === "text");
-    const wake =
-      firstText !== undefined && firstText.type === "text" && !runSessionIds.has(props.sessionId)
-        ? parseAutomationHeader(firstText.text)
-        : null;
+    // this_session 的自动化叫醒这条会话的那一轮：白卡（指令首行 + 可展开全文）。
+    // 自动化新开的运行会话里第一条消息照常画气泡——那里顶部有「任务名 · 第 n 次」的条。
+    // 真实回显会把抬头与指令拆成多个 text 块；先拼回全文，否则卡片只剩抬头、没有指令。
+    const wakeText = runSessionIds.has(props.sessionId) ? "" : joinWakeText(entry.item.content);
+    const wake = wakeText === "" ? null : parseAutomationHeader(wakeText);
     if (wake !== null) {
       return (
-        <AutomationWakeLine title={wake.title} number={wake.number} max={wake.max} stamp={wake.stamp} body={wake.body} />
+        <AutomationWakeLine
+          title={wake.title}
+          number={wake.number}
+          max={wake.max}
+          stamp={wake.stamp}
+          body={wake.body}
+          sessionId={props.sessionId}
+        />
       );
     }
     const memoryRow = props.memory?.rows.get(entry.item.id);

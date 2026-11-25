@@ -7123,6 +7123,12 @@ html {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
+.exit-card-preview {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .exit-card-meta {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
@@ -7135,6 +7141,11 @@ html {
 }
 .exit-card-status {
   font-size: var(--font-size-sm);
+}
+.exit-card-below {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding-top: var(--space-1);
 }
 /* 卡上的按钮：同产物卡「预览」、改文件卡「撤销 / 审核」 */
 .card-btn {

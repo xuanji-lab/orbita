@@ -51,11 +51,16 @@ export function ExitCard(props: {
   clickTitle?: string;
   /** 右边的动作按钮（交接卡：去浏览器 / 完成 / 取消）；用 `.card-btn` */
   actions?: React.ReactNode;
+  /** 卡内展开区（唤醒卡的指令全文）；有它时外框换行，仍保持同一张白卡 */
+  below?: React.ReactNode;
+  /** 窄容器响应式只改布局，不改 token；由调用方给容器查询一个类名 */
+  className?: string;
   lit?: boolean;
 }) {
   const style: React.CSSProperties = {
     ...EXIT_CARD_STYLE,
     ...(props.lit === true ? LIT_STYLE : {}),
+    ...(props.below !== undefined ? { flexWrap: "wrap" } : {}),
     ...(props.onClick !== undefined ? { width: "100%", textAlign: "left", cursor: "pointer", font: "inherit" } : {}),
   };
   const sub = [props.preview ?? ""].filter((part) => part !== "");
@@ -72,10 +77,10 @@ export function ExitCard(props: {
         </span>
         {(sub.length > 0 || props.meta !== undefined) && (
           <span className="exit-card-sub">
-            {sub.join("")}
+            {sub.length > 0 && <span className="exit-card-preview">{sub.join("")}</span>}
             {props.meta !== undefined && (
               <>
-                {sub.length > 0 && " · "}
+                {sub.length > 0 && <span className="exit-card-separator"> · </span>}
                 <span className="exit-card-meta">{props.meta}</span>
               </>
             )}
@@ -94,10 +99,18 @@ export function ExitCard(props: {
       )}
     </>
   );
-  if (props.onClick === undefined || props.actions !== undefined) return <div style={style}>{content}</div>;
+  if (props.onClick === undefined || props.actions !== undefined) {
+    return (
+      <div className={props.className} style={style}>
+        {content}
+        {props.below !== undefined && <div className="exit-card-below">{props.below}</div>}
+      </div>
+    );
+  }
   return (
-    <button type="button" onClick={props.onClick} title={props.clickTitle} style={style}>
+    <button type="button" className={props.className} onClick={props.onClick} title={props.clickTitle} style={style}>
       {content}
+      {props.below !== undefined && <div className="exit-card-below">{props.below}</div>}
     </button>
   );
 }
