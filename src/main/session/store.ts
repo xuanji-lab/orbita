@@ -2,7 +2,7 @@
  * 会话落盘 —— 每条会话两个文件（设计与被否决的方案见
  * `docs/plans/2026-08-25-会话存储与命名工作区.md`）：
  *
- *   sessions/<id>.meta.json   可变（标题 / updatedAt / 权限档），原子写
+ *   sessions/<id>.meta.json   可变（标题 / updatedAt / 模型），原子写
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  *
  * 分两个文件的理由：meta 会变而 transcript 只增。把可变记录塞进只追加的日志里，
@@ -26,7 +26,6 @@ import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
-import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
@@ -253,10 +252,15 @@ export class SessionStore {
     }
   }
 
-  /** 所有 meta 落盘唯一收口：原子写成功后才更新内存索引；失败时索引继续指向上一份完整值 */
+  /**
+   * 所有 meta 落盘唯一收口：原子写成功后才更新内存索引；失败时索引继续指向上一份完整值。
+   * 写盘时一律盖上 `mode: "skip"`：只为回滚兼容——旧版把缺的 mode 读成只读计划档，
+   * 装回旧版后新版聊过的会话会全部写不了文件。新版自己不读它（parseSessionMeta 不返回它，
+   * 所以内存索引里也没有）；不再支持回滚到带权限档的版本时可连同类型字段一起删掉。
+   */
   private async writeMeta(meta: SessionMeta): Promise<void> {
     await this.metaIndexReady;
-    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    await writeJsonAtomic(this.metaPath(meta.id), { ...meta, mode: "skip" });
     // 与旧 list() 逐条 readMeta 的口径一致：可选默认值 / 归一化也在索引里生效，不能只存写入前的对象
     const normalized = parseSessionMeta(meta);
     if (normalized === null) this.metaById.delete(meta.id);
@@ -693,10 +697,6 @@ export class SessionStore {
     return this.update(id, { piSessionFile });
   }
 
-  setMode(id: string, mode: PermissionMode): Promise<void> {
-    return this.update(id, { mode });
-  }
-
   /**
    * 「转成普通会话」：把一条自动化新开的会话标成 promoted，从此进左侧栏。
    * 只对带 automationId 的会话有意义——别的会话原样不动（返回 false）。
@@ -711,7 +711,7 @@ export class SessionStore {
     return changed;
   }
 
-  /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
+  /** 改思考档：重开与下一轮开机的装配都读它 */
   setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
     return this.update(id, { thinkingLevel });
   }
@@ -799,7 +799,6 @@ export class SessionStore {
         workspaceId: meta.workspaceId,
         providerId: meta.providerId,
         modelId: meta.modelId,
-        mode: meta.mode,
         thinkingLevel: meta.thinkingLevel,
         piSessionFile: null,
         pinned: false,

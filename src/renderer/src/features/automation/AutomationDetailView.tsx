@@ -30,7 +30,7 @@ const TOGGLE_ICON: Record<"pause" | "resume" | "restart", IconName> = {
 export function AutomationDetailView(props: {
   automation: Automation;
   now: number;
-  boundSession: { mode: string; title: string } | null;
+  boundSession: { title: string } | null;
   knownSessionIds: ReadonlySet<string>;
   act: (action: AutomationAction) => Promise<AutomationOutcome>;
   onEdit: () => void;
@@ -76,11 +76,9 @@ export function AutomationDetailView(props: {
         ? schedule
         : `${schedule} · ${a.next(formatWhen(automation.nextRunAt, props.now, a))}`
       : schedule;
-  const modeText =
-    automation.target.kind === "this_session" ? d.modeFollow : automation.mode === "plan" ? d.modePlan : d.modeSkip;
   const modelText =
     automation.providerId !== undefined && automation.modelId !== undefined ? automation.modelId : null;
-  const note = noteOf(automation, a, props.boundSession);
+  const note = noteOf(automation, a);
   const { shown, hidden } = visibleRuns(automation, showAllRuns);
   const long = promptIsLong(automation.prompt);
 
@@ -172,8 +170,6 @@ export function AutomationDetailView(props: {
           <dd>{when}</dd>
           <dt>{d.where}</dt>
           <dd>{where}</dd>
-          <dt>{d.mode}</dt>
-          <dd>{modeText}</dd>
           {modelText !== null && (
             <>
               <dt>{d.model}</dt>

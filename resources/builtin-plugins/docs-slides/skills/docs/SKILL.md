@@ -11,7 +11,7 @@ The tools and the Files panel on the right are built into Orbita; this file is t
 
 ## Workflow for editing a document
 
-1. **`doc_open`** the file (relative to the workspace, or absolute inside it). It opens the file in the Files panel and returns the outline (headings with line numbers, first 40). Use it whenever the user asks to open / show / work on a document, before editing. `create:true` makes a new empty document if the path does not exist (it never overwrites; plan mode does not create files).
+1. **`doc_open`** the file (relative to the workspace, or absolute inside it). It opens the file in the Files panel and returns the outline (headings with line numbers, first 40). Use it whenever the user asks to open / show / work on a document, before editing. `create:true` makes a new empty document if the path does not exist (it never overwrites).
 2. **`read`** the part you need (the outline's line numbers tell you where), then change it with the normal **`edit`** / **`write`** tools. The panel updates live as the file changes; the user can keep reading or editing in it.
 3. Pictures: **`doc_insert_image`** (see below) — do not hand-write image paths.
 4. Export when asked: **`doc_export`** (see below).

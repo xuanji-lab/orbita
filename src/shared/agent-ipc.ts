@@ -10,7 +10,6 @@
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
 import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
-import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
@@ -62,12 +61,10 @@ export const ipcChannels = {
   agentInterrupt: "agent:interrupt",
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
-  agentSetMode: "agent:set-mode",
   /** 会话内改思考档：下一轮生效（同 setModel 的语义）。只落 meta，不经 agent 进程 */
   agentSetThinkingLevel: "agent:set-thinking-level",
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   agentSetModel: "agent:set-model",
-  agentAnswerPermission: "agent:answer-permission",
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
   /**
@@ -168,8 +165,6 @@ export const ipcChannels = {
   automationUpdate: "automation:update",
   automationAct: "automation:act",
   automationPromote: "automation:promote",
-  /** 对话里「改权限」那一行的按钮（入参 AutomationModeRowRequest，回 AutomationModeRowResult；结局以数据返回，不抛） */
-  automationModeFromRow: "automation:mode-from-row",
   /** 主进程 → renderer 推送（`AutomationEvent`）：任何一条自动化变了 */
   automationEvent: "automation:event",
   sessionList: "session:list",
@@ -516,7 +511,7 @@ export const ipcChannels = {
   boardFrame: "board:frame",
   /**
    * 对话里「装上插件」那一行的「安装」（入参 PluginRowInstallRequest，回 PluginRowInstallResult）。
-   * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区 / manual 档）：主进程重新校验会话、
+   * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区；旧会话里还有当时在手动档留下的）：主进程重新校验会话、
    * 路径与指纹，对得上才装；不对以数据返回，不抛
    */
   pluginInstallFromRow: "plugin:install-from-row",
@@ -695,9 +690,8 @@ export interface AgentTurnContext {
   resume: { piSessionFile: string } | null;
   providerId: string;
   modelId: string;
-  mode: PermissionMode;
   /**
-   * 这轮跑在哪一档思考上。**必填**（同 mode 的理由）：可选就会静默退到
+   * 这轮跑在哪一档思考上。**必填**：可选就会静默退到
    * pi 解析链的用户全局配置——正是这一刀要修的病。真源是 SessionMeta，
    * 主进程与 renderer 都从它读；模型 clamp 后的真值经 `thinking` 事件回传。
    */
@@ -835,7 +829,6 @@ export type AgentCommand =
       workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
-      mode: PermissionMode;
       /** 这轮的思考档（同 AgentTurnContext.thinkingLevel；开轮命令必带，不退 pi 全局配置） */
       thinkingLevel: ThinkingLevel;
       /**
@@ -851,8 +844,7 @@ export type AgentCommand =
       attachmentsDir: string;
       /**
        * 工具永不许写的目录（会话账本 sessions/ 与 pi 的本子 pi-sessions/）。
-       * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：tool_call 闸门
-       * 在权限档判定**之前**拦——「会话记录不可变」是全档不变量，Skip 也抬不掉。
+       * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：工具闸门拦——「会话记录不可变」是不变量。
        */
       protectedPaths: string[];
       /**
@@ -1011,7 +1003,6 @@ export type AgentCommand =
       workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
-      mode: PermissionMode;
       /** 这轮的思考档，语义同 submit */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
@@ -1078,7 +1069,6 @@ export type AgentCommand =
       workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
-      mode: PermissionMode;
       /** 这轮的思考档，语义同 submit（压缩轮内部照旧强制 off，这里传的是会话意图档） */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
@@ -1119,7 +1109,7 @@ export type AgentCommand =
    * 已开会话的 customTools 在开机时已定格，不受影响；下一轮开机拿新工具集。
    */
   | { type: "mcpReload" }
-  /** 4-3：主进程对 skillWriteRequest 的回执（同 permissionAnswer 的 requestId 模式） */
+  /** 4-3：主进程对 skillWriteRequest 的回执（按 requestId 对回去） */
   | {
       type: "skillWriteResult";
       requestId: string;
@@ -1216,7 +1206,6 @@ export type AgentCommand =
       cwd: string;
       notice: string;
     }
-  | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
    * **对正在跑的轮无效**：pi 在轮启动时快照模型，当前轮用旧模型跑完，
@@ -1237,8 +1226,6 @@ export type AgentCommand =
       cwd: string;
       roles: readonly ("user" | "assistant")[];
     }
-  /** 用户对一次工具审批的回答，按 requestId 对回去 */
-  | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   /** 意图确认卡的回答（实验功能 intent-system），按 requestId 对回去；停止 / 抢跑时 runtime 侧按取消结掉 */
   | { type: "intentConfirmResult"; requestId: string; decision: IntentConfirmDecision }
   | { type: "dispose"; sessionId: string };
@@ -1372,7 +1359,6 @@ export type AgentEvent =
    * 然后**立即**回 pluginInstallResult，不等用户：低风险直接装；其余在对话里留一行带「安装」的行
    * （数据在工具结果的 details 里，随会话落盘），用户点了走 pluginInstallFromRow。
    * scope 的 workspace 一侧由主进程按会话归属解析（agent 不知道 workspaceId，同 skillWriteRequest）。
-   * `mode` 是此刻的权限档：manual 档任何插件都不直接装（那一行就是用户的点头）。
    */
   | {
       type: "pluginInstallRequest";
@@ -1380,7 +1366,6 @@ export type AgentEvent =
       sessionId: string;
       path: string;
       scope: PluginAgentScope | null;
-      mode: PermissionMode;
     }
   /**
    * 已装的插件变了（agent 的 install_plugin 装好了一个、用户点了对话里那一行的「安装」；
@@ -1516,10 +1501,8 @@ export type AgentEvent =
    * 按这条会话所在的工作区落 `automations.json`（只能管当前工作区的）、回 automationResult。
    * 建出来**直接生效**（2026-10-31 用户裁决，不再有待启用）：默认绑定这条会话（this_session），
    * 到点把指令送回来。自动化新开的会话与子会话的请求主进程直接拒（防递归，不只靠不注册工具）。
-   * `mode` 是这条会话此刻的权限档：agent 给自动化的权限不能高于它——请求 skip 只有会话本身是「放行」才直接改，
-   * 其余在对话里留一行让用户点「允许」（automation_update / automation_create 的 mode 参数）。
    */
-  | { type: "automationRequest"; requestId: string; sessionId: string; mode: PermissionMode; request: AutomationToolRequest }
+  | { type: "automationRequest"; requestId: string; sessionId: string; request: AutomationToolRequest }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，
@@ -1679,14 +1662,6 @@ export type AgentEvent =
    * runtime 翻成 phase 事件，renderer 的重试槽随任何 phase 事件一并清空（自愈）。
    */
   | { type: "retry"; sessionId: string; status: RetryStatus | null }
-  /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
-  | {
-      type: "permission";
-      sessionId: string;
-      requestId: string;
-      toolName: string;
-      input: unknown;
-    }
   /**
    * 回合级失败的标记（如重试耗尽）：true = 这一轮没跑成，renderer 把文案标注进
    * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败

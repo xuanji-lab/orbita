@@ -1,5 +1,4 @@
 import { thinkingLevelLabel, type ThinkingLevel } from "../../shared/thinking.ts";
-import { PERMISSION_MODE_LABELS } from "../../shared/permission.ts";
 import type { DictationProvider } from "../../shared/voice.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { ReviewDiffErrorReason, ReviewSource } from "../../shared/review.ts";
@@ -461,7 +460,6 @@ export const en = {
     failedBecause: (reason: string) =>
       reason === "" ? "Stopped after repeated failures. Restart to try again." : `Stopped after repeated failures: ${reason}`,
     lastFailed: (reason: string) => `Last run failed: ${reason}`,
-    manualWarn: "This task asks before every tool call. With nobody there, a run stops at the approval.",
     sentBackTo: (title: string) => `Back into “${title}”`,
     sentBackGone: "Back into a deleted task",
     runs: {
@@ -497,13 +495,9 @@ export const en = {
       recent: "Recent runs",
       time: "Time",
       where: "Destination",
-      mode: "Permission",
       model: "Model",
       plugin: "Plugin",
       newSession: "A fresh task each run",
-      modeSkip: "Skip, nothing is asked",
-      modePlan: "Plan, read-only",
-      modeFollow: "Follows the task's own mode",
       editSettings: "Edit settings",
       showMore: "Show all",
       showLess: "Show less",
@@ -582,12 +576,7 @@ export const en = {
       pluginNone: "No plugin",
       pluginHint: "Each run uses this plugin and ends by showing its board cards, which also appear on the weekly board.",
       pluginMissing: (name: string) => `${name} (not installed in this workspace)`,
-      mode: "Permission",
-      modeSkip: "Skip — unattended, nothing is asked",
-      modePlan: "Plan — read-only",
-      modeFollow: "Follows the task's own permission",
       modelFollow: "Follows the task's own model",
-      modeHint: "Unattended runs cannot ask for approval, so there is no Manual.",
       save: "Save",
       create: "Create",
       saving: "Saving…",
@@ -617,30 +606,6 @@ export const en = {
       ends: (done: number, max: number) => `${done}/${max} runs`,
       endsUntil: (when: string) => `until ${when}`,
       gone: "This automation no longer exists",
-    },
-    /** The row in the conversation where the agent asked for write access (automation_update): done, or waiting for the user's click */
-    modeRow: {
-      aria: "Automation permission",
-      allowedTitle: (title: string) => `“${title}” set to Skip`,
-      allowedMeta: "can write files when due",
-      pendingTitle: (title: string) => `Let “${title}” write files when due (Skip)?`,
-      keptTitle: (title: string) => `“${title}” stays read-only`,
-      keptMeta: "can only read when due",
-      goneTitle: (title: string) => `“${title}” no longer exists`,
-      allow: "Allow",
-      allowing: "Allowing…",
-      revert: "Back to read-only",
-      reverting: "Reverting…",
-      keep: "Keep read-only",
-      note: (mode: string) =>
-        `This conversation is in “${mode}” mode: the agent cannot give an automation more permission than the conversation has, so it needs your click.`,
-      failed: {
-        noSession: "This conversation no longer exists, so its workspace cannot be checked.",
-        notFound: "The automation is gone, or no longer belongs to this conversation's workspace.",
-        notApplicable: "This automation runs inside its conversation and has no permission of its own.",
-        finished: "This automation has already finished.",
-        failed: (detail: string) => `Could not change it: ${detail}`,
-      },
     },
     wakeKicker: "Automation",
     wakeTitle: (title: string) => `“${title}”`,
@@ -834,8 +799,7 @@ export const en = {
     },
     thinking: "Thinking",
     doing: (step: string, now: string) => `${step}: ${now}`,
-    approve: (what: string) => `Waiting for your approval: ${what}`,
-    childWaiting: "A sub-session is waiting for your approval",
+    waitingReply: "Waiting for your reply",
     failed: "Stopped with an error",
     done: "Finished — open it to see the result",
     noText: "(no text)",
@@ -1421,7 +1385,7 @@ export const en = {
     planFirst: "Show me the plan first",
     planFirstAria: "Show me the plan first",
     planFirstInfo:
-      "After the agent writes the first plan of a task, it stops and waits for your reply in the chat box before doing anything (no buttons). Off by default · Plan mode and questions from the agent always pause first",
+      "After the agent writes the first plan of a task, it stops and waits for your reply in the chat box before doing anything (no buttons). Off by default · “Show me the plan first” and questions from the agent always pause first",
     attributionAria: "Commit and PR attribution",
     attributionInfo:
       "Adds a trailer to commits the agent writes and a line to PR descriptions · never sets Co-Authored-By or changes the author",
@@ -2046,9 +2010,6 @@ export const en = {
     mcpFailed: (n: number) => `${plural(n, "MCP server")} didn't come over`,
   },
 
-  /** 权限档：英文沿用 shared 的词与说明 */
-  permissionModes: PERMISSION_MODE_LABELS,
-
   chat: {
     moveHeader: "Move this task to… (the working folder moves too)",
     moveBlocked: "The task is running — stop it first, then move it",
@@ -2615,7 +2576,6 @@ export const en = {
     rowStatus: {
       running: "running",
       waiting: "waiting for you",
-      approval: "needs approval",
       done: "done",
       failed: "failed",
       interrupted: "interrupted",
@@ -2636,7 +2596,6 @@ export const en = {
     toolLabel: (id: string) =>
       ({ web_search: "web search", web_fetch: "fetch page", browser_navigate: "open page", browser_extract: "read page", terminal_read: "read terminal", terminal_execute: "run in terminal", read_pdf: "read PDF", read_docx: "read Word", report_to_parent: "report", reply_subsession: "reply" })[id] ?? "tool",
     stuckTip: (minutes: number) => `The same call has run for ${minutes} min`,
-    approvalLine: (call: string) => `Needs approval · ${call}`,
     stoppedByYou: "You stopped it",
     idleLine: "This turn ended without handing back",
     endCauses: {
@@ -2672,16 +2631,6 @@ export const en = {
     stopHint: "Aborts this turn and closes the channel — only you can re-open it",
     stopConfirm: "Stop it",
     stoppedHint: "Already stopped — speak as the parent in the channel to re-open.",
-  },
-
-  approval: {
-    aria: "Tool approval",
-    run: (tool: string) => `Run ${tool}?`,
-    keys: "Enter to allow · Esc to deny",
-    allow: "Allow",
-    deny: "Deny",
-    stopEditing: "Stop editing",
-    editInput: "Edit input",
   },
 
   /** 会话引擎（useChatSession）报给界面的错误 */
@@ -3303,7 +3252,7 @@ export const en = {
     unassignedTip: "Sent before there was a plan, or while no step was in progress",
     handedBack: (n: number) => `${n} handed back`,
     showAll: (n: number) => `${n} more`,
-    state: { running: "Running", stuck: "Stuck", waiting: "Asking you", approval: "Needs approval", done: "Handed back", failed: "Failed", interrupted: "Interrupted", stopped: "Stopped", idle: "Not started" },
+    state: { running: "Running", stuck: "Stuck", waiting: "Asking you", done: "Handed back", failed: "Failed", interrupted: "Interrupted", stopped: "Stopped", idle: "Not started" },
     thinking: "Thinking",
     elapsedS: (s: number) => `${s}s`,
     elapsedM: (m: number) => `${m}m`,
@@ -3564,20 +3513,14 @@ export const en = {
           composer: {
             name: "The message box",
             title: "The row under the message box",
-            body: "One sentence per job is enough. The row underneath decides **where it works, what it may touch, and which model it uses**.",
+            body: "One sentence per job is enough. The row underneath decides **where it works and which model it uses**.",
             notes: [
               "Paperclip: attach files, folders, screenshots (or drag them in).",
               "Workspace: the folder it works in.",
-              "Permission, model, thinking level — permission is next.",
+              "Model and thinking level: which model, and how hard it thinks.",
               "Type / at the start and press space to pick a skill or plugin.",
             ],
             say: "Read the UrbanGPT paper in the papers folder and list the experiments we can reproduce on this machine.",
-          },
-          permission: {
-            name: "Plan / Manual / Allow",
-            title: "You decide how much it may do on its own",
-            body: "**Plan** reads but never writes — good for thinking it through first. **Manual** asks before every step. **Allow** just does it, for work you trust it with.",
-            notes: ["Switch any time; it applies from your next message."],
           },
           watch: {
             name: "Watch it work",
@@ -3871,10 +3814,10 @@ export const en = {
             say: "Every morning at 9:00, use the paper tracker to find a new paper and show me the board when it's done.",
           },
           plugin: {
-            name: "Plugin and permission",
-            title: "Which plugin, and what it may touch",
-            body: "Pick a plugin for an automation and its board comes out after each run. Scheduled runs are **read-only** by default — to let one actually write files, loosen it here.",
-            notes: ["The plugin whose board it shows.", "Permission for unattended runs."],
+            name: "Pick a plugin",
+            title: "Which plugin runs when it is due",
+            body: "Pick a plugin for an automation and its board comes out after each run.",
+            notes: ["The plugin whose board it shows.", "Time, destination and model are changed under Edit settings."],
           },
           chart: {
             name: "Detail and the bars",

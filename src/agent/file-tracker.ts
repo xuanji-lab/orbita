@@ -113,8 +113,7 @@ export class TurnFileTracker {
 
   /**
    * 闸门放行后记一笔：write / edit 的路径首次出现时读 before。**必须在放行后**——
-   * plan 档直接拒的调用不会执行，记了就是假账；ask 档等用户点了允许再记，
-   * 读到的才是「这一批动手前」的内容。
+   * 闸门拒掉的调用（受保护路径）不会执行，记了就是假账。
    */
   async noteAllowed(toolCallId: string, toolName: string, input: unknown): Promise<void> {
     if (toolName !== "write" && toolName !== "edit") return;

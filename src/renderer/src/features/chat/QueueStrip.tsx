@@ -29,7 +29,7 @@ function countPastedBlocks(text: string): number {
  * 每条两个按钮：**立即发送**（回车图标）与**撤回**（undo 图标，文字落回输入框）；
  * 调顺序走**行首抓手拖拽**，不占按钮位。落点语义见 queue-drop.ts：落到谁身上就占谁的
  * 位置，悬停整行描边——与 Providers 厂商排序同一套手感。
- * 设计规则与 ApprovalBar 同源：浮起的玻璃卡（popover 阴影，比 composer 高一层）、
+ * 设计规则与浮在输入框上方的卡片同源：浮起的玻璃卡（popover 阴影，比 composer 高一层）、
  * 状态用图标与文字、不拿 accent 染底——accent 留给发送键。
  */
 export function QueueStrip(props: {

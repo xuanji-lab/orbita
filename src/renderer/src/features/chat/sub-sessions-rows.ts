@@ -11,13 +11,10 @@ import type { ChannelEndInfo, ChannelMessage, ChannelStatus } from "@shared/chan
 import type { Messages } from "../../messages-en.ts";
 
 /**
- * 一行的显示状态（七档，字面对应设计裁决的颜色/图标分配）：
+ * 一行的显示状态（字面对应设计裁决的颜色/图标分配）：
  *   running  = 子在跑（accent）
  *   waiting  = 通道状态 waiting，子问了、父还没回（warning，"waiting for you"）
- *   approval = 子会话在 renderer 会话槽里有未答的工具审批（warning，"needs approval"）——
- *     manual 档下每个工具都要批，用户往往不在看这条子会话，必须顶到审批之上单独一档
- *   stopped  = 通道状态 stopped，**用户**终止了这个子会话（tertiary，"stopped"）——
- *     用户的裁决压过审批 / 在跑这些瞬时态：停都停了，不该再引导用户去批一个死轮
+ *   stopped  = 通道状态 stopped，**用户**终止了这个子会话（tertiary，"stopped"）
  *   done     = 通道 closed 于 done（success）
  *   failed   = 通道 closed 于 failed（danger）
  *   interrupted = 主进程确认轮没有收尾（danger；与 failed 一样需要恢复动作）
@@ -26,7 +23,6 @@ import type { Messages } from "../../messages-en.ts";
 export type SubSessionRowStatus =
   | "running"
   | "waiting"
-  | "approval"
   | "done"
   | "failed"
   | "interrupted"
@@ -34,21 +30,14 @@ export type SubSessionRowStatus =
   | "idle";
 
 /**
- * 一行状态怎么定：**waiting 优先于 stopped，优先于 approval，优先于 running**——
- * waiting 与 stopped 同源（通道状态，互斥），摆在一起只是让检查顺序可读；stopped
- * 压过 approval / running 是用户裁决的语义：终止了就别再拿「待批 / 在跑」引导用户。
- * approval 又比单纯 running 紧迫——running 只是「知会」，approval 是「卡住了，等你」。
- * done/failed 只在不满足前者时才看（正常情况下 done/failed 的通道不会同时在跑或有
- * 待批审批，但状态机不为「不会发生」的组合留特判缺口，见 channelStatus 同款纪律）。
+ * 一行状态怎么定：**waiting 优先于 stopped，优先于 running**。stopped 压过 running 是用户裁决的语义。
  */
 export function subSessionRowStatus(input: {
   channelStatus: ChannelStatus | undefined;
-  needsApproval: boolean;
   running: boolean;
 }): SubSessionRowStatus {
   if (input.channelStatus === "waiting") return "waiting";
   if (input.channelStatus === "stopped") return "stopped";
-  if (input.needsApproval) return "approval";
   if (input.running) return "running";
   if (input.channelStatus === "done") return "done";
   if (input.channelStatus === "failed") return "failed";
@@ -63,19 +52,17 @@ function firstLineOf(text: string): string {
 }
 
 /**
- * `subSessionStatusOf` 从引擎读的两个槽的**最小结构面**——结构化而不是直接引用
+ * `subSessionStatusOf` 从引擎读的槽的**最小结构面**——结构化而不是直接引用
  * `SessionEngine` 整型：本模块保持纯模块纪律（不 import useChatSession），
  * 测试拿字面量假对象就能喂，真实引擎天然满足这个形状。
  */
 export interface SubSessionEngineSlots {
-  /** 分槽状态里的审批槽：有未答审批 = approval 档 */
-  states: ReadonlyMap<string, { approvals: readonly unknown[] }>;
   /** 会话 phase：非 idle = 这条会话此刻真的在跑 */
   phaseOf: (id: string) => string;
 }
 
 /**
- * 一行 / 一张通道卡的显示状态怎么取：通道摘要的 status + 引擎的审批槽与 phase，
+ * 一行 / 一张通道卡的显示状态怎么取：通道摘要的 status + 引擎的 phase，
  * 拼成 `subSessionRowStatus` 的输入。Sub-sessions 面板的行与父子会话面板的通道卡
  * **共用这一份 glue**，两处画出来的状态永远同源。
  *
@@ -91,7 +78,6 @@ export function subSessionStatusOf(
 ): SubSessionRowStatus {
   return subSessionRowStatus({
     channelStatus,
-    needsApproval: (engine.states.get(childId)?.approvals.length ?? 0) > 0,
     running: engine.phaseOf(childId) !== "idle",
   });
 }
@@ -152,7 +138,7 @@ export function childActivityOf(records: readonly TailRecord[]): ChildActivity |
 /** 同一个工具调用跑了这么久就算「卡住了」（转录空档 P97 是 28 秒；一条命令十分钟没动静，人该看一眼）——同状态卡 */
 export const STUCK_MS = 10 * 60_000;
 
-/** 面板行的状态：子会话七档之上多一档 stuck（在跑，但同一个调用跑太久了） */
+/** 面板行的状态：子会话各档之上多一档 stuck（在跑，但同一个调用跑太久了） */
 export type PanelRowState = SubSessionRowStatus | "stuck";
 
 /**
@@ -161,14 +147,12 @@ export type PanelRowState = SubSessionRowStatus | "stuck";
  */
 export function panelRowState(input: {
   channelStatus: ChannelStatus | undefined;
-  needsApproval: boolean;
   enginePhaseRunning: boolean;
   activity: ChildActivity | null;
   now: number;
 }): PanelRowState {
   const status = subSessionRowStatus({
     channelStatus: input.channelStatus,
-    needsApproval: input.needsApproval,
     running: input.enginePhaseRunning,
   });
   if (status === "running" && input.activity !== null && input.now - input.activity.since > STUCK_MS) return "stuck";
@@ -176,7 +160,7 @@ export function panelRowState(input: {
 }
 
 /**
- * 四组，按「要不要你」排：等你（在问你 / 待批 / 失败——要你看的）→ 在跑（含卡住）→ 已交回 → 已停止（你停的，
+ * 四组，按「要不要你」排：等你（在问你 / 失败——要你看的）→ 在跑（含卡住）→ 已交回 → 已停止（你停的，
  * 以及这一轮停了却没交回的 idle）。后两组默认收成一行（「15 个已交回 ›」）：做完的不需要你，自己退场。
  */
 export type PanelGroup = "attention" | "running" | "handed" | "stopped";
@@ -189,7 +173,6 @@ export const FOLDED_GROUPS: ReadonlySet<PanelGroup> = new Set(["handed", "stoppe
 export function panelGroupOf(state: PanelRowState): PanelGroup {
   switch (state) {
     case "waiting":
-    case "approval":
     case "failed":
     case "interrupted":
       return "attention";
@@ -203,10 +186,9 @@ export function panelGroupOf(state: PanelRowState): PanelGroup {
   }
 }
 
-/** 组内次序：等你组里 在问你 / 待批 › 失败；在跑组里 卡住的在前、其余跑得久的在前；交回 / 停止组新的在前 */
+/** 组内次序：等你组里 在问你 › 失败；在跑组里 卡住的在前、其余跑得久的在前；交回 / 停止组新的在前 */
 const IN_GROUP_ORDER: Record<PanelRowState, number> = {
   waiting: 0,
-  approval: 0,
   failed: 1,
   interrupted: 1,
   stuck: 0,
@@ -286,7 +268,7 @@ export function channelEndOf(
  * 每个状态的第二行说有用的话（2026-11-22 任务单）：
  *   在跑：正在执行的工具调用（「bash · bun run test」，行尾走表）；没在跑工具时，计划里在做的那一步；都没有 =「在想」
  *   卡住：同上，前面多「卡住了」（文字是首选信号，黄色三角与黄字是第二信号）
- *   在问你：问题第一行；待批：要批的那次调用
+ *   在问你：问题第一行
  *   失败：原因第一行；已交回：报告第一行（不是「完成」两个字）
  *   已停止（用户终止）：「你停止了它」；idle：「这一轮停了，没有交回」
  * 通道正文拉不到时退到状态词，不显示「读取失败」。
@@ -298,8 +280,6 @@ export function panelSecondLine(
     /** 子会话计划里 in_progress 那一步（没有计划 / 没有在做的步 = null） */
     planStep: string | null;
     messages: readonly ChannelMessage[] | undefined;
-    /** 挂着的第一个工具审批 */
-    approval: { toolName: string; input: unknown } | null;
   },
   /** 一次调用的一行字（「bash · bun run test」）：动词表在组件里，这里只拼 */
   callLine: (toolName: string, toolInput: unknown) => string,
@@ -328,17 +308,6 @@ export function panelSecondLine(
     }
     case "waiting":
       return { text: lastOf("question") ?? t.subSessions.rowStatus.waiting, lead: null, since: null, mono: false, tone: "default" };
-    case "approval":
-      return {
-        text:
-          input.approval === null
-            ? t.subSessions.rowStatus.approval
-            : t.subSessions.approvalLine(callLine(input.approval.toolName, input.approval.input)),
-        lead: null,
-        since: null,
-        mono: false,
-        tone: "default",
-      };
     case "failed": {
       const end = channelEndOf(input.messages, "failed");
       return {

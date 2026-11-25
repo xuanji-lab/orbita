@@ -29,8 +29,8 @@ import {
   type BoardWeekItem,
   type BoardWeekResponse,
   type PluginBoardResult,
+  PLUGIN_BOARD_TOOL,
 } from "../../shared/plugin-board.ts";
-import { PLUGIN_BOARD_TOOL } from "../../shared/permission.ts";
 
 /** 一条自动化推算排期时最多走这么多步（hourly 往后翻两年多才撞上；防止坏数据死循环） */
 const MAX_STEPS = 20_000;

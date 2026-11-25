@@ -132,14 +132,13 @@ describe("SettingsStore", () => {
     assert.deepEqual((await new SettingsStore(dir).read()).choreModel, { providerId: "kimi", modelId: "kimi-k3" });
   });
 
-  test("lastUsed 的部分更新按键合并——切档不抹已记的模型", async () => {
+  test("lastUsed 的部分更新按键合并——只改模型 id 不抹已记的服务商", async () => {
     await store.write({ lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
-    await store.write({ lastUsed: { mode: "skip" } });
+    await store.write({ lastUsed: { modelId: "glm-5.3" } });
     const read = await store.read();
     assert.deepEqual(read.lastUsed, {
       providerId: "zhipu-coding",
-      modelId: "glm-5.3-flash",
-      mode: "skip",
+      modelId: "glm-5.3",
     });
   });
 });

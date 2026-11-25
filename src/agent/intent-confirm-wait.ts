@@ -1,10 +1,9 @@
 /**
- * 回答前确认的等待编排（Tier B 第二批）—— runtime 的 pendingPermissions /
- * askPermission / settlePendingPermissions 同款请求-应答，单独成文件只为可测
- * （runtime 本体被 parentPort 守卫钉死在 utility 进程里）。
+ * 回答前确认的等待编排（Tier B 第二批）—— requestId 请求-应答，
+ * 单独成文件只为可测（runtime 本体被 parentPort 守卫钉死在 utility 进程里）。
  *
  * 语义（审核 2026-09-25 第二批裁决）：
- * - **没有超时**：用户可能去泡杯咖啡再回来点（askPermission 同款纪律）；
+ * - **没有超时**：用户可能去泡杯咖啡再回来点；
  * - **不听 abort**：停止 / 抢跑 / 删会话必须显式调 settle，把等待按「取消」结掉，
  *   否则那一轮永远不收尾、running 表的坑永远占着；
  * - 应答按 requestId 校对，陈旧应答（取消后用户才点）丢弃不串台。

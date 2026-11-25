@@ -240,7 +240,7 @@
   }
 }
 
-/* 一句话提醒（失败原因 / 会卡在审批）：行内左缘与标题对齐 */
+/* 一句话提醒（失败原因）：行内左缘与标题对齐 */
 .auto-note {
   margin: 0;
   padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--space-4) + var(--space-2));
@@ -950,19 +950,4 @@
 .auto-detail-wrap {
   display: flex;
   padding: var(--space-2) var(--space-2) 0;
-}
-
-/* ---------- 对话里「改权限」那一行（AutomationModeLine）：行本身复用 plugins.css 的 .pl-line，这里只管外壳与行下说明 ---------- */
-
-.aml {
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-/* 为什么要点一下：行外、行下一小句灰字（xs），左缘对齐行内文字 */
-.aml-note {
-  padding: 0 var(--space-3);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }
