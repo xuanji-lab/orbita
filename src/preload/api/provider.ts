@@ -18,8 +18,12 @@ import type {
 } from "../../shared/provider.ts";
 import type { QuotaQuery, QuotaResult } from "../../shared/quota.ts";
 
+/**
+ * `quotaInvalidated`：这次保存让这一家的旧额度作废了（换了钥匙 / 地址 / 条目 / 鉴权，或浏览器登录换了令牌）。
+ * 设置页据此让额度卡重查——卡片只认 providerId，换钥匙不会自己重查。与主进程 `provider/ipc.ts` 的同名类型同形。
+ */
 export type UpsertResult =
-  | { ok: true; provider: ProviderDto }
+  | { ok: true; provider: ProviderDto; quotaInvalidated: boolean }
   | { ok: false; issues: ValidationIssue[] };
 
 export const providerApi = {

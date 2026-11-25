@@ -30,7 +30,13 @@ mock.module("electron", {
 });
 const { registerProviderIpc } = await import("./ipc.ts");
 
-type UpsertResult = { ok: true; provider: ProviderDto } | { ok: false; issues: ValidationIssue[] };
+type UpsertOk = { ok: true; provider: ProviderDto; quotaInvalidated: boolean };
+type UpsertResult = UpsertOk | { ok: false; issues: ValidationIssue[] };
+
+/** 这次保存有没有让主进程作废额度（返回里的 quotaInvalidated）；保存失败时是 "failed" */
+function invalidated(result: UpsertResult): boolean | "failed" {
+  return result.ok ? result.quotaInvalidated : "failed";
+}
 
 /** 内存密钥端口（与 store.test.ts 同款）：store 不依赖 Electron，这里就能跑真文件系统的用例 */
 class MemorySecrets implements SecretsPort {
@@ -149,6 +155,39 @@ describe("provider:quota —— 换钥匙 / 换地址 / 删除之后，按旧配
     assert.equal(shownAmount(after), "9.00");
     assert.equal(isFreshOk(after), true, "换了钥匙就不能再回缓存");
     assert.equal(probed.at(-1)?.key, KEY_B, "按新钥匙重查");
+  });
+
+  test("保存的返回里写明这次有没有作废额度：设置页据此让额度卡重查，只改名不必重查", async () => {
+    respond = () => balance("5.00");
+
+    // 新建：作废（老版本删服务商不清缓存，同名 id 重建不能吃到上一家）
+    assert.equal(invalidated(await upsert(deepseek("ds-flag", { apiKey: KEY_A, create: true }))), true);
+    await quota("ds-flag");
+    assert.equal(probed.length, 1);
+
+    // 只改显示名与型号清单（模型区的 Enable / Remove / 弹窗 Apply 走的就是这条）：没作废
+    const draft = deepseek("ds-flag");
+    const renamed = await upsert({
+      provider: {
+        ...draft.provider,
+        displayName: "DeepSeek 备用",
+        models: { declared: [{ id: "deepseek-reasoner" }] },
+      },
+    });
+    assert.equal(invalidated(renamed), false, "钥匙与地址都没动，界面不必重查");
+    assert.equal(isCachedOk(await quota("ds-flag")), true, "额度还在缓存里");
+    assert.equal(probed.length, 1, "也没有多打一次厂商接口");
+
+    // 换钥匙：作废
+    assert.equal(invalidated(await upsert(deepseek("ds-flag", { apiKey: KEY_B }))), true);
+    assert.equal(isFreshOk(await quota("ds-flag")), true);
+
+    // 换接口地址：作废
+    assert.equal(invalidated(await upsert(deepseek("ds-flag", { baseUrl: "https://mirror.example" }))), true);
+    assert.equal(isFreshOk(await quota("ds-flag")), true);
+
+    // 保存没成功（校验不过）：没有「作废」可谈
+    assert.equal(invalidated(await upsert(deepseek("", { apiKey: KEY_A }))), "failed");
   });
 
   test("新钥匙探测失败：不把上一家的快照当「保留旧值」返回，盘上的旧快照也删掉", async () => {

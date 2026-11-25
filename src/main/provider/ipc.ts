@@ -25,7 +25,16 @@ import { QuotaCache } from "./quota-cache.ts";
 import { probeQuota } from "./quota.ts";
 
 export type UpsertResult =
-  | { ok: true; provider: ProviderDto }
+  | {
+      ok: true;
+      provider: ProviderDto;
+      /**
+       * 这次保存动了额度所依的东西（钥匙 / 接口地址 / 条目种类 / 鉴权方式），旧额度已作废。
+       * 设置页据此让额度卡重查：卡片只认 providerId，同一个 id 换了钥匙它自己不知道。
+       * 浏览器登录成功一律是 true（换了令牌）；只改显示名 / 型号清单是 false，界面不必重查。
+       */
+      quotaInvalidated: boolean;
+    }
   | { ok: false; issues: ValidationIssue[] };
 
 /**
@@ -134,8 +143,9 @@ export function registerProviderIpc(
         const provider = await store.upsert(input);
         // 新添加的 / 改了条目的服务商：补刷它的目录，不等 4 小时循环
         host?.syncCatalogScope();
-        if (quotaInputsChanged(before, input, provider)) await forgetQuota(provider.id);
-        return { ok: true, provider };
+        const quotaInvalidated = quotaInputsChanged(before, input, provider);
+        if (quotaInvalidated) await forgetQuota(provider.id);
+        return { ok: true, provider, quotaInvalidated };
       } catch (error) {
         if (error instanceof ProviderValidationError) return { ok: false, issues: error.issues };
         throw error;
@@ -414,7 +424,8 @@ export function registerProviderIpc(
       await forgetQuota(input.id);
       host?.syncCatalogScope();
       const fresh = (await store.list()).find((p) => p.id === input.id);
-      return { ok: true, provider: fresh ?? saved };
+      // 重新登录之后界面要重查额度：卡片只认 providerId，换了令牌它自己不知道
+      return { ok: true, provider: fresh ?? saved, quotaInvalidated: true };
     } catch (error) {
       if (error instanceof ProviderValidationError) return { ok: false, issues: error.issues };
       throw error;
