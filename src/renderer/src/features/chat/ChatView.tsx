@@ -179,7 +179,8 @@ import { IconButton } from "../../shell/IconButton";
 import { Icon, type IconName } from "../../shell/Icon";
 import { ImageRefCountContext, MarkdownBlock, TaskTitlesContext } from "./MarkdownBlock";
 import { childRunSettled, sessionOutputs, type SessionOutputs } from "./child-outputs.ts";
-import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, type ChatFileScope } from "./chat-file-scope.ts";
+import { ChatFileScopeContext, loadChatImage, openChatFile, revealChatFile, useChatFileScope, useChatImage, useChatRoots, type ChatFileScope } from "./chat-file-scope.ts";
+import { isReadablePath } from "./chat-paths.ts";
 import { requestOpenPanel } from "../../shell/open-panel.ts";
 import {
   assignImages,
@@ -199,7 +200,7 @@ import {
   type OutputSource,
   type TurnOutput,
 } from "./process-rows.ts";
-import { formatDuration } from "./media-outputs.ts";
+import { formatDuration } from "./named-outputs.ts";
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";
@@ -5192,7 +5193,9 @@ function TurnOutputsBlock(props: { unit: TurnOutputsUnit; toolResults: ToolResul
     };
     return loaded.outputs.map((output) => ({ ...output, source }));
   });
-  const outputs = mergeOutputs(mine, fromChildren);
+  // 读不了的文件不出卡：不在这条会话可读根里的（文件面板同一套根清单），点了也打不开
+  const roots = useChatRoots();
+  const outputs = mergeOutputs(mine, fromChildren).filter((output) => isReadablePath(output.path, roots));
   if (outputs.length === 0) return null;
   return (
     <div className="turn-outputs">

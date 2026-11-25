@@ -44,6 +44,7 @@ describe("sessionOutputs：子会话整条记录做出来的东西", () => {
       rec({ id: "u", role: "user", content: [{ type: "text", text: "做汇报" }], timestamp: 1 }),
       rec({ id: "a", role: "assistant", content: [{ type: "toolCall", toolCallId: "c", toolName: "slides_create", input: { title: "汇报" } }], timestamp: 2 }),
       rec({ id: "t", role: "tool", toolCallId: "c", toolName: "slides_create", input: {}, content: [], timestamp: 3, status: "complete", isError: false, details: { card: { kind: "slides", path: "/w/汇报.slides.json", title: "汇报" } } }),
+      rec({ id: "a2", role: "assistant", content: [{ type: "text", text: "做好了：汇报在 report.md，页面是 summary.html，图是 chart.svg。" }], timestamp: 3.5 }),
       rec({
         id: "f",
         role: "file-turn",
@@ -62,6 +63,33 @@ describe("sessionOutputs：子会话整条记录做出来的东西", () => {
       ["slides:汇报", "doc:report.md", "web:summary.html", "web:chart.svg"],
     );
     assert.deepEqual(edited, ["/w/src/util.ts"]);
+  });
+});
+
+describe("子会话交回的文档 / 网页同样只收最终回答点了名的，且只认已收尾的记录", () => {
+  const user = rec({ id: "u", role: "user", content: [{ type: "text", text: "写报告" }], timestamp: 1 });
+  const report = rec({ id: "t", role: "tool", toolCallId: "c", toolName: "report_to_parent", input: {}, content: [], timestamp: 2, status: "complete", isError: false });
+  const finalText = (text: string) => rec({ id: "a", role: "assistant", content: [{ type: "text", text }], timestamp: 3 });
+  const ledger = rec({
+    id: "f",
+    role: "file-turn",
+    timestamp: 4,
+    changes: [{ path: "/w/notes.md", added: 5, removed: 0 }, { path: "/w/tmp.md", added: 1, removed: 0 }, { path: "/w/page.html", added: 9, removed: 0 }],
+  });
+  test("交回那一刻文件账还没落盘：没收尾、没有文档 / 网页产物；落盘后收尾、点名的出现，没点名的只算「改过」", () => {
+    const early = [user, report];
+    assert.equal(childRunSettled(early, -1), false);
+    assert.deepEqual(sessionOutputs(early).outputs, []);
+    const settled = [user, report, finalText("笔记在 notes.md，页面是 page.html。"), ledger];
+    assert.equal(childRunSettled(settled, early.length), true);
+    const out = sessionOutputs(settled);
+    assert.deepEqual(out.outputs.map((o) => `${o.kind}:${o.title}`), ["doc:notes.md", "web:page.html"]);
+    assert.deepEqual(out.edited, ["/w/tmp.md"]);
+  });
+  test("最终回答只是顺带提到「那个文档」没点文件名：不出卡", () => {
+    const out = sessionOutputs([user, report, finalText("文档和页面都改好了。"), ledger]);
+    assert.deepEqual(out.outputs, []);
+    assert.deepEqual(out.edited.sort(), ["/w/notes.md", "/w/page.html", "/w/tmp.md"]);
   });
 });
 
