@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { AVATAR_INSTRUCTION_MAX, isAvatarJobLive, type AvatarBackend, type AvatarHistory, type AvatarHistoryCandidate, type AvatarJob, type AvatarSlot } from "@shared/planet-avatar";
+import {
+  AVATAR_INSTRUCTION_MAX,
+  isAvatarJobLive,
+  type AvatarBackend,
+  type AvatarHistory,
+  type AvatarHistoryCandidate,
+  type AvatarJob,
+  type AvatarRenderMode,
+  type AvatarRenderPolicyResult,
+  type AvatarSlot,
+} from "@shared/planet-avatar";
 import type { PlanetMix } from "@shared/planet-design";
 import { lastUsedPair, type AvatarModelChoice } from "@shared/settings";
 import { api } from "../../api";
@@ -9,7 +19,10 @@ import { PanelButton, PanelGroupHead } from "../../shell/RightPanel";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 import { inheritedRow, ModelPickerMenu, modelChipParts, usableProviders } from "../settings/model-menu";
+import { InfoTip } from "../settings/InfoTip";
+import { Switch } from "../settings/SettingControls";
 import { avatarModelFace, type AvatarModelSource } from "./avatar-model.ts";
+import { avatarNotes, avatarRenderNote, avatarRenderSwitchTitle } from "./avatar-render.ts";
 import { bodyArt, planetFaceDesign, type BodyKind, type GalaxyDesign } from "./design.ts";
 import { BodyFigure } from "./StarFigure.tsx";
 
@@ -22,6 +35,9 @@ import { BodyFigure } from "./StarFigure.tsx";
  * 这一组用哪个模型：动作行左边的模型胶囊（与输入卡、子会话面板同一张 ModelPickerMenu）。**点之前就写明**取法与型号
  * （跟会话栏 / 子会话模型 / 挑定的型号），胶囊上那一对 id 随请求发出去，主进程以请求为准——显示什么就用什么
  * （2026-11-25 用户：在会话栏换了两次模型，出图两次都是子会话默认的那家，点了才发现）。取法记在设置里，跨重启保留。
+ *
+ * 用不用生图工具：模型旁边的开关。真源是插件「行星造物」的策略文件（它原本只在对话里出图时问一次），面板读它、拨它都经
+ * 插件的脚本；默认关 = 只让智能体手绘（用户 2026-11-25：「默认就是用手绘，就是模型画 SVG，然后边上有个开关说你可以用生图工具」）。
  */
 export function AvatarSection(props: {
   workspaceId: string;
@@ -47,6 +63,21 @@ export function AvatarSection(props: {
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<AvatarHistory | null>(null);
   const historySeq = useRef(0);
+  /** 「用生图工具」开关：策略是插件级的（不分工作区、天体），挂上时读一次，拨动后拿主进程回的落定值 */
+  const [renderPolicy, setRenderPolicy] = useState<AvatarRenderPolicyResult | null>(null);
+  const [renderBusy, setRenderBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void api.planet
+      .avatarRenderPolicy()
+      .catch((cause: unknown): AvatarRenderPolicyResult => ({ ok: false, error: cause instanceof Error ? cause.message : String(cause) }))
+      .then((result) => {
+        if (alive) setRenderPolicy(result);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const refreshHistory = useCallback(async (): Promise<void> => {
     const ticket = ++historySeq.current;
@@ -152,6 +183,18 @@ export function AvatarSection(props: {
   const cancel = (): void => {
     if (bodyId !== null) void api.planet.cancelAvatar({ workspaceId, bodyId });
   };
+  const renderOn = renderPolicy?.ok === true && renderPolicy.policy.mode === "image_tool";
+  /** 开关说不清的情况（插件没装、策略文件读不出来、旧档、每次都问、自定义）在开关下面补一行 */
+  const renderNote = avatarRenderNote(renderPolicy, t);
+  const toggleRender = async (mode: AvatarRenderMode): Promise<void> => {
+    if (renderBusy || live) return;
+    setRenderBusy(true);
+    setError(null);
+    const result = await api.planet.setAvatarRenderPolicy({ mode });
+    setRenderBusy(false);
+    setRenderPolicy(result);
+    if (!result.ok) setError(ta.renderFailed(result.error));
+  };
 
   const slots = job?.slots ?? [];
   const chosen = picked ?? null;
@@ -162,6 +205,8 @@ export function AvatarSection(props: {
   // 每一位都因同一个原因没出来（停下、超时、会话断了）：原因只写一次，不在每张下面重复
   const failedReasons = slots.map((slot) => (slot.state === "failed" ? slot.reason : null));
   const sharedReason = slots.length > 1 && failedReasons.every((reason) => reason !== null && reason === failedReasons[0]) ? failedReasons[0] ?? null : null;
+  // 插件账本的说明（开关开着却没找到生图工具、临时换了后端……）：照实写，别让人以为图是生图工具出的
+  const notes = avatarNotes(job?.notes ?? []);
   // 出图中：胶囊显示这一组实际在用的型号（主进程开轮时定的那一对），不许换——换了也只对下一组生效
   const liveParts = live && job !== null && job.model !== null ? modelChipParts(modelSource.providers, modelSource.catalog, job.model) : null;
   const pickedParts = face.pair === null ? null : modelChipParts(modelSource.providers, modelSource.catalog, face.pair);
@@ -238,6 +283,16 @@ export function AvatarSection(props: {
               ))}
             </ul>
           )}
+          {notes.length > 0 && (
+            <div className="gd-avatar-notes" data-notes="avatar">
+              {notes.map((note) => (
+                <p className="gd-role-line gd-avatar-note" key={note}>
+                  <Icon name="info" size={12} strokeWidth={1.8} />
+                  <span>{note}</span>
+                </p>
+              ))}
+            </div>
+          )}
           {noneOut && !props.hasSurface && (
             <div className="gd-avatar-pending" role="status" data-pending="avatar">
               <p className="gd-avatar-pending-title">
@@ -268,6 +323,22 @@ export function AvatarSection(props: {
             </p>
           )}
           <span className="gd-avatar-acts" ref={actsRef}>
+            {/* 用不用生图工具：开关 + 名字 + 说明。真源是插件的策略文件；插件没装、文件读不出来时不可拨，原因写在下面一行。
+                排在模型前面：读的时候先定用什么画（手绘 / 生图工具），再定谁来画，最后才是「生成形象」；放不下一行时它在模型的上一行 */}
+            <span className="gd-avatar-render" data-render-mode={renderOn ? "image_tool" : "hand_drawn"}>
+              <Switch
+                label={avatarRenderSwitchTitle(renderOn, t)}
+                checked={renderOn}
+                disabled={busy || live || renderBusy || renderPolicy === null || !renderPolicy.ok}
+                onChange={(next) => void toggleRender(next ? "image_tool" : "hand_drawn")}
+              />
+              <span className="gd-avatar-render-label">{ta.renderSwitch}</span>
+              <InfoTip label={ta.renderAbout}>
+                {ta.renderInfo1}
+                <br />
+                {ta.renderInfo2}
+              </InfoTip>
+            </span>
             <ModelPickerMenu
               t={t}
               providers={usableProviders(modelSource.providers)}
@@ -311,6 +382,8 @@ export function AvatarSection(props: {
                 </Chip>
               )}
             />
+            {/* 主操作（停下 / 用这张 / 生成形象 / 再来一组）钉在行尾；前面的设置放不下一行时它自己换到下一行 */}
+            <span className="gd-avatar-primary">
             {live ? (
               <PanelButton onClick={cancel}>{ta.cancel}</PanelButton>
             ) : (
@@ -330,7 +403,14 @@ export function AvatarSection(props: {
                 )}
               </>
             )}
+            </span>
           </span>
+          {renderNote !== null && (
+            <p className="gd-role-line gd-avatar-render-note" data-note="render-policy">
+              <Icon name="info" size={12} strokeWidth={1.8} />
+              <span>{renderNote}</span>
+            </p>
+          )}
           {history !== null && history.entries.length > 0 && (
             <details className="gd-avatar-history" data-history="avatar">
               <summary>

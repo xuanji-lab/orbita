@@ -1192,20 +1192,24 @@
 }
 .gd-avatar-acts {
   display: flex;
-  /* 放得下就同一行（胶囊在左、主操作钉行尾）；放不下时主操作换到下一行、照旧钉行尾——取法与型号名不省、不挤 */
+  /* 放得下就同一行（用不用生图工具、用哪个模型在左，主操作钉行尾）；放不下时后面的换到下一行，主操作照旧钉行尾——
+     取法与型号名不省、不挤 */
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
   gap: var(--space-2);
 }
-/*
- * 动作行左边的模型胶囊（Chip + ModelPickerMenu 的锚）：行尾留给主操作（生成形象 / 用这张 / 停下）。
- * 型号名长过 Chip 的上限才省略（chip-label 自带省略号，全名在悬停提示里）。
- */
+/* 模型胶囊（Chip + ModelPickerMenu 的锚）：型号名长过 Chip 的上限才省略（chip-label 自带省略号，全名在悬停提示里） */
 .gd-avatar-acts > :has(> .gd-avatar-model) {
   flex: 0 1 auto;
   min-width: 0;
-  margin-right: auto;
+}
+/* 主操作组靠行尾（行里前面的设置放不下时，它换到下一行也仍在行尾） */
+.gd-avatar-primary {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
 }
 /* Chip 自带上限 260px（内联）；这一行放得下更长的「取法 · 型号名」（换行后独占一行时有 277+），上限交给这一行的宽度 */
 .gd-avatar-model {
@@ -1215,6 +1219,24 @@
 /* 取法那一截（「跟会话栏 · 」）比型号名弱一级：先靠颜色分层 */
 .gd-avatar-model-source {
   color: var(--color-text-tertiary);
+}
+/* 「用生图工具」：开关在左、名字在右、说明的 info 在名字右边（用户 2026-11-25 说的位置） */
+.gd-avatar-render {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: var(--control-height-xs);
+  white-space: nowrap;
+}
+.gd-avatar-render-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+/* 开关下面那行说明、插件账本的说明：与这一节其余说明同一个灰度，图标 12 挂在前面 */
+.gd-avatar-render-note,
+.gd-avatar-note {
+  overflow-wrap: anywhere;
 }
 .gd .gd-avatar-generate,
 .gd .gd-avatar-use {
