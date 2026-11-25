@@ -8,11 +8,13 @@ import {
   parseInboundFrame,
   parseRequest,
   parseSetBind,
+  requestIdOf,
+  requestIdOfFrame,
   shapeInboundFrame,
   type InboundFrame,
   type Wire,
 } from "./mobile-wire.ts";
-import { MOBILE_CRYPTO, MOBILE_FRAME_MAX_BYTES, MOBILE_LIMITS, MOBILE_PROTOCOL_VERSION } from "./mobile.ts";
+import { MOBILE_CRYPTO, MOBILE_FRAME_MAX_BYTES, MOBILE_LIMITS, MOBILE_PROTOCOL_VERSION, MOBILE_REQUEST_ID_MAX } from "./mobile.ts";
 
 const SESSION = "0199a0aa-6bb0-7cc0-8000-123456789012";
 const DEVICE = "0123456789abcdef0123456789abcdef";
@@ -287,5 +289,40 @@ describe("hello 密文里的东西与设置 IPC 的入参", () => {
     assert.equal(MOBILE_CRYPTO.tagBytes, 16);
     assert.equal(MOBILE_CRYPTO.ivDeviceToHost, "D2H>");
     assert.equal(MOBILE_CRYPTO.ivHostToDevice, "H2D>");
+  });
+});
+
+
+describe("形状不对的请求，应答带哪个 id", () => {
+  test("那一帧的 JSON 里读得出合法的请求 id 就原样带回；读不出才是 0", () => {
+    assert.equal(requestIdOf({ id: 41, method: "reply", params: { text: "   " } }), 41);
+    assert.equal(requestIdOf({ id: 0, method: "ping" }), 0);
+    assert.equal(requestIdOf({ id: MOBILE_REQUEST_ID_MAX, method: "ping" }), MOBILE_REQUEST_ID_MAX);
+    assert.equal(requestIdOf({ id: "45", method: "ping" }), 0, "数字串不算");
+    assert.equal(requestIdOf({ id: 46.5, method: "ping" }), 0);
+    assert.equal(requestIdOf({ id: -1, method: "ping" }), 0);
+    assert.equal(requestIdOf({ id: MOBILE_REQUEST_ID_MAX + 1, method: "ping" }), 0);
+    assert.equal(requestIdOf({ id: Number.NaN, method: "ping" }), 0);
+    assert.equal(requestIdOf({ id: null, method: "ping" }), 0);
+    assert.equal(requestIdOf({ method: "ping" }), 0, "没带 id");
+    assert.equal(requestIdOf([47]), 0, "请求是个数组");
+    assert.equal(requestIdOf("ping"), 0);
+    assert.equal(requestIdOf(null), 0);
+    assert.equal(requestIdOf(undefined), 0);
+    // 文本版：帧本身不是 JSON 就回 0
+    assert.equal(requestIdOfFrame('{"id":48,"method":"ping","params":{"extra":1}}'), 48);
+    assert.equal(requestIdOfFrame("{not json"), 0);
+    assert.equal(requestIdOfFrame(""), 0);
+  });
+
+  test("与请求校验同一个口径：parseRequest 认的 id，requestIdOf 也认；parseRequest 拒的 id 它也不认", () => {
+    for (const id of [0, 1, 12345, MOBILE_REQUEST_ID_MAX]) {
+      assert.equal(failure(parseRequest({ id, method: "ping", extra: true })), 'bad_request: unknown field "extra"');
+      assert.equal(requestIdOf({ id, method: "ping", extra: true }), id);
+    }
+    for (const id of [-1, 1.5, MOBILE_REQUEST_ID_MAX + 1, "7", null]) {
+      assert.equal(failure(parseRequest({ id, method: "ping" })).startsWith("bad_request:"), true);
+      assert.equal(requestIdOf({ id, method: "ping" }), 0);
+    }
   });
 });

@@ -196,6 +196,9 @@ export interface HostInfo {
 /** 协议版本。两边对不上就握手失败——形状变了抬这个数，不在线上兼容旧形状 */
 export const MOBILE_PROTOCOL_VERSION = 1;
 
+/** 请求 id 是 0 到这个数的整数，两端一样（帧、请求、应答的 `id` 都按它校验） */
+export const MOBILE_REQUEST_ID_MAX = 0x7fffffff;
+
 /**
  * 手机 → 电脑的单帧上限（按 UTF-8 字节算，明文帧与加密帧都算）。
  *
@@ -457,7 +460,13 @@ export type MobileRequest = {
   [M in MobileMethod]: { id: number; method: M; params: MobileMethodParams[M] };
 }[MobileMethod];
 
-/** 电脑 → 手机的应答（在密文里）；`result` 的形状按方法见 `MobileMethodResults` */
+/**
+ * 电脑 → 手机的应答（在密文里）；`result` 的形状按方法见 `MobileMethodResults`。
+ *
+ * `id` 带的是请求自己的 id，**形状不对的请求也一样**（空文本、超长、多带字段……只要那一帧的 JSON 里读得出
+ * 合法的 id）；读不出（不是 JSON、不是对象、`id` 不是合法整数）才是 0。所以手机别拿 0 当请求 id
+ * （2026-11-25 审查 N1）。
+ */
 export type MobileReply =
   | { id: number; ok: true; result: unknown }
   | { id: number; ok: false; error: MobileError };

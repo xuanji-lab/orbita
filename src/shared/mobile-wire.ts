@@ -25,6 +25,7 @@ import {
   MOBILE_LIMITS,
   MOBILE_METHODS,
   MOBILE_PROTOCOL_VERSION,
+  MOBILE_REQUEST_ID_MAX,
   isBindableAddress,
   isMobilePort,
 } from "./mobile.ts";
@@ -103,6 +104,26 @@ function stringOf(
   if (limits.min !== undefined && length < limits.min) return bad(`"${name}" is too short`);
   if (limits.pattern !== undefined && !limits.pattern.test(text)) return bad(`"${name}" has an unexpected format`);
   return { ok: true, value: text };
+}
+
+/**
+ * 形状不对的请求，应答里该带哪个 id：那一帧的 JSON 里读得出合法的请求 id 就原样带回，读不出才是 0。
+ * 手机拿应答的 id 去对它发出去的请求——一律回 0 的话，空文本、超长、多带字段的请求都被记到「id 0 的那个」
+ * 头上（2026-11-25 审查 N1）。`raw` 是已经 `JSON.parse` 过的东西；只认数，不认数字串。
+ */
+export function requestIdOf(raw: unknown): number {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return 0;
+  const id = (raw as Record<string, unknown>)["id"];
+  return typeof id === "number" && Number.isInteger(id) && id >= 0 && id <= MOBILE_REQUEST_ID_MAX ? id : 0;
+}
+
+/** `requestIdOf` 的文本版：帧本身不是 JSON 就回 0 */
+export function requestIdOfFrame(text: string): number {
+  try {
+    return requestIdOf(JSON.parse(text));
+  } catch {
+    return 0;
+  }
 }
 
 function intOf(value: unknown, name: string, min: number, max: number): Checked<number> {
@@ -190,7 +211,7 @@ function shapeClearFrame(raw: Record<string, unknown>): Wire<InboundFrame> {
   if (!fields.ok) return fields;
   const version = versionOf(fields.value);
   if (version !== null) return { ok: false, error: version };
-  const id = intOf(fields.value["id"], "id", 0, 0x7fffffff);
+  const id = intOf(fields.value["id"], "id", 0, MOBILE_REQUEST_ID_MAX);
   if (!id.ok) return id;
   if (type === "pair.start") {
     const params = noParams(fields.value["params"]);
@@ -244,7 +265,7 @@ function shapeSealedFrame(raw: Record<string, unknown>): Wire<SealedFrame> {
 export function parseRequest(raw: unknown): Wire<MobileRequest> {
   const fields = fieldsOf(raw, ["id", "method"], ["params"]);
   if (!fields.ok) return fields;
-  const id = intOf(fields.value["id"], "id", 0, 0x7fffffff);
+  const id = intOf(fields.value["id"], "id", 0, MOBILE_REQUEST_ID_MAX);
   if (!id.ok) return id;
   const method = fields.value["method"];
   if (typeof method !== "string" || !(MOBILE_METHODS as readonly string[]).includes(method)) {

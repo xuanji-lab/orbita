@@ -89,8 +89,9 @@ class Phone {
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  send(frame: object): void {
-    this.socket.send(JSON.stringify(frame));
+  /** 给字符串就原样发（测「帧本身不是 JSON」用），给对象就 JSON 序列化 */
+  send(frame: object | string): void {
+    this.socket.send(typeof frame === "string" ? frame : JSON.stringify(frame));
   }
 
   next(): Promise<Record<string, unknown>> {
@@ -232,6 +233,8 @@ async function fixture(options: { metas?: SessionMeta[] } = {}): Promise<Fixture
 /** 一个已经过了握手的手机会话：能发请求、按序号解开电脑的应答与通知 */
 interface Authenticated {
   request(n: number, id: number, method: string, params?: object): void;
+  /** 发一帧，密文里放调用方给的原文（测形状不对的请求用） */
+  sendRaw(n: number, plaintext: string): void;
   /** 下一帧并解开；等不到回 null */
   next(timeoutMs?: number): Promise<{ frame: Record<string, unknown>; body: Record<string, unknown> } | null>;
 }
@@ -257,10 +260,13 @@ async function authenticate(phone: Phone, store: MobileStore, pnByte: number): P
   // 契约：收到握手应答再发数据帧
   await phone.next();
   const key = channelKey(shared, nonce, pn, deviceId);
+  const sendRaw = (n: number, plaintext: string): void => {
+    phone.send({ v: 1, n, ct: sealFrame(key, "deviceToHost", n, deviceId, plaintext).ct });
+  };
   return {
+    sendRaw,
     request: (n, id, method, params) => {
-      const body = JSON.stringify({ id, method, ...(params === undefined ? {} : { params }) });
-      phone.send({ v: 1, n, ct: sealFrame(key, "deviceToHost", n, deviceId, body).ct });
+      sendRaw(n, JSON.stringify({ id, method, ...(params === undefined ? {} : { params }) }));
     },
     next: async (timeoutMs = 2_000) => {
       const frame = await phone.nextWithin(timeoutMs);
@@ -571,4 +577,50 @@ describe("未认证的连接：全局最多 8 条，同一个来源地址最多�
     assert.equal(admitsUnauthenticated(peers.slice(0, 6), "10.0.0.9"), true, "别的地址还有名额");
     assert.equal(admitsUnauthenticated(peers, "10.0.0.9"), false, "全局 8 条满了");
   });
+});
+
+
+describe("契约备注：形状不对的请求带回自己的 id", () => {
+  test("形状不对的请求，应答带请求自己的 id（空文本、多带字段、未知方法）；读不出 id 才是 0，连接不断", async () => {
+    const { port, store } = await fixture();
+    const session = await openAuthenticated(port, store, 6);
+    const cases: [string, string, number][] = [
+      ["空文本的 reply", JSON.stringify({ id: 41, method: "reply", params: { sessionId: SESSION, text: "   ", requestId: "r" } }), 41],
+      ["多带字段", JSON.stringify({ id: 42, method: "ping", params: {}, extra: 1 }), 42],
+      ["未知方法", JSON.stringify({ id: 43, method: "nope" }), 43],
+      ["请求是个数组（读不出 id）", JSON.stringify([44]), 0],
+      ["id 是数字串（读不出 id）", JSON.stringify({ id: "45", method: "ping" }), 0],
+      ["id 超出范围（读不出 id）", JSON.stringify({ id: 0x80000000, method: "ping" }), 0],
+      ["密文里不是 JSON（读不出 id）", "{not json", 0],
+    ];
+    let n = 1;
+    for (const [label, plaintext, expected] of cases) {
+      session.sendRaw(n, plaintext);
+      n += 1;
+      const reply = await session.next();
+      assert.equal(reply?.body["id"], expected, label);
+      assert.equal(reply?.body["ok"], false, label);
+    }
+    // 连接没断：之后一个正常请求照常应答
+    session.request(n, 99, "ping");
+    assert.equal((await session.next())?.body["id"], 99);
+
+    // 明文段（还没认出设备）：形状不对的 pair.start 也是先回一句带 id 的错误再断
+    const stranger = await Phone.open(port);
+    phones.push(stranger);
+    await stranger.next();
+    stranger.send({ v: 1, type: "pair.start", id: 51, params: {}, surprise: true });
+    const refused = await stranger.next();
+    assert.equal(refused["id"], 51);
+    assert.equal(refused["ok"], false);
+    await stranger.closed;
+    // 帧本身不是 JSON：只能回 0
+    const another = await Phone.open(port);
+    phones.push(another);
+    await another.next();
+    another.send("{not json");
+    assert.equal((await another.next())["id"], 0);
+  });
+
+
 });

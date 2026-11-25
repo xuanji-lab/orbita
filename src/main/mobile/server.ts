@@ -42,7 +42,7 @@ import {
   type MobileSettings,
   type PairProveFrame,
 } from "../../shared/mobile.ts";
-import { isSealedFrame, parseInboundFrame, parseRequest, type InboundFrame } from "../../shared/mobile-wire.ts";
+import { isSealedFrame, parseInboundFrame, parseRequest, requestIdOf, requestIdOfFrame, type InboundFrame } from "../../shared/mobile-wire.ts";
 import { SecureChannel } from "./channel.ts";
 import { PairingBook } from "./pairing.ts";
 import type { HostCrypto } from "./host-keys.ts";
@@ -365,10 +365,12 @@ export class MobileServer {
       return;
     }
     const buf = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data);
-    const parsed = parseInboundFrame(buf.toString("utf8"));
+    const text = buf.toString("utf8");
+    const parsed = parseInboundFrame(text);
     if (!parsed.ok) {
-      // 明文段给一句带错误码的应答再断（手机联调时好看）；加密段的错帧直接断
-      if (conn.deviceId === null) this.sendPlain(conn, { v: MOBILE_PROTOCOL_VERSION, id: 0, ok: false, error: parsed.error });
+      // 明文段给一句带错误码的应答再断（手机联调时好看）；加密段的错帧直接断。
+      // 应答尽量带上请求自己的 id（审查 N1）：读不出才是 0
+      if (conn.deviceId === null) this.sendPlain(conn, { v: MOBILE_PROTOCOL_VERSION, id: requestIdOfFrame(text), ok: false, error: parsed.error });
       this.terminate(conn);
       return;
     }
@@ -396,7 +398,8 @@ export class MobileServer {
       }
       const request = parseRequest(raw);
       if (!request.ok) {
-        this.sendSealed(conn, errorReply(0, request.error.code, request.error.message));
+        // 形状不对的请求也带它自己的 id（审查 N1）：手机才对得上是哪一句没发成
+        this.sendSealed(conn, errorReply(requestIdOf(raw), request.error.code, request.error.message));
         return;
       }
       void this.dispatch(conn, request.value).catch((cause: unknown) => {
