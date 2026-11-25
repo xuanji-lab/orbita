@@ -1,9 +1,13 @@
-import { describe, test } from "node:test";
+import { describe, mock, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { MobileCatalog, type CatalogDeps } from "./summaries.ts";
+import { SessionStore } from "../session/store.ts";
 import type { SessionSummary } from "../../shared/mobile.ts";
 
 const NOW = 1_800_000_000_000;
@@ -57,11 +61,13 @@ interface World {
   stats: Map<string, { size: number; mtimeMs: number }>;
   phases: Map<string, string>;
   tailReads: string[];
+  /** 置真后 listMetas 抛错（模拟读会话表失败） */
+  failMetas?: boolean;
 }
 
 function depsOf(world: World): CatalogDeps {
   return {
-    listMetas: () => Promise.resolve(world.metas),
+    listMetas: () => (world.failMetas === true ? Promise.reject(new Error("会话表读不出来")) : Promise.resolve(world.metas)),
     listWorkspaces: () => Promise.resolve([{ id: "ws-1", name: "璇玑" }]),
     tailRecords: (id) => {
       world.tailReads.push(id);
@@ -285,5 +291,86 @@ describe("sessions.changed：增量推送", () => {
     await flushAfter(catalog);
     assert.deepEqual([...catalog.snapshotIds()], [A]);
     assert.deepEqual(pushes.at(-1)?.removed, [B]);
+    assert.deepEqual([...catalog.snapshotIds()], [A]);
+    assert.deepEqual(pushes.at(-1)?.removed, [B]);
+  });
+
+  test("转录里有坏记录、或有会话的尾部读不出来：整张清单照常出，那一条留空值、一次读取只记一行日志", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-mobile-catalog-"));
+    try {
+      await mkdir(join(dir, "sessions"));
+      const store = new SessionStore(join(dir, "sessions"));
+      const log = (id: string): string => join(dir, "sessions", `${id}.jsonl`);
+      // 真 SessionStore 读盘：parseLogLine 只拒非对象行，缺 content 的消息记录照样放行——坏记录就是这么进到
+      // 手机清单里的。以前 lastAssistantLineOf 一碰它就是 TypeError，sessions.list 一直回 internal
+      const badAssistant = { id: "x1", role: "assistant", timestamp: 2 };
+      await writeFile(log(A), [JSON.stringify(said("a1", 1, "A 的上一句")), JSON.stringify(badAssistant), JSON.stringify(said("a2", 3, "A 的末尾这句"))].join("\n") + "\n");
+      await writeFile(log(B), [JSON.stringify({ id: "x2", role: "user", timestamp: 1 }), JSON.stringify(badAssistant)].join("\n") + "\n");
+      const C = "40000000-0000-7000-8000-00000000000c";
+      await writeFile(log(C), `${JSON.stringify(said("c1", 1, "C 读不出来，看不到这句"))}\n`);
+      const logs: string[] = [];
+      const world = worldOf([metaOf(A), metaOf(B), metaOf(C)]);
+      const catalog = new MobileCatalog({
+        ...depsOf(world),
+        tailRecords: async (id) => {
+          // C：读盘出错
+          if (id === C) throw new Error("EBUSY: resource busy");
+          world.tailReads.push(id);
+          return store.tailRecords(id);
+        },
+        tailStat: (id) => store.tailStat(id),
+        log: (line) => logs.push(line),
+      });
+
+      const first = await catalog.list();
+      assert.equal(first.sessions.length, 3, "一条坏会话不拖垮整张清单");
+      assert.equal(byId(first.sessions, A).lastLine, "A 的末尾这句", "坏的那条跳过，取得到末尾这句");
+      assert.equal(byId(first.sessions, B).lastLine, null, "只有坏记录：留空");
+      assert.equal(byId(first.sessions, C).lastLine, null, "读不出来：留空");
+      assert.equal(logs.length, 3, "每条坏会话一行");
+      assert.match(logs[0] ?? "", new RegExp(`会话 ${A} 的转录尾部有 1 条读不了`));
+      assert.match(logs[1] ?? "", new RegExp(`会话 ${B} 的转录尾部有 2 条读不了`));
+      assert.match(logs[2] ?? "", new RegExp(`会话 ${C} 的转录尾部读不出汇总.*EBUSY`));
+
+      // 文件没变：不重读，也不重复记
+      await catalog.list();
+      assert.equal(logs.length, 3);
+
+      // 增量刷新：坏会话出一个事件，同一批里别的脏会话照常推给观看者——以前这一批整批静默丢掉
+      const pushes: { changed: SessionSummary[]; removed: string[] }[] = [];
+      catalog.subscribe((changed, removed) => pushes.push({ changed, removed }));
+      catalog.onAgentEvent({ type: "title", sessionId: B, title: "动了" });
+      catalog.onAgentEvent({ type: "title", sessionId: C, title: "动了" });
+      await flushAfter(catalog);
+      assert.equal(pushes.length, 1, "刷新做完了，观看者收到了");
+      assert.deepEqual(pushes[0]?.changed.map((session) => session.id).sort(), [A, B, C]);
+      assert.equal(logs.length, 3, "文件没变，日志不重复");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("增量刷新失败不再没人知道：记一条错误日志，下一次刷新照常", async () => {
+    const world = worldOf([metaOf(A)]);
+    const catalog = new MobileCatalog(depsOf(world));
+    await catalog.list();
+    const errors = mock.method(console, "error", () => undefined);
+    try {
+      world.failMetas = true;
+      catalog.onAgentEvent({ type: "title", sessionId: A, title: "动了" });
+      await flushAfter(catalog);
+      assert.equal(errors.mock.callCount(), 1, "失败要留下一行错误日志");
+      assert.match(String(errors.mock.calls[0]?.arguments[0]), /增量刷新失败/);
+      // 链没被上一次失败卡住：下一次刷新照常
+      world.failMetas = false;
+      world.metas = world.metas.map((meta) => (meta.id === A ? { ...meta, title: "A 的新标题" } : meta));
+      catalog.onAgentEvent({ type: "title", sessionId: A, title: "A 的新标题" });
+      await flushAfter(catalog);
+      assert.equal(errors.mock.callCount(), 1);
+      const summary = [...(await catalog.list()).sessions].find((session) => session.id === A);
+      assert.equal(summary?.title, "A 的新标题");
+    } finally {
+      errors.mock.restore();
+    }
   });
 });

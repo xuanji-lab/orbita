@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { lastAssistantLineOf, MOBILE_TAIL_TEXT_MAX_BYTES, tailEntriesOf, tailPageOf } from "./mobile-tail.ts";
+import { lastAssistantLineOf, malformedMessageCount, MOBILE_TAIL_TEXT_MAX_BYTES, tailEntriesOf, tailPageOf } from "./mobile-tail.ts";
 import { MOBILE_LAST_LINE_MAX, MOBILE_TAIL_PAGE, MOBILE_TAIL_PAGE_MAX_BYTES, type TailEntry } from "./mobile.ts";
 import type { CompactedRecord, SessionRecord } from "./session.ts";
 import type { AssistantTranscriptItem, ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
@@ -147,6 +147,35 @@ describe("agent 最近一句", () => {
     assert.equal(lastAssistantLineOf([]), null);
     assert.equal(lastAssistantLineOf([user("u1", 1)]), null);
     assert.equal(lastAssistantLineOf([said("a1", 1, "旧的"), said("a2", 2, "", 1), ran("t1", 3)]), "旧的");
+  });
+});
+
+describe("转录里的坏记录", () => {
+  // parseLogLine 只拒非对象行：长着消息的脸、却没有 content 的行照样放行——SessionRecord 的类型在这里说了谎
+  const noContent = (id: string, role: "user" | "assistant"): SessionRecord => ({ id, role, timestamp: 1 } as unknown as SessionRecord);
+
+  test("缺 content 的 user / assistant 记录当没有这条：不抛、不出条目、也不打断正在进行的过程", () => {
+    const records = [user("u1", 1), noContent("a-bad", "assistant"), said("a1", 2, "好的那句"), noContent("u-bad", "user"), ran("t1", 3), ran("t2", 4), said("a2", 5, "做完了")];
+    assert.equal(malformedMessageCount(records), 2);
+    assert.deepEqual(tailEntriesOf(records), [
+      { id: "u1", at: 1, kind: "user", text: "看看这个" },
+      { id: "a1", at: 2, kind: "assistant", text: "好的那句" },
+      { id: "t2", at: 4, kind: "process", steps: 2, failed: 0 },
+      { id: "a2", at: 5, kind: "assistant", text: "做完了" },
+    ]);
+  });
+
+  test("agent 最近一句跳过坏记录：取得到末尾说了话的那句；只有坏记录是 null", () => {
+    assert.equal(lastAssistantLineOf([noContent("a-bad", "assistant"), said("a1", 2, "末尾这句")]), "末尾这句");
+    assert.equal(lastAssistantLineOf([said("a0", 1, "旧的"), noContent("a-bad", "assistant")]), "旧的");
+    assert.equal(lastAssistantLineOf([noContent("a-bad", "assistant")]), null);
+  });
+
+  test("content 里混了非对象、或者文字块没有 text：那一块不要，其余照常", () => {
+    const holes = { id: "a1", role: "assistant", timestamp: 1, content: [null, { type: "text" }, { type: "text", text: "真的一句" }, "裸字符串"] } as unknown as SessionRecord;
+    assert.deepEqual(tailEntriesOf([holes]), [{ id: "a1", at: 1, kind: "assistant", text: "真的一句" }]);
+    assert.equal(lastAssistantLineOf([holes]), "真的一句");
+    assert.equal(malformedMessageCount([holes]), 0, "content 是数组，只是里面有洞，不算坏记录");
   });
 });
 

@@ -9,6 +9,8 @@
  * - 每条的 `state` 用契约里的 `deriveMobileSessionState`；`lastLine` 与 `planAwaiting` 要读转录尾部
  *   才知道——**一次清单刷新最多读 40 条会话的尾部**，其余的沿用缓存（按「文件大小 + 修改时间」判
  *   没变，没变不重读），没有缓存的留空。
+ * - 一条会话的尾部读不出汇总（转录里有坏记录、读盘出错）不拖垮整张清单：那一条留空值、记一行日志，
+ *   别的会话照常；增量刷新失败也记日志，不静默吞掉（2026-11-25 审查 S3）。
  * - 变了才推：`sessions.changed` 只带变过的会话与消失了的 id。哪条会话脏了由 agent 事件说了算
  *   （phase / stats / fileTurn / title / compaction），攒 400 毫秒一起重算。
  * - `settledRecently` 只在这次运行里记（重启就丢）：刚从在跑变成空闲、还没人点进这条会话时，把它
@@ -19,7 +21,7 @@
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
 import { isRootSession, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import { planAwaitingIn } from "../../shared/plan.ts";
-import { lastAssistantLineOf } from "../../shared/mobile-tail.ts";
+import { lastAssistantLineOf, malformedMessageCount } from "../../shared/mobile-tail.ts";
 import { foldRevertRecords } from "../session/store.ts";
 import { deriveMobileSessionState, type SessionSummary } from "../../shared/mobile.ts";
 
@@ -42,6 +44,8 @@ export interface CatalogDeps {
   /** 运行态表里这条会话的档；没在跑回 undefined */
   phaseOf(id: string): string | undefined;
   now(): number;
+  /** 诊断日志（坏记录、某条会话的尾部读不出来）；不给就打到 console.warn */
+  log?(line: string): void;
 }
 
 /** 一条会话的「读尾部才知道」的部分，按文件指纹缓存 */
@@ -156,7 +160,8 @@ export class MobileCatalog {
     if (this.flushTimer !== null) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      void this.exclusive(() => this.flush());
+      // exclusive 的链会接住失败好让后面的刷新继续，可那条链不通向任何人——不在这儿接一下，失败就没人知道
+      void this.exclusive(() => this.flush()).catch((cause: unknown) => console.error("[mobile] 清单的增量刷新失败", cause));
     }, FLUSH_DELAY_MS);
   }
 
@@ -257,15 +262,29 @@ export class MobileCatalog {
       // 这轮不让读：沿用旧缓存（哪怕已过期），没有就空着——清单先出，下轮刷新再补
       return { facts: cached ?? { size: 0, mtimeMs: 0, lastLine: null, planAwaiting: false }, read: false };
     }
-    const records = foldRevertRecords(await this.deps.tailRecords(id));
-    const facts: TailFacts = {
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-      lastLine: lastAssistantLineOf(records),
-      planAwaiting: planAwaitingIn(records),
-    };
+    // 一条会话的尾部读不出汇总，不该让整张清单失败（别的会话照常）：这一条按这次的文件指纹留空值、记一行
+    // 日志，文件变了才会再读。读不了的消息记录（缺 content）只是跳过，同一次读取只记一行
+    let facts: TailFacts;
+    try {
+      const records = foldRevertRecords(await this.deps.tailRecords(id));
+      const malformed = malformedMessageCount(records);
+      if (malformed > 0) this.log(`[mobile] 会话 ${id} 的转录尾部有 ${malformed} 条读不了的消息记录（缺 content），已跳过`);
+      facts = {
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        lastLine: lastAssistantLineOf(records),
+        planAwaiting: planAwaitingIn(records),
+      };
+    } catch (cause) {
+      this.log(`[mobile] 会话 ${id} 的转录尾部读不出汇总，先留空：${cause instanceof Error ? cause.message : String(cause)}`);
+      facts = { size: stat.size, mtimeMs: stat.mtimeMs, lastLine: null, planAwaiting: false };
+    }
     this.tailCache.set(id, facts);
     return { facts, read: true };
+  }
+
+  private log(line: string): void {
+    (this.deps.log ?? ((entry: string) => console.warn(entry)))(line);
   }
 
   private summaryOf(
