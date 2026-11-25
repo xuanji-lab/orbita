@@ -1,6 +1,8 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { isAvatarGenerateRequest, isAvatarSelectRequest, isAvatarJobLive, type AvatarJob } from "./planet-avatar.ts";
+import { defaultThinkingLevel } from "./model-defaults.ts";
+import type { ProviderDto } from "./provider.ts";
+import { avatarModelError, checkAvatarModel, isAvatarGenerateRequest, isAvatarSelectRequest, isAvatarJobLive, pickAvatarModel, resolveAvatarModel, type AvatarJob } from "./planet-avatar.ts";
 import { parseSessionMeta, rootSessions, type SessionMeta } from "./session.ts";
 
 describe("planet-avatar 契约", () => {
@@ -42,5 +44,194 @@ describe("planet-avatar 契约", () => {
     const plain = parseSessionMeta({ ...raw, id: "s2", backstage: "other" }) as SessionMeta;
     assert.equal(plain.backstage, undefined);
     assert.equal(rootSessions([plain]).length, 1);
+  });
+});
+
+/**
+ * 出图用哪个模型：取法 → 型号 → 校验这一段是面板与主进程共用的纯函数，所以和契约一起测。
+ * 夹具照用户正式版的情形摆：子会话默认模型是 Kimi Code 的 kimi-for-coding，会话栏用的是智谱的 glm-5.4——
+ * 2026-11-25 就是在这个设置下，会话栏怎么换模型出图都是 Kimi。
+ */
+function modelProvider(id: string, displayName: string, modelIds: string[], disabled = false): ProviderDto {
+  return {
+    id,
+    displayName,
+    disabled,
+    endpoint: { baseUrl: "https://x.example", api: "anthropic-messages" },
+    auth: { scheme: "api_key", hasSecret: true, masked: "abc…xyz" },
+    models: { declared: modelIds.map((modelId) => ({ id: modelId })) },
+  };
+}
+
+const ZHIPU = "zhipu-coding";
+const KIMI = "kimi-coding";
+const GLM = { providerId: ZHIPU, modelId: "glm-5.4" };
+const KIMI_CODE = { providerId: KIMI, modelId: "kimi-for-coding" };
+
+function modelProviders(withKimi = true): ProviderDto[] {
+  const list = [modelProvider(ZHIPU, "智谱 Coding Plan", ["glm-5.4", "glm-5.3-flash"])];
+  if (withKimi) list.push(modelProvider(KIMI, "Kimi Code", ["kimi-for-coding", "k3.1-pro"]));
+  return list;
+}
+
+/** Kimi 那家被关了，智谱照常 */
+function kimiOff(): ProviderDto[] {
+  return [modelProvider(ZHIPU, "智谱 Coding Plan", ["glm-5.4", "glm-5.3-flash"]), modelProvider(KIMI, "Kimi Code", ["kimi-for-coding", "k3.1-pro"], true)];
+}
+
+/** 用户正式版设置的那一段：子会话默认模型压在会话栏模型上面 */
+const userSettings = { subSessionModel: KIMI_CODE };
+
+const resolve = (input: Partial<Parameters<typeof resolveAvatarModel>[0]> = {}) =>
+  resolveAvatarModel({
+    requested: undefined,
+    session: GLM,
+    settings: { avatarModel: undefined, ...userSettings },
+    providers: modelProviders(),
+    ...input,
+  });
+/** 解析失败时的那句错误（成功就是测试写错了） */
+function failure(result: ReturnType<typeof resolveAvatarModel>): string {
+  if (result.ok) assert.fail(`expected a failure, got ${result.providerId}/${result.modelId}`);
+  return result.error;
+}
+
+describe("pickAvatarModel：取法落到哪个型号（只挑不校验）", () => {
+  it("没选过 = 跟会话栏：取会话栏此刻的模型，不被子会话默认模型压住", () => {
+    assert.deepEqual(pickAvatarModel(undefined, GLM, userSettings, modelProviders()), { ...GLM, source: "session" });
+  });
+
+  it("会话栏没有模型时挑不出（回 null），不拿别家的型号顶上", () => {
+    assert.equal(pickAvatarModel(undefined, undefined, userSettings, modelProviders()), null);
+  });
+
+  it("选「子会话模型」= 走原链路：设置里的子会话默认模型", () => {
+    assert.deepEqual(pickAvatarModel("sub_session", GLM, userSettings, modelProviders()), { ...KIMI_CODE, source: "sub_session_model" });
+  });
+
+  it("「子会话模型」在服务商被关 / 被删、或根本没设时，退回会话栏的模型（同原子会话的退回）", () => {
+    assert.deepEqual(pickAvatarModel("sub_session", GLM, userSettings, kimiOff()), { ...GLM, source: "session" });
+    assert.deepEqual(pickAvatarModel("sub_session", GLM, userSettings, modelProviders(false)), { ...GLM, source: "session" });
+    assert.deepEqual(pickAvatarModel("sub_session", GLM, {}, modelProviders()), { ...GLM, source: "session" });
+  });
+
+  it("选了具体型号就用它，原样返回——服务商被关了也不在这里换（留给校验报错）", () => {
+    const picked = { providerId: KIMI, modelId: "k3.1-pro" };
+    assert.deepEqual(pickAvatarModel(picked, GLM, userSettings, modelProviders(false)), { ...picked, source: "picked" });
+  });
+});
+
+describe("checkAvatarModel：这个型号此刻能不能用", () => {
+  it("服务商开着、型号还声明着：能用", () => {
+    assert.deepEqual(checkAvatarModel(KIMI_CODE, modelProviders()), { ok: true });
+  });
+
+  it("服务商被关：报原因，带上服务商的显示名", () => {
+    assert.deepEqual(checkAvatarModel(KIMI_CODE, kimiOff()), {
+      ok: false,
+      reason: { kind: "provider_off", providerId: KIMI, modelId: "kimi-for-coding", providerName: "Kimi Code" },
+    });
+  });
+
+  it("型号从服务商的模型列表里没了：报原因", () => {
+    assert.deepEqual(checkAvatarModel({ providerId: KIMI, modelId: "k2.7" }, modelProviders()), {
+      ok: false,
+      reason: { kind: "model_gone", providerId: KIMI, modelId: "k2.7", providerName: "Kimi Code" },
+    });
+  });
+
+  it("服务商被删：报原因，显示名为 null", () => {
+    assert.deepEqual(checkAvatarModel(KIMI_CODE, modelProviders(false)), {
+      ok: false,
+      reason: { kind: "provider_gone", providerId: KIMI, modelId: "kimi-for-coding", providerName: null },
+    });
+  });
+
+  it("主进程的错误句说清是哪一种、怎么办", () => {
+    const off = avatarModelError({ kind: "provider_off", providerId: KIMI, modelId: "kimi-for-coding", providerName: "Kimi Code" });
+    assert.match(off, /Kimi Code/);
+    assert.match(off, /已关闭/);
+    assert.match(off, /模型服务/);
+    assert.match(avatarModelError({ kind: "model_gone", providerId: KIMI, modelId: "k2.7", providerName: "Kimi Code" }), /kimi-coding\/k2\.7/);
+    assert.match(avatarModelError({ kind: "provider_gone", providerId: KIMI, modelId: "kimi-for-coding", providerName: null }), /已被删除/);
+  });
+});
+
+describe("resolveAvatarModel：主进程开这一轮用的模型", () => {
+  it("默认跟会话栏：子会话默认模型压不过它，思考档取该型号的默认档", () => {
+    assert.deepEqual(resolve(), { ok: true, ...GLM, source: "session", thinkingLevel: defaultThinkingLevel("glm-5.4") });
+  });
+
+  it("选「子会话模型」：用子会话默认模型，思考档沿子会话的设置", () => {
+    const r = resolve({ settings: { avatarModel: "sub_session", subSessionModel: KIMI_CODE, subSessionThinking: "high" } });
+    assert.deepEqual(r, { ok: true, ...KIMI_CODE, source: "sub_session_model", thinkingLevel: "high" });
+    // 没单独设档 = 那个型号的默认档
+    const unset = resolve({ settings: { avatarModel: "sub_session", ...userSettings } });
+    assert.equal(unset.ok && unset.thinkingLevel, defaultThinkingLevel("kimi-for-coding"));
+  });
+
+  it("「子会话模型」退回会话栏时，思考档不再认子会话那一档", () => {
+    const r = resolve({ providers: kimiOff(), settings: { avatarModel: "sub_session", subSessionModel: KIMI_CODE, subSessionThinking: "high" } });
+    assert.deepEqual(r, { ok: true, ...GLM, source: "session", thinkingLevel: defaultThinkingLevel("glm-5.4") });
+  });
+
+  it("选了具体型号：用它，思考档取它的默认档", () => {
+    const r = resolve({ settings: { avatarModel: { providerId: KIMI, modelId: "k3.1-pro" }, ...userSettings } });
+    assert.deepEqual(r, { ok: true, providerId: KIMI, modelId: "k3.1-pro", source: "picked", thinkingLevel: defaultThinkingLevel("k3.1-pro") });
+  });
+
+  it("会话栏的模型不可用（服务商关了 / 型号没了 / 服务商删了）：报错说清怎么办，不静默换成别家", () => {
+    const off = resolve({ session: KIMI_CODE, providers: kimiOff() });
+    const offError = failure(off);
+    assert.match(offError, /Kimi Code/);
+    assert.match(offError, /已关闭/);
+    // 报错里不许出现别家型号
+    assert.doesNotMatch(offError, /glm/);
+
+    const gone = resolve({ session: { providerId: KIMI, modelId: "k2.7" } });
+    assert.match(failure(gone), /kimi-coding\/k2\.7/);
+
+    const removed = resolve({ session: KIMI_CODE, providers: modelProviders(false) });
+    assert.match(failure(removed), /已被删除/);
+  });
+
+  it("选了具体型号但它已不可用：同样报错不换", () => {
+    const r = resolve({ settings: { avatarModel: KIMI_CODE, ...userSettings }, providers: modelProviders(false) });
+    assert.match(failure(r), /已被删除/);
+  });
+
+  it("挑不出任何模型（会话栏没有、也没选）：报错引导去选", () => {
+    const r = resolve({ session: undefined });
+    assert.match(failure(r), /选一个模型/);
+  });
+
+  it("请求里带了型号就以请求为准，设置里的取法管不着它", () => {
+    const r = resolve({ requested: { providerId: KIMI, modelId: "k3.1-pro" }, settings: { avatarModel: "sub_session", ...userSettings } });
+    assert.deepEqual(r, { ok: true, providerId: KIMI, modelId: "k3.1-pro", source: "picked", thinkingLevel: defaultThinkingLevel("k3.1-pro") });
+  });
+
+  it("请求带的型号正好是子会话默认模型：思考档沿子会话的设置（同一个型号同一档）", () => {
+    const r = resolve({ requested: KIMI_CODE, settings: { avatarModel: "sub_session", subSessionModel: KIMI_CODE, subSessionThinking: "high" } });
+    assert.equal(r.ok && r.thinkingLevel, "high");
+  });
+
+  it("请求带的型号不可用：报错不换，也不回头看设置里别的取法", () => {
+    const r = resolve({ requested: KIMI_CODE, providers: modelProviders(false), settings: { avatarModel: GLM, ...userSettings } });
+    assert.match(failure(r), /已被删除/);
+  });
+});
+
+describe("生成请求的 model 字段：面板解析好的具体型号，成对才认", () => {
+  const base = { workspaceId: "w", bodyId: "main" };
+  it("不带 model 照旧通过；带成对的 providerId + modelId 通过", () => {
+    assert.equal(isAvatarGenerateRequest(base), true);
+    assert.equal(isAvatarGenerateRequest({ ...base, model: GLM }), true);
+  });
+  it("半截的、空字符串的、不是对象的都拒绝", () => {
+    assert.equal(isAvatarGenerateRequest({ ...base, model: { providerId: ZHIPU } }), false);
+    assert.equal(isAvatarGenerateRequest({ ...base, model: { providerId: ZHIPU, modelId: "" } }), false);
+    assert.equal(isAvatarGenerateRequest({ ...base, model: { providerId: "", modelId: "glm-5.4" } }), false);
+    assert.equal(isAvatarGenerateRequest({ ...base, model: "glm-5.4" }), false);
+    assert.equal(isAvatarGenerateRequest({ ...base, model: null }), false);
   });
 });

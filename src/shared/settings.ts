@@ -94,6 +94,25 @@ export interface ModelPair {
 }
 
 /**
+ * `lastUsed` 里的两个 id 都在才算一个模型（它逐字段可选，存半截的定位不到哪家的密钥）。
+ * 「生成形象」主进程兑底时拿它当会话栏的模型：面板没带型号，主进程读得到的只有这一对。
+ */
+export function lastUsedPair(settings: Pick<AppSettings, "lastUsed">): ModelPair | undefined {
+  const last = settings.lastUsed;
+  return last?.providerId !== undefined && last.modelId !== undefined ? { providerId: last.providerId, modelId: last.modelId } : undefined;
+}
+
+/**
+ * 「生成形象」用哪个模型（星系设计面板 › 形象一节的模型菜单）。三种取法：
+ * - **缺席 = 跟会话栏**：用输入框此刻的模型（主进程兑底时读 `lastUsed`）。默认值不是子会话模型——
+ *   2026-11-25 用户在会话栏换了两次模型，出图两次都是子会话默认的那一家（「我一开始以为是用 session 栏的模型」）；
+ * - `"sub_session"` = 走子会话默认模型那条链路（`subSessionModel`；它被关 / 被删 / 没设时退回会话栏）；
+ * - 一对 { providerId, modelId } = 面板里挑定的型号（有人会特地换一个更会画的模型来出图）。
+ * 思考档不在这里（同 lastUsed）：跟型号的默认档走；落的是子会话默认模型时沿 `subSessionThinking`。
+ */
+export type AvatarModelChoice = ModelPair | "sub_session";
+
+/**
  * 实验功能的档位 id（2026-10-12 起逐项开关）。**唯一来源在这里**：设置键
  * `experimentalFeatures` 按它记账，renderer 的 `experimental-features.ts` 清单与
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
@@ -299,6 +318,8 @@ export interface AppSettings {
    * 这里 > 同父。形状同 choreModel（两 id 成对：光有 modelId 定位不到哪家的密钥）。
    */
   subSessionModel?: ModelPair;
+  /** 「生成形象」用哪个模型（取法见 AvatarModelChoice）。**缺席 = 跟会话栏**。 */
+  avatarModel?: AvatarModelChoice;
   /**
    * 子会话的思考档。**绑定 subSessionModel**（wafo 2026-09-23）：档位因模型而异，
    * 脱离模型单独存一档，派到不支持它的模型上就是一个假选项。所以：
@@ -515,7 +536,7 @@ export const isDocPaper = (value: unknown): value is DocPaper =>
 export type SettingsPatch = Partial<
   Omit<
     AppSettings,
-    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays"
+    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays" | "avatarModel"
   >
 > & {
   /** `null` = 清除，退回「不限」（同 choreModel：undefined 在补丁里是「没改」，选不回默认） */
@@ -532,6 +553,8 @@ export type SettingsPatch = Partial<
   subSessionModel?: ModelPair | null;
   /** 清除后退回所选子会话模型的默认档；subSessionModel 被清除时它随之失效（见 AppSettings） */
   subSessionThinking?: ThinkingLevel | null;
+  /** 同 choreModel 的 null 语义：清除后退回「跟会话栏」（undefined 在补丁里是「这个键没改」，选不回默认） */
+  avatarModel?: AvatarModelChoice | null;
 };
 
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
@@ -735,6 +758,7 @@ export function parseSettings(raw: unknown): AppSettings {
     titleModel?: unknown;
     subSessionModel?: unknown;
     subSessionThinking?: unknown;
+    avatarModel?: unknown;
     lastUsed?: unknown;
     browserDownloadDir?: unknown;
     starredModels?: unknown;
@@ -771,6 +795,7 @@ export function parseSettings(raw: unknown): AppSettings {
       ? record.subSessionThinking
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
+  const avatarModel = parseAvatarModel(record.avatarModel);
   const starredModels = parseStarredModels(record.starredModels);
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
@@ -838,6 +863,7 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
+    ...(avatarModel === undefined ? {} : { avatarModel }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
     ...(providersPage === undefined ? {} : { providersPage }),
     ...(pluginsPage === undefined ? {} : { pluginsPage }),
@@ -913,6 +939,11 @@ function parseModelPair(raw: unknown): ModelPair | undefined {
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
   if (typeof record.modelId !== "string" || record.modelId === "") return undefined;
   return { providerId: record.providerId, modelId: record.modelId };
+}
+
+/** 「生成形象」的取法：`"sub_session"` 这一档单独认，其余走成对校验；别的值当作没选过（回到跟会话栏） */
+function parseAvatarModel(raw: unknown): AvatarModelChoice | undefined {
+  return raw === "sub_session" ? "sub_session" : parseModelPair(raw);
 }
 
 /** 星云偏好：日期键格式不对就丢、hidden 只认 true；两样都没有 = 不落键 */

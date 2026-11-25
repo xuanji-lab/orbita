@@ -130,6 +130,33 @@ describe("SettingsStore", () => {
     assert.deepEqual((await new SettingsStore(dir).read()).choreModel, undefined);
   });
 
+  test("avatarModel：挑定的型号 / 「子会话模型」写进去重开还在；补丁发 null 选回默认（跟会话栏）；坏值不落盘", async () => {
+    await store.write({ theme: "graphite", avatarModel: { providerId: "kimi-coding", modelId: "k3.1-pro" } });
+    assert.deepEqual((await new SettingsStore(dir).read()).avatarModel, { providerId: "kimi-coding", modelId: "k3.1-pro" });
+    await store.write({ sidebarWidth: 300 });
+    assert.deepEqual((await new SettingsStore(dir).read()).avatarModel, { providerId: "kimi-coding", modelId: "k3.1-pro" }, "改别的设置不抹它");
+    await store.write({ avatarModel: "sub_session" });
+    assert.equal((await new SettingsStore(dir).read()).avatarModel, "sub_session");
+    // undefined 在补丁语义里是「这个键没改」，所以选回默认必须是显式的 null
+    const cleared = await store.write({ avatarModel: null });
+    assert.equal("avatarModel" in cleared, false);
+    assert.equal(cleared.theme, "graphite");
+    const onDisk = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("avatarModel" in onDisk, false);
+    // 盘上的坏值（别的取法名、半截的一对）当作没选过：回到默认，不拦应用启动
+    await writeFile(
+      join(dir, "settings.json"),
+      JSON.stringify({ theme: "light", avatarModel: { providerId: "kimi-coding" } }),
+      "utf8",
+    );
+    assert.equal((await new SettingsStore(dir).read()).avatarModel, undefined);
+    await writeFile(join(dir, "settings.json"), JSON.stringify({ theme: "light", avatarModel: "follow" }), "utf8");
+    assert.equal((await new SettingsStore(dir).read()).avatarModel, undefined);
+    // 选回默认之后再写具体型号：仍是完整的成对
+    await store.write({ avatarModel: { providerId: "zhipu-coding", modelId: "glm-5.4" } });
+    assert.deepEqual((await new SettingsStore(dir).read()).avatarModel, { providerId: "zhipu-coding", modelId: "glm-5.4" });
+  });
+
   test("旧键 titleModel 平滑迁移：读得到，任何一次写入都把旧键从盘上带走", async () => {
     // 旧版本写的盘上只有 titleModel（只管起名的时代）
     await writeFile(join(dir, "settings.json"), JSON.stringify({ theme: "light", titleModel: { providerId: "kimi", modelId: "kimi-k3" } }));

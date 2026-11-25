@@ -13,6 +13,10 @@
  * 选中后 galaxy.json 的 surface 指向 `<候选目录>/candidates/<文件>`（相对 planet/，与集成分支现有约定同一个基准）；
  * 有插件设计稿（主星的 planet/design.json、行星伴随文件里登记的 design）时再跑插件的 `select` 写稿，两边同源。
  */
+import { defaultThinkingLevel } from "./model-defaults.ts";
+import { isProviderEnabled, type ProviderDto } from "./provider.ts";
+import type { AppSettings, AvatarModelChoice, ModelPair } from "./settings.ts";
+import type { ThinkingLevel } from "./thinking.ts";
 
 /** 插件的三种后端：图像生成工具 / 智能体画 SVG / 用户给的图（面板这一版不收用户的图） */
 export type AvatarBackend = "image_model" | "model_svg" | "user_image";
@@ -116,6 +120,11 @@ export interface AvatarGenerateRequest extends AvatarBodyRef {
   baseCandidateId?: string;
   /** 聊天修改用：以 galaxy.json 当前在用的 surface 为基础；候选在账本里就带原提示词，否则直接读当前图 */
   useCurrentSurface?: boolean;
+  /**
+   * 这一组用哪个模型（面板按用户的取法解析好的具体型号；见 `pickAvatarModel`）。缺席 = 主进程按设置兜底解析。
+   * 面板显示什么就发什么：点之前胶囊上写的型号与这一轮实际开的型号是同一对，不靠两边各解析一遍对得上。
+   */
+  model?: ModelPair;
 }
 
 export interface AvatarSelectRequest extends AvatarBodyRef {
@@ -172,8 +181,15 @@ export function isAvatarGenerateRequest(raw: unknown): raw is AvatarGenerateRequ
   return (
     (name === undefined || (typeof name === "string" && name.length <= 200)) &&
     (instruction === undefined || (typeof instruction === "string" && instruction.trim() !== "" && instruction.length <= AVATAR_INSTRUCTION_MAX)) &&
-    (base === undefined || (typeof base === "string" && CANDIDATE_ID.test(base)))
-  ) && (raw["useCurrentSurface"] === undefined || typeof raw["useCurrentSurface"] === "boolean");
+    (base === undefined || (typeof base === "string" && CANDIDATE_ID.test(base))) &&
+    (raw["useCurrentSurface"] === undefined || typeof raw["useCurrentSurface"] === "boolean") &&
+    (raw["model"] === undefined || isModelPair(raw["model"]))
+  );
+}
+
+/** 一对非空的 providerId + modelId（请求里的 model、设置里的取法都认这一种形状） */
+function isModelPair(value: unknown): value is ModelPair {
+  return isRecord(value) && typeof value["providerId"] === "string" && value["providerId"] !== "" && typeof value["modelId"] === "string" && value["modelId"] !== "";
 }
 
 export function isAvatarSelectRequest(raw: unknown): raw is AvatarSelectRequest {
@@ -188,3 +204,99 @@ const CANDIDATE_ID = /^r\d{1,4}-s\d{1,2}$/;
 export const AVATAR_SLOTS_MAX = 4;
 /** 一轮最长多久（ms）：到点还没交的位记「超时」并停掉幕后会话。Qwen turbo 一张 10–20 s，SVG 一张约一分钟，三位串行加重画留足余量 */
 export const AVATAR_JOB_TIMEOUT_MS = 8 * 60 * 1000;
+
+// ── 这一组用哪个模型 ────────────────────────────────────────────────────
+
+/** 取法落到的型号，和它是怎么来的（面板照这个写胶囊，主进程照这个定思考档） */
+export interface AvatarModelPick extends ModelPair {
+  /** session = 跟会话栏（或「子会话模型」退回了会话栏）；sub_session_model = 设置里的子会话默认模型；picked = 面板里挑定的型号 */
+  source: "session" | "sub_session_model" | "picked";
+}
+
+/**
+ * 取法 → 此刻的型号（**只挑不校验**，校验在 `checkAvatarModel`）。面板与主进程共用这一份：
+ * 面板拿它的结果写胶囊并随请求发来，主进程兜底时（请求没带型号）自己再挑一遍。
+ * - 没选过：会话栏此刻的模型（`session`），没有就是没有——不拿别家顶上（回 null）；
+ * - 「子会话模型」：设置里的子会话默认模型；它那家被关 / 被删 / 没设时退回会话栏（同原子会话的退回）；
+ * - 挑了具体型号：原样返回，哪怕它已不可用——换成别家不是这里的事。
+ */
+export function pickAvatarModel(
+  choice: AvatarModelChoice | undefined,
+  session: ModelPair | undefined,
+  settings: Pick<AppSettings, "subSessionModel">,
+  providers: readonly ProviderDto[],
+): AvatarModelPick | null {
+  if (choice === "sub_session") {
+    const sub = settings.subSessionModel;
+    const owner = sub === undefined ? undefined : providers.find((provider) => provider.id === sub.providerId);
+    if (sub !== undefined && owner !== undefined && isProviderEnabled(owner)) return { ...sub, source: "sub_session_model" };
+    return session === undefined ? null : { ...session, source: "session" };
+  }
+  if (choice !== undefined) return { ...choice, source: "picked" };
+  return session === undefined ? null : { ...session, source: "session" };
+}
+
+/** 这个型号此刻用不了的原因（面板与主进程各翻各的那句话，原因只有这一份） */
+export interface AvatarModelUnavailable {
+  /** provider_gone = 服务商被删了；provider_off = 服务商关着；model_gone = 型号已不在它的模型列表里 */
+  kind: "provider_gone" | "provider_off" | "model_gone";
+  providerId: string;
+  modelId: string;
+  /** 服务商的显示名；被删了为 null */
+  providerName: string | null;
+}
+
+export type AvatarModelCheck = { ok: true } | { ok: false; reason: AvatarModelUnavailable };
+
+/** 服务商开着、型号还在它的模型列表里 = 能用。**不静默换别家**：渠道不替用户选（同自动化、delegate 的口径） */
+export function checkAvatarModel(pair: ModelPair, providers: readonly ProviderDto[]): AvatarModelCheck {
+  const provider = providers.find((candidate) => candidate.id === pair.providerId);
+  if (provider === undefined) return { ok: false, reason: { kind: "provider_gone", ...pair, providerName: null } };
+  if (!isProviderEnabled(provider)) return { ok: false, reason: { kind: "provider_off", ...pair, providerName: provider.displayName } };
+  if (!provider.models.declared.some((model) => model.id === pair.modelId)) {
+    return { ok: false, reason: { kind: "model_gone", ...pair, providerName: provider.displayName } };
+  }
+  return { ok: true };
+}
+
+/** 主进程回给面板的错误句（avatar 这条路上的错误都是中文原句，同文件其它地方） */
+export function avatarModelError(reason: AvatarModelUnavailable): string {
+  const id = `${reason.providerId}/${reason.modelId}`;
+  switch (reason.kind) {
+    case "provider_off":
+      return `出图用的模型 ${reason.modelId} 所在的服务商「${reason.providerName}」已关闭。到设置 › 模型服务打开它，或在形象一节的模型菜单里换一个。`;
+    case "model_gone":
+      return `出图用的模型 ${id} 已不在服务商的模型列表里。到设置 › 模型服务重新拉取，或在形象一节的模型菜单里换一个。`;
+    default:
+      return `出图用的模型 ${id} 的服务商已被删除。在形象一节的模型菜单里换一个。`;
+  }
+}
+
+export type AvatarModelResolution =
+  | (AvatarModelPick & { ok: true; thinkingLevel: ThinkingLevel })
+  | { ok: false; error: string };
+
+/**
+ * 主进程开这一轮用的模型：**请求里带的型号最优先**（面板显示什么就发什么），没带才按设置里的取法解析。
+ * `session` 是会话栏此刻的模型——面板在时它带在请求里，所以这里拿到的是 `lastUsed`。
+ * 挑不出、或挑出的型号已不可用：报错说清怎么办，**不换成别家**。
+ * 思考档跟型号走：落的是子会话默认模型（且用的正是它）就沿 `subSessionThinking`，否则取该型号的默认档。
+ */
+export function resolveAvatarModel(input: {
+  requested: ModelPair | undefined;
+  session: ModelPair | undefined;
+  settings: Pick<AppSettings, "avatarModel" | "subSessionModel" | "subSessionThinking">;
+  providers: readonly ProviderDto[];
+}): AvatarModelResolution {
+  const picked = pickAvatarModel(input.settings.avatarModel, input.session, input.settings, input.providers);
+  const chosen = input.requested ?? picked;
+  if (chosen === null) return { ok: false, error: "会话栏还没有可用模型：先在会话栏选一个模型，或在形象一节的模型菜单里挑一个。" };
+  const check = checkAvatarModel(chosen, input.providers);
+  if (!check.ok) return { ok: false, error: avatarModelError(check.reason) };
+  const sameAsPicked = picked !== null && picked.providerId === chosen.providerId && picked.modelId === chosen.modelId;
+  const thinkingLevel =
+    picked !== null && sameAsPicked && picked.source === "sub_session_model"
+      ? (input.settings.subSessionThinking ?? defaultThinkingLevel(chosen.modelId))
+      : defaultThinkingLevel(chosen.modelId);
+  return { ok: true, providerId: chosen.providerId, modelId: chosen.modelId, source: sameAsPicked ? picked.source : "picked", thinkingLevel };
+}
