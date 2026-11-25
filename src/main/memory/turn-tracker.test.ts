@@ -329,7 +329,6 @@ test("复现：工具调用轮——idle 时最终回答还没落盘，回答正
       recentQueries: [],
       providerId: "p",
       modelId: "m",
-      mode: "plan",
       thinkingLevel: "medium",
       createdAt: 1,
       updatedAt: 1,

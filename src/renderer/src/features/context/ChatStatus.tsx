@@ -151,7 +151,6 @@ export function ChatStatus(props: {
         const activity = activities.get(meta.id) ?? null;
         const state = childStateOf({
           channelStatus: summaries.get(meta.id)?.status,
-          needsApproval: (props.engine.states.get(meta.id)?.approvals.length ?? 0) > 0,
           enginePhaseRunning: props.engine.phaseOf(meta.id) !== "idle",
           activity,
           now,

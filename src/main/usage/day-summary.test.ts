@@ -92,7 +92,6 @@ function meta(id: string, createdAt: number, extra: Partial<SessionMeta> = {}): 
     recentQueries: [],
     providerId: "p",
     modelId: "m",
-    mode: "plan",
     thinkingLevel: "high",
     createdAt,
     updatedAt: createdAt,

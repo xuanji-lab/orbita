@@ -21,6 +21,12 @@
  * 会话里的看板快照、周看板的类型（文件后段）归看板数据那条线——同文件不同段。
  */
 
+/**
+ * 看板结果工具的名字：show_plugin_board 把插件已经写好的卡快照进工具结果、显示在对话里
+ * （agent/plugin-tools.ts）。自动化调度据它收周看板的快照，renderer 据它画卡。
+ */
+export const PLUGIN_BOARD_TOOL = "show_plugin_board";
+
 // ---------- 清单与视图 ----------
 
 /** 四档尺寸（宽×高，单位格）。 */

@@ -18,7 +18,6 @@ const meta = (cwd: string): SessionMeta => ({
   cwd,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,

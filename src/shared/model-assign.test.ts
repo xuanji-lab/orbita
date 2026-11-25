@@ -67,7 +67,6 @@ function meta(patch: Partial<Pick<SessionMeta, "id" | "providerId" | "modelId" |
     workspaceId: null,
     providerId: UNASSIGNED_PROVIDER_ID,
     modelId: "m",
-    mode: "plan",
     thinkingLevel: "medium",
     piSessionFile: null,
     pinned: false,

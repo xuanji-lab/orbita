@@ -17,7 +17,6 @@ const meta = (over: { id: string } & Partial<SessionMeta>): SessionMeta => ({
   workspaceId: null,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "manual",
   thinkingLevel: "medium",
   piSessionFile: null,
   pinned: false,

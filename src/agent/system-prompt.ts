@@ -2,15 +2,15 @@
  * 系统提示词的段装配。抽成纯函数后，测试可以直接比较「派出 / 删除子会话前后」
  * 整份提示词的字节；prompt-stability 也吃同一份段名单，变化能归因到具体段。
  *
- * attached、权限模式、cwd、本会话工作台与浏览器下载目录仍按原行为留在这里；
+ * attached、受保护数据说明、cwd、本会话工作台与浏览器下载目录仍按原行为留在这里；
  * 父子会话清单不进系统提示词，对方工作台由 delegate 回执和通道信封告知。
  */
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
-import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS, type PermissionMode } from "../shared/permission.ts";
+import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import type { Language } from "../shared/settings.ts";
 import { INTENT_CONTEXT_GUIDELINE } from "../shared/intent-recall.ts";
-import { describePermissionMode } from "./permission.ts";
+import { describeProtectedData } from "./permission.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { describeChannelRole } from "./channel-tools.ts";
 import { storeToolsGuideline } from "./store-tools.ts";
@@ -47,9 +47,6 @@ const LONG_TASK_AUTOMATION_GUIDELINE =
 export interface SystemPromptInput {
   /** pi 基底，已由 adaptSystemPrompt 处理 */
   piBase: string;
-  mode: PermissionMode;
-  /** 当前实际注册的非内建工具名，与工具注册共用同一来源 */
-  extraToolNames: readonly string[];
   role: "root" | "child";
   workspace: { name?: string } | null;
   cwd: string;
@@ -72,7 +69,7 @@ export interface PromptSegment {
 export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] {
   return [
     { name: "pi-base", text: input.piBase },
-    { name: "permission", text: describePermissionMode(input.mode, input.extraToolNames) },
+    { name: "permission", text: describeProtectedData() },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
     { name: "channel-role", text: describeChannelRole(input.role) },
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),

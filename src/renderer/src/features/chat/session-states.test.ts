@@ -19,7 +19,6 @@ import {
   moveQueued,
   parseCompactCommand,
   createSessionStates,
-  removeApproval,
   setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
@@ -56,14 +55,6 @@ const progress = (sessionId: string, item: ReturnType<typeof assistantDone>): Ag
   progress: item,
 });
 
-const permission = (sessionId: string, requestId: string): AgentEvent => ({
-  type: "permission",
-  sessionId,
-  requestId,
-  toolName: "bash",
-  input: { command: "ls src" },
-});
-
 /** 槽里 transcript 的可读形态：assistant 文本按序 */
 function texts(states: SessionStates, sessionId: string): string[] {
   const entry = states.get(sessionId);
@@ -88,14 +79,13 @@ describe("applyAgentEvent —— 每会话一槽", () => {
   test("事件照进自己的槽，与「当前看谁」无关——这就是后台累积", () => {
     // 模块没有「当前会话」的概念：老实现按 sessionRef 丢事件，这里没得丢。
     let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
-    // 期间来了 B 的 phase / 审批 / 失败，都不影响 A 的槽
+    // 期间来了 B 的 phase / 失败，都不影响 A 的槽
     states = applyAgentEvent(states, { type: "phase", sessionId: "B", phase: "turn" });
-    states = applyAgentEvent(states, permission("B", "B:tc1"));
     states = applyAgentEvent(states, progress("A", assistantDone("a2", "甲二")));
 
     assert.deepEqual(texts(states, "A"), ["甲一", "甲二"]);
-    assert.equal(states.get("A")?.approvals.length, 0);
-    assert.equal(states.get("B")?.approvals.length, 1);
+    assert.equal(states.get("A")?.phase, "idle");
+    assert.equal(states.get("B")?.phase, "turn");
   });
 
   test("未知会话的事件就地建槽", () => {
@@ -198,44 +188,12 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.equal(states.get("B")?.phase, "idle");
   });
 
-  test("审批进对应槽；按 requestId 跨槽摘除；未匹配原样返回", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, permission("B", "B:tc2"));
-
-    const afterRemove = removeApproval(states, "B:tc2");
-    assert.deepEqual(afterRemove.get("A")?.approvals, states.get("A")?.approvals);
-    assert.deepEqual(afterRemove.get("B")?.approvals, []);
-    assert.equal(removeApproval(afterRemove, "nope"), afterRemove);
-  });
-
-  /**
-   * 审批不听 abort（pi 是 await beforeToolCall 之后才查 signal），所以停止 / 抢跑时
-   * runtime 会把挂起的审批按拒绝结清。卡片必须跟着消失，否则用户会去回答一个
-   * runtime 那边已经不存在的请求（点了没任何事发生）。
-   */
-  test("phase idle 清掉挂起的审批卡，不碰别的会话", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, permission("B", "B:tc2"));
-
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
-    assert.deepEqual(states.get("A")?.approvals, [], "轮结束就不可能还有挂起的审批");
-    assert.equal(states.get("B")?.approvals.length, 1, "别的会话的审批不受影响");
-  });
-
   test("pluginsChanged 是全局信号，不属于任何会话槽：归约原样返回同一引用", () => {
     const states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
     assert.equal(applyAgentEvent(states, { type: "pluginsChanged" }), states);
     assert.equal(applyAgentEvent(states, { type: "pluginsChanged", installed: { name: "lit", sessionId: "A" } }), states);
     // 草稿事件也是给 App 层的信号，会话槽不接
     assert.equal(applyAgentEvent(states, { type: "pluginDraft", sessionId: "A", path: "/w/plugins/lit" }), states);
-  });
-
-  test("phase turn / compaction 不清审批卡——工具还在等回答", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
-    assert.equal(states.get("A")?.approvals.length, 1);
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "compaction" });
-    assert.equal(states.get("A")?.approvals.length, 1);
   });
 
   test("单条 failed 只归位那条，不存在的槽不凭空造", () => {
@@ -283,9 +241,8 @@ describe("applyAgentEvent —— 每会话一槽", () => {
 });
 
 describe("seedFromDisk / setEntryPhase", () => {
-  test("整槽覆盖：拿到磁盘真相，旧审批清掉，phase 归 idle", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+  test("整槽覆盖：拿到磁盘真相，phase 归 idle", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
 
     const diskItem: TranscriptItem = {
       id: "u1",
@@ -296,7 +253,6 @@ describe("seedFromDisk / setEntryPhase", () => {
     states = seedFromDisk(states, "A", [diskItem]);
 
     assert.equal(states.get("A")?.phase, "idle");
-    assert.deepEqual(states.get("A")?.approvals, []);
     const items = selectTranscript(states.get("A")!.transcript);
     assert.equal(items.length, 1);
     assert.equal(items[0]?.role, "user");
@@ -343,9 +299,8 @@ describe("乐观 turn 的失败归位（revertOptimisticTurn）", () => {
   });
 });
 
-test("EMPTY_ENTRY 是稳定兜底：phase idle、无审批、无重试", () => {
+test("EMPTY_ENTRY 是稳定兜底：phase idle、无重试", () => {
   assert.equal(EMPTY_ENTRY.phase, "idle");
-  assert.deepEqual(EMPTY_ENTRY.approvals, []);
   assert.deepEqual(EMPTY_ENTRY.compactions, []);
   assert.deepEqual(EMPTY_ENTRY.marks, []);
   assert.equal(EMPTY_ENTRY.retry, null);

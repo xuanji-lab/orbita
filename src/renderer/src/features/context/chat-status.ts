@@ -82,23 +82,21 @@ function hostOf(url: string): string {
 /** 同一个工具调用跑了这么久就算「卡得异常久」（P97 的空档是 28 秒；一条命令十分钟没动静，人该看一眼） */
 export const STUCK_MS = 10 * 60_000;
 
-/** 状态卡里一个子会话的状态：在子会话面板那八档之上，多一档 stuck（在跑，但同一个调用跑太久了） */
-export type ChildState = "running" | "stuck" | "waiting" | "approval" | "done" | "failed" | "interrupted" | "stopped" | "idle";
+/** 状态卡里一个子会话的状态：在子会话面板那几档之上，多一档 stuck（在跑，但同一个调用跑太久了） */
+export type ChildState = "running" | "stuck" | "waiting" | "done" | "failed" | "interrupted" | "stopped" | "idle";
 
 /**
  * 一个子会话此刻的状态。running 只认引擎活 phase；转录尾巴只提供正在跑的工具与卡住计时。
- * 基础八档与面板 / 派出卡共用 subSessionRowStatus，不再各算一份。
+ * 基础几档与面板 / 派出卡共用 subSessionRowStatus，不再各算一份。
  */
 export function childStateOf(input: {
   channelStatus: ChannelStatus | undefined;
-  needsApproval: boolean;
   enginePhaseRunning: boolean;
   activity: ChildActivity | null;
   now: number;
 }): ChildState {
   const status = subSessionRowStatus({
     channelStatus: input.channelStatus,
-    needsApproval: input.needsApproval,
     running: input.enginePhaseRunning,
   });
   if (status === "running" && input.activity !== null && input.now - input.activity.since > STUCK_MS) return "stuck";
@@ -107,11 +105,11 @@ export function childStateOf(input: {
 
 /** 「在干活」的：步骤行尾画机器人头像的那些 */
 export function isWorking(state: ChildState): boolean {
-  return state === "running" || state === "stuck" || state === "waiting" || state === "approval";
+  return state === "running" || state === "stuck" || state === "waiting";
 }
 
-/** 一步下面的子会话怎么排：要你的（在问 / 待批 / 卡住 / 失败）在前，其次在跑，已交回的最后 */
-const CHILD_ORDER: Record<ChildState, number> = { waiting: 0, approval: 0, stuck: 1, failed: 2, interrupted: 2, running: 3, idle: 4, stopped: 5, done: 6 };
+/** 一步下面的子会话怎么排：要你的（在问 / 卡住 / 失败）在前，其次在跑，已交回的最后 */
+const CHILD_ORDER: Record<ChildState, number> = { waiting: 0, stuck: 1, failed: 2, interrupted: 2, running: 3, idle: 4, stopped: 5, done: 6 };
 
 export function sortChildren<T extends { state: ChildState; since: number }>(rows: readonly T[]): T[] {
   return [...rows].sort((a, b) => CHILD_ORDER[a.state] - CHILD_ORDER[b.state] || a.since - b.since);
@@ -182,12 +180,12 @@ export function elapsedParts(ms: number): { h: number; m: number; s: number } {
 export type PillSignal = { kind: "waiting" | "failed" | "stuck" | "running"; count: number } | null;
 
 /**
- * 收起后的小钮只说一件事，按「要不要你」排：在问你 / 待批 > 失败（还没看）> 卡住 > 在跑（Codex 宠物同一个思路：
+ * 收起后的小钮只说一件事，按「要不要你」排：在问你 > 失败（还没看）> 卡住 > 在跑（Codex 宠物同一个思路：
  * 一个指示器同时有几种动静时，按优先级只露一种）。都没有 = null，小钮安静。
  */
 export function pillSignal(states: readonly ChildState[], extraRunning: number): PillSignal {
   const count = (pick: (state: ChildState) => boolean) => states.filter(pick).length;
-  const waiting = count((state) => state === "waiting" || state === "approval");
+  const waiting = count((state) => state === "waiting");
   if (waiting > 0) return { kind: "waiting", count: waiting };
   const failed = count((state) => state === "failed" || state === "interrupted");
   if (failed > 0) return { kind: "failed", count: failed };

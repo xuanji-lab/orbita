@@ -7,7 +7,6 @@ import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import type { BrowserToolOutcome } from "../shared/browser.ts";
-import { BROWSER_READ_TOOLS, USER_ACTION_TOOL } from "../shared/permission.ts";
 
 const setup = () => {
   const sent: Record<string, unknown>[] = [];
@@ -23,11 +22,21 @@ const setup = () => {
 const card = { tabId: "t1", url: "https://example.com/", title: "Example" };
 
 describe("browser_* 工具", () => {
-  test("名单 = 免审批的读取类 + 交接 + 三件交互；交互三件不在免审批名单里——免审批的范围不会悄悄变大", () => {
+  test("名单 = 读取类 + 交接 + 三件交互，不多不少", () => {
     const { tools } = setup();
+    const reads = [
+      "browser_navigate",
+      "browser_observe",
+      "browser_extract",
+      "browser_wait_for",
+      "browser_screenshot",
+      "browser_tabs",
+      "browser_scroll",
+      "browser_console_messages",
+      "browser_network_requests",
+    ];
     const actions = ["browser_click", "browser_type", "browser_press"];
-    assert.deepEqual([...tools.keys()].sort(), [...BROWSER_READ_TOOLS, USER_ACTION_TOOL, ...actions].sort());
-    for (const name of actions) assert.equal((BROWSER_READ_TOOLS as readonly string[]).includes(name), false, name);
+    assert.deepEqual([...tools.keys()].sort(), [...reads, "request_user_action", ...actions].sort());
   });
 
   test("request_user_action：带上 toolCallId 与去掉首尾空白的 reason；缺 reason 当场报错", async () => {

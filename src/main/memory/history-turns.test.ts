@@ -118,7 +118,6 @@ test("被回退撤掉的轮不进（经 SessionStore.load 的生效视图）", a
       cwd: "/repo",
       providerId: "p",
       modelId: "m",
-      mode: "plan",
       thinkingLevel: "medium",
       createdAt: 1,
       updatedAt: 1,

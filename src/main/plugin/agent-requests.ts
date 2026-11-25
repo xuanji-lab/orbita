@@ -10,7 +10,7 @@
  *      agent 想把别处的文件夹装成插件，得先放进工作区；
  *   3. 预览（链接装法，**只读不写**）：读不出来 / 重名 / 清单有问题 / workflow 点名了不存在的技能，
  *      都以清楚的错误回给模型——这些是它自己写错的东西，让它先改完再来；
- *   4. 要不要让用户看一眼：带 MCP（会在本机启动程序）/ 范围是所有工作区 / manual 档（每个动作都要用户点头）
+ *   4. 要不要让用户看一眼：带 MCP（会在本机启动程序）/ 范围是所有工作区
  *      → **不装**，回 `pending`，对话里留一行带「安装」的行（`PluginInstallRow`，落在工具结果的 details 里
  *      随会话落盘）；其余低风险 → 直接装，回 `installed`，留一行「已装上」。
  *
@@ -45,7 +45,6 @@ import {
   type PluginScope,
   type PluginView,
 } from "../../shared/plugin.ts";
-import type { PermissionMode } from "../../shared/permission.ts";
 import type { PluginRecord } from "./records.ts";
 
 /** 送到 renderer 的草稿事件（右栏的「正在做」视图靠它打开） */
@@ -171,7 +170,7 @@ export class PluginAgentRequests {
     const dataDir = this.ports.plugins.dataDirOf(preview.name);
     if (prepared.relinked) return { ok: true, kind: "already", name: preview.name, scope: wanted, skills, mcp, dataDir, row: null };
 
-    const reason = needsLook(preview, wanted, event.mode);
+    const reason = needsLook(preview, wanted);
     if (reason !== null) {
       // 不装，也不等：留一行带「安装」的行，让这一轮结束
       return { ok: true, kind: "pending", name: preview.name, scope: wanted, skills, mcp, row: rowOf(prepared, "pending", reason) };
@@ -289,14 +288,12 @@ function unresolvedWorkflow(preview: PluginPreview): string[] {
 /**
  * 这次安装要不要让用户先看一眼（要 = 不装，留一行带「安装」的行）。返回原因，null = 低风险可直装。
  *
- * 看一眼的有三种：带 MCP（会在本机启动程序，必须让用户看见完整命令）、范围是所有工作区（别的工作区也会加载这些技能）、
- * 权限档不是 skip（manual = 每个动作都要用户点头；plan 本来就被权限层拒了，万一走到这里也按保守处理）。
- * 多个原因同时成立时取最要紧的：mcp > global > manual。
+ * 看一眼的有两种：带 MCP（会在本机启动程序，必须让用户看见完整命令）、范围是所有工作区（别的工作区也会加载这些技能）。
+ * 两个同时成立时取最要紧的：mcp > global。（以前还有「会话在手动档」一种，2026-11-16 随档位删了。）
  */
-export function needsLook(preview: Pick<PluginPreview, "mcp">, scope: PluginAgentScope, mode: PermissionMode): PluginInstallRow["reason"] {
+export function needsLook(preview: Pick<PluginPreview, "mcp">, scope: PluginAgentScope): "mcp" | "global" | null {
   if (preview.mcp.length > 0) return "mcp";
   if (scope === "global") return "global";
-  if (mode !== "skip") return "manual";
   return null;
 }
 

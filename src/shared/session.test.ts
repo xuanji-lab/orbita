@@ -32,7 +32,6 @@ const valid = {
   unread: null,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "manual",
   thinkingLevel: "medium" as const,
   recentQueries: [],
   stats: null,
@@ -135,7 +134,7 @@ describe("deriveSessionTitle", () => {
 
 describe("parseSessionMeta", () => {
   it("完整的一条原样解出来", () => {
-    deepStrictEqual(parseSessionMeta(valid), { ...valid, mode: "manual" });
+    deepStrictEqual(parseSessionMeta(valid), { ...valid });
   });
 
   // 少一条会话，比多一条指向空白的假会话好
@@ -154,9 +153,12 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta({ ...valid, title: undefined })?.title, "");
   });
 
-  it("不认识的权限档退回最保守的 plan，而不是丢掉整条会话", () => {
-    strictEqual(parseSessionMeta({ ...valid, mode: "yolo" })?.mode, "plan");
-    strictEqual(parseSessionMeta({ ...valid, mode: undefined })?.mode, "plan");
+  it("旧会话存着的权限档（plan / manual / 坏值）照常解析，且不再读进 meta——一律按放行跑", () => {
+    for (const mode of ["plan", "manual", "skip", "yolo"]) {
+      const parsed = parseSessionMeta({ ...valid, mode });
+      notStrictEqual(parsed, null);
+      strictEqual(parsed !== null && "mode" in parsed, false);
+    }
   });
 
   it("思考档：合法透传（7 档全集）；缺省与坏值退 medium——字段落地前的老会话实际跑的就是它", () => {
@@ -173,7 +175,6 @@ describe("parseSessionMeta", () => {
   it("不认识的字段丢掉，不原样带过去", () => {
     deepStrictEqual(parseSessionMeta({ ...valid, junk: 1, nested: { a: 1 } }), {
       ...valid,
-      mode: "manual",
     });
   });
 
@@ -345,7 +346,6 @@ describe("recentQueriesFromRecords", () => {
 describe("sortSessions", () => {
   const at = (id: string, updatedAt: number, pinned = false): SessionMeta => ({
     ...valid,
-    mode: "manual",
     id,
     updatedAt,
     pinned,
@@ -366,7 +366,6 @@ describe("sortSessions", () => {
 describe("rootSessions / childSessions", () => {
   const at = (id: string, createdAt: number, parentId?: string): SessionMeta => ({
     ...valid,
-    mode: "manual",
     id,
     createdAt,
     ...(parentId === undefined ? null : { parentId }),
@@ -424,7 +423,7 @@ describe("transcriptToMarkdown", () => {
   };
 
   it("带 meta 时出标题与机器事实", () => {
-    const md = transcriptToMarkdown([user], { ...valid, mode: "manual", title: "重做外壳" });
+    const md = transcriptToMarkdown([user], { ...valid, title: "重做外壳" });
     match(md, /^# 重做外壳\n/);
     match(md, /- Folder: `\/Users\/wafo\/repo\/orbita-lab`/);
     match(md, /- Model: `zai \/ glm-5\.3`/);

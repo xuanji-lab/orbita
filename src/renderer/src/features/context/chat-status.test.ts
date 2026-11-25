@@ -34,11 +34,11 @@ describe("状态卡：子会话此刻在跑什么", () => {
   });
   it("活 phase 才在跑；同一个调用超过十分钟才算卡住，通道关了不算在跑", () => {
     const activity = { toolName: "bash", input: {}, since: 0 };
-    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: true, activity, now: STUCK_MS + 1 }), "stuck");
-    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: true, activity, now: 60_000 }), "running");
-    assert.equal(childStateOf({ channelStatus: "running", needsApproval: false, enginePhaseRunning: false, activity, now: STUCK_MS + 1 }), "idle");
-    assert.equal(childStateOf({ channelStatus: "done", needsApproval: false, enginePhaseRunning: false, activity, now: 60_000 }), "done");
-    assert.equal(childStateOf({ channelStatus: "interrupted", needsApproval: false, enginePhaseRunning: false, activity, now: 60_000 }), "interrupted");
+    assert.equal(childStateOf({ channelStatus: "running", enginePhaseRunning: true, activity, now: STUCK_MS + 1 }), "stuck");
+    assert.equal(childStateOf({ channelStatus: "running", enginePhaseRunning: true, activity, now: 60_000 }), "running");
+    assert.equal(childStateOf({ channelStatus: "running", enginePhaseRunning: false, activity, now: STUCK_MS + 1 }), "idle");
+    assert.equal(childStateOf({ channelStatus: "done", enginePhaseRunning: false, activity, now: 60_000 }), "done");
+    assert.equal(childStateOf({ channelStatus: "interrupted", enginePhaseRunning: false, activity, now: 60_000 }), "interrupted");
   });
   it("调用的一行字：工具名 + 能认出它的参数", () => {
     assert.equal(toolCallLine("bash", { command: "sleep 600\nnext" }), "bash sleep 600");

@@ -339,7 +339,6 @@ export function createKimiExternalSessionReader(deps: KimiExternalSessionReaderD
         workspaceId: null,
         providerId: UNASSIGNED_PROVIDER_ID,
         modelId: wire.model ?? UNASSIGNED_MODEL_ID,
-        mode: "plan",
         thinkingLevel: "medium",
         piSessionFile: null,
         pinned: false,

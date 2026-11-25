@@ -29,7 +29,6 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   cwd: "/lab",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,
