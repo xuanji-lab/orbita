@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { AppState as RNAppState, Linking, LogBox, Platform, StyleSheet, Text, View } from "react-native";
+import { AppState as RNAppState, Linking, LogBox, Platform, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { HostLink } from "./protocol/link.ts";
@@ -8,7 +8,8 @@ import { rnSocketFactory } from "./protocol/rn-socket.ts";
 import { clearCredentials, loadCredentials, saveCredentials } from "./protocol/credentials-store.ts";
 import { AppController } from "./store/controller.ts";
 import { fixtureController, parseFixtureUrl, type FixtureParams } from "./store/fixture.ts";
-import { fontSize, useTheme, type Theme } from "./theme/theme.ts";
+import { useTheme, type Theme } from "./theme/theme.ts";
+import { ListScreen } from "./ui/ListScreen.tsx";
 import { PairScreen } from "./ui/PairScreen.tsx";
 import { Spinner } from "./ui/PanelEmpty.tsx";
 
@@ -93,12 +94,7 @@ function Screens(props: { theme: Theme; controller: AppController; fixture: Fixt
         initialCode={fixture?.pair !== null && fixture !== null ? "418207" : ""}
       />
     );
-  return (
-    <View style={[styles.center, { backgroundColor: theme.color.bgApp }]}>
-      <Text style={{ color: theme.color.textPrimary, fontSize: fontSize.base }}>{state.hostName}</Text>
-      <Text style={{ color: theme.color.textTertiary, fontSize: fontSize.sm }}>{state.link.kind}</Text>
-    </View>
-  );
+  return <ListScreen theme={theme} state={state} controller={controller} initiallyOpen={fixture?.open ?? null} />;
 }
 
 function Booting(props: { theme: Theme }) {
