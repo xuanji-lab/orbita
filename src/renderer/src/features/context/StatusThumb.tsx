@@ -7,7 +7,7 @@ import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { BoardThumb } from "../board/BoardThumb.tsx";
 import { MarkdownBlock } from "../chat/MarkdownBlock";
-import { readChatFile, readChatPdf, readChatWebThumb, type ChatFileScope } from "../chat/chat-file-scope.ts";
+import { readChatFile, readChatMediaUrl, readChatPdf, readChatWebThumb, type ChatFileScope } from "../chat/chat-file-scope.ts";
 import { SLIDE_CSS } from "../../../../shared/slides-render.ts";
 import { SlideStatic } from "../slides-editor/ElementView";
 import { parseDeckSafe } from "../slides-editor/use-deck-editor.ts";
@@ -27,8 +27,8 @@ const DOC_SCALE = 0.7;
  * 状态面板产物行里的一张大缩略图（用户 2026-11-22：「我想找汇报 PPT，看名字我又不知道里面内容是啥，我需要看到预览图」）。
  * 每种类型怎么画：演示文稿 = 第一页（SlideStatic，与缩略条同一份渲染）；文档 = MarkdownBlock 渲染开头再缩小；
  * 图片 = 原图（contain）；网页 = 主进程隐藏窗口真跑起来截的一张图（fs:web-thumb；renderer 里不放能跑脚本的 iframe）；PDF = pdf.js 画第一页；
- * 视频 / PPTX / Word / 看板 / 画布 = 画不出来，大图标卡（视频：renderer 的 CSP 不放行本地媒体地址，取不到首帧）。
- * 读文件走文件面板同一道白名单（readChatFile / readChatPdf）；读不到也落成图标卡。
+ * 视频 = `orbita-media://` 流 seek 到 0.1 秒画 canvas；音频 = 文件名、时长与音频图标；PPTX / Word / 看板 / 画布 = 大图标卡。
+ * 读文件走文件面板同一道白名单（readChatFile / readChatPdf / readChatMediaUrl）；读不到也落成图标卡。
  */
 type ThumbData = FilePreview | Uint8Array | WebThumb | null;
 
@@ -84,6 +84,7 @@ export function OutputThumb(props: { output: StatusOutput; scope: ChatFileScope 
   const shot = output.kind === "pdf" && width > 0 ? pdfShots.get(cacheKey) : undefined;
   const pasteShot = shot !== undefined && shotFits(shot, width, window.devicePixelRatio || 1) && (data === undefined || (data instanceof Uint8Array && shotMatches(shot, data)));
   if (pasteShot) body = <PdfShotView shot={shot} />;
+  else if (output.kind === "video" && width > 0) body = <VideoFirstFrame output={output} scope={props.scope} />;
   else if (data === undefined || width === 0) body = null;
   else if (data instanceof Uint8Array) body = <PdfFirstPage data={data} width={width} cacheKey={cacheKey} />;
   else if (data !== null && "mime" in data && data.mime === "image/jpeg" && !("kind" in data)) body = <img className="cs-thumb-img cs-thumb-shot" alt="" src={`data:${data.mime};base64,${data.base64}`} />;
@@ -95,6 +96,75 @@ export function OutputThumb(props: { output: StatusOutput; scope: ChatFileScope 
     <div className="cs-thumb-box" ref={boxRef} data-kind={output.kind} data-loading={(data === undefined && !pasteShot) || undefined}>
       {body}
     </div>
+  );
+}
+
+function VideoFirstFrame(props: { output: StatusOutput; scope: ChatFileScope }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video === null) return undefined;
+    let alive = true;
+    setReady(false);
+    setFailed(false);
+    const fail = (): void => {
+      if (alive) setFailed(true);
+    };
+    const seek = (): void => {
+      try {
+        // 避开部分编码器第 0 帧全黑；极短视频由浏览器把 0.1 秒夹到末尾
+        video.currentTime = 0.1;
+      } catch {
+        fail();
+      }
+    };
+    const draw = (): void => {
+      const canvas = canvasRef.current;
+      if (!alive || canvas === null || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+      const ratio = window.devicePixelRatio || 1;
+      const cssWidth = canvas.parentElement?.clientWidth ?? video.videoWidth;
+      const targetWidth = Math.max(1, Math.round(cssWidth * ratio));
+      canvas.width = targetWidth;
+      canvas.height = Math.max(1, Math.round((targetWidth * video.videoHeight) / video.videoWidth));
+      try {
+        const context = canvas.getContext("2d");
+        if (context === null) return fail();
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        setReady(true);
+      } catch {
+        fail();
+      }
+    };
+    video.addEventListener("loadedmetadata", seek);
+    video.addEventListener("seeked", draw);
+    video.addEventListener("error", fail);
+    void readChatMediaUrl(props.scope, props.output.path).then((media) => {
+      if (!alive) return;
+      if (media === null) return fail();
+      video.src = media.url;
+      video.load();
+    });
+    return () => {
+      alive = false;
+      video.removeEventListener("loadedmetadata", seek);
+      video.removeEventListener("seeked", draw);
+      video.removeEventListener("error", fail);
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+    };
+  }, [props.scope.sessionId, props.scope.workspaceId, props.output.path]);
+
+  return (
+    <>
+      <video ref={videoRef} className="cs-thumb-source" preload="metadata" playsInline muted aria-hidden="true" />
+      <canvas ref={canvasRef} className="cs-thumb-video" data-ready={ready || undefined} aria-hidden="true" />
+      {failed && <IconCard output={props.output} />}
+    </>
   );
 }
 
@@ -117,6 +187,13 @@ function useBoxWidth(ref: React.RefObject<HTMLDivElement | null>): number {
 
 function IconCard(props: { output: StatusOutput }) {
   const { output } = props;
+  if (output.kind === "audio" || output.kind === "video") {
+    return (
+      <div className="cs-thumb-icon">
+        <Icon name={output.kind === "audio" ? "file-audio-2" : "file-video-2"} size={40} strokeWidth={1.4} />
+      </div>
+    );
+  }
   return (
     <div className="cs-thumb-icon">
       {output.kind === "board" ? (

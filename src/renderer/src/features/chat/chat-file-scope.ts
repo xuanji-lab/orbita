@@ -5,7 +5,7 @@
  * renderer 这边只是把绝对路径对到它所在的根上，传什么主进程都不信。不在任何根里的路径 = 读不到。
  */
 import { createContext, useContext, useEffect, useState } from "react";
-import type { FilePreview, FileRoot, WebThumb } from "@shared/files";
+import type { FileMediaUrl, FilePreview, FileRoot, WebThumb } from "@shared/files";
 import { api } from "../../api";
 import { rootOf } from "./chat-paths.ts";
 
@@ -117,6 +117,17 @@ export async function readChatPdf(scope: ChatFileScope, path: string): Promise<U
   try {
     const file = await api.files.readPdf({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
     return file.kind === "pdf" ? file.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 音视频首帧 / 播放地址：与文件面板一样由主进程按 Range 流式读，不把整份媒体过 IPC。 */
+export async function readChatMediaUrl(scope: ChatFileScope, path: string): Promise<FileMediaUrl | null> {
+  const root = rootOf(path, await rootsFor(scope));
+  if (root === null) return null;
+  try {
+    return await api.files.mediaUrl({ sessionId: scope.sessionId, workspaceId: scope.workspaceId, root: root.path, dir: path });
   } catch {
     return null;
   }

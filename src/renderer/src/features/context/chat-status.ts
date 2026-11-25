@@ -204,7 +204,7 @@ export function pillSignal(states: readonly ChildState[], extraRunning: number):
  * 状态卡里一份产物的文件类型（2026-11-22 20:58 用户：分组按文件类型，不按「怎么产生的」——第二版的「导出的文件」
  * 其实是「还没支持预览的文件」，去掉）。
  */
-export type StatusOutputKind = "slides" | "pptx" | "doc" | "word" | "web" | "pdf" | "image" | "board" | "file";
+export type StatusOutputKind = "slides" | "pptx" | "doc" | "word" | "web" | "pdf" | "image" | "audio" | "video" | "board" | "file";
 
 export interface StatusOutput {
   kind: StatusOutputKind;
@@ -212,6 +212,8 @@ export interface StatusOutput {
   title: string;
   /** 演示文稿页数等补充（量不到 null） */
   pages: number | null;
+  /** 音视频时长（秒；agent 从容器头量到才有） */
+  duration?: number;
   /** 子会话做的：它的标题；主会话自己的 = null */
   by: string | null;
   at: number;
@@ -246,6 +248,7 @@ export function statusKindOf(output: TurnOutput): StatusOutputKind {
   if (output.kind === "slides") return "slides";
   if (output.kind === "doc") return "doc";
   if (output.kind === "web") return "web";
+  if (output.kind === "audio" || output.kind === "video") return output.kind;
   return EXT_KIND[extOf(output.path)] ?? "file";
 }
 
@@ -291,12 +294,23 @@ export function thumbCardOf(result: PluginBoardResult): PluginBoardResult["cards
  * 只多两类结尾卡里没有的（用户 20:58：「图片待在里面也没毛病。看板也肯定待在里面」）：
  * - 图片：文件账（file-turn）里写出、结尾卡归进「改过的文件」的 png / jpg / svg / gif / webp（write、edit、bash 生成后被记账的都算）；
  * - 看板：show_plugin_board 成功的结果（details.pluginBoard）。
- * 结尾卡也不收的视频、画布、表格，这里同样不收。by = 子会话标题（主会话自己的 null）。
+ * 音视频沿用结尾卡的同一套 `turnArtifacts` / `namedMedia` 判定：只有最终回答点了名的 `mediaArtifacts` 才收。
+ * 画布、表格这里仍不收。by = 子会话标题（主会话自己的 null）。
  */
 export function statusOutputs(records: readonly TranscriptRecord[], by: string | null): StatusOutput[] {
   const { outputs, edited } = sessionOutputs(records);
   const at = records.at(-1)?.timestamp ?? 0;
-  const list: StatusOutput[] = outputs.map((output) => ({ kind: statusKindOf(output), path: output.path, title: output.title, pages: output.pages, by, at, plugin: null, boardCall: null }));
+  const list: StatusOutput[] = outputs.map((output) => ({
+    kind: statusKindOf(output),
+    path: output.path,
+    title: output.title,
+    pages: output.pages,
+    ...(output.duration === undefined ? {} : { duration: output.duration }),
+    by,
+    at,
+    plugin: null,
+    boardCall: null,
+  }));
   for (const path of edited) {
     if (EXT_KIND[extOf(path)] === "image") list.push({ kind: "image", path, title: path.split(/[\\/]/).pop() ?? path, pages: null, by, at, plugin: null, boardCall: null });
   }
@@ -323,11 +337,11 @@ export function statusOutputs(records: readonly TranscriptRecord[], by: string |
 }
 
 /**
- * 产物按文件类型分行：演示文稿（含 PPTX）· 文档（含 Word）· 网页 · PDF · 图片 · 看板 · 其他文件。
+ * 产物按文件类型分行：演示文稿（含 PPTX）· 文档（含 Word）· 网页 · PDF · 图片 · 视频 · 音频 · 看板 · 其他文件。
  * 行序固定（看得见画面的在前），不随新旧跳——找东西靠「它在哪一行」的记忆。行内新的在前，但并进来的格式（PPTX、Word：
  * 只有图标卡）排在本行能渲染的之后——一行的第一张是大图，不是图标。没有的类型不出行。
  */
-export type OutputGroupKey = "slides" | "doc" | "web" | "pdf" | "image" | "board" | "file";
+export type OutputGroupKey = "slides" | "doc" | "web" | "pdf" | "image" | "video" | "audio" | "board" | "file";
 
 const GROUP_OF: Readonly<Record<StatusOutputKind, OutputGroupKey>> = {
   slides: "slides",
@@ -337,10 +351,12 @@ const GROUP_OF: Readonly<Record<StatusOutputKind, OutputGroupKey>> = {
   web: "web",
   pdf: "pdf",
   image: "image",
+  video: "video",
+  audio: "audio",
   board: "board",
   file: "file",
 };
-const GROUP_ORDER: readonly OutputGroupKey[] = ["slides", "doc", "web", "pdf", "image", "board", "file"];
+const GROUP_ORDER: readonly OutputGroupKey[] = ["slides", "doc", "web", "pdf", "image", "video", "audio", "board", "file"];
 
 export function groupOutputs<T extends Pick<StatusOutput, "kind">>(outputs: readonly T[]): { key: OutputGroupKey; items: T[] }[] {
   const map = new Map<OutputGroupKey, T[]>();
