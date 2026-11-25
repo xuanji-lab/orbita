@@ -29,6 +29,7 @@ import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
 import { GuideSettings } from "./GuideSettings";
+import { MobileSettingsPage } from "./MobileSettings";
 import { SettingGroup, SettingRow } from "./SettingRow";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
@@ -154,6 +155,10 @@ export function SettingsView(props: {
       ) : props.tab === "voice" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
+        </div>
+      ) : props.tab === "mobile" ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          <MobileSettingsPage />
         </div>
       ) : props.tab === "guide" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>

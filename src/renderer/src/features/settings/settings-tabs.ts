@@ -5,7 +5,7 @@
 import type { IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
-export type SettingsTab = "general" | "guide" | "providers" | "migration" | "browser" | "voice" | "plugins" | "memory" | "experimental";
+export type SettingsTab = "general" | "guide" | "providers" | "migration" | "browser" | "voice" | "mobile" | "plugins" | "memory" | "experimental";
 
 export interface SettingsTabDef {
   id: SettingsTab;
@@ -20,6 +20,8 @@ export const SETTINGS_TABS: readonly SettingsTabDef[] = [
   { id: "migration", icon: "download" },
   { id: "browser", icon: FEATURE_ICON.browser },
   { id: "voice", icon: "mic" },
+  // 手机：配对码、已配对设备、监听开关（2026-11-25，手机端「看与回」第一刀）
+  { id: "mobile", icon: FEATURE_ICON.mobile },
   // 插件页的全屏版（右栏图标条的积木图标开的是右栏单列版，两处是同一个组件）
   { id: "plugins", icon: FEATURE_ICON.plugins },
   // 记忆库（原右侧图标条的入口，2026-11-06 挪进设置）

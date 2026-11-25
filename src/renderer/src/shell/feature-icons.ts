@@ -48,6 +48,8 @@ export const FEATURE_ICON = {
   archived: "archive",
   /** 新手引导：设置页签 */
   guide: "graduation-cap",
+  /** 手机：设置页签「手机」、已配对设备的行首（2026-11-25，手机端「看与回」第一刀） */
+  mobile: "smartphone",
   /** 设置 */
   settings: "settings",
   /** 通知（右栏铃铛与通知卡空态） */
