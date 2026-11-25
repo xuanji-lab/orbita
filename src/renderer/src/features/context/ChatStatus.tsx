@@ -22,11 +22,11 @@ import type { PlanStep } from "./plan-timeline.ts";
 import { STATUS_FOCUS_EVENT, type StatusFocusDetail } from "./chat-status-flag.ts";
 import { LruCache } from "../../../../shared/lru.ts";
 import { OutputThumb, SlideStyles } from "./StatusThumb";
+import { delegationSteps } from "./delegation-steps.ts";
 import {
   childActivityOf,
   childStateOf,
   clampPanelWidth,
-  delegationSteps,
   fitsPanel,
   elapsedParts,
   groupOutputs,

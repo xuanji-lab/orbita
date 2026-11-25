@@ -7,6 +7,8 @@ import {
   hasExchange,
   parseChannelMessage,
   parseChannelPrompt,
+  parseDelegatePlanStep,
+  DELEGATE_PLAN_STEP_MAX_CHARS,
   sortChannelMessages,
   summarizeChannel,
   userRepliesNote,
@@ -537,5 +539,19 @@ describe("userRepliesSincePreviousReport —— 用户代父回复要转告父�
     const note = userRepliesNote([msg("先不支持扫描件", "parent", "reply", 1, "user")]);
     deepStrictEqual(note.includes('- "先不支持扫描件"'), true);
     deepStrictEqual(note.includes("on your behalf"), true);
+  });
+});
+
+describe("parseDelegatePlanStep：delegate 的 planStep 参数", () => {
+  it("取字符串、折叠空白；缺席 / 非字符串 / 空白 = null", () => {
+    strictEqual(parseDelegatePlanStep({ planStep: "  写测试\n 并跑通 " }), "写测试 并跑通");
+    strictEqual(parseDelegatePlanStep({}), null);
+    strictEqual(parseDelegatePlanStep({ planStep: 3 }), null);
+    strictEqual(parseDelegatePlanStep({ planStep: "  \n" }), null);
+    strictEqual(parseDelegatePlanStep(null), null);
+    strictEqual(parseDelegatePlanStep("planStep"), null);
+  });
+  it("超长截断到上限", () => {
+    strictEqual(parseDelegatePlanStep({ planStep: "字".repeat(500) })?.length, DELEGATE_PLAN_STEP_MAX_CHARS);
   });
 });

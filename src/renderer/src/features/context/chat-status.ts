@@ -1,5 +1,5 @@
 /**
- * 对话区右上角「状态」卡（原型，2026-11-22）的纯推导：子会话挂到哪一步、子会话此刻在跑什么、
+ * 对话区右上角「状态」卡（原型，2026-11-22）的纯推导：子会话此刻在跑什么、
  * 收着时计划露哪几步、走表多久跳一次、收起小钮说哪一种状态、产物的类型词。
  *
  * 用户的出发点（2026-11-22 17:21）：「我看进度为了知道进度到哪了。我看产物为了知道我产出了些什么。
@@ -9,50 +9,9 @@
  */
 import type { TranscriptRecord } from "@shared/session";
 import type { ChannelStatus } from "@shared/channel";
-import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
-import type { PlanStep, PlanTimeline } from "./plan-timeline.ts";
+import type { PlanStep } from "./plan-timeline.ts";
 import type { TurnOutput } from "../chat/process-rows.ts";
 import { sessionOutputs } from "../chat/child-outputs.ts";
-
-// ───────────────────────── 子会话挂到哪一步 ─────────────────────────
-
-/**
- * 子会话 → 计划步骤 id（不改契约的推导）：**派出它的那次 delegate 调用发生时，当前这张计划里在做的那一步**。
- * 按转录顺序走：遇到 update_plan 换「此刻在做的步」（只认当前这张计划的版本——旧计划的步 id 在当前计划里不存在），
- * 遇到 delegate 就把它的 childId 记到那一步。在做的步不存在（写计划之前、全是待做、全做完）= null（「没挂在计划上的」）；
- * 那一步后来被删掉了也 = null。
- *
- * 会错的情况（报告里列）：模型先派人、后改计划（同一批里 delegate 在 update_plan 之前）→ 挂到上一步；
- * 一步做完没打勾就派下一步的人 → 挂到上一步；子会话做的其实是另一步的活（模型没改计划）→ 挂错，只能靠步骤名短而准来暴露。
- */
-export function delegationSteps(records: readonly TranscriptRecord[], timeline: PlanTimeline | null): Map<string, string | null> {
-  const out = new Map<string, string | null>();
-  const versionByCall = new Map((timeline?.versions ?? []).map((version) => [version.toolCallId, version]));
-  const alive = new Set((timeline?.current.items ?? []).map((item) => item.id));
-  let active: string | null = null;
-  for (const record of records) {
-    if (record.role !== "tool") continue;
-    if (record.toolName === PLAN_TOOL_NAME) {
-      const version = versionByCall.get(record.toolCallId);
-      // 旧计划（被一张新计划顶掉的）里的步，在当前计划里没有对应：那段时间派的人算「没挂上」
-      active = version === undefined ? null : (version.items.find((item) => item.status === "in_progress")?.id ?? null);
-      continue;
-    }
-    if (record.toolName !== "delegate") continue;
-    const childId = delegateChildId(record.details);
-    if (childId === null) continue;
-    out.set(childId, active !== null && alive.has(active) ? active : null);
-  }
-  return out;
-}
-
-function delegateChildId(details: unknown): string | null {
-  if (typeof details !== "object" || details === null) return null;
-  const raw = (details as Record<string, unknown>)["delegate"];
-  if (typeof raw !== "object" || raw === null) return null;
-  const id = (raw as Record<string, unknown>)["childId"];
-  return typeof id === "string" && id !== "" ? id : null;
-}
 
 // ───────────────────────── 子会话此刻在跑什么 ─────────────────────────
 
