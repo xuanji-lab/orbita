@@ -105,6 +105,24 @@ class Phone {
     });
   }
 
+  /** 等一帧，最多 `timeoutMs`；等不到回 null（不断言「不该有帧」，只把已经到的取走） */
+  nextWithin(timeoutMs: number): Promise<Record<string, unknown> | null> {
+    const queued = this.frames.shift();
+    if (queued !== undefined) return Promise.resolve(queued);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const at = this.waiting.indexOf(waiter);
+        if (at >= 0) this.waiting.splice(at, 1);
+        resolve(null);
+      }, timeoutMs);
+      const waiter = (frame: Record<string, unknown>): void => {
+        clearTimeout(timer);
+        resolve(frame);
+      };
+      this.waiting.push(waiter);
+    });
+  }
+
   close(): void {
     this.socket.terminate();
   }
@@ -143,7 +161,17 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-async function fixture(): Promise<{ port: number; store: MobileStore; submitted: string[]; aborted: string[]; cleared: string[] }> {
+interface Fixture {
+  port: number;
+  store: MobileStore;
+  catalog: MobileCatalog;
+  /** 手机的话真的交给了 agent 的那几条（文本） */
+  submitted: string[];
+  aborted: string[];
+  cleared: string[];
+}
+
+async function fixture(options: { metas?: SessionMeta[] } = {}): Promise<Fixture> {
   const port = await freePort();
   const store = new MobileStore(dir);
   await store.setBind({ address: "127.0.0.1", port });
@@ -151,8 +179,9 @@ async function fixture(): Promise<{ port: number; store: MobileStore; submitted:
   const submitted: string[] = [];
   const aborted: string[] = [];
   const cleared: string[] = [];
+  const metas = options.metas ?? [meta];
   const catalog = new MobileCatalog({
-    listMetas: async () => [meta],
+    listMetas: async () => metas,
     listWorkspaces: async () => [{ id: "ws", name: "测试工作区" }],
     tailRecords: async () => [],
     tailStat: async () => null,
@@ -166,7 +195,7 @@ async function fixture(): Promise<{ port: number; store: MobileStore; submitted:
   let serverRef: MobileServer | null = null;
   const replies = new ReplyQueue(
     {
-      readMeta: async () => meta,
+      readMeta: async (id) => metas.find((entry) => entry.id === id) ?? null,
       submitTurn: async (input) => {
         submitted.push(input.text);
       },
@@ -197,8 +226,48 @@ async function fixture(): Promise<{ port: number; store: MobileStore; submitted:
   });
   serverRef = server;
   await server.start(hostCrypto);
-  return { port, store, submitted, aborted, cleared };
+  return { port, store, catalog, submitted, aborted, cleared };
 }
+
+/** 一个已经过了握手的手机会话：能发请求、按序号解开电脑的应答与通知 */
+interface Authenticated {
+  request(n: number, id: number, method: string, params?: object): void;
+  /** 下一帧并解开；等不到回 null */
+  next(timeoutMs?: number): Promise<{ frame: Record<string, unknown>; body: Record<string, unknown> } | null>;
+}
+
+/** 不走完整配对（上面那条用例付过成本了）：直接登记一台设备，然后 hello 进加密段 */
+async function openAuthenticated(port: number, store: MobileStore, pnByte: number): Promise<Authenticated> {
+  const device = generateBoxKeyPair();
+  const deviceId = pnByte.toString(16).padStart(2, "0").repeat(16);
+  await store.addDevice({ id: deviceId, name: "已配对", boxPublic: device.publicRaw.toString("base64"), pairedAt: 1, lastSeenAt: null });
+  const phone = await Phone.open(port);
+  phones.push(phone);
+  const hostHello = await phone.next();
+  const nonce = Buffer.from(hostHello["nonce"] as string, "base64");
+  const shared = sharedSecret(boxPrivateKeyFromRaw(device.privateRaw), HOST.publicRaw);
+  const kh = helloKey(shared, nonce);
+  const pn = Buffer.alloc(32, pnByte);
+  phone.send({ v: 1, type: "hello", id: 1, d: deviceId, n: 1, ct: sealFrame(kh, "deviceToHost", 1, deviceId, JSON.stringify({ pn: pn.toString("base64") })).ct });
+  // 契约：收到握手应答再发数据帧
+  await phone.next();
+  const key = channelKey(shared, nonce, pn, deviceId);
+  return {
+    request: (n, id, method, params) => {
+      const body = JSON.stringify({ id, method, ...(params === undefined ? {} : { params }) });
+      phone.send({ v: 1, n, ct: sealFrame(key, "deviceToHost", n, deviceId, body).ct });
+    },
+    next: async (timeoutMs = 2_000) => {
+      const frame = await phone.nextWithin(timeoutMs);
+      if (frame === null) return null;
+      const plaintext = openFrame(key, "hostToDevice", frame["n"] as number, deviceId, Buffer.from(frame["ct"] as string, "base64"));
+      assert.ok(plaintext);
+      return { frame, body: JSON.parse(plaintext) as Record<string, unknown> };
+    },
+  };
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("手机服务：真 WebSocket 走整条协议", () => {
   test("配对 → 双向确认 → hello → 四个口；重放与撤销都断开", async () => {
@@ -393,5 +462,71 @@ describe("手机服务：真 WebSocket 走整条协议", () => {
     await disabled.start({ privateKey: HOST.privateKey, publicRaw: HOST.publicRaw });
     assert.equal((await disabled.settings([])).listening, false);
     await assert.rejects(Phone.open(port));
+  });
+});
+
+describe("准入：四个口只认清单，增量刷新也只认根会话", () => {
+  const CHILD = "0199a0aa-6bb0-7cc0-8000-0000000000a1";
+  const AUTOMATION = "0199a0aa-6bb0-7cc0-8000-0000000000a2";
+
+  test("子会话与自动化会话各出一个事件之后，tail.load / stop / unread.clear / reply 照样 not_found，观看者收不到它们", async () => {
+    const child: SessionMeta = { ...meta, id: CHILD, title: "子会话", parentId: SESSION };
+    const automation: SessionMeta = { ...meta, id: AUTOMATION, title: "自动化新开的", automationId: "auto-1" };
+    const fx = await fixture({ metas: [meta, child, automation] });
+    const session = await openAuthenticated(fx.port, fx.store, 3);
+
+    session.request(1, 1, "sessions.list");
+    const list = await session.next();
+    assert.deepEqual((list?.body["result"] as { sessions: { id: string }[] }).sessions.map((entry) => entry.id), [SESSION]);
+    assert.deepEqual([...fx.catalog.snapshotIds()], [SESSION]);
+    session.request(2, 2, "sessions.watch");
+    assert.equal((await session.next())?.body["ok"], true);
+
+    // 两条不该点的会话各出一个带 sessionId 的事件：以前增量刷新只查「没归档 + 30 天内」，它们就进了准入集合
+    fx.catalog.onAgentEvent({ type: "title", sessionId: CHILD, title: "子会话的新标题" });
+    fx.catalog.onAgentEvent({ type: "title", sessionId: AUTOMATION, title: "自动化的新标题" });
+    await sleep(600);
+    assert.deepEqual([...fx.catalog.snapshotIds()], [SESSION], "增量刷新之后准入集合没有变");
+
+    // 观看清单的手机只收到「第一次全量」（只有根会话），没有那两条
+    for (let i = 0; i < 4; i += 1) {
+      const pushed = await session.next(200);
+      if (pushed === null) break;
+      assert.equal(pushed.body["event"], "sessions.changed");
+      const payload = pushed.body["params"] as { sessions: { id: string }[]; removed: string[] };
+      assert.deepEqual(payload.sessions.map((entry) => entry.id), [SESSION]);
+      assert.deepEqual(payload.removed, []);
+    }
+    assert.equal(await session.next(100), null, "之后没有别的推送");
+
+    // 四个口逐个点它们
+    let seq = 3;
+    const expectNotFound = async (method: string, params: object): Promise<void> => {
+      const id = seq;
+      session.request(seq, seq, method, params);
+      seq += 1;
+      const reply = await session.next();
+      assert.equal(reply?.body["id"], id, method);
+      assert.equal(reply?.body["ok"], false, `${method} 不该放行`);
+      assert.equal((reply?.body["error"] as { code: string }).code, "not_found", method);
+    };
+    for (const id of [CHILD, AUTOMATION]) {
+      await expectNotFound("tail.load", { sessionId: id });
+      await expectNotFound("stop", { sessionId: id });
+      await expectNotFound("unread.clear", { sessionId: id });
+      await expectNotFound("reply", { sessionId: id, text: "从手机塞进去的一句话", requestId: `sneak-${id}` });
+    }
+    await sleep(50);
+    assert.deepEqual(fx.submitted, [], "一句话都没交给 agent");
+    assert.deepEqual(fx.aborted, []);
+    assert.deepEqual(fx.cleared, []);
+
+    // 根会话出了事件：照常留在准入集合里，口还点得动（tail.load 每秒两次的额度上面用掉了，换一个不限速的口）
+    fx.catalog.onAgentEvent({ type: "title", sessionId: SESSION, title: "手机集成测试" });
+    await sleep(600);
+    assert.deepEqual([...fx.catalog.snapshotIds()], [SESSION]);
+    session.request(seq, seq, "unread.clear", { sessionId: SESSION });
+    assert.equal((await session.next())?.body["ok"], true);
+    assert.deepEqual(fx.cleared, [SESSION]);
   });
 });

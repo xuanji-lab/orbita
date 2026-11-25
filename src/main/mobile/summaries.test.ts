@@ -248,4 +248,42 @@ describe("sessions.changed：增量推送", () => {
     assert.equal(pushes.length, 1, "清未读必须推一次");
     assert.equal(pushes[0]?.changed.find((s) => s.id === A)?.state, "idle");
   });
+
+  test("增量刷新与全量清单同一个判据：子会话 / 自动化会话 / 归档的出了事件也进不了准入集合", async () => {
+    const child = metaOf("40000000-0000-7000-8000-00000000000c", { parentId: A });
+    const automation = metaOf("40000000-0000-7000-8000-00000000000d", { automationId: "auto-1" });
+    const archived = metaOf("40000000-0000-7000-8000-00000000000e", { archived: true });
+    const world = worldOf([metaOf(A), metaOf(B), child, automation, archived]);
+    const catalog = new MobileCatalog(depsOf(world));
+    const first = await catalog.list();
+    assert.deepEqual(first.sessions.map((session) => session.id).sort(), [A, B]);
+    assert.deepEqual([...catalog.snapshotIds()].sort(), [A, B]);
+    const pushes: { changed: SessionSummary[]; removed: string[] }[] = [];
+    catalog.subscribe((changed, removed) => pushes.push({ changed, removed }));
+    // 新观看者的第一次推送固定是全量（哪怕什么都没变）；先让它发生完，后面的断言才只看「变了才推」
+    catalog.onAgentEvent({ type: "title", sessionId: A, title: "任务 4000" });
+    await flushAfter(catalog);
+    assert.equal(pushes.length, 1, "第一次推送是全量");
+    pushes.length = 0;
+
+    // 任何带 sessionId 的 agent 事件都会标脏：phase、stats、fileTurn、title……这里用最短的 title
+    for (const id of [child.id, automation.id, archived.id]) catalog.onAgentEvent({ type: "title", sessionId: id, title: "动了" });
+    await flushAfter(catalog);
+    assert.deepEqual([...catalog.snapshotIds()].sort(), [A, B], "三条都不该进准入集合");
+    assert.equal(pushes.length, 0, "清单没变，观看者收不到推送");
+
+    // 根会话出了事件：照常刷新并推给观看者
+    world.metas = world.metas.map((meta) => (meta.id === A ? { ...meta, title: "A 的新标题" } : meta));
+    catalog.onAgentEvent({ type: "title", sessionId: A, title: "A 的新标题" });
+    await flushAfter(catalog);
+    assert.equal(pushes.length, 1);
+    assert.deepEqual(pushes[0]?.changed.map((session) => [session.id, session.title]), [[A, "A 的新标题"]]);
+
+    // 在准入集合里的根会话被归档了：出一个事件就被请出去，观看者收到 removed
+    world.metas = world.metas.map((meta) => (meta.id === B ? { ...meta, archived: true } : meta));
+    catalog.onAgentEvent({ type: "title", sessionId: B, title: "B" });
+    await flushAfter(catalog);
+    assert.deepEqual([...catalog.snapshotIds()], [A]);
+    assert.deepEqual(pushes.at(-1)?.removed, [B]);
+  });
 });

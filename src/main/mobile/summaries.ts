@@ -2,8 +2,10 @@
  * 手机的「任务清单」——`sessions.list` 的结果、以及变化时推给在看的手机的增量。
  *
  * 规则（规格 4.2 / 4.7）：
- * - 只列根会话（`rootSessions`：没有母会话、也不是自动化新开的），30 天内动过的，按 updatedAt
- *   倒序，最多 200 条，超出的 `truncated: true`。
+ * - 只列根会话（没有母会话、也不是自动化新开的），30 天内动过的，按 updatedAt 倒序，最多 200 条，
+ *   超出的 `truncated: true`。**能不能进清单只看一个判据**（`isListableSession`）：`sessions.list` 的全量
+ *   构建与 agent 事件触发的增量刷新都调它——手机上四个「点会话」的方法只认这份清单，增量刷新要是
+ *   少判一条，子会话出一个事件就混进了准入集合（2026-11-25 审查 M1）。
  * - 每条的 `state` 用契约里的 `deriveMobileSessionState`；`lastLine` 与 `planAwaiting` 要读转录尾部
  *   才知道——**一次清单刷新最多读 40 条会话的尾部**，其余的沿用缓存（按「文件大小 + 修改时间」判
  *   没变，没变不重读），没有缓存的留空。
@@ -15,8 +17,7 @@
  * 纯核 + 依赖注入：不 import electron，`node --test` 直测。
  */
 import type { AgentEvent } from "../../shared/agent-ipc.ts";
-import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
-import { rootSessions } from "../../shared/session.ts";
+import { isRootSession, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
 import { planAwaitingIn } from "../../shared/plan.ts";
 import { lastAssistantLineOf } from "../../shared/mobile-tail.ts";
 import { foldRevertRecords } from "../session/store.ts";
@@ -178,8 +179,9 @@ export class MobileCatalog {
 
     for (const id of dirty) {
       const meta = byId.get(id);
-      if (meta === undefined || !isListableRoot(meta, now)) {
-        // 从清单里消失（被删 / 归档 / 过了 30 天窗）：在快照里才要推 removed
+      if (meta === undefined || !isListableSession(meta, now)) {
+        // 不该在清单里（被删 / 归档 / 过了 30 天窗 / 子会话或自动化会话）：从准入集合请出去；
+        // 之前在快照里的才要给在看清单的手机推 removed
         this.snapshot.delete(id);
         continue;
       }
@@ -217,11 +219,11 @@ export class MobileCatalog {
     const metas = await this.deps.listMetas();
     const now = this.deps.now();
     this.childrenRunning = countRunningChildren(metas, (id) => this.deps.phaseOf(id) !== undefined && this.deps.phaseOf(id) !== "idle");
-    const roots = rootSessions(metas)
-      .filter((meta) => isListableRoot(meta, now))
+    const eligible = metas
+      .filter((meta) => isListableSession(meta, now))
       .sort((a, b) => b.updatedAt - a.updatedAt);
-    const truncated = roots.length > LIST_MAX;
-    const listed = roots.slice(0, LIST_MAX);
+    const truncated = eligible.length > LIST_MAX;
+    const listed = eligible.slice(0, LIST_MAX);
     const workspaceNames = new Map((await this.deps.listWorkspaces()).map((workspace) => [workspace.id, workspace.name]));
 
     // 尾部按指纹缓存；变了才重读，一次最多读 TAIL_READS_PER_LIST 条
@@ -319,7 +321,10 @@ function countRunningChildren(metas: readonly SessionMeta[], isRunning: (id: str
   return counts;
 }
 
-/** 这条 meta 进不进清单：没归档、30 天内动过的根会话（`rootSessions` 已滤掉子会话与自动化新开的） */
-function isListableRoot(meta: SessionMeta, now: number): boolean {
-  return !meta.archived && now - meta.updatedAt <= LIST_WINDOW_MS;
+/**
+ * 这条 meta 进不进清单——同时就是四个「点会话」的方法的准入判据（安全审查第 7 条）：
+ * 根会话、没归档、30 天内动过的。`sessions.list` 的全量构建与增量刷新都只调它，别处不再判一遍。
+ */
+function isListableSession(meta: SessionMeta, now: number): boolean {
+  return isRootSession(meta) && !meta.archived && now - meta.updatedAt <= LIST_WINDOW_MS;
 }

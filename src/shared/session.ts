@@ -771,9 +771,15 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
  * 转成普通会话（`promoted`）之后才进这些列表。
  */
 export function rootSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
-  return sessions.filter(
-    (meta) => meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true),
-  );
+  return sessions.filter(isRootSession);
+}
+
+/**
+ * 这条会话算不算根会话——`rootSessions` 的逐条判据。手里只有一条 meta、或者要一条一条增量地判的时候
+ * 调它（手机服务的清单增量刷新），不在别处再抄一遍条件。
+ */
+export function isRootSession(meta: Pick<SessionMeta, "parentId" | "automationId" | "promoted">): boolean {
+  return meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true);
 }
 
 /**
