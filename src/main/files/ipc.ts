@@ -16,6 +16,7 @@ import {
   type FileListRequest,
   type FilePreview,
   type PdfFile,
+  type WebThumb,
   type FileRootsRequest,
   type FsEntryFact,
 } from "../../shared/files.ts";
@@ -25,6 +26,8 @@ import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
+import { localPageRoots } from "../browser/local-file.ts";
+import { webThumbOf } from "./web-thumb.ts";
 import { issueMediaUrl, type MediaTokens } from "./media-stream.ts";
 
 /**
@@ -164,6 +167,24 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
     await openInBrowser(path);
+  });
+
+  /**
+   * 网页缩略图：同一道白名单，且须是网页文件（realpath 后判，与 fs:open-in-browser 同口径）。
+   * 页面里的 file:// 子资源只在页面所在目录内放行（同 fs:open-in-browser 的页面闸）。
+   * 截不出来（超时 / 加载失败）回 null——renderer 落成图标卡，不当错误处理。
+   */
+  ipcMain.handle(ipcChannels.fsWebThumb, async (_event, req: FileListRequest): Promise<WebThumb | null> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    let path: string;
+    try {
+      path = await whitelistedPath(roots, req);
+    } catch {
+      return null;
+    }
+    if (!isWebPageFile(path)) return null;
+    // 缩略图窗口里的页面同样只读自己所在目录（与内置浏览器的页面闸同一规则，见 local-file.ts 的 localPageRoots）
+    return webThumbOf(path, localPageRoots(path));
   });
 
   /**

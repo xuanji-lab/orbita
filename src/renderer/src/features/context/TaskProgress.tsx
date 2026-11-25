@@ -226,7 +226,7 @@ export function TaskProgress(props: {
  * 一页时算一次，每条流式事件只重算尾巴（更早那段的最后一轮 + 尾窗）——全量每次重算在长会话上
  * 一次要几毫秒（task-progress.ts 的 settledEnd）。没拉更早的时候落定段为空，等于只算尾窗。
  */
-function useProgressDigest(view: TaskRecordsView, turnActive: boolean) {
+export function useProgressDigest(view: TaskRecordsView, turnActive: boolean) {
   const end = useMemo(() => settledEnd(view.older), [view.older]);
   const settled = useMemo(() => view.older.slice(0, end), [view.older, end]);
   const olderIds = useMemo(() => new Set(view.older.map((record) => record.id)), [view.older]);

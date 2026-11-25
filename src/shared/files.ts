@@ -288,6 +288,13 @@ export type PdfFile =
   | { kind: "pdf"; data: Uint8Array; size: number; modifiedAt: number }
   | { kind: "too-large"; limit: number; size: number; modifiedAt: number };
 
+/** 网页缩略图（`fs:web-thumb` 的回执）：一张缩到缩略图宽的 JPEG；modifiedAt 是页面文件的 mtime，renderer 据此判缓存是否还新 */
+export interface WebThumb {
+  mime: "image/jpeg";
+  base64: string;
+  modifiedAt: number;
+}
+
 export function isPdfFile(path: string): boolean {
   return /\.pdf$/i.test(path);
 }

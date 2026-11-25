@@ -294,6 +294,12 @@ export const ipcChannels = {
    */
   fsOpenInBrowser: "fs:open-in-browser",
   /**
+   * 网页文件的缩略图（同 root/dir 白名单，且须 isWebPageFile；回 `WebThumb | null`，files.ts）。
+   * 主进程开一个隐藏窗口真的把页面跑起来（脚本生成的内容也在）、截一张图；按「路径 + mtime + 大小」缓存，
+   * 同时只截一张。超时 / 白名单外 / 加载失败回 null，renderer 落成图标卡。
+   */
+  fsWebThumb: "fs:web-thumb",
+  /**
    * 把一批绝对路径 stat 成盘上事实（回 `FsEntryFact[]`，与路径等长同序：kind 是
    * file / dir 还是 null、size 多大）。消费者是输入框的附件分拣与文件面板的已发送
    * 附件列表：拖入 / 粘贴的 `File` 对象在 renderer 里分不清是文件还是目录，主进程
