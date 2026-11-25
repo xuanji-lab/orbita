@@ -9,8 +9,10 @@ import {
   formatMoney,
   progressOf,
   quotaMenuItems,
+  quotaProblemText,
   resetLabel,
   usedPercent,
+  windowLabel,
   windowValueText,
 } from "./quota-view.ts";
 import { en } from "../../messages-en.ts";
@@ -128,6 +130,53 @@ const okResult = (snapshot: { credits?: { amount: string; currency: string }; wi
 });
 
 const labels = (items: ReturnType<typeof quotaMenuItems>) => items.map((item) => item.label);
+
+describe("窗口名 —— 已知语义类别就本地化", () => {
+  test("kind 已知 → 本地化文案（中文界面不能出现英文 label）", () => {
+    assert.equal(windowLabel(window({ kind: "5h" }), zh), "5 小时");
+    assert.equal(windowLabel(window({ kind: "weekly" }), zh), "每周");
+    assert.equal(windowLabel(window({ kind: "monthly" }), zh), "每月");
+    assert.equal(windowLabel(window({ kind: "5h" }), en), "5-hour window");
+  });
+
+  test("MCP 月额度与套餐月窗口不是同一件事：两种 kind 两种文案", () => {
+    // 智谱的第三行是 MCP 工具的月额度，混写成「每月」会把两件事说成一件
+    assert.equal(windowLabel(window({ kind: "mcp", label: "MCP monthly" }), zh), "MCP 每月");
+    assert.equal(windowLabel(window({ kind: "mcp", label: "MCP monthly" }), en), "MCP monthly");
+    assert.notEqual(windowLabel(window({ kind: "mcp" }), zh), windowLabel(window({ kind: "monthly" }), zh));
+  });
+
+  test("OpenCode Go 的滚动窗：不是 5 小时，也不是每月", () => {
+  });
+
+  test("custom / 没有 kind（旧快照、余额类）→ 厂商原文", () => {
+    assert.equal(windowLabel(window({ kind: "custom", label: "TOKENS_LIMIT" }), zh), "TOKENS_LIMIT");
+    assert.equal(windowLabel(window({ label: "45m" }), zh), "45m");
+  });
+
+  test("环菜单与设置页同一口径：菜单行也用本地化后的名字", () => {
+    const items = quotaMenuItems(
+      okResult({
+        windows: [{ id: "tokens_limit:6:1", label: "Weekly", kind: "weekly", usedPercent: 30 }],
+        fetchedAt: NOW,
+      }),
+      "plan-windows",
+      false,
+      zh,
+      undefined,
+      () => undefined,
+    );
+    assert.deepEqual(labels(items), ["账户", "每周", "刚刚查过"]);
+  });
+});
+
+describe("失败文案——「没订阅」与「团队账号」是两句话", () => {
+  test("no-plan 走 noPlan，不混进 teamUnsupported", () => {
+    assert.equal(quotaProblemText("no-plan", zh), "这个账号没有订阅套餐。");
+    assert.equal(quotaProblemText("no-plan", en), "This account has no subscription.");
+    assert.notEqual(quotaProblemText("no-plan", zh), quotaProblemText("unsupported", zh));
+  });
+});
 
 describe("quotaMenuItems —— 环菜单里的 Account 段", () => {
   test("能力为 none：整段不出现（连标题都没有）", () => {
