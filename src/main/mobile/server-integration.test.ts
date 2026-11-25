@@ -118,7 +118,6 @@ const meta: SessionMeta = {
   workspaceId: "ws",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   piSessionFile: "/data/pi-sessions/a.jsonl",
   pinned: false,

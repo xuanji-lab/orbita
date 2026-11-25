@@ -18,7 +18,6 @@ const metaOf = (id: string, patch: Partial<SessionMeta> = {}): SessionMeta => ({
   workspaceId: "ws-1",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "high",
   piSessionFile: "/data/pi-sessions/abc.jsonl",
   pinned: false,
@@ -92,8 +91,7 @@ describe("回一句：空闲时立刻发", () => {
       resume: { piSessionFile: "/data/pi-sessions/abc.jsonl" },
       providerId: "zai",
       modelId: "glm-5.3",
-      mode: "plan",
-      thinkingLevel: "high",
+          thinkingLevel: "high",
       text: "继续做",
     });
     assert.deepEqual(world.sent.map((entry) => entry.reply.requestId), ["r1"]);

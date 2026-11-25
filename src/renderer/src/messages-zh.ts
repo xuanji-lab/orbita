@@ -388,7 +388,6 @@ export const zh: Messages = {
     failedBecause: (reason) =>
       reason === "" ? "连续失败后已停下。重新启动即可再试。" : `连续失败后已停下：${reason}`,
     lastFailed: (reason) => `上一次运行失败：${reason}`,
-    manualWarn: "这条会话每次调用工具都要询问。无人时，运行会停在审批上。",
     sentBackTo: (title) => `投回「${title}」`,
     sentBackGone: "投回一条已删除的会话",
     runs: {
@@ -424,13 +423,9 @@ export const zh: Messages = {
       recent: "最近运行",
       time: "时间",
       where: "去处",
-      mode: "权限",
       model: "模型",
       plugin: "插件",
       newSession: "每次新开会话",
-      modeSkip: "放行，不询问",
-      modePlan: "计划，只读",
-      modeFollow: "跟这条会话自己的档",
       editSettings: "改设置",
       showMore: "展开全文",
       showLess: "收起",
@@ -509,12 +504,7 @@ export const zh: Messages = {
       pluginNone: "不用插件",
       pluginHint: "每次运行用这个插件做，最后把它的看板卡片显示出来，并出现在全局周看板上。",
       pluginMissing: (name: string) => `${name}（这个工作区里没装）`,
-      mode: "权限",
-      modeSkip: "放行，无人值守不询问",
-      modePlan: "计划，只读",
-      modeFollow: "跟这条会话自己的权限档",
       modelFollow: "跟这条会话自己的模型",
-      modeHint: "无人值守没法点审批，所以没有询问档。",
       save: "保存",
       create: "创建",
       saving: "保存中…",
@@ -544,29 +534,6 @@ export const zh: Messages = {
       ends: (done, max) => `${done}/${max} 次`,
       endsUntil: (when) => `到 ${when}`,
       gone: "这条自动化已不存在",
-    },
-    /** 对话里智能体申请「到点能写文件」那一行（automation_update 留的）：改好了 / 等你点「允许」 */
-    modeRow: {
-      aria: "自动化权限",
-      allowedTitle: (title) => `「${title}」改成放行`,
-      allowedMeta: "到点能写文件",
-      pendingTitle: (title) => `让「${title}」到点能写文件（放行）？`,
-      keptTitle: (title) => `「${title}」保持只读`,
-      keptMeta: "到点只能读，不能写",
-      goneTitle: (title) => `「${title}」已不存在`,
-      allow: "允许",
-      allowing: "正在改…",
-      revert: "改回只读",
-      reverting: "正在改…",
-      keep: "保持只读",
-      note: (mode) => `这条会话是「${mode}」档：智能体不能替你把自动化调得比这条会话更宽，要你点一下。`,
-      failed: {
-        noSession: "这条会话已经不在了，没法确认它的工作区。",
-        notFound: "这条自动化已经不在了，或不再属于这条会话的工作区。",
-        notApplicable: "这条自动化是投回原会话的，没有自己的权限档。",
-        finished: "这条自动化已经结束了。",
-        failed: (detail) => `没改成：${detail}`,
-      },
     },
     wakeKicker: "定时任务",
     wakeTitle: (title) => `「${title}」`,
@@ -752,8 +719,7 @@ export const zh: Messages = {
     },
     thinking: "在想",
     doing: (step, now) => `${step}：${now}`,
-    approve: (what) => `等你批准：${what}`,
-    childWaiting: "子会话在等你批准",
+    waitingReply: "等你回复",
     failed: "出错停下了",
     done: "跑完了，打开看结果",
     noText: "（没有文字）",
@@ -1316,7 +1282,7 @@ export const zh: Messages = {
     attribution: "提交与 PR 署名",
     planFirst: "先给我看计划",
     planFirstAria: "先给我看计划",
-    planFirstInfo: "智能体写下一个任务的第一张计划后先停下，等你在聊天框里回一句再动手（不会弹按钮）· 默认关；计划档与智能体提出问题时无论如何都会先停",
+    planFirstInfo: "智能体写下一个任务的第一张计划后先停下，等你在聊天框里回一句再动手（不会弹按钮）· 默认关；「先给我看计划」与智能体提出问题时无论如何都会先停",
     attributionAria: "提交与 PR 署名",
     attributionInfo: "给智能体代写的提交加尾注、PR 描述加一行 · 不设 Co-Authored-By，也不改作者",
     pastedCollapse: "粘贴文本折叠",
@@ -1883,12 +1849,6 @@ export const zh: Messages = {
     mcpFailed: (n) => `${n} 个 MCP 服务没导过来`,
   },
 
-  permissionModes: {
-    plan: { label: "计划", hint: "只读。写文件和执行命令都会被拒绝。" },
-    manual: { label: "手动", hint: "每次调用工具前都先问你。" },
-    skip: { label: "放行", hint: "所有工具直接运行，不再询问。" },
-  },
-
   chat: {
     moveHeader: "把这条任务移到…（工作目录一起换）",
     moveBlocked: "任务正在运行，停下后再移",
@@ -2413,7 +2373,6 @@ export const zh: Messages = {
     rowStatus: {
       running: "运行中",
       waiting: "等你",
-      approval: "待批准",
       done: "完成",
       failed: "失败",
       interrupted: "中断",
@@ -2432,7 +2391,6 @@ export const zh: Messages = {
     toolLabel: (id) =>
       ({ web_search: "搜网页", web_fetch: "抓网页", browser_navigate: "打开网页", browser_extract: "读网页", terminal_read: "读终端", terminal_execute: "终端执行", read_pdf: "读 PDF", read_docx: "读 Word", report_to_parent: "汇报", reply_subsession: "回复" })[id] ?? "工具",
     stuckTip: (minutes) => `同一个调用跑了 ${minutes} 分钟`,
-    approvalLine: (call) => `等你批准 · ${call}`,
     stoppedByYou: "你停止了它",
     idleLine: "这一轮停了，没有交回",
     endCauses: {
@@ -2465,16 +2423,6 @@ export const zh: Messages = {
     stopHint: "中止当前这一轮并关闭通道，只有你能重新打开",
     stopConfirm: "终止",
     stoppedHint: "已终止——在通道里以母会话身份发言可重新打开。",
-  },
-
-  approval: {
-    aria: "工具审批",
-    run: (tool) => `执行 ${tool}？`,
-    keys: "Enter 允许 · Esc 拒绝",
-    allow: "允许",
-    deny: "拒绝",
-    stopEditing: "结束编辑",
-    editInput: "改参数",
   },
 
 
@@ -3080,7 +3028,7 @@ export const zh: Messages = {
     unassignedTip: "还没写计划时派的，或派的时候没有在做的步骤",
     handedBack: (n: number) => `${n} 个已交回`,
     showAll: (n: number) => `还有 ${n} 个`,
-    state: { running: "在跑", stuck: "卡住了", waiting: "在问你", approval: "等你批准", done: "已交回", failed: "失败", interrupted: "中断", stopped: "已终止", idle: "还没开始" },
+    state: { running: "在跑", stuck: "卡住了", waiting: "在问你", done: "已交回", failed: "失败", interrupted: "中断", stopped: "已终止", idle: "还没开始" },
     thinking: "在想",
     elapsedS: (s: number) => `${s} 秒`,
     elapsedM: (m: number) => `${m} 分`,
@@ -3314,20 +3262,14 @@ export const zh: Messages = {
           composer: {
             name: "输入框一览",
             title: "输入框底下这一排",
-            body: "一句话交代一件事就行。底下一排决定**在哪做、能动什么、用哪个模型**。",
+            body: "一句话交代一件事就行。底下一排决定**在哪做、用哪个模型**。",
             notes: [
               "回形针：附文件、文件夹、截图（也能直接拖进来）。",
               "工作区：它在哪个文件夹里干活。",
-              "权限、模型、思考档：权限下一页讲。",
+              "模型与思考档：用哪个模型、想多深。",
               "行首打 / 再按空格，挑技能和插件。",
             ],
             say: "把论文文件夹里的 UrbanGPT 读一遍，列出能在这台电脑上复现的实验。",
-          },
-          permission: {
-            name: "权限：计划 / 手动 / 放行",
-            title: "放手到什么程度，你定",
-            body: "**计划**只读不写，适合先让它想清楚；**手动**每动一下都先问你；**放行**直接干，适合你信得过的活。",
-            notes: ["随时能换，下一条消息起生效。"],
           },
           watch: {
             name: "看它干活",
@@ -3621,10 +3563,10 @@ export const zh: Messages = {
             say: "每天早上 9:00 用文献追踪找一篇新论文，跑完把看板给我。",
           },
           plugin: {
-            name: "选插件与权限",
-            title: "跑哪个插\u2060件、能动什\u2060么",
-            body: "编辑自动化时可以挑一个插件，到点跑完把它的看板带出来。定时跑默认**只读**：要它真写文件，得你在这里放开权限。",
-            notes: ["挑一个插件，跑完带出它的看板。", "无人值守时的权限。"],
+            name: "选插件",
+            title: "到点跑哪个插⁠件",
+            body: "编辑自动化时可以挑一个插件，到点跑完把它的看板带出来。",
+            notes: ["挑一个插件，跑完带出它的看板。", "时间、去处、模型都在「改设置」里改。"],
           },
           chart: {
             name: "详情与柱状图",

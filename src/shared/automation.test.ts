@@ -11,7 +11,6 @@ import {
   parseAutomation,
   parseAutomationCard,
   parseAutomationHeader,
-  parseAutomationModeRow,
   parseAutomationPlugin,
   parseAutomationRunLabel,
   parseClockTime,
@@ -244,7 +243,6 @@ describe("parseAutomation", () => {
     prompt: "看看 DDPM 有没有新进展",
     schedule: { kind: "interval", unit: "minute", every: 30 },
     target: { kind: "this_session", sessionId: "s9", workspaceId: "ws1" },
-    mode: "skip",
     status: "active",
     createdBy: { kind: "agent", sessionId: "s9" },
     maxRuns: 12,
@@ -275,9 +273,10 @@ describe("parseAutomation", () => {
     assert.equal(parseAutomation(null), null);
     assert.equal(parseAutomation("x"), null);
   });
-  test("manual 档退回 plan；坏的 agent 来源退回 user；非 active 的 nextRunAt 清空", () => {
-    const parsed = parseAutomation({ ...good, mode: "manual", createdBy: { kind: "agent" }, status: "paused" }) as Automation;
-    assert.equal(parsed.mode, "plan");
+  test("旧记录存着的 mode / modeDeclined 不再读进来；坏的 agent 来源退回 user；非 active 的 nextRunAt 清空", () => {
+    const parsed = parseAutomation({ ...good, mode: "plan", modeDeclined: ["r1"], createdBy: { kind: "agent" }, status: "paused" }) as Automation;
+    assert.equal("mode" in parsed, false);
+    assert.equal("modeDeclined" in parsed, false);
     assert.deepEqual(parsed.createdBy, { kind: "user" });
     assert.equal(parsed.nextRunAt, null);
   });
@@ -339,7 +338,6 @@ describe("对话卡的摘要", () => {
     prompt: "看日志",
     schedule: { kind: "interval", unit: "minute", every: 15 },
     target: { kind: "this_session", sessionId: "s9", workspaceId: null },
-    mode: "plan",
     status: "active",
     createdBy: { kind: "agent", sessionId: "s9" },
     maxRuns: 12,
@@ -385,7 +383,6 @@ describe("插件与看板快照 id", () => {
     schedule: { kind: "daily", time: "09:00" },
     target: { kind: "new_session", workspaceId: null },
     status: "active",
-    mode: "plan",
     plugin: { name: "lit" },
     runs: [
       { id: "r1", runAt: 1, trigger: "schedule", status: "success", sessionId: "s", boardSnapshotIds: ["c1", "c1", "", 3, "c2"] },
@@ -410,49 +407,5 @@ describe("插件与看板快照 id", () => {
     const card = automationCardOf(parsed);
     assert.equal(card.plugin, "lit");
     assert.equal(parseAutomationCard(card)?.plugin, "lit");
-  });
-});
-
-describe("parseAutomationModeRow（工具结果 details 里「改权限」那一行）", () => {
-  const row = { state: "pending", requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" };
-  test("合法的原样取出，JSON 来回不变", () => {
-    assert.deepEqual(parseAutomationModeRow({ automationMode: row }), row);
-    assert.deepEqual(parseAutomationModeRow(JSON.parse(JSON.stringify({ automationMode: { ...row, state: "applied", sessionMode: "skip" } }))), {
-      ...row,
-      state: "applied",
-      sessionMode: "skip",
-    });
-  });
-  test("别的工具的 details / 缺字段 / 坏值：都是 null", () => {
-    for (const bad of [undefined, null, "x", {}, { automation: {} }, { automationMode: null }, { automationMode: { ...row, state: "x" } }, { automationMode: { ...row, sessionMode: "x" } }, { automationMode: { ...row, requestId: "" } }, { automationMode: { ...row, automationId: undefined } }, { automationMode: { ...row, title: 1 } }]) {
-      assert.equal(parseAutomationModeRow(bad), null, JSON.stringify(bad));
-    }
-  });
-});
-
-describe("Automation.modeDeclined（磁盘解析）", () => {
-  const base = {
-    id: "a",
-    title: "t",
-    prompt: "p",
-    schedule: { kind: "interval", unit: "minute", every: 15 },
-    target: { kind: "new_session", workspaceId: null },
-    mode: "plan",
-    status: "active",
-    createdBy: { kind: "user" },
-    nextRunAt: 1,
-    runs: [],
-    runCount: 0,
-    consecutiveFailures: 0,
-    createdAt: 1,
-    updatedAt: 1,
-  };
-  test("只留非空字符串、最近 10 个；没有 / 坏了就不带这个字段", () => {
-    assert.equal(parseAutomation(base)?.modeDeclined, undefined);
-    assert.equal(parseAutomation({ ...base, modeDeclined: "r1" })?.modeDeclined, undefined);
-    assert.equal(parseAutomation({ ...base, modeDeclined: [] })?.modeDeclined, undefined);
-    assert.deepEqual(parseAutomation({ ...base, modeDeclined: ["r1", 3, "", "r2"] })?.modeDeclined, ["r1", "r2"]);
-    const many = Array.from({ length: 14 }, (_, i) => `r${i}`);
-    assert.deepEqual(parseAutomation({ ...base, modeDeclined: many })?.modeDeclined, many.slice(-10));
   });
 });

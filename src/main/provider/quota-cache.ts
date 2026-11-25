@@ -82,6 +82,22 @@ export class QuotaCache {
     this.chain = run.catch(() => undefined);
     return run;
   }
+
+  /**
+   * 删掉一家的快照：换了钥匙 / 换了接口地址 / 删掉这家之后，按旧配置查到的额度不能再顶着显示。
+   * 与 `write` 接在同一条链上（读 → 删 → 原子写），不会把另一家刚写进去的快照抹掉；
+   * 盘上本来就没有这一家就不动盘。
+   */
+  remove(providerId: string): Promise<void> {
+    const run = this.chain.then(async () => {
+      const table = await this.read();
+      if (!Object.hasOwn(table, providerId)) return;
+      delete table[providerId];
+      await writeJsonAtomic(this.filePath, toFileShape(table));
+    });
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
 }
 
 /** 盘上的形状带一层 `snapshot` 包装：以后要加 `lastFailure` 之类的字段时不用换文件格式 */

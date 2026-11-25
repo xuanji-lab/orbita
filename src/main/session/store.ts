@@ -2,7 +2,7 @@
  * 会话落盘 —— 每条会话两个文件（设计与被否决的方案见
  * `docs/plans/2026-08-25-会话存储与命名工作区.md`）：
  *
- *   sessions/<id>.meta.json   可变（标题 / updatedAt / 权限档），原子写
+ *   sessions/<id>.meta.json   可变（标题 / updatedAt / 模型），原子写
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  *
  * 分两个文件的理由：meta 会变而 transcript 只增。把可变记录塞进只追加的日志里，
@@ -23,11 +23,10 @@ import {
   type SentImage,
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
-import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
+import { forEachBufferLine, headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
-import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
@@ -254,10 +253,15 @@ export class SessionStore {
     }
   }
 
-  /** 所有 meta 落盘唯一收口：原子写成功后才更新内存索引；失败时索引继续指向上一份完整值 */
+  /**
+   * 所有 meta 落盘唯一收口：原子写成功后才更新内存索引；失败时索引继续指向上一份完整值。
+   * 写盘时一律盖上 `mode: "skip"`：只为回滚兼容——旧版把缺的 mode 读成只读计划档，
+   * 装回旧版后新版聊过的会话会全部写不了文件。新版自己不读它（parseSessionMeta 不返回它，
+   * 所以内存索引里也没有）；不再支持回滚到带权限档的版本时可连同类型字段一起删掉。
+   */
   private async writeMeta(meta: SessionMeta): Promise<void> {
     await this.metaIndexReady;
-    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    await writeJsonAtomic(this.metaPath(meta.id), { ...meta, mode: "skip" });
     // 与旧 list() 逐条 readMeta 的口径一致：可选默认值 / 归一化也在索引里生效，不能只存写入前的对象
     const normalized = parseSessionMeta(meta);
     if (normalized === null) this.metaById.delete(meta.id);
@@ -694,10 +698,6 @@ export class SessionStore {
     return this.update(id, { piSessionFile });
   }
 
-  setMode(id: string, mode: PermissionMode): Promise<void> {
-    return this.update(id, { mode });
-  }
-
   /**
    * 「转成普通会话」：把一条自动化新开的会话标成 promoted，从此进左侧栏。
    * 只对带 automationId 的会话有意义——别的会话原样不动（返回 false）。
@@ -712,7 +712,7 @@ export class SessionStore {
     return changed;
   }
 
-  /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
+  /** 改思考档：重开与下一轮开机的装配都读它 */
   setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
     return this.update(id, { thinkingLevel });
   }
@@ -800,7 +800,6 @@ export class SessionStore {
         workspaceId: meta.workspaceId,
         providerId: meta.providerId,
         modelId: meta.modelId,
-        mode: meta.mode,
         thinkingLevel: meta.thinkingLevel,
         piSessionFile: null,
         pinned: false,
@@ -1107,20 +1106,26 @@ export class SessionStore {
     return foldRevertRecords(await this.readLogEntries(id));
   }
 
-  /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
+  /**
+   * 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环；逐行判定收敛在 parseLogLine。
+   *
+   * 切行按换行字节切 Buffer、每行再解码（forEachBufferLine），不做「整份 toString 再
+   * split("\n")」——194 MB 会话实测 split 段 107ms / 同步段 289ms，逐行切把这一段省掉，
+   * 也不再产生整份大字符串与装着全部行的数组。行切法与 split 逐行一致（见函数注释），
+   * 新旧实现对同一批输入的结果逐条相等（store.test.ts 的对照测试把关）。
+   */
   private async readLogEntries(id: string): Promise<SessionRecord[]> {
-    let raw: string;
+    let raw: Buffer;
     try {
-      raw = await readFile(this.logPath(id), "utf8");
+      raw = await readFile(this.logPath(id));
     } catch {
       return [];
     }
     const records: SessionRecord[] = [];
-    for (const line of raw.split("\n")) {
-      if (line.trim() === "") continue;
-      const record = parseRecordLine(line);
-      if (record !== null) records.push(record);
-    }
+    forEachBufferLine(raw, (line) => {
+      const record = parseLogLine(line);
+      if (record !== undefined) records.push(record);
+    });
     return records;
   }
 
@@ -1198,8 +1203,8 @@ export class SessionStore {
         const lineStart = lastIndexOf(buffer, headOffset, cursor, NEWLINE);
         const line = buffer.subarray(Math.max(headOffset, lineStart + 1), cursor);
         if (line.length > 0) {
-          const record = parseRecordLine(line.toString("utf8"));
-          if (record !== null) records.push(record);
+          const record = parseLogLine(line.toString("utf8"));
+          if (record !== undefined) records.push(record);
         }
         cursor = lineStart;
       }
@@ -1266,28 +1271,37 @@ function lastIndexOf(buffer: Buffer, from: number, to: number, byte: number): nu
 }
 
 /**
- * 转录的一行 → 记录。全量读取与尾部倒读共用：两处对「什么算一行合法记录」必须是同一个答案，
- * 否则从尾部读到的会与整份读出来的对不上。
+ * 一行日志 → 一条记录：JSON 解析 + 逐字段校验，不落地返回 undefined。
+ * 坏行（半截 JSON、长着特殊记录的脸但字段不齐）跳过——只追加的文件最后一行
+ * 可能因断电只写了一半，为此丢掉整条会话不划算。
  *
- * 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——半截摘要当消息渲染，比少渲染一行更糟。
- * 坏行（解不出 JSON）返回 null。
+ * 「这行落不落地」的判定只有这一份：readLogEntries 的行循环、行切分的新旧对照
+ * 测试（store.test.ts）都从它过，谁也不许另抄一份判定链。
  */
-function parseRecordLine(line: string): SessionRecord | null {
-  if (line.trim() === "") return null;
+export function parseLogLine(line: string): SessionRecord | undefined {
+  if (line.trim() === "") return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
-    return null; // 半截行
+    // 半截行：跳过它，前面读到的照常返回
+    return undefined;
   }
-  // `null`、数字、数组都不是记录：以前全量读取会把它们原样塞进数组，下游一碰 .role 就炸
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  if (isCompactedRecord(parsed) || isChannelMarkRecord(parsed)) return parsed;
+  // 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——
+  // 半截摘要当消息渲染，比少渲染一行更糟
+  if (isCompactedRecord(parsed)) return parsed;
+  // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
+  // 半截标记被当成消息强转，下游访问 content 就是 undefined
+  if (isChannelMarkRecord(parsed)) return parsed;
+  // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
   if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) return parsed;
+  // `null`、数字、数组、裸字符串都不是记录：以前会把它们原样塞进数组，下游一碰 .role 就炸
+  // （手机端尾部倒读与全量读取共用这一个判定，两边一起修）
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
   const suspect = parsed as { role?: unknown };
-  // 字段不齐的界碑：跳过（见上）
-  if (suspect.role === "compacted" || suspect.role === "channel-mark") return null;
-  if (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo") return null;
+  if (suspect.role === "compacted") return undefined;
+  if (suspect.role === "channel-mark") return undefined;
+  if (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo") return undefined;
   return parsed as TranscriptItem;
 }
 

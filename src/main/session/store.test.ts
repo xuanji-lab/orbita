@@ -5,9 +5,10 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { branchRoles, SessionStore } from "./store.ts";
+import { branchRoles, parseLogLine, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
-import { UNASSIGNED_PROVIDER_ID, SESSION_INITIAL_RECORDS, SESSION_PAGE_RECORDS, sortSessions, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
+import { UNASSIGNED_PROVIDER_ID, SESSION_INITIAL_RECORDS, SESSION_PAGE_RECORDS, isChannelMarkRecord, isCompactedRecord, sortSessions, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
+import { isFileTurnRecord, isRevertRecord, isUndoRecord } from "../../shared/revert.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
@@ -21,7 +22,6 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   cwd: "/repo/orbita-lab",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,
@@ -103,6 +103,34 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.list()).map((m) => m.id), [ID]);
     assert.deepEqual((await store.load(ID))?.meta.id, ID);
     assert.deepEqual((await store.load(ID))?.transcript, []);
+  });
+
+  // 回滚兼容：旧版把缺的 mode 读成只读计划档，新版写的 meta 必须带 mode:"skip"。
+  describe("meta 的 mode 回滚兼容字段", () => {
+    const rawMeta = async (id: string): Promise<Record<string, unknown>> =>
+      JSON.parse(await readFile(join(dir, "sessions", `${id}.meta.json`), "utf8")) as Record<string, unknown>;
+
+    test("新建会话的 meta 带 mode:skip", async () => {
+      await store.ensureSession(meta());
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+    });
+
+    test("旧会话 meta 是 plan，新版动过一次后改写成 skip；读回时不暴露 mode", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      await writeFile(join(dir, "sessions", `${ID}.meta.json`), JSON.stringify({ ...meta(), mode: "plan" }), "utf8");
+      await store.setPiSessionFile(ID, null);
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+      assert.equal((await store.readMeta(ID))?.mode, undefined);
+    });
+
+    test("没被碰过的旧会话 meta 原样不动", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      const path = join(dir, "sessions", `${ID}.meta.json`);
+      const text = JSON.stringify({ ...meta(), mode: "manual" });
+      await writeFile(path, text, "utf8");
+      await store.list();
+      assert.equal(await readFile(path, "utf8"), text);
+    });
   });
 
   // 启动索引按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
@@ -205,14 +233,6 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
   });
 
-  test("收尾扫描轮压过的权限档不写回会话 meta（审核 F-4）", async () => {
-    // 扫描轮在已有会话上 submit：主进程走 settleFirstTurn → ensureSession（带着压成 manual 的档）+ 落扫描提问
-    await store.ensureSession(meta({ mode: "skip", piSessionFile: "/pi/a.jsonl" }));
-    await store.ensureSession(meta({ mode: "manual", piSessionFile: "/pi/a.jsonl" }));
-    await store.record(ID, userItem(`${CLOSING_SCAN_HEAD}\n回看这几轮……`, 4000));
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
-  });
-
   test("列表按 updatedAt 倒序——新的在前", async () => {
     await store.ensureSession(meta({ id: ID, updatedAt: 1000 }));
     await store.ensureSession(meta({ id: OTHER, updatedAt: 5000 }));
@@ -232,6 +252,114 @@ describe("SessionStore", () => {
     await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1","role":"user"', { flag: "a" });
     const detail = await store.load(ID);
     assert.equal(detail?.transcript.length, 1);
+  });
+
+  // ── readLogEntries 行切分：新旧实现对照（perf/session-log-lines）──
+  // 旧实现是 readFile(utf8) → split("\n") → 逐行 parseLogLine；新实现按换行字节切 Buffer、
+  // 每行再解码。下面内联旧实现的最小副本当对照基准——逐行判定 parseLogLine 两边共用同一份，
+  // 副本复制的只是「怎么拿到行」——同一批输入，新旧结果必须逐条相等。
+  describe("readLogEntries 行切分对照", () => {
+    /** readLogEntries 改动前的最小副本：整份读成字符串再 split("\n")。只当对照基准，别处别用。 */
+    async function readLogEntriesLegacy(path: string): Promise<SessionRecord[]> {
+      let raw: string;
+      try {
+        raw = await readFile(path, "utf8");
+      } catch {
+        return [];
+      }
+      const records: SessionRecord[] = [];
+      for (const line of raw.split("\n")) {
+        const record = parseLogLine(line);
+        if (record !== undefined) records.push(record);
+      }
+      return records;
+    }
+
+    const logLine = (id: string, text: string): string =>
+      JSON.stringify({ id, role: "user", content: [{ type: "text", text }] });
+
+    const CASES: ReadonlyArray<{ name: string; text: string; expected: number }> = [
+      {
+        name: "没有结尾换行",
+        text: [logLine("u1", "第一行"), logLine("u2", "第二行")].join("\n"),
+        expected: 2,
+      },
+      {
+        name: "CRLF 换行",
+        text: [logLine("u1", "甲"), logLine("u2", "乙")].join("\r\n") + "\r\n",
+        expected: 2,
+      },
+      {
+        name: "连续空行与末尾空行",
+        text: [logLine("u1", "一"), "", "", logLine("u2", "二"), ""].join("\n") + "\n\n\n",
+        expected: 2,
+      },
+      {
+        // 裸字符串是合法 JSON 但不是记录（没有 role/content）：以前会原样混进数组，下游一碰
+        // .content 就炸。手机端尾部倒读与全量读取共用同一个 parseLogLine，两边一起拒。
+        name: "夹着非法 JSON 的行（裸字符串不是记录，跳过）",
+        text: [logLine("u1", "前"), "{ 这不是 JSON", logLine("u2", "后"), '"裸字符串"'].join("\n") + "\n",
+        expected: 2,
+      },
+      {
+        name: "行内多字节中文和 emoji",
+        text: logLine("u1", "中文🎉混排 émigré 東京") + "\n",
+        expected: 1,
+      },
+      { name: "空文件", text: "", expected: 0 },
+      {
+        name: "只有一行且超长（约 4.5 MB，无结尾换行）",
+        text: logLine("u1", "汉".repeat(1_500_000)),
+        expected: 1,
+      },
+      {
+        name: "最后一行没换行且是坏行",
+        text: [logLine("u1", "完整"), '{"id":"u2","role":"user"'].join("\n"),
+        expected: 1,
+      },
+      {
+        name: "BOM 开头（带 BOM 的第一行 JSON.parse 失败，跳过）",
+        text: "\uFEFF" + logLine("u1", "甲") + "\n" + logLine("u2", "乙") + "\n",
+        expected: 1,
+      },
+      {
+        name: "特殊记录：字段齐的收下，长着它的脸但字段不齐的跳过",
+        text:
+          [
+            '{"role":"compacted","id":"c1"}',
+            '{"role":"compacted","id":"c2","summary":"摘要","tokensBefore":100,"timestamp":1}',
+            '{"role":"revert","id":"r1"}',
+            '{"role":"revert","id":"r2","targetMessageId":"u1","restored":[],"timestamp":1}',
+            '{"role":"undo","id":"d1","turnId":"t1"}',
+            '{"role":"file-turn","id":"f1"}',
+            '{"role":"channel-mark","id":"m1"}',
+            logLine("u1", "普通消息"),
+          ].join("\n") + "\n",
+        expected: 3,
+      },
+      {
+        name: "只含空白的行",
+        text: [logLine("u1", "甲"), "   ", "\t", logLine("u2", "乙")].join("\n") + "\n",
+        expected: 2,
+      },
+    ];
+
+    for (const { name, text, expected } of CASES) {
+      test(name, async () => {
+        const path = join(dir, "sessions", `${ID}.jsonl`);
+        await mkdir(join(dir, "sessions"), { recursive: true });
+        await writeFile(path, text, "utf8");
+        const legacy = await readLogEntriesLegacy(path);
+        const current = await store.readRawLog(ID);
+        assert.deepEqual(current, legacy);
+        assert.equal(current.length, expected);
+      });
+    }
+
+    test("日志文件不存在：新旧都回空", async () => {
+      assert.deepEqual(await store.readRawLog(ID), []);
+      assert.deepEqual(await readLogEntriesLegacy(join(dir, "sessions", `${ID}.jsonl`)), []);
+    });
   });
 
   test("meta 不在就不往日志里加，避免长出孤儿日志", async () => {
@@ -257,12 +385,6 @@ describe("SessionStore", () => {
     await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1"}\n', "utf8");
     assert.deepEqual(await store.list(), []);
     assert.equal(await store.load(ID), null);
-  });
-
-  test("setMode 落盘——重开会话不该静默换档", async () => {
-    await store.ensureSession(meta());
-    await store.setMode(ID, "skip");
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
   test("setThinkingLevel 落盘——重开与下一轮开机的装配都读它", async () => {

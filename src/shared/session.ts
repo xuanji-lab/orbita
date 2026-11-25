@@ -12,7 +12,6 @@ import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import type { AgentStats } from "./agent-ipc.ts";
 import { parseAutomationRunLabel, type AutomationRunLabel } from "./automation.ts";
 import { CHANNEL_MESSAGE_KINDS, type ChannelMessageKind } from "./channel.ts";
-import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { isThinkingLevel, parseThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { parseQuotedMessage, withoutQuotes } from "./quote.ts";
 import { parseSkillSegments } from "./skill.ts";
@@ -384,13 +383,16 @@ export interface SessionMeta {
    */
   providerId: string;
   modelId: string;
-  /** 最后一次用的权限档。存下来是为了重开这条会话时不会静默换档。 */
-  mode: PermissionMode;
   /**
-   * 最后一次用的思考档，同 mode 的理由：重开不静默换档。**缺省退 "medium"**——
+   * 最后一次用的思考档：存下来是为了重开这条会话时不静默换档。**缺省退 "medium"**——
    * 这个字段落地之前存的会话，实际跑的就是 pi 的默认 medium，退 "off" 才是改写历史。
    */
   thinkingLevel: ThinkingLevel;
+  /**
+   * 只写不读：store 写盘时固定盖 "skip"，只为回滚兼容旧版（旧版缺 mode 会读成只读计划档）。
+   * 新版不解析、不依赖它；不再支持回滚到带权限档的版本时可删掉。
+   */
+  mode?: "skip";
   /**
    * pi 自己那份 session 文件的路径；**null = 这条会话只能读不能续**。
    *
@@ -598,10 +600,6 @@ export function deriveSessionTitle(text: string): string {
   return line.length > SESSION_TITLE_MAX ? `${line.slice(0, SESSION_TITLE_MAX)}…` : line;
 }
 
-function isPermissionMode(value: unknown): value is PermissionMode {
-  return (PERMISSION_MODES as readonly unknown[]).includes(value);
-}
-
 const TITLE_SOURCES: readonly TitleSource[] = ["derived", "auto", "user"];
 
 function isTitleSource(value: unknown): value is TitleSource {
@@ -730,8 +728,7 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     recentQueries: parseRecentQueries(value["recentQueries"]),
     // 读不出用量就当没有——一份坏账本不该连带丢掉整条会话
     stats: parseAgentStats(value["stats"]),
-    // 档位不认识就退回最保守的那一档，而不是丢掉整条会话
-    mode: isPermissionMode(value["mode"]) ? value["mode"] : "plan",
+    // 旧会话存着的权限档（mode：plan / manual / skip）不再读：存过什么都按放行跑，不提示
     // 思考档坏值退 medium（老会话实际跑的那一档），理由见字段注释
     thinkingLevel: parseThinkingLevel(value["thinkingLevel"]),
     // 导入标记：非导入会话缺席（空串/null 都当没有，str 的规则）
@@ -823,7 +820,6 @@ export function transcriptToMarkdown(
       [
         `- Folder: \`${meta.cwd}\``,
         `- Model: \`${meta.providerId} / ${meta.modelId}\``,
-        `- Permission: \`${meta.mode}\``,
         `- Created: \`${iso(meta.createdAt)}\``,
         `- Updated: \`${iso(meta.updatedAt)}\``,
       ].join("\n"),

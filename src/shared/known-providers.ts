@@ -16,7 +16,7 @@
  * 这部分是干净的，值得学。不该学的是 `fetchModels` 那个 15 分支 switch。
  */
 import type { CatalogPreference } from "./model-defaults.ts";
-import type { ProviderApi } from "./provider.ts";
+import type { ProviderApi, ProviderAuth } from "./provider.ts";
 import type { QuotaProbe } from "./quota.ts";
 
 /**
@@ -663,6 +663,8 @@ export interface ProviderKindSource {
   kind?: string;
   /** baseUrl 可选：额度按地址兜底时要它；其余判定只看 kind / id */
   endpoint: { api: ProviderApi; baseUrl?: string };
+  /** 鉴权方式可选：只有浏览器登录的条目（Claude）查额度时要它 */
+  auth?: { scheme: ProviderAuth["scheme"] };
 }
 
 /** 认不出条目时按协议落到哪个兼容入口 */
@@ -716,6 +718,15 @@ export function isPlanBilling(provider: ProviderKindSource): boolean {
 }
 
 /**
+ * 浏览器登录的条目（Claude）：额度接口认的是 OAuth 令牌。这一家配的是 API 钥匙时没有可查的额度——
+ * 那个接口对 API 钥匙只会回 401，照查的话卡片会红字说「密钥被拒」，而这把钥匙聊天是通的。
+ * 没带鉴权方式的调用方按「不是浏览器登录」处理：宁可整块不画，也不去打一个注定 401 的接口。
+ */
+function quotaUsableBy(entry: KnownProvider, provider: ProviderKindSource): boolean {
+  return entry.auth !== "oauth" || provider.auth?.scheme === "oauth";
+}
+
+/**
  * 这家能不能查额度、查哪一类。**认不得的一律 `none`**（自建网关没有可查的账号余额）。
  *
  * 与 `isPlanBilling` 同一个入口（`knownProviderOf`）而不是只看 `kind`：老数据没有 kind，
@@ -731,7 +742,9 @@ export function isPlanBilling(provider: ProviderKindSource): boolean {
  */
 export function knownQuotaSourceOf(provider: ProviderKindSource): KnownProvider | undefined {
   const entry = knownProviderOf(provider);
-  if (entry.quota !== undefined && entry.quota !== "none") return entry;
+  if (entry.quota !== undefined && entry.quota !== "none") {
+    return quotaUsableBy(entry, provider) ? entry : undefined;
+  }
   /*
    * 兜底：用户把一家网关配成**通用兼容条目**（`openai-compatible` / `anthropic-compatible` …）时，
    * `knownProviderOf` 按 kind 认到的是兼容条目，声明在厂商条目上的额度能力落不到它身上。
@@ -750,6 +763,7 @@ export function knownQuotaSourceOf(provider: ProviderKindSource): KnownProvider 
   if (target === "") return undefined;
   return KNOWN_PROVIDERS.find((item) => {
     if (item.quota === undefined || item.quota === "none") return false;
+    if (!quotaUsableBy(item, provider)) return false;
     /*
      * 候选地址包括条目自己的 baseUrl 与每条接入方式的地址：同一家网关可能有两种协议
      * 两个地址（例：基元律动 OpenAI 走 …/v1、Anthropic 走裸域），用户按哪一种配进来

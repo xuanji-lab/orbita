@@ -3,7 +3,7 @@
  *
  * 两个消费者都是「无人值守、替用户把一句话送进一条已有会话」：自动化的 this_session
  * （automation/launch.ts 的 deliverAutomationRun）与手机的「回一句」。两处原先会各拼一遍
- * piSessionFile / 模型 / 权限档 / 思考档，漏一项就是静默换档——所以收成这一个函数。
+ * piSessionFile / 模型 / 思考档，漏一项就是静默换档——所以收成这一个函数。
  *
  * 纯模块：不 import electron，可被 `node --test` 直接加载。
  */
@@ -16,9 +16,9 @@ export type ResumeTurnContext =
   | { ok: false; reason: "unresumable" };
 
 /**
- * 用会话 meta 里的 piSessionFile / 模型 / 权限档 / 思考档 resume 一轮——它还是那条会话，不是新开的。
- * **不替用户改档**：manual 档会停在审批上，但那是用户在电脑上选的档，无人值守也照它走。
+ * 用会话 meta 里的 piSessionFile / 模型 / 思考档 resume 一轮——它还是那条会话，不是新开的。
  * 手机发来的只有 sessionId 与那句话，别的一律从这里取，不从网络收。
+ * （权限档已随「权限只留放行」从契约里删掉：2026-11-25 合 main 时摘掉 meta.mode 的读取。）
  */
 export function resumeTurnContext(meta: SessionMeta, text: string): ResumeTurnContext {
   if (meta.piSessionFile === null) return { ok: false, reason: "unresumable" };
@@ -31,7 +31,6 @@ export function resumeTurnContext(meta: SessionMeta, text: string): ResumeTurnCo
       resume: { piSessionFile: meta.piSessionFile },
       providerId: meta.providerId,
       modelId: meta.modelId,
-      mode: meta.mode,
       thinkingLevel: meta.thinkingLevel,
       text,
     },

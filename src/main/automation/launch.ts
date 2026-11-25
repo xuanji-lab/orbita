@@ -203,7 +203,6 @@ export async function launchAutomationRun(
     automationRun: { title: automation.title, number: input.number, at: input.at, trigger: input.trigger },
     providerId: resolved.providerId,
     modelId: resolved.modelId,
-    mode: automation.mode,
     thinkingLevel: resolved.thinkingLevel,
     piSessionFile: null,
     pinned: false,
@@ -221,7 +220,6 @@ export async function launchAutomationRun(
       resume: null,
       providerId: resolved.providerId,
       modelId: resolved.modelId,
-      mode: automation.mode,
       thinkingLevel: resolved.thinkingLevel,
       text: composeAutomationPrompt({
         title: automation.title,
@@ -242,7 +240,7 @@ export async function launchAutomationRun(
 
 /**
  * 把指令送回创建它的那条会话（target = this_session）：用**会话自己 meta 里**的 piSessionFile / 模型 /
- * 权限档 / 思考档 resume 一轮——它还是那条会话，不是新开的。调用方已确认这条会话此刻空闲。
+ * 思考档 resume 一轮——它还是那条会话，不是新开的。调用方已确认这条会话此刻空闲。
  * 开工上下文由 `resumeTurnContext` 拼（与手机的「回一句」共用，别处不再手拼一份）。
  * 会话没了抛 SessionGoneError；没有 pi 本子（只读的导入会话）抛普通错误（这条会话续不了）。
  */

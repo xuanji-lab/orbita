@@ -17,7 +17,6 @@ const metaOf = (id: string, patch: Partial<SessionMeta> = {}): SessionMeta => ({
   workspaceId: "ws-1",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "high",
   piSessionFile: "/data/pi-sessions/x.jsonl",
   pinned: false,

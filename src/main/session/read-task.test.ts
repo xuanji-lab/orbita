@@ -61,7 +61,6 @@ const meta = (id: string, title: string, patch: Partial<SessionMeta> = {}): Sess
   workspaceId: null,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   piSessionFile: null,
   pinned: false,

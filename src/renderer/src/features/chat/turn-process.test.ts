@@ -347,7 +347,7 @@ describe("钉在折叠外的工具：落定后卡片数据解析不出的收进�
     assert.deepEqual(kinds(bad), ["user", "turnProcess", "text"]);
   });
 
-  test("show_image / install_plugin / automation_update：同样，解析不出的收进过程行", () => {
+  test("show_image / install_plugin：同样，解析不出的收进过程行；automation_update 不再有独立的卡，一律收进过程行", () => {
     assert.equal(insideProcess(round("show_image", { paths: ["/a.png"] }, { showImage: { images: [] } }), "x1"), true);
     assert.equal(insideProcess(round("show_image", { paths: ["/a.png"] }, { showImage: { images: [{ data: "AAAA", mimeType: "image/png", name: "a.png" }] } }), "x1"), false);
     assert.equal(insideProcess(round("install_plugin", { path: "/p" }, undefined), "x1"), true);

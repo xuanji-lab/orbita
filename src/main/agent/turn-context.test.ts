@@ -11,7 +11,6 @@ const meta: SessionMeta = {
   workspaceId: "ws",
   providerId: "kimi",
   modelId: "k3",
-  mode: "manual",
   thinkingLevel: "off",
   piSessionFile: "/data/pi-sessions/a.jsonl",
   pinned: false,
@@ -23,7 +22,7 @@ const meta: SessionMeta = {
 };
 
 describe("resumeTurnContext：按会话 meta 拼开工上下文（自动化 this_session 与手机回一句共用）", () => {
-  test("一切都取自 meta，不替用户改档；只把 text 换成这一句", () => {
+  test("一切都取自 meta；只把 text 换成这一句", () => {
     assert.deepEqual(resumeTurnContext(meta, "继续"), {
       ok: true,
       input: {
@@ -33,8 +32,7 @@ describe("resumeTurnContext：按会话 meta 拼开工上下文（自动化 this
         resume: { piSessionFile: "/data/pi-sessions/a.jsonl" },
         providerId: "kimi",
         modelId: "k3",
-        mode: "manual",
-        thinkingLevel: "off",
+              thinkingLevel: "off",
         text: "继续",
       },
     });

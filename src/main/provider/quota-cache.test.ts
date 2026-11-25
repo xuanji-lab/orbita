@@ -71,4 +71,24 @@ describe("QuotaCache", () => {
     await broken.write("deepseek", snapshot("2.00"));
     assert.deepEqual((await broken.read())["deepseek"], snapshot("2.00"));
   });
+
+  test("remove 与 write 接在同一条链上：按调用先后落盘，谁先谁后都不会被对方抹掉", async () => {
+    await cache.write("deepseek", snapshot("1.00"));
+    await Promise.all([cache.remove("deepseek"), cache.write("deepseek", snapshot("2.00"))]);
+    assert.deepEqual((await cache.read())["deepseek"], snapshot("2.00"), "先删后写：写的那份留下");
+
+    await Promise.all([cache.write("deepseek", snapshot("3.00")), cache.remove("deepseek")]);
+    assert.equal((await cache.read())["deepseek"], undefined, "先写后删：删的生效");
+  });
+
+  test("remove：只删这一家，其余的留下；盘上本来就没有这一家就不动盘", async () => {
+    await cache.write("deepseek", snapshot("1.00"));
+    await cache.write("deepseek-2", snapshot("2.00"));
+    await cache.remove("deepseek");
+    assert.deepEqual(await cache.read(), { "deepseek-2": snapshot("2.00") });
+
+    const before = await readFile(join(dir, "quota-cache.json"), "utf8");
+    await cache.remove("not-there");
+    assert.equal(await readFile(join(dir, "quota-cache.json"), "utf8"), before, "没有这一家：不重写文件");
+  });
 });
