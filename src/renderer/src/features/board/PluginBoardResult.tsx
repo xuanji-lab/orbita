@@ -12,6 +12,10 @@
  * 长会话里反复展示看板会一直累积（20 次 × 4 张 = 80 只 ≈ 237 MB，实测）。占位高度由卡的尺寸与量到的宽度
  * 算出（`gridHeight`，与真实排版一致），所以卸 / 挂都不会让对话滚动跳动；回到视口再挂、重新换一次性地址。
  * 与周看板挂载「可视 ± 1 天」同一思路。
+ *
+ * **切走再切回不白一帧**：重挂后 iframe 要重新换地址、加载、收数据，这段时间外框里先贴上一次画好的样子（位图，
+ * `board-shot-cache.ts`），等真 iframe 全部加载并合成后再换下。位图是宿主窗口在 iframe 画好后截的（`board:shot`），
+ * 1:1 贴、钉在截下来的位置：右栏开合的过渡里宽度每帧都在变，宽度对不上就拿同一块看板最接近的一张，多出来的由外框裁掉。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PluginBoardResult as PluginBoardSnapshotResult } from "../../../../shared/plugin-board.ts";
@@ -22,7 +26,18 @@ import { requestOpenPluginBoard } from "../../shell/open-panel.ts";
 import { BoardGrid } from "../plugins/BoardGrid.tsx";
 import { containerLayout, gridHeight } from "../plugins/board-layout.ts";
 import { boardClip, boardExpandStore, collapseScrollDelta } from "./board-expand.ts";
-import { boardShotFor, boardShotKey, boardShotVariantKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
+import {
+  boardShotCovering,
+  boardShotFor,
+  boardShotGeometrySame,
+  boardShotKey,
+  boardShotVariantKey,
+  boardShotView,
+  boardShots,
+  type BoardShot,
+  type BoardShotGeometry,
+  type BoardShotView as BoardView,
+} from "./board-shot-cache.ts";
 import { skippedText } from "./board-text.ts";
 import { useSnapshotCards, type SnapshotCardInput } from "./useSnapshotCards.ts";
 import "./board.css";
@@ -33,6 +48,20 @@ const NEAR_MARGIN = "100% 0px";
 const SCROLL_ROOT = ".chat-transcript";
 /** 收起时看板顶部与滚动容器顶部之间留的边距（像素） */
 const COLLAPSE_MARGIN = 12;
+/**
+ * 真 iframe 画好后隔这么久试着留位图（毫秒，依次是第 1、2、3 次）。首次给模板里的图片、字体与会话 / 右栏的过渡留出时间；
+ * 那一次没存上（截到空白、几何一直在动、那一片看不见）就再试，存上了后两次什么都不做。
+ */
+const CAPTURE_ATTEMPT_DELAYS_MS = [600, 1600, 3100];
+/** 展开看板滚动停下这么久后，给新露出来的那一片也留一张；滚动过程中只重置一个计时器，不逐帧 setState */
+const SCROLL_CAPTURE_DELAY_MS = 400;
+/** 留图前等几何连续这么多帧不动（虚拟列表测高、阅读位置恢复会在 iframe 就绪后继续挪页面）；最多等这么多帧 */
+const SETTLE_FRAMES = 2;
+const SETTLE_FRAME_LIMIT = 60;
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
 
 /** 窗口高度（随窗口缩放更新）：算「限高后是否被裁」要用 */
 function useWindowHeight(): number {
@@ -53,8 +82,22 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   const [near, setNear] = useState(false);
   const [liveReady, setLiveReady] = useState(false);
   const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "");
-  const captureVersion = useRef(0);
+  /** 此刻看得见的那一片（从看板顶部往下多少、多高）：决定贴哪张位图、贴在哪 */
+  const [view, setView] = useState<BoardView | null>(null);
+  const capturing = useRef(false);
   const cacheKey = sessionId === null ? null : boardShotKey(sessionId, toolCallId);
+
+  /** 此刻的几何：外框矩形、看得见的那一片（与滚动容器的交集）、滚动位置。外框不在页面上了回 null */
+  const geometry = useCallback((): BoardShotGeometry | null => {
+    const clip = hostRef.current?.querySelector<HTMLElement>(".board-clip");
+    if (clip === null || clip === undefined || !clip.isConnected) return null;
+    const rect = clip.getBoundingClientRect();
+    const root = clip.closest<HTMLElement>(SCROLL_ROOT);
+    const rootRect = root?.getBoundingClientRect();
+    const visible = boardShotView({ top: rect.top, height: rect.height }, { top: rootRect?.top ?? 0, bottom: rootRect?.bottom ?? window.innerHeight });
+    if (visible === null) return null;
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, view: visible, scrollTop: root?.scrollTop ?? 0 };
+  }, []);
 
   // 量自己的宽度（layout effect：占位在第一帧画出来之前就有对的高度）
   useLayoutEffect(() => {
@@ -95,90 +138,109 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   const clip = boardClip({ contentHeight: placeholderHeight, windowHeight, expanded });
   const visibleHeight = clip.maxHeight ?? placeholderHeight;
 
-  /** 真 iframe 已经画好：截宿主窗口里这一块，给下一次重挂用。失败只放弃优化，不影响正常加载。 */
-  const capture = useCallback((): void => {
-    if (cacheKey === null) return;
-    const host = hostRef.current?.querySelector<HTMLElement>(".board-clip");
-    if (host === null || host === undefined) return;
+  // 量此刻看得见的那一片。外框的高度由宽度和限高算出来，要等它们落到布局上再量，所以挂在它们后面的 layout effect 里；
+  // 挂上 iframe、原地展开 / 收起、窗口缩放后重量。滚动不跟：位图钉在看板上，跟着看板走
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      const next = geometry()?.view ?? null;
+      setView((previous) =>
+        previous !== null && next !== null && Math.abs(previous.top - next.top) < 0.5 && Math.abs(previous.height - next.height) < 0.5 ? previous : next,
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [geometry, width, live, expanded]);
+
+  /** 真 iframe 已经画好：截宿主窗口里此刻看得见的那一片，给下一次重挂用。失败只放弃优化，不影响正常加载。 */
+  const capture = useCallback(async (): Promise<void> => {
+    const clip = hostRef.current?.querySelector<HTMLElement>(".board-clip");
+    if (cacheKey === null || clip === null || clip === undefined || capturing.current) return;
     // 有卡坏了 / 还没都挂上时不截：残缺画面不该成为下次的第一帧
-    if (host.querySelectorAll("iframe.bd-iframe").length !== board.cards.length) return;
-    const root = host.closest<HTMLElement>(SCROLL_ROOT);
+    if (clip.querySelectorAll("iframe.bd-iframe").length !== board.cards.length) return;
     const ratio = window.devicePixelRatio || 1;
-    const version = ++captureVersion.current;
-    void (async () => {
-      // 阅读位置恢复与虚拟列表测高会在 iframe 就绪后继续挪动页面。连续两次几何不变才截，
-      // 否则 rect 是量的时候的、像素是另一时刻的，贴回来就只剩某个局部（实测右下半张）。
-      let candidate = { rect: host.getBoundingClientRect(), scrollTop: root?.scrollTop ?? 0 };
-      let settled: typeof candidate | null = null;
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 400));
-        if (!host.isConnected) return;
-        const next = { rect: host.getBoundingClientRect(), scrollTop: root?.scrollTop ?? 0 };
-        const stable =
-          Math.abs(next.rect.x - candidate.rect.x) < 1 &&
-          Math.abs(next.rect.y - candidate.rect.y) < 1 &&
-          Math.abs(next.rect.width - candidate.rect.width) < 1 &&
-          Math.abs(next.rect.height - candidate.rect.height) < 1 &&
-          Math.abs(next.scrollTop - candidate.scrollTop) < 1;
-        if (stable) {
-          settled = next;
-          break;
-        }
-        candidate = next;
+    const before = geometry();
+    if (before === null) return;
+    // 这一片已经有图盖着就不再截：每次切回都会走到这里，截一张要主进程整页取帧
+    if (boardShotCovering(cacheKey, { width: before.width, ...before.view, ratio, theme, now: Date.now() }) !== undefined) return;
+    capturing.current = true;
+    try {
+      // 量矩形与截像素不在同一刻：先等几何连续几帧不动，截完再核一次，动了就丢（否则贴回来只剩某个局部）
+      let settled = before;
+      let same = 0;
+      for (let frames = 0; same < SETTLE_FRAMES && frames < SETTLE_FRAME_LIMIT; frames += 1) {
+        await nextFrame();
+        const next = geometry();
+        if (next === null) return;
+        same = boardShotGeometrySame(next, settled) ? same + 1 : 0;
+        settled = next;
       }
-      if (settled === null) return;
-      const { rect, scrollTop } = settled;
-      // 只截完整落在窗口里的外框；半露的图贴回来会像被二次裁过
-      if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight || rect.width < 1 || rect.height < 1) return;
-      const result = await api.board.shot({ rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } });
+      if (same < SETTLE_FRAMES) return;
+      const { view } = settled;
+      const result = await api.board.shot({ rect: { x: settled.x, y: settled.y + view.top, width: settled.width, height: view.height } });
       if (result === null) return;
       const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
       const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-      const current = hostRef.current?.querySelector<HTMLElement>(".board-clip");
-      const currentRect = current?.getBoundingClientRect();
-      // IPC / 解码期间又挪了位置、尺寸或主题：这份旧图不能落地
-      if (
-        current === null ||
-        current === undefined ||
-        currentRect === undefined ||
-        Math.abs(currentRect.x - rect.x) >= 1 ||
-        Math.abs(currentRect.y - rect.y) >= 1 ||
-        Math.abs(currentRect.width - rect.width) >= 2 ||
-        Math.abs(currentRect.height - rect.height) >= 2 ||
-        Math.abs((root?.scrollTop ?? 0) - scrollTop) >= 1 ||
-        (document.documentElement.dataset.theme ?? "") !== theme ||
-        version !== captureVersion.current
-      ) {
+      const after = geometry();
+      // 取帧 / 解码期间又挪了位置、尺寸或主题：这份旧图不能落地
+      if (after === null || !boardShotGeometrySame(after, settled) || (document.documentElement.dataset.theme ?? "") !== theme) {
         bitmap.close();
         return;
       }
-      boardShots.set(
-        boardShotVariantKey(cacheKey, { cssWidth: rect.width, cssHeight: rect.height, ratio, theme }),
-        { bitmap, cssWidth: rect.width, cssHeight: rect.height, ratio, theme, capturedAt: Date.now() },
-      );
-    })().catch(() => undefined);
-  }, [board.cards.length, cacheKey, theme]);
+      const stored: BoardShot = { bitmap, cacheKey, cssTop: view.top, cssWidth: settled.width, cssHeight: view.height, ratio, theme, capturedAt: Date.now() };
+      boardShots.set(boardShotVariantKey(cacheKey, stored), stored);
+    } catch {
+      // 截不到只等于没有这张图，正常 iframe 路径不受影响
+    } finally {
+      capturing.current = false;
+    }
+  }, [board.cards.length, cacheKey, geometry, theme]);
 
   const onPainted = useCallback((): void => {
     setLiveReady(true);
   }, []);
 
-  // 真 iframe 就绪后留位图；已经画着的看板改宽 / 展开 / 换主题也重新留一张。
-  // 2 秒等模板的数据、图片、字体与会话 / 右栏过渡结束：过早截到空白再贴回去，比没有缓存更糟。
+  // 真 iframe 就绪后留位图；已经画着的看板改宽 / 展开 / 换主题也重新走一遍（那一片已经有图的话 capture 自己会跳过）
   useEffect(() => {
     if (!live || !liveReady) return undefined;
-    const timer = window.setTimeout(capture, 2000);
-    return () => window.clearTimeout(timer);
+    const timers = CAPTURE_ATTEMPT_DELAYS_MS.map((delay) =>
+      window.setTimeout(() => {
+        void capture();
+      }, delay),
+    );
+    return () => {
+      for (const timer of timers) window.clearTimeout(timer);
+    };
   }, [width, expanded, theme, live, liveReady, capture]);
 
   useEffect(() => {
     if (!live) setLiveReady(false);
   }, [live]);
 
+  // 原地展开的看板比对话区高：留过顶部以后再滚到中段，新露出来的那一片也要留图。只在滚动停下后做一次；
+  // 已经有图盖住这一片时 capture 会直接返回，不产生 IPC
+  useEffect(() => {
+    if (!live || !liveReady) return undefined;
+    const root = hostRef.current?.closest<HTMLElement>(SCROLL_ROOT);
+    if (root === null || root === undefined) return undefined;
+    let timer: number | undefined;
+    const onScroll = (): void => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void capture();
+      }, SCROLL_CAPTURE_DELAY_MS);
+    };
+    root.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.clearTimeout(timer);
+      root.removeEventListener("scroll", onScroll);
+    };
+  }, [capture, live, liveReady]);
+
   const shot =
-    cacheKey === null || width === 0
+    cacheKey === null || width === 0 || view === null
       ? undefined
-      : boardShotFor(cacheKey, { width, height: visibleHeight, ratio: window.devicePixelRatio || 1, theme, now: Date.now() });
+      : boardShotFor(cacheKey, { width, ...view, ratio: window.devicePixelRatio || 1, theme, now: Date.now() });
   const pasteShot = shot !== undefined && (!live || !liveReady);
   const collapse = (): void => {
     // 「收起」钮在展开的看板最底下：整块缩回半屏后，顶部若在视口上方就把它拉回视口里，别让用户迷路
@@ -229,7 +291,7 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   );
 }
 
-/** 位图同步贴上（layout effect）：挂载后的第一帧就有内容，不等 PNG 再解码一次 */
+/** 位图同步贴上（layout effect）：挂载后的第一帧就有内容，不等 PNG 再解码一次。1:1 钉在它截下来的位置，多出来的由外框裁掉 */
 function BoardShotView(props: { shot: BoardShot }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useLayoutEffect(() => {
@@ -239,7 +301,7 @@ function BoardShotView(props: { shot: BoardShot }) {
     canvas.height = props.shot.bitmap.height;
     canvas.getContext("2d")?.drawImage(props.shot.bitmap, 0, 0);
   }, [props.shot]);
-  return <canvas ref={ref} className="board-shot" aria-hidden="true" />;
+  return <canvas ref={ref} className="board-shot" style={{ top: props.shot.cssTop, width: props.shot.cssWidth, height: props.shot.cssHeight }} aria-hidden="true" />;
 }
 
 /** 挂着的看板：换地址的 hook 在这里——卸载即丢掉已用掉的一次性地址，再挂载重新换 */

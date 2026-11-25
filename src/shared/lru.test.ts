@@ -21,3 +21,13 @@ test("覆盖同键不增长，delete 生效", () => {
   lru.delete("a");
   assert.equal(lru.get("a"), undefined);
 });
+
+test("values 按最久到最近列出全部候选，本身不刷新新鲜度", () => {
+  const lru = new LruCache<number>(3);
+  lru.set("a", 1);
+  lru.set("b", 2);
+  lru.set("c", 3);
+  assert.deepEqual(lru.values(), [1, 2, 3]);
+  lru.set("d", 4);
+  assert.deepEqual(lru.values(), [2, 3, 4]);
+});

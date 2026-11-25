@@ -1,49 +1,136 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BOARD_SHOT_LIMIT, boardShotFits, boardShotFor, boardShotKey, boardShotVariantKey, boardShots, type BoardShot } from "./board-shot-cache.ts";
+import {
+  BOARD_SHOT_LIMIT,
+  boardShotCovering,
+  boardShotCovers,
+  boardShotFor,
+  boardShotGeometrySame,
+  boardShotKey,
+  boardShotVariantKey,
+  boardShotView,
+  boardShots,
+  type BoardShot,
+  type BoardShotGeometry,
+  type BoardShotQuery,
+} from "./board-shot-cache.ts";
 
-const base = { cssWidth: 752, cssHeight: 400, ratio: 2, theme: "light", capturedAt: 1_000 };
-const current = { width: 752, height: 400, ratio: 2, theme: "light", now: 2_000 };
+function shot(cacheKey: string, overrides: Partial<BoardShot> = {}): BoardShot {
+  return { bitmap: {} as ImageBitmap, cacheKey, cssTop: 0, cssWidth: 752, cssHeight: 400, ratio: 2, theme: "light", capturedAt: 1_000, ...overrides };
+}
+
+function query(overrides: Partial<BoardShotQuery> = {}): BoardShotQuery {
+  return { width: 752, top: 0, height: 400, ratio: 2, theme: "light", now: 2_000, ...overrides };
+}
+
+function put(value: BoardShot): string {
+  const key = boardShotVariantKey(value.cacheKey, value);
+  boardShots.set(key, value);
+  return key;
+}
+
+function geometry(overrides: Partial<BoardShotGeometry> = {}): BoardShotGeometry {
+  return { x: 332, y: 104, width: 752, height: 400, view: { top: 0, height: 400 }, scrollTop: 12_000, ...overrides };
+}
 
 test("缓存键同时含会话与工具调用，撞 toolCallId 也不互贴", () => {
   assert.notEqual(boardShotKey("session-a", "call-1"), boardShotKey("session-b", "call-1"));
   assert.notEqual(boardShotKey("session-a", "call-1"), boardShotKey("session-a", "call-2"));
   assert.equal(boardShotKey("session-a", "call-1"), "session-a:call-1");
+  const key = boardShotKey("same-call", "call");
+  const other = boardShotKey("other-call", "call");
+  const expected = shot(key);
+  const keys = [put(expected), put(shot(other, { cssWidth: 999 }))];
+  assert.equal(boardShotFor(key, query()), expected);
+  for (const variant of keys) boardShots.delete(variant);
 });
 
-test("位图只在宽高、DPR、主题与新鲜度都对得上时可用", () => {
-  assert.equal(boardShotFits(base, current), true);
-  assert.equal(boardShotFits(base, { ...current, width: 753.99 }), true);
-  assert.equal(boardShotFits(base, { ...current, width: 754 }), false);
-  assert.equal(boardShotFits(base, { ...current, height: 402 }), false);
-  assert.equal(boardShotFits(base, { ...current, ratio: 1 }), false);
-  assert.equal(boardShotFits(base, { ...current, theme: "black" }), false);
+test("整块位图要求宽度、DPR、主题对得上且上下盖得住；亚像素抖动可以", () => {
+  const key = boardShotKey("fits", "call");
+  const expected = shot(key);
+  const variant = put(expected);
+  assert.equal(boardShotFor(key, query({ width: 753.99, height: 400.99 })), expected);
+  assert.equal(boardShotFor(key, query({ ratio: 1 })), undefined);
+  assert.equal(boardShotFor(key, query({ theme: "black" })), undefined);
+  assert.equal(boardShotCovering(key, query({ width: 754 })), undefined);
+  assert.equal(boardShotCovering(key, query({ height: 402 })), undefined);
+  boardShots.delete(variant);
 });
 
 test("快照不按时间过期；只有时钟倒走的未来图不贴", () => {
-  assert.equal(boardShotFits(base, { ...current, now: base.capturedAt + 365 * 24 * 60 * 60 * 1000 }), true);
-  assert.equal(boardShotFits(base, { ...current, now: base.capturedAt - 1 }), false);
+  const key = boardShotKey("freshness", "call");
+  const expected = shot(key);
+  const variant = put(expected);
+  assert.equal(boardShotFor(key, query({ now: 1_000 + 365 * 24 * 60 * 60 * 1000 })), expected);
+  assert.equal(boardShotFor(key, query({ now: 999 })), undefined);
+  boardShots.delete(variant);
 });
 
-test("右栏开合的宽窄布局各留一张，不按当前宽度互相覆盖", () => {
+test("右栏开合的宽窄布局各留一张；稳定宽度精确命中，过渡宽度拿最接近的", () => {
   const key = boardShotKey("variant-test", "call");
-  const wide = { ...base, cssWidth: 840, bitmap: {} as ImageBitmap } satisfies BoardShot;
-  const narrow = { ...base, cssWidth: 406, bitmap: {} as ImageBitmap } satisfies BoardShot;
-  boardShots.set(boardShotVariantKey(key, wide), wide);
-  boardShots.set(boardShotVariantKey(key, narrow), narrow);
-  assert.equal(boardShotFor(key, { ...current, width: 840 }), wide);
-  assert.equal(boardShotFor(key, { ...current, width: 406 }), narrow);
-  assert.equal(boardShotFor(key, { ...current, width: 600 }), undefined);
-  boardShots.delete(boardShotVariantKey(key, wide));
-  boardShots.delete(boardShotVariantKey(key, narrow));
+  const wide = shot(key, { cssWidth: 840 });
+  const narrow = shot(key, { cssWidth: 406 });
+  const keys = [put(wide), put(narrow)];
+  assert.equal(boardShotFor(key, query({ width: 840 })), wide);
+  assert.equal(boardShotFor(key, query({ width: 406 })), narrow);
+  // 840 能盖住 600，406 盖不住：不拉伸，贴 840 的那张，右边由外框裁掉
+  assert.equal(boardShotFor(key, query({ width: 600 })), wide);
+  // 两张都比 1000 窄：取更宽的，右边缺的更少
+  assert.equal(boardShotFor(key, query({ width: 1000 })), wide);
+  // 两张都盖得住 300：取较窄的，被裁掉的更少
+  assert.equal(boardShotFor(key, query({ width: 300 })), narrow);
+  for (const variant of keys) boardShots.delete(variant);
+});
+
+test("原地展开只留看得见的那一片：贴回同一片；整块图出现后优先整块", () => {
+  const key = boardShotKey("expanded", "call");
+  const partial = shot(key, { cssTop: 240, cssHeight: 520 });
+  const full = shot(key, { cssHeight: 1_100 });
+  const keys = [put(partial)];
+  assert.equal(boardShotFor(key, query({ top: 240, height: 520 })), partial);
+  assert.equal(boardShotFor(key, query({ top: 300, height: 300 })), partial);
+  assert.equal(boardShotCovering(key, query({ top: 0, height: 600 })), undefined);
+  keys.push(put(full));
+  assert.equal(boardShotFor(key, query({ top: 240, height: 520 })), full);
+  assert.equal(boardShotFor(key, query({ top: 0, height: 600 })), full);
+  for (const variant of keys) boardShots.delete(variant);
+});
+
+test("可见区域是看板与滚动容器的交集；顶部被裁、底部被裁与一条边都算对", () => {
+  assert.deepEqual(boardShotView({ top: 104, height: 400 }, { top: 52, bottom: 722 }), { top: 0, height: 400 });
+  assert.deepEqual(boardShotView({ top: -200, height: 1_100 }, { top: 52, bottom: 722 }), { top: 252, height: 670 });
+  assert.deepEqual(boardShotView({ top: 600, height: 500 }, { top: 52, bottom: 722 }), { top: 0, height: 122 });
+  assert.equal(boardShotView({ top: 700, height: 500 }, { top: 52, bottom: 722 }), null);
+  assert.equal(boardShotView({ top: -900, height: 500 }, { top: 52, bottom: 722 }), null);
+});
+
+test("一片至少覆盖到可见区域底边；顶部和底部各留 1px 亚像素余量", () => {
+  assert.equal(boardShotCovers({ cssTop: 0, cssHeight: 400 }, { top: 0, height: 400 }), true);
+  assert.equal(boardShotCovers({ cssTop: 100.9, cssHeight: 400 }, { top: 100, height: 400.9 }), true);
+  assert.equal(boardShotCovers({ cssTop: 102, cssHeight: 400 }, { top: 100, height: 400 }), false);
+  assert.equal(boardShotCovers({ cssTop: 0, cssHeight: 397 }, { top: 0, height: 400 }), false);
+});
+
+test("留图前后任一几何变化都判不稳定；亚像素抖动与相同滚动位置通过", () => {
+  const base = geometry();
+  assert.equal(boardShotGeometrySame(base, geometry({ x: 332.4, y: 103.6, width: 752.4, height: 400.4, scrollTop: 12_000.4, view: { top: 0.4, height: 400.4 } })), true);
+  for (const changed of [
+    geometry({ x: 333 }),
+    geometry({ y: 105 }),
+    geometry({ width: 753 }),
+    geometry({ height: 401 }),
+    geometry({ scrollTop: 12_001 }),
+    geometry({ view: { top: 1, height: 400 } }),
+    geometry({ view: { top: 0, height: 401 } }),
+  ]) {
+    assert.equal(boardShotGeometrySame(base, changed), false);
+  }
 });
 
 test("LRU 只留最近 8 张，最久没用的先淘汰", () => {
   const keys: string[] = [];
   for (let i = 0; i < BOARD_SHOT_LIMIT + 1; i += 1) {
-    const key = boardShotKey(`shot-test-${i}`, "call");
-    keys.push(key);
-    boardShots.set(key, { ...base, bitmap: {} as ImageBitmap } satisfies BoardShot);
+    keys.push(put(shot(boardShotKey(`shot-test-${i}`, "call"))));
   }
   assert.equal(boardShots.size, BOARD_SHOT_LIMIT);
   assert.equal(boardShots.get(keys[0] ?? ""), undefined);

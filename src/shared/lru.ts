@@ -35,4 +35,9 @@ export class LruCache<V> {
   delete(key: string): void {
     this.items.delete(key);
   }
+
+  /** 现有的全部值，从最久没用到最近用过。只读、不刷新新鲜度：要在一组候选里挑（看板位图按布局找最接近的一张）时用 */
+  values(): V[] {
+    return [...this.items.values()];
+  }
 }
