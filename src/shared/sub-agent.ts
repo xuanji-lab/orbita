@@ -13,6 +13,7 @@
  * 质量单位同 planet-design：盘上 M⊕。
  */
 
+import { MASS_UNIT_PER_EARTH, orbitClearance, seededStarMass, STAR_MASS } from "./galaxy-scale.ts";
 import { checkSystem, LEGACY_ORBIT_E, LEGACY_ORBIT_OMEGA_DEG, type OrbitSpec } from "./orbit-physics.ts";
 
 export const SUB_AGENTS_DIR = "agents";
@@ -26,8 +27,11 @@ export const SUB_AGENT_ROLE_MAX = 6000;
 export const SUB_AGENT_MASS_EARTH = { min: 0.1, max: 4 } as const;
 /** 行星质量上限跟着主星走（璇玑星系规则：行星上限 = 主星质量 × 5%–10%，这里取 10%） */
 export const SUB_AGENT_MASS_RATIO = 0.1;
-/** 主星质量读不到时按最轻的主星（30 M⊕）算上限：宁严勿松 */
-export const STAR_MASS_EARTH_FLOOR = 30;
+/**
+ * 连工作区 id 都没有、主星质量实在读不到时按界面上最轻的那档主星算（STAR_MASS.min，同一个来源）：宁严勿松。
+ * 有工作区 id 时不用它——界面给那个工作区画的主星是 seededStarMassEarth(id)。
+ */
+export const STAR_MASS_EARTH_FLOOR = STAR_MASS.min / MASS_UNIT_PER_EARTH;
 /** 没给质量时的默认（M⊕） */
 export const SUB_AGENT_MASS_DEFAULT = 2;
 
@@ -82,7 +86,7 @@ export function parseSubAgentProfile(raw: unknown, id: string): SubAgentProfile 
 
 /** 行星质量上限（M⊕）：主星 × 10%，再夹在绝对区间里 */
 export function subAgentMassCap(starMassEarth: number | null): number {
-  const star = starMassEarth !== null && Number.isFinite(starMassEarth) && starMassEarth > 0 ? starMassEarth : STAR_MASS_EARTH_FLOOR;
+  const star = starMassOrFloor(starMassEarth);
   return Math.min(SUB_AGENT_MASS_EARTH.max, Math.round(star * SUB_AGENT_MASS_RATIO * 100) / 100);
 }
 
@@ -282,15 +286,35 @@ export function defaultSubAgentOrbit(existing: readonly number[]): number {
 }
 
 /**
+ * 没设计过的工作区（planet/ 里还没有主星质量）界面上画的那颗主星（M⊕）：按工作区 id 播种，与设计面板、首页星系、
+ * 侧栏头像用的是同一个函数（galaxy-scale 的 seededStarMass）。新建子智能体找空轨、算行星质量上限时，读不到主星质量
+ * 就按它算——两边对同一颗星说同一个质量，新行星才不会落进界面画出的主星里。
+ */
+export function seededStarMassEarth(workspaceId: string | null): number | null {
+  return workspaceId === null ? null : seededStarMass(workspaceId) / MASS_UNIT_PER_EARTH;
+}
+
+function starMassOrFloor(starMassEarth: number | null): number {
+  return starMassEarth !== null && Number.isFinite(starMassEarth) && starMassEarth > 0 ? starMassEarth : STAR_MASS_EARTH_FLOOR;
+}
+
+/**
  * 新行星的硬合法空轨：先找靠近旧默认槽位的候选，再按 0.5 步长向两边找。
- * 只看新行星涉及的冲突（旧稿本身的红区仍交给面板修），找不到返回 null，调用方不得先落档案。
+ * 两道判据：不落进主星、不出行星区（与设计面板同一条，orbitClearance）；行星之间隔开 2√3 个相互希尔半径
+ * （checkSystem，只看新行星涉及的冲突，旧稿本身的红区仍交给面板修）。找不到返回 null，调用方不得先落档案。
+ *
+ * 以前只有第二道：候选从 4 起一路试，空工作区的第二颗被排到 4.5——按主星半径算整个落在主星里（2026-11-25）。
  */
 export function findSubAgentOrbit(
   starMassEarth: number | null,
   existing: readonly { massEarth: number | null; orbit: number | null; eccentricity?: number; periapsisDeg?: number }[],
   newMassEarth: number,
+  newComposition: SubAgentComposition = "rock",
 ): number | null {
-  const star = starMassEarth !== null && Number.isFinite(starMassEarth) && starMassEarth > 0 ? starMassEarth : STAR_MASS_EARTH_FLOOR;
+  const star = starMassOrFloor(starMassEarth);
+  // 界面质量单位（M⊕ × 10）：半径公式与设计面板同一份
+  const starOnScreen = star * MASS_UNIT_PER_EARTH;
+  const planetOnScreen = newMassEarth * MASS_UNIT_PER_EARTH;
   const planets: OrbitSpec[] = existing.map((planet, index) => ({
     mass: planet.massEarth ?? SUB_AGENT_MASS_DEFAULT,
     a: planet.orbit ?? 19 + 12 * index,
@@ -300,6 +324,8 @@ export function findSubAgentOrbit(
   const preferred = defaultSubAgentOrbit(planets.map((planet) => planet.a));
   const candidates = Array.from({ length: 97 }, (_, index) => 4 + index * 0.5).sort((a, b) => Math.abs(a - preferred) - Math.abs(b - preferred) || a - b);
   for (const a of candidates) {
+    // 不落进主星、不出行星区：新行星从圆轨道出生，所以看的就是半长轴本身
+    if (!orbitClearance({ star: { mass: starOnScreen }, planet: { mass: planetOnScreen, composition: newComposition, a, e: 0 } }).ok) continue;
     const next = [...planets, { mass: newMassEarth, a, e: 0, omegaDeg: LEGACY_ORBIT_OMEGA_DEG }];
     const checked = checkSystem({ mass: star }, next);
     const self = next.length - 1;

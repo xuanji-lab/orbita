@@ -2,6 +2,18 @@ import { isWindowInactive } from "../../shell/window-activity.ts";
 // 值 import 走相对路径：node --test 解析不了 @shared 别名
 import { GALAXY_ZOOM } from "../../../../shared/settings.ts";
 import { LEGACY_ORBIT_E, LEGACY_ORBIT_OMEGA_DEG, orbitalPeriod } from "../../../../shared/orbit-physics.ts";
+import {
+  DENSITY,
+  MIN_CLEARANCE,
+  PLANET_MASS,
+  PLANET_ZONE,
+  STAR_DENSITY,
+  STAR_MASS,
+  bodyRadius,
+  planetRadius,
+  starRadius,
+  type BodyComposition,
+} from "../../../../shared/galaxy-scale.ts";
 
 /**
  * 首页星系（原型，proto/home-galaxy）的纯内核：天体、轨道、透视投影、按深度排序、动效闸门。
@@ -18,7 +30,7 @@ import { LEGACY_ORBIT_E, LEGACY_ORBIT_OMEGA_DEG, orbitalPeriod } from "../../../
  */
 
 /** 成分只影响密度（同质量下的半径）与配色深浅，不决定智能体的性格或职责 */
-export type Composition = "rock" | "ice" | "gas";
+export type Composition = BodyComposition;
 
 export interface PlanetSpec {
   id: string;
@@ -150,12 +162,12 @@ export function meanAnomalyOf(E: number, e: number): number {
   return E - e * Math.sin(E);
 }
 
-/** 主星与行星的质量区间互不重叠，且行星上限远低于主星下限 */
-export const STAR_MASS = { min: 300, max: 1000 } as const;
-export const PLANET_MASS = { min: 1, max: 40 } as const;
-/** 主星的密度：主星成分固定（等离子），只有质量能调。星系设计面板也用它算主星半径 */
-export const STAR_DENSITY = 1.4;
-export const DENSITY: Readonly<Record<Composition, number>> = { rock: 5.5, ice: 2, gas: 1.3 };
+/*
+ * 星系的比例（质量区间、密度、半径、行星区、间距）住在 shared/galaxy-scale.ts：新建子智能体找空轨的主进程也要它——
+ * 以前只在 renderer 里，主进程够不着，只好自己写一个「最轻主星」去算轨道，新行星落进了界面画出的主星里（2026-11-25）。
+ * 这里原样再导出，画星系的其余代码与别的消费者不用改。
+ */
+export { DENSITY, MIN_CLEARANCE, PLANET_MASS, PLANET_ZONE, STAR_DENSITY, STAR_MASS, bodyRadius, planetRadius, starRadius };
 /**
  * 一座星系最多画几圈轨道（几颗行星）。超出的计进 hidden，不画、不滚动、不缩放：9 圈以上的
  * 发丝线在 900×240 的带子里会叠成一个靶心（2026-11-23 视觉审查），6 圈还读得出「一圈一颗」。
@@ -167,11 +179,8 @@ export const VISIBLE_ORBIT_CAP = 6;
  */
 export const FRAME_EXTENT = 64;
 /** 行星区外沿：再往外留给碎石带。用户给的轨道半径整体超出时按比例收进来（天体半径不缩） */
-export const PLANET_ZONE = 52;
 /** 空星系画一圈极淡的「预期落位轨道」：第一颗行星会落在这一带，空星系不至于读成一个 loading 球 */
 export const EXPECTED_ORBIT = 22;
-/** 相邻两个天体表面之间至少留的距离（与半径同单位） */
-export const MIN_CLEARANCE = 2.5;
 /** 开普勒第三定律的参考点：轨道半径 KEPLER_REF_RADIUS 处转一圈 KEPLER_REF_PERIOD_S 秒 */
 export const KEPLER_REF_RADIUS = 20;
 /**
@@ -191,23 +200,6 @@ const DEG = Math.PI / 180;
 export const CAMERA_ELEVATION_DEG = 20;
 export const CAMERA_DISTANCE_FACTOR = 3.2;
 
-/** 球体半径 ∝ (质量 / 密度)^(1/3) */
-export function bodyRadius(mass: number, density: number): number {
-  return Math.cbrt(mass / density);
-}
-
-/**
- * 主星半径。density 缺席 = STAR_DENSITY（现有星系逐位不变）；给了（如红矮星：小而致密，真实的比邻星约 50 g/cm³）
- * 就按它算——小主星可以比自己的气态巨行星还小（璇玑星系规则：体积不受质量高低约束，高低以质量为准）
- */
-export function starRadius(mass: number, density: number = STAR_DENSITY): number {
-  return bodyRadius(clamp(mass, STAR_MASS.min, STAR_MASS.max), density > 0 && Number.isFinite(density) ? density : STAR_DENSITY);
-}
-
-export function planetRadius(planet: Pick<PlanetSpec, "mass" | "composition" | "density">): number {
-  const density = planet.density !== undefined && planet.density > 0 ? planet.density : DENSITY[planet.composition];
-  return bodyRadius(clamp(planet.mass, PLANET_MASS.min, PLANET_MASS.max), density);
-}
 
 /** 开普勒：T² ∝ a³/(M+m)。相对视觉时钟以默认主星 620、a=20 时 112 秒一圈为参考 */
 export function angularSpeed(orbitRadius: number, starMass = 620, planetMass = 0): number {

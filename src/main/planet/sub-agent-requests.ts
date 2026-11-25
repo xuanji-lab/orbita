@@ -66,7 +66,7 @@ export async function applySubAgentRequest(
     return { ok: true, text, agents };
   }
   if (request.action === "create") {
-    const created = await deps.store.create(workspace.path, request.input, "chat");
+    const created = await deps.store.create(workspace.path, request.input, "chat", workspace.id);
     if (!created.ok) return { ok: false, error: created.error };
     deps.broadcast({ workspaceId: workspace.id, subAgentId: created.value.id, action: "created", source: "chat", sessionId: event.sessionId });
     let pending = "";

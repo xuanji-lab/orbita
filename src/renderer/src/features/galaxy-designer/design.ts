@@ -9,6 +9,7 @@ import {
   starRadius,
   type Composition,
 } from "../chat/galaxy.ts";
+import { MASS_UNIT_PER_EARTH, orbitClearance, orbitRange, seededStarMass, STAR_MASS_DEFAULT, STAR_MASS_STEPS } from "../../../../shared/galaxy-scale.ts";
 import type { RightPanelKind } from "../../shell/RightRail.tsx";
 import type { SubAgentProfile } from "@shared/sub-agent";
 import type { EyeStyle, PlanetMix, PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
@@ -193,16 +194,25 @@ export function radiusOf(design: GalaxyDesign, kind: BodyKind): number {
   return design.planet === null ? Number.NaN : planetRadius({ ...design.planet, density: planetDensity(design.planet) });
 }
 
+/**
+ * 这颗行星绕主星的轨道合不合法（撞主星、出行星区）由 shared 的 orbitClearance / orbitRange 判——主进程新建子智能体
+ * 挑空轨用的是同一条。密度按这颗天体此刻的（主星固定、行星随构成推），与 radiusOf 同源。
+ */
+function starAndPlanet(design: GalaxyDesign): { star: { mass: number; density?: number }; planet: { mass: number; density: number } } {
+  return {
+    star: { mass: design.star?.mass ?? Number.NaN, density: design.star?.density },
+    planet: { mass: design.planet?.mass ?? Number.NaN, density: bodyDensity(design, "planet") },
+  };
+}
+
 /** 半长轴的合法下限：近日距 a(1−e) 至少放下两颗天体与间距 */
 export function minOrbit(design: GalaxyDesign): number {
-  const e = design.planet === null ? 0 : orbitEccentricityOf(design.planet);
-  return (radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE) / Math.max(1 - e, 1e-9);
+  return orbitRange({ ...starAndPlanet(design), e: design.planet === null ? 0 : orbitEccentricityOf(design.planet) }).min;
 }
 
 /** 半长轴的合法上限：远日距 a(1+e) 连同行星半径留在行星区里 */
 export function maxOrbit(design: GalaxyDesign): number {
-  const e = design.planet === null ? 0 : orbitEccentricityOf(design.planet);
-  return (PLANET_ZONE - radiusOf(design, "planet")) / (1 + e);
+  return orbitRange({ ...starAndPlanet(design), e: design.planet === null ? 0 : orbitEccentricityOf(design.planet) }).max;
 }
 
 // ── 校验 ─────────────────────────────────────────────────────────────
@@ -237,12 +247,12 @@ export function validateDesign(design: GalaxyDesign): DesignError[] {
   }
   if (design.star === null || design.planet === null) return errors;
   const orbit = design.planet.orbitRadius;
-  const e = orbitEccentricityOf(design.planet);
   const near = minOrbit(design);
   const far = maxOrbit(design);
-  if (!Number.isFinite(orbit) || !Number.isFinite(e) || e < 0 || e > ORBIT_ECC_MAX || orbit * (1 - e) < radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE) {
-    errors.push({ kind: "orbit-collision", min: near, value: orbit });
-  } else if (orbit * (1 + e) + radiusOf(design, "planet") > PLANET_ZONE) errors.push({ kind: "orbit-far", max: far, value: orbit });
+  const bodies = starAndPlanet(design);
+  const clearance = orbitClearance({ star: bodies.star, planet: { ...bodies.planet, a: orbit, e: orbitEccentricityOf(design.planet) } });
+  if (!clearance.ok && clearance.kind === "collision") errors.push({ kind: "orbit-collision", min: near, value: orbit });
+  else if (!clearance.ok) errors.push({ kind: "orbit-far", max: far, value: orbit });
   return errors;
 }
 
@@ -566,8 +576,11 @@ export function workspaceHash(id: string): number {
 /** 满载档的长名字：超过 NAME_MAX，用来看面板会不会被撑开、错误会不会报出来 */
 export const LONG_NAME = "一颗名字特别长用来检查面板会不会被撑开的行星开普勒四五二乙扩展版";
 
-/** 默认主星质量：没在面板里设计过的工作区、全局首页都用它（与原型三档 fixture 同一个数） */
-export const STAR_MASS_DEFAULT = 620;
+/*
+ * 默认主星质量（没在面板里设计过的工作区的底稿、全局首页都用它）、界面质量单位、主星质量的档数：住在
+ * shared/galaxy-scale.ts（主进程新建子智能体找空轨要按同一颗主星算），这里原样再导出，面板里的消费者不用改。
+ */
+export { MASS_UNIT_PER_EARTH, STAR_MASS_DEFAULT, STAR_MASS_STEPS };
 
 function defaultStar(): BodyDesign {
   return { name: "", mass: STAR_MASS_DEFAULT, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star };
@@ -697,7 +710,6 @@ export function agentMapOf(planets: readonly PlanetDesign[]): Map<string, Planet
 
 // ── 与工作区 planet/ 的换算（盘上 M⊕，界面单位 = M⊕ × 10）────────────────
 
-export const MASS_UNIT_PER_EARTH = 10;
 
 /** 没给轨道的第 i 颗子智能体的默认轨道（与 galaxy-data 的 orbitRadiusOf 同一个起点与步长） */
 export function defaultAgentOrbit(index: number): number {
@@ -834,7 +846,6 @@ export function addPlanet(design: GalaxyDesign, workspaceId: string): AddPlanetR
  * 同一个 id 永远同一套；不同 id 在 8 档质量 × 星环 × 日冕 = 32 种之间散开（12 个工作区大概率各不相同，碰撞概率见测试）。
  * 注意主星没有成分 / 色调 / 纹理 / 云带这些轴（那是行星的），所以主星头像的差异轴只有这三个。
  */
-export const STAR_MASS_STEPS = 8;
 
 /** 头像按质量缩放的系数：最轻的主星 0.8、最重的 1（侧栏头像槽是固定的 28px，按这个系数在槽里放大放小） */
 export const AVATAR_SCALE = { min: 0.8, max: 1 } as const;
@@ -847,10 +858,10 @@ export function avatarScale(mass: number): number {
 export function seededDesign(workspaceId: string, level: Exclude<DesignLevel, "nostar"> = "default"): CompleteDesign {
   const base = defaultDesign(workspaceId, level);
   const bits = workspaceHash(`${workspaceId}:star`);
-  const mass = STAR_MASS.min + 100 * ((bits >>> 3) % STAR_MASS_STEPS);
+  // 质量取哪一档住在 shared（主进程新建子智能体找空轨要按同一颗主星算）；星环、日冕仍在这里按同一次哈希取
   const star: BodyDesign = {
     ...base.star,
-    mass: clamp(mass, STAR_MASS.min, STAR_MASS.max),
+    mass: seededStarMass(workspaceId),
     elements: { ...ALL_OFF, eyes: true, ring: (bits & 1) === 1, corona: (bits & 2) === 2 },
   };
   const draft: CompleteDesign = { ...base, star };

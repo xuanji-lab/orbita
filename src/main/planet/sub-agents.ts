@@ -23,6 +23,7 @@ import {
   checkCreate,
   checkUpdate,
   findSubAgentOrbit,
+  seededStarMassEarth,
   SUB_AGENT_VERSION,
   SUB_AGENTS_DIR,
   type Checked,
@@ -54,8 +55,12 @@ export class SubAgentStore {
     this.newId = options.newId ?? (() => `agent-${randomUUID().slice(0, 8)}`);
   }
 
-  /** 读一座星系的现状：伴随文件、主星名字与质量、每颗行星的名字与档案（不读地表图，便宜） */
-  private async galaxy(workspacePath: string): Promise<Galaxy> {
+  /**
+   * 读一座星系的现状：伴随文件、主星名字与质量、每颗行星的名字与档案（不读地表图，便宜）。
+   * 盘上还没有主星质量（这个工作区没在面板里设计过）时给了 workspaceId，就按界面给它画的那颗算——按工作区 id 播种，
+   * 与设计面板、首页星系同一个函数（seededStarMassEarth）；不给就还是 null，由用得上它的地方各自兜底。
+   */
+  private async galaxy(workspacePath: string, workspaceId: string | null = null): Promise<Galaxy> {
     const dir = join(workspacePath, PLANET_DIR);
     const companion = parseCompanion((await readJson(join(dir, PLANET_GALAXY_FILE))) ?? null);
     const mainFields = pluginDesignFields((await readJson(join(dir, PLANET_DESIGN_FILE))) ?? null);
@@ -71,7 +76,7 @@ export class SubAgentStore {
       agents,
       context: {
         mainName: mainFields.name ?? companion.main?.name ?? null,
-        starMassEarth: mainFields.massEarth ?? companion.main?.massEarth ?? null,
+        starMassEarth: mainFields.massEarth ?? companion.main?.massEarth ?? seededStarMassEarth(workspaceId),
         agents: agents.map((agent) => ({ id: agent.planet.id, name: agent.name })),
         max: PLANET_AGENTS_MAX,
       },
@@ -119,13 +124,17 @@ export class SubAgentStore {
     return { ok: true, value: relative };
   }
 
-  async create(workspacePath: string, raw: unknown, source: SubAgentSource): Promise<Checked<{ id: string; name: string }>> {
+  /**
+   * 建一颗新行星。workspaceId 用来认出「盘上还没有主星质量」时界面上画的是哪颗主星（按工作区 id 播种）：
+   * 找空轨与行星质量上限都按它算。新行星与界面画出的主星才对得上，不会落进主星里。
+   */
+  async create(workspacePath: string, raw: unknown, source: SubAgentSource, workspaceId: string | null = null): Promise<Checked<{ id: string; name: string }>> {
     return withPlanetLock(workspacePath, async () => {
-      const galaxy = await this.galaxy(workspacePath);
+      const galaxy = await this.galaxy(workspacePath, workspaceId);
       const checked = checkCreate(raw, galaxy.context);
       if (!checked.ok) return checked;
       const input = checked.value;
-      const orbit = findSubAgentOrbit(galaxy.context.starMassEarth, galaxy.agents.map((agent) => ({ massEarth: agent.massEarth, orbit: agent.planet.orbit ?? null, ...(agent.planet.eccentricity === undefined ? {} : { eccentricity: agent.planet.eccentricity }), ...(agent.planet.periapsisDeg === undefined ? {} : { periapsisDeg: agent.planet.periapsisDeg }) })), input.massEarth);
+      const orbit = findSubAgentOrbit(galaxy.context.starMassEarth, galaxy.agents.map((agent) => ({ massEarth: agent.massEarth, orbit: agent.planet.orbit ?? null, ...(agent.planet.eccentricity === undefined ? {} : { eccentricity: agent.planet.eccentricity }), ...(agent.planet.periapsisDeg === undefined ? {} : { periapsisDeg: agent.planet.periapsisDeg }) })), input.massEarth, input.composition);
       if (orbit === null) return { ok: false, error: "这组轨道排不下：请增加主星质量，或把相邻行星调远。当前质量下没有合法空轨，子智能体尚未创建。" };
       const id = this.uniqueId(galaxy);
       const surface = input.surfacePath === undefined ? null : await this.copySurface(workspacePath, id, input.surfacePath);

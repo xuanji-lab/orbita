@@ -76,12 +76,12 @@ export function registerPlanetIpc(workspaces: WorkspaceStore, subAgents: SubAgen
   const mutate = async (
     workspaceId: unknown,
     action: SubAgentsChanged["action"],
-    run: (path: string) => Promise<{ ok: true; value: { id: string } } | { ok: false; error: string }>,
+    run: (path: string, workspaceId: string) => Promise<{ ok: true; value: { id: string } } | { ok: false; error: string }>,
   ): Promise<SubAgentMutationResult> => {
     const path = await pathOf(workspaceId);
     if (path === null || typeof workspaceId !== "string") return { ok: false, error: "没有这个工作区" };
     try {
-      const result = await run(path);
+      const result = await run(path, workspaceId);
       if (!result.ok) return result;
       broadcast({ workspaceId, subAgentId: result.value.id, action, source: "panel" });
       return { ok: true, id: result.value.id };
@@ -90,7 +90,9 @@ export function registerPlanetIpc(workspaces: WorkspaceStore, subAgents: SubAgen
     }
   };
   ipcMain.handle(ipcChannels.subAgentCreate, (_event, request: unknown): Promise<SubAgentMutationResult> =>
-    isRecord(request) ? mutate(request["workspaceId"], "created", (path) => subAgents.create(path, request["input"], "panel")) : Promise.resolve({ ok: false, error: "请求的形状不对" }),
+    isRecord(request)
+      ? mutate(request["workspaceId"], "created", (path, workspaceId) => subAgents.create(path, request["input"], "panel", workspaceId))
+      : Promise.resolve({ ok: false, error: "请求的形状不对" }),
   );
   ipcMain.handle(ipcChannels.subAgentUpdate, (_event, request: unknown): Promise<SubAgentMutationResult> =>
     isRecord(request) ? mutate(request["workspaceId"], "updated", (path) => subAgents.update(path, request["input"], "panel")) : Promise.resolve({ ok: false, error: "请求的形状不对" }),

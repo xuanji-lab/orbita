@@ -9,6 +9,7 @@ import { applySubAgentRequest, type SubAgentRequestDeps } from "./sub-agent-requ
 import { DEFAULT_SETTINGS } from "../../shared/settings.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 import type { SubAgentsChanged } from "../../shared/sub-agent.ts";
+import { MASS_UNIT_PER_EARTH, orbitClearance, seededStarMass, STAR_MASS } from "../../shared/galaxy-scale.ts";
 
 async function workspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), "orbita-subagents-"));
@@ -123,6 +124,45 @@ describe("SubAgentStore：建", () => {
     const galaxy = await readJsonFile(join(dir, "planet", "galaxy.json"));
     assert.equal((galaxy["planets"] as unknown[]).length, 1);
     await rm(dir, { recursive: true });
+  });
+
+  it("空工作区连建两颗：第二颗不落进主星——主星多大，按界面给这个工作区播种的那颗算", async () => {
+    // 界面给没设计过的工作区画的主星按工作区 id 播种（STAR_MASS.min–max 整百一档）：各找一个落在最重、最轻那档的工作区
+    const idSeededTo = (mass: number): string => {
+      for (let i = 0; ; i += 1) if (seededStarMass(`ws-${i}`) === mass) return `ws-${i}`;
+    };
+    const newPlanetClear = (workspaceId: string, a: unknown): boolean =>
+      typeof a === "number" &&
+      orbitClearance({ star: { mass: seededStarMass(workspaceId) }, planet: { mass: 20, composition: "rock", a, e: 0 } }).ok;
+    const store = new SubAgentStore({ newId: counter() });
+
+    // 主星最重（100 M⊕）：两颗都排得下，第二颗在第一颗外侧、主星之外
+    const heavy = idSeededTo(STAR_MASS.max);
+    const heavyDir = await workspace();
+    assert.equal((await store.create(heavyDir, { name: "第一颗", role: "x" }, "panel", heavy)).ok, true);
+    const second = await store.create(heavyDir, { name: "第二颗", role: "x" }, "panel", heavy);
+    assert.equal(second.ok, true, second.ok ? "" : second.error);
+    const heavyPlanets = (await readJsonFile(join(heavyDir, "planet", "galaxy.json")))["planets"] as Record<string, unknown>[];
+    assert.equal(heavyPlanets.length, 2);
+    assert.equal(heavyPlanets[0]?.["orbit"], 19);
+    assert.ok(newPlanetClear(heavy, heavyPlanets[1]?.["orbit"]), `第二颗落在 ${String(heavyPlanets[1]?.["orbit"])}，主星 ${STAR_MASS.max / MASS_UNIT_PER_EARTH} M⊕`);
+    assert.ok((heavyPlanets[1]?.["orbit"] as number) > 19);
+    await rm(heavyDir, { recursive: true });
+
+    // 主星最轻（30 M⊕）：以前第二颗被排到 4.5，整个落在主星里；现在要么落在主星之外，要么如实说排不下
+    const light = idSeededTo(STAR_MASS.min);
+    const lightDir = await workspace();
+    assert.equal((await store.create(lightDir, { name: "第一颗", role: "x" }, "panel", light)).ok, true);
+    const lightSecond = await store.create(lightDir, { name: "第二颗", role: "x" }, "panel", light);
+    const lightPlanets = (await readJsonFile(join(lightDir, "planet", "galaxy.json")))["planets"] as Record<string, unknown>[];
+    if (lightSecond.ok) {
+      assert.equal(lightPlanets.length, 2);
+      assert.ok(newPlanetClear(light, lightPlanets[1]?.["orbit"]), `第二颗落在 ${String(lightPlanets[1]?.["orbit"])}，主星 ${STAR_MASS.min / MASS_UNIT_PER_EARTH} M⊕`);
+    } else {
+      assert.match(lightSecond.error, /排不下/);
+      assert.equal(lightPlanets.length, 1);
+    }
+    await rm(lightDir, { recursive: true });
   });
 
   it("空工作区（planet/ 还没有）也能建：伴随文件新建出来", async () => {
