@@ -1382,7 +1382,9 @@ void app.whenReady().then(async () => {
     secrets,
     safeStorage: {
       available: () => safeStorage.isEncryptionAvailable(),
-      backend: () => safeStorage.getSelectedStorageBackend(),
+      // getSelectedStorageBackend 只有 Linux 有（electron.d.ts 标 @platform linux）：macOS / Windows 上调它是
+      // TypeError，开关一点就抛（2026-11-25 真 Electron 实测）。别的平台走系统钥匙串 / DPAPI，没有 basic_text 退化
+      backend: () => (process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : "native"),
     },
     deviceCount: async () => (await mobileStore.devices()).length,
     onKeyLost: async (notice) => {
