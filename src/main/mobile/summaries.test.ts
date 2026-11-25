@@ -231,4 +231,21 @@ describe("sessions.changed：增量推送", () => {
     await flushAfter(catalog);
     assert.equal(pushes.length, 0);
   });
+
+  test("未读来自落盘的 meta（重启后 settled 是空的）：清未读也要推状态变化", async () => {
+    // 重启后的常见情况：meta.unread 有值、内存里 settledRecently 为空。
+    // clearSettled 只看 settled 删没删到会漏标脏，别的手机会一直停在「跑完没看」
+    const world = worldOf([metaOf(A, { unread: { at: 5, failed: false } })]);
+    const catalog = new MobileCatalog(depsOf(world));
+    const first = await catalog.list();
+    assert.equal(byId(first.sessions, A).state, "done");
+    const pushes: { changed: SessionSummary[]; removed: string[] }[] = [];
+    catalog.subscribe((changed, removed) => pushes.push({ changed, removed }));
+    // 手机端 unread.clear：主进程先把 meta.unread 落 null，再 clearSettled
+    world.metas = world.metas.map((meta) => (meta.id === A ? { ...meta, unread: null } : meta));
+    catalog.clearSettled(A);
+    await flushAfter(catalog);
+    assert.equal(pushes.length, 1, "清未读必须推一次");
+    assert.equal(pushes[0]?.changed.find((s) => s.id === A)?.state, "idle");
+  });
 });

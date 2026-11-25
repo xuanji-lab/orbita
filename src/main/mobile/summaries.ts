@@ -138,9 +138,15 @@ export class MobileCatalog {
     this.markDirty(sessionId);
   }
 
-  /** `unread.clear`：清掉「跑完没看」，状态可能从 done 变 idle——标脏推给在看的手机 */
+  /**
+   * `unread.clear`（以及手机打开这条会话）：清掉「跑完没看」，状态可能从 done 变 idle。
+   * **无条件标脏**：调用方此刻刚把 meta.unread 清成 null，而「跑完没看」在界面上是
+   * settledRecently 与 meta.unread 的并集——重启后 settled 是空的、未读来自落盘的 meta，
+   * 只看 settled 删没删到会漏推，别的手机上的清单会一直停在「跑完没看」。
+   */
   clearSettled(sessionId: string): void {
-    if (this.settled.delete(sessionId)) this.markDirty(sessionId);
+    this.settled.delete(sessionId);
+    this.markDirty(sessionId);
   }
 
   /** 有会话脏了，400 毫秒内一起重算。没有观看者时只更新快照，什么都不发 */
