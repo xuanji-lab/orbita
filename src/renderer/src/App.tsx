@@ -492,29 +492,30 @@ export function App() {
   useEffect(() => {
     setPaperChatWidth(settings.paperChatWidth ?? PAPER_CHAT_WIDTH);
   }, [settings.paperChatWidth]);
-  /** 布局 B 的容器（`.pane` = 稿件区 + 对话栏）实测宽：一半上限按它现算 */
+  /**
+   * 夹取**放在 CSS 里**（`min(clamp(280px, 存值, 50%), calc(100% - 稿件区最小宽))`），
+   * 不用 ResizeObserver 量容器：窗口被遮挡 / 后台时渲染帧会停，观察器回调跟着停，
+   * 量出来的宽会陈旧（真机复现：侧栏展开后对话栏仍按旧容器算，越过分界线）。
+   * CSS 的百分比在每次布局时现算，永远不会旧。拖动 / 键盘这些需要像素换算的场合
+   * 才在事件里现量。
+   */
   const paneRef = useRef<HTMLElement | null>(null);
-  const [paneMeasuredWidth, setPaneMeasuredWidth] = useState(0);
-  useEffect(() => {
-    const el = paneRef.current;
-    if (el === null) return undefined;
-    const measure = (): void => setPaneMeasuredWidth(Math.round(el.getBoundingClientRect().width));
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const chatRef = useRef<HTMLDivElement | null>(null);
   /** 稿件区此刻是不是并排（tex | pdf）：并排时对话栏要给它留下两块的最小宽 */
   const [paperSplit, setPaperSplit] = useState(false);
   const paperChatReserved = paperSplit ? PAPER_SPLIT_MIN_TOTAL : PAPER_SOURCE_MIN_WIDTH;
-  const clampChat = (width: number): number =>
-    clampPaperChatWidth(width, paneMeasuredWidth, paperChatReserved);
-  /** 实际渲染 / 拖动的宽：盘上的值按当前容器再夹一次 */
-  const effectivePaperChatWidth = clampChat(paperChatWidth);
+  const paperChatCss = `min(clamp(${PAPER_CHAT_WIDTH_RANGE.min}px, ${Math.round(paperChatWidth)}px, 50%), calc(100% - ${paperChatReserved}px))`;
+  /** 事件时现量：容器宽（`.pane`）与对话栏此刻渲染宽 */
+  const measureChat = (): { pane: number; chat: number } => ({
+    pane: paneRef.current?.getBoundingClientRect().width ?? 0,
+    chat: chatRef.current?.getBoundingClientRect().width ?? 0,
+  });
+  const clampChat = (width: number, pane: number): number =>
+    clampPaperChatWidth(width, pane, paperChatReserved);
   /** 对话栏拖动起点（px）：对话在右，指针左移 = 变宽 */
-  const paperChatDragFrom = useRef(effectivePaperChatWidth);
-  const commitPaperChatWidth = (width: number): void => {
-    const next = clampChat(width);
+  const paperChatDragFrom = useRef<{ width: number; pane: number }>({ width: paperChatWidth, pane: 0 });
+  const commitPaperChatWidth = (width: number, pane: number): void => {
+    const next = clampChat(width, pane);
     setPaperChatWidth(next);
     changeSettings({ paperChatWidth: next });
   };
@@ -1759,11 +1760,11 @@ export function App() {
           // 布局 B：对话栏宽由设置注入（CSS 只读变量；默认值仍是 paper-layout.ts 的 340）
           style={
             paperMode
-              ? ({ "--paper-chat-w": `${effectivePaperChatWidth}px` } as React.CSSProperties)
+              ? ({ "--paper-chat-w": paperChatCss } as React.CSSProperties)
               : undefined
           }
         >
-          <div className="pane-main">
+          <div className="pane-main" ref={chatRef}>
             {/* 稿件区 ↔ 对话栏的拆分条：布局 B 才有（对话在右，拖它改对话栏宽）。
                 绝对定位骑在对话卡片左缘的竖线上，不吃对话栏的 7px */}
             {paperMode && (
@@ -1772,17 +1773,35 @@ export function App() {
                 className="paper-chat-handle"
                 label={t.paper.chatHandle}
                 onDragStart={() => {
-                  paperChatDragFrom.current = effectivePaperChatWidth;
+                  const now = measureChat();
+                  paperChatDragFrom.current = { width: now.chat, pane: now.pane };
                 }}
-                onDrag={(delta) => setPaperChatWidth(clampChat(paperChatDragFrom.current - delta))}
-                onDragEnd={(delta) => commitPaperChatWidth(paperChatDragFrom.current - delta)}
-                onStep={(delta) => commitPaperChatWidth(effectivePaperChatWidth - delta)}
-                onEdge={(edge) =>
-                  commitPaperChatWidth(
-                    edge === "min" ? PAPER_CHAT_WIDTH_RANGE.min : Number.MAX_SAFE_INTEGER,
+                onDrag={(delta) =>
+                  setPaperChatWidth(
+                    clampChat(paperChatDragFrom.current.width - delta, paperChatDragFrom.current.pane),
                   )
                 }
-                onReset={() => commitPaperChatWidth(PAPER_CHAT_WIDTH)}
+                onDragEnd={(delta) =>
+                  commitPaperChatWidth(
+                    paperChatDragFrom.current.width - delta,
+                    paperChatDragFrom.current.pane,
+                  )
+                }
+                onStep={(delta) => {
+                  const now = measureChat();
+                  commitPaperChatWidth(now.chat - delta, now.pane);
+                }}
+                onEdge={(edge) => {
+                  const now = measureChat();
+                  commitPaperChatWidth(
+                    edge === "min" ? PAPER_CHAT_WIDTH_RANGE.min : Number.MAX_SAFE_INTEGER,
+                    now.pane,
+                  );
+                }}
+                onReset={() => {
+                  const now = measureChat();
+                  commitPaperChatWidth(PAPER_CHAT_WIDTH, now.pane);
+                }}
               />
             )}
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，

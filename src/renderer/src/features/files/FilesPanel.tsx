@@ -3,7 +3,6 @@ import { Icon, type IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { SplitHandle } from "../../shell/SplitHandle";
 import {
-  clampPaperPdfRatio,
   PAPER_PDF_MIN_WIDTH,
   PAPER_SOURCE_MIN_WIDTH,
   paperPdfRatioFromLeftWidth,
@@ -822,21 +821,19 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   useEffect(() => {
     setPdfRatio(props.settings.paperPdfRatio ?? PAPER_PDF_RATIO.default);
   }, [props.settings.paperPdfRatio]);
-  /** 并排容器的实测宽：每侧最小宽按它现算（量不到时按比例直接分） */
+  /**
+   * 并排宽度的夹取**写在 CSS 里**（`flex-basis: clamp(320px, 比例%, calc(100% - 280px))`），
+   * 不靠 ResizeObserver 量容器：窗口被遮挡 / 后台时渲染帧会停，观察器回调跟着停，
+   * 量出来的宽会陈旧（真机复现：侧栏展开后源码块仍按旧容器宽，PDF 被挤出面板）。
+   * 百分比在每次布局时现算，永远不会旧。拖动 / 键盘要像素换算的场合才在事件里现量。
+   */
   const panesRef = useRef<HTMLDivElement | null>(null);
-  const [panesWidth, setPanesWidth] = useState(0);
-  useEffect(() => {
-    const el = panesRef.current;
-    if (el === null) return undefined;
-    const measure = (): void => setPanesWidth(Math.round(el.getBoundingClientRect().width));
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [splitOn, shownTab?.path]);
-  const splitRatio = clampPaperPdfRatio(pdfRatio, panesWidth);
-  const sourceWidth = panesWidth > 0 ? Math.round(splitRatio * panesWidth) : 0;
   const pdfDragFrom = useRef<{ pane: number; left: number } | null>(null);
+  const measurePanes = (): { pane: number; left: number } => {
+    const pane = panesRef.current?.getBoundingClientRect().width ?? 0;
+    const left = panesRef.current?.firstElementChild?.getBoundingClientRect().width ?? 0;
+    return { pane, left };
+  };
   /** 比例落盘：拖动中只改本地，commit 才写（与侧栏 / 右栏同一条纪律） */
   const applyPdfRatio = (left: number, pane: number, commit: boolean): void => {
     const ratio = paperPdfRatioFromLeftWidth(left, pane);
@@ -2137,8 +2134,10 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                 data-pane="source"
                 className="files-panel-pane"
                 style={
-                  splitOn && panesWidth > 0
-                    ? { flex: `0 0 ${sourceWidth}px`, width: `${sourceWidth}px` }
+                  splitOn
+                    ? {
+                        flex: `0 0 clamp(${PAPER_SOURCE_MIN_WIDTH}px, ${(pdfRatio * 100).toFixed(4)}%, calc(100% - ${PAPER_PDF_MIN_WIDTH}px))`,
+                      }
                     : undefined
                 }
               >
@@ -2221,7 +2220,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                   orientation="vertical"
                   label={t.paper.sourcePdfHandle}
                   onDragStart={() => {
-                    pdfDragFrom.current = { pane: panesWidth, left: sourceWidth };
+                    pdfDragFrom.current = measurePanes();
                   }}
                   onDrag={(delta) => {
                     const from = pdfDragFrom.current;
@@ -2234,15 +2233,22 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     if (from === null) return;
                     applyPdfRatio(from.left + delta, from.pane, true);
                   }}
-                  onStep={(delta) => applyPdfRatio(sourceWidth + delta, panesWidth, true)}
-                  onEdge={(edge) =>
+                  onStep={(delta) => {
+                    const now = measurePanes();
+                    applyPdfRatio(now.left + delta, now.pane, true);
+                  }}
+                  onEdge={(edge) => {
+                    const now = measurePanes();
                     applyPdfRatio(
-                      edge === "min" ? PAPER_SOURCE_MIN_WIDTH : panesWidth - PAPER_PDF_MIN_WIDTH,
-                      panesWidth,
+                      edge === "min" ? PAPER_SOURCE_MIN_WIDTH : now.pane - PAPER_PDF_MIN_WIDTH,
+                      now.pane,
                       true,
-                    )
-                  }
-                  onReset={() => applyPdfRatio(panesWidth * PAPER_PDF_RATIO.default, panesWidth, true)}
+                    );
+                  }}
+                  onReset={() => {
+                    const now = measurePanes();
+                    applyPdfRatio(now.pane * PAPER_PDF_RATIO.default, now.pane, true);
+                  }}
                 />
               )}
               {pdfSidePath !== null && (
