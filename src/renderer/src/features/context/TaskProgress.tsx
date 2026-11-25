@@ -12,7 +12,7 @@ import { useTaskHistory, useTaskRecords, type TaskRecordsView } from "../chat/us
 import { sessionRunState, type SessionRunState } from "../notify/completion-notice.ts";
 import { isBookkeepingTool } from "../../../../shared/goal.ts";
 import { headSnippet, snippetPair, type GoalLedger, type LedgerEntry } from "../../../../shared/goal-ledger.ts";
-import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
+import { PLAN_TOOL_NAME, planAwaitingIn } from "../../../../shared/plan.ts";
 import type { TranscriptRecord } from "@shared/session";
 import type { ProcessChapter } from "../chat/turn-process.ts";
 import {
@@ -31,7 +31,6 @@ import {
   BEFORE_PLAN,
   groupBySteps,
   OUTSIDE_PLAN,
-  planAwaitingIn,
   planTimeline,
   planView,
   stepActiveSince,

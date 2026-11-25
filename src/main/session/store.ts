@@ -46,6 +46,7 @@ import {
   parseSessionMeta,
   pushRecentQuery,
   recentQueriesFromRecords,
+  SESSION_ID_PATTERN,
   SESSION_INITIAL_RECORDS,
   SESSION_PAGE_RECORDS,
   sortSessions,
@@ -69,12 +70,11 @@ import {
 } from "../../shared/revert.ts";
 
 /**
- * 会话 id 必须长得像 `randomUUID()`。
- *
- * **这是安全检查，不是洁癖**：id 从 renderer 经 IPC 传进来，直接拼进路径的话，
- * 一个 `../../` 就能读写 sessions 目录之外的文件。白名单比转义可靠。
+ * 会话 id 必须长得像 `randomUUID()`。**这是安全检查，不是洁癖**：id 从 renderer 经 IPC 传进来，
+ * 直接拼进路径的话，一个 `../../` 就能读写 sessions 目录之外的文件。白名单比转义可靠。
+ * 形状定在 shared（手机的线上协议也拿它校验手机发来的会话 id）。
  */
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SESSION_ID = SESSION_ID_PATTERN;
 
 /**
  * 会话 id 白名单，导出给 ChannelStore 用——通道账本的路径

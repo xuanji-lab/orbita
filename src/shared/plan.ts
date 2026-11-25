@@ -7,7 +7,12 @@
  * 会和同批等你批准的工具一起挂着，面板若只认执行完的，就一直显示上一张计划。
  *
  * 纯模块：不 import electron / React，可被 node --test 直接加载。
+ *
+ * 「这条会话是不是停在计划等你确认上」的判据（`planAwaitingIn`）也在这里（2026-11-25 从 renderer 的
+ * plan-timeline 挪过来）：主进程的手机服务给每条会话推「等你」状态要读它，而 renderer 目录主进程引不进。
+ * 两处共用这一份，不抄第二遍——判据一旦漂移，侧栏说在等、手机说跑完了。
  */
+import type { TranscriptRecord } from "./session.ts";
 
 export const PLAN_TOOL_NAME = "update_plan";
 
@@ -156,4 +161,26 @@ function parseConfirm(raw: unknown): string[] {
     if (out.length >= PLAN_MAX_CONFIRM) break;
   }
   return out;
+}
+
+/** 一条 update_plan 的工具记录是否让这一轮先停下等用户（工具结果 details.awaiting） */
+export function planAwaitingOf(record: { readonly details?: unknown }): boolean {
+  const details = record.details as Partial<PlanToolDetails> | undefined;
+  return details?.awaiting === true;
+}
+
+/**
+ * 这条会话此刻是不是停在「计划等你确认」上：从尾往前找，先碰到用户消息 = 已回应、不是；
+ * 先碰到 update_plan 的完成记录 = 看它 details.awaiting（plan 档写完计划 / 带了 confirm / 先给我看计划）。
+ * 侧栏状态饼、铃铛、首页卡的「等你」与进度面板头一行都读它（sessionRunState 的计划来源）；
+ * 主进程给手机推会话状态时也读它。只要判据、不要整段生效视图：传尾部若干条结果一样。
+ */
+export function planAwaitingIn(records: readonly TranscriptRecord[]): boolean {
+  for (let i = records.length - 1; i >= 0; i -= 1) {
+    const record = records[i];
+    if (record === undefined) continue;
+    if (record.role === "user") return false;
+    if (record.role === "tool" && record.toolName === PLAN_TOOL_NAME && record.status === "complete") return planAwaitingOf(record);
+  }
+  return false;
 }

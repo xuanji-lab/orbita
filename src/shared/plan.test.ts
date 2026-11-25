@@ -1,6 +1,15 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { parsePlan, parsePlanCall, parsePlanItemsLoose, PLAN_STATUSES } from "./plan.ts";
+import type { ToolTranscriptItem, TranscriptItem } from "@earendil-works/pi-protocol";
+import type { CompactedRecord } from "./session.ts";
+import {
+  parsePlan,
+  parsePlanCall,
+  parsePlanItemsLoose,
+  PLAN_STATUSES,
+  planAwaitingIn,
+  planAwaitingOf,
+} from "./plan.ts";
 
 describe("parsePlan（工具与右栏面板共用的计划校验）", () => {
   test("整张清单解析：去空白、保留顺序", () => {
@@ -95,5 +104,44 @@ describe("parsePlanCall（v4：why / later / confirm 三个可选字段）", () 
   test("confirm：最多 3 个问题，空白与重复丢掉；写坏了不拒整次调用", () => {
     assert.deepEqual(parsePlanCall({ items, confirm: ["a？", " ", "a？", "b？", "c？", "d？"] }).confirm, ["a？", "b？", "c？"]);
     assert.deepEqual(parsePlanCall({ items, confirm: { 0: "x" } }).confirm, []);
+  });
+});
+
+describe("planAwaitingIn：停在计划确认上（主进程给手机推状态与 renderer 侧栏共用的判据）", () => {
+  const tool = (o: Partial<ToolTranscriptItem> & Pick<ToolTranscriptItem, "toolCallId">): TranscriptItem =>
+    ({ id: `item-${o.toolCallId}`, role: "tool", toolName: "read", input: {}, content: [], timestamp: 0, status: "complete", isError: false, ...o }) as TranscriptItem;
+  const plan = (id: string, at: number, input: Record<string, unknown>, extra: Partial<ToolTranscriptItem> = {}) =>
+    tool({ toolCallId: id, toolName: "update_plan", input: input as never, timestamp: at, ...extra });
+  const steps = (...pairs: [string, "pending" | "in_progress" | "done"][]) => ({ items: pairs.map(([text, status]) => ({ text, status })) });
+  const user = (id: string, at: number) =>
+    ({ id, role: "user", content: [{ type: "text", text: "x" }], timestamp: at }) as unknown as TranscriptItem;
+  const awaitingPlan = plan("p1", 10, steps(["甲", "in_progress"]), { details: { plan: [], awaiting: true } as never });
+
+  test("最后一次 update_plan 要求确认、之后没有用户消息 = 是（中间隔着别的工具调用也算）", () => {
+    assert.equal(planAwaitingIn([user("u1", 1), awaitingPlan, tool({ toolCallId: "r1", timestamp: 11 })]), true);
+  });
+
+  test("压缩界碑、回退界碑不是用户回应：隔着它们仍然停在确认上", () => {
+    const compacted: CompactedRecord = { role: "compacted", id: "c1", summary: "…", tokensBefore: 1, timestamp: 12 };
+    assert.equal(planAwaitingIn([user("u1", 1), awaitingPlan, compacted]), true);
+  });
+
+  test("用户已回应 / 之后有不要求确认的计划 / 没有计划 = 否", () => {
+    assert.equal(planAwaitingIn([awaitingPlan, user("u2", 20)]), false);
+    assert.equal(planAwaitingIn([awaitingPlan, plan("p2", 30, steps(["甲", "in_progress"]))]), false);
+    assert.equal(planAwaitingIn([user("u1", 1)]), false);
+    assert.equal(planAwaitingIn([]), false);
+  });
+
+  test("只认执行完的 update_plan：出错的、别的工具带了 awaiting 都不算", () => {
+    assert.equal(planAwaitingIn([plan("p1", 10, steps(["甲", "pending"]), { status: "error", isError: true, details: { awaiting: true } as never })]), false);
+    assert.equal(planAwaitingIn([tool({ toolCallId: "r1", details: { awaiting: true } as never })]), false);
+  });
+
+  test("planAwaitingOf 只认真值 true：缺席、字符串、对象都不算", () => {
+    assert.equal(planAwaitingOf({ details: { awaiting: true } }), true);
+    assert.equal(planAwaitingOf({ details: { awaiting: "true" } }), false);
+    assert.equal(planAwaitingOf({ details: null }), false);
+    assert.equal(planAwaitingOf({}), false);
   });
 });
