@@ -302,7 +302,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     // 重读会话后自然对齐；活会话期这帧就是卡片的数据源。只有旁路网页产物、
     // 没有 changes 的轮也进来（卡片要出）；批量折叠的轮同理——只有计数也进
     const webArtifacts = event.webArtifacts ?? [];
-    if (event.changes.length === 0 && webArtifacts.length === 0 && event.webArtifactsBatch === undefined) {
+    const mediaArtifacts = event.mediaArtifacts ?? [];
+    if (event.changes.length === 0 && webArtifacts.length === 0 && event.webArtifactsBatch === undefined && mediaArtifacts.length === 0) {
       return states;
     }
     return update(states, event.sessionId, (entry) => ({
@@ -316,6 +317,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
           changes: event.changes,
           ...(webArtifacts.length > 0 ? { webArtifacts } : {}),
           ...(event.webArtifactsBatch !== undefined ? { webArtifactsBatch: event.webArtifactsBatch } : {}),
+          ...(mediaArtifacts.length > 0 ? { mediaArtifacts } : {}),
         },
       ],
     }));
@@ -478,6 +480,8 @@ function splitRecords(transcript: readonly SessionRecord[]): SplitRecords {
           ? { webArtifacts: record.webArtifacts }
           : {}),
         ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
+        // 音视频候选随种子还原（卡片按回答点名从里面挑）
+        ...(record.mediaArtifacts !== undefined && record.mediaArtifacts.length > 0 ? { mediaArtifacts: record.mediaArtifacts } : {}),
       });
     } else if (record.role === "revert") {
       split.reverts.push(record);

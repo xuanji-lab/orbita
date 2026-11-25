@@ -15,7 +15,7 @@ import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
-import type { FileChangePayload, FileChangeView } from "./revert.ts";
+import type { FileChangePayload, FileChangeView, MediaArtifact } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { ReplyLang } from "./reply-language.ts";
@@ -1569,6 +1569,11 @@ export type AgentEvent =
       changes: readonly FileChangePayload[];
       webArtifacts?: readonly string[];
       webArtifactsBatch?: number;
+      /**
+       * 音视频产物候选（脚本生成的 mp3 / mp4 等，同样走旁路扫描与时间窗；只有它、没有 changes 的轮也发）。
+       * 不参与撤销；卡片只显示回答里点了名的。
+       */
+      mediaArtifacts?: readonly MediaArtifact[];
     }
   /**
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
@@ -1582,6 +1587,8 @@ export type AgentEvent =
       webArtifacts?: readonly string[];
       /** 批量折叠计数：本轮网页文件变动超过上限，不逐个列（与 webArtifacts 互斥） */
       webArtifactsBatch?: number;
+      /** 音视频产物候选（与 fileTurn 同字段） */
+      mediaArtifacts?: readonly MediaArtifact[];
     }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的

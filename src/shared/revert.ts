@@ -53,6 +53,16 @@ export interface FileChangeView {
   removed: number;
 }
 
+/**
+ * 一份音 / 视频产物（脚本生成的 mp3 / mp4 等）：绝对路径 + 时长（秒；agent 读容器头量得到才有，量不到缺席）。
+ * 轮尾扫描把本轮窗口内落盘的媒体文件**全部**报上来（含分段、试音样本），卡片只显示回答里点了名的
+ * （renderer 的 media-outputs.ts）。不参与撤销。
+ */
+export interface MediaArtifact {
+  path: string;
+  duration?: number;
+}
+
 export interface FileTurnView {
   role: "file-turn";
   id: string;
@@ -69,6 +79,8 @@ export interface FileTurnView {
    * 按钮。缺席 = 没折叠过（旧记录没有这个字段，照常解析）。
    */
   webArtifactsBatch?: number;
+  /** 音视频产物候选（见 MediaArtifact）；缺席 = 本轮没有 */
+  mediaArtifacts?: readonly MediaArtifact[];
 }
 
 /** agent 进程报上来的轮内改动：正文内联，主进程负责写 blob。 */
@@ -105,6 +117,11 @@ export interface FileTurnRecord {
    * 的轮也落记录（卡片要出那一行计数）。
    */
   webArtifactsBatch?: number;
+  /**
+   * 音视频产物候选：本轮脚本窗口内落盘的 mp3 / mp4 等（全部，卡片再按回答点名过滤）。不参与撤销。
+   * 缺席 = 本轮没有（旧记录没有这个字段，照常解析）。只有它、没有 changes 的轮也落记录。
+   */
+  mediaArtifacts?: readonly MediaArtifact[];
 }
 
 /** 回退记录（role: "revert"）。readLog 按它折叠生效列表。 */
@@ -152,6 +169,21 @@ function parseWebArtifacts(raw: unknown): readonly string[] | undefined {
   return paths;
 }
 
+/** mediaArtifacts 的逐项校验：在场必须是 { path: 非空字符串, duration?: 有限正数 } 的数组；返回 undefined = 坏值 */
+export function parseMediaArtifacts(raw: unknown): MediaArtifact[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const items: MediaArtifact[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) return undefined;
+    const value = item as Record<string, unknown>;
+    if (typeof value["path"] !== "string" || value["path"] === "") return undefined;
+    const duration = value["duration"];
+    if (duration !== undefined && (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0)) return undefined;
+    items.push(duration === undefined ? { path: value["path"] } : { path: value["path"], duration });
+  }
+  return items;
+}
+
 /** webArtifactsBatch 的逐字段校验：可选；在场必须是 ≥ 1 的整数（折叠计数不会是 0）。 */
 function parseWebArtifactsBatch(raw: unknown): number | undefined {
   if (raw === undefined) return undefined;
@@ -188,6 +220,8 @@ export function isFileTurnRecord(raw: unknown): raw is FileTurnRecord {
   if ("webArtifactsBatch" in value && parseWebArtifactsBatch(value["webArtifactsBatch"]) === undefined) {
     return false;
   }
+  // mediaArtifacts 同一张纪律：在场就必须逐项合法
+  if ("mediaArtifacts" in value && parseMediaArtifacts(value["mediaArtifacts"]) === undefined) return false;
   return true;
 }
 

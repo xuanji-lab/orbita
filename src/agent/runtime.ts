@@ -57,7 +57,9 @@ import { planBranchCut } from "./branch-cut.ts";
 import { withOpencodeSession } from "./opencode-session.ts";
 import { movePiBook, revertPiBook, undoPiBook } from "./pi-book-edit.ts";
 import { TurnFileTracker } from "./file-tracker.ts";
+import { measureMedia } from "./media-duration.ts";
 import {
+  capMediaArtifacts,
   foldWebArtifacts,
   dropSavedPages,
   makeWebAccept,
@@ -220,13 +222,16 @@ async function reportFileTurn(
     ]);
     const tracked = new Set(changes.map((change) => change.path));
     const folded = foldWebArtifacts(scan.paths.filter((path) => !tracked.has(path)));
-    if (changes.length > 0 || folded.webArtifacts.length > 0 || folded.webArtifactsBatch !== undefined) {
+    // 音视频候选：同一次扫描顺带收的，全部报上来（卡片再按回答点名筛）；顺手量一遍时长，量不到的不带
+    const mediaArtifacts = await measureMedia(capMediaArtifacts(scan.mediaPaths.filter((path) => !tracked.has(path))));
+    if (changes.length > 0 || folded.webArtifacts.length > 0 || folded.webArtifactsBatch !== undefined || mediaArtifacts.length > 0) {
       send({
         type: "fileTurn",
         sessionId,
         changes,
         ...(folded.webArtifacts.length > 0 ? { webArtifacts: folded.webArtifacts } : {}),
         ...(folded.webArtifactsBatch !== undefined ? { webArtifactsBatch: folded.webArtifactsBatch } : {}),
+        ...(mediaArtifacts.length > 0 ? { mediaArtifacts } : {}),
       });
     }
   } catch (cause) {
@@ -253,7 +258,7 @@ async function scanWebArtifactsLogged(watch: WebArtifactWatch): Promise<WebScanR
   try {
     const windows = watch.windows.snapshot(Date.now());
     // 本轮没跑过脚本类工具：不可能有旁路产物，也就不必扫盘（顺带省掉大目录的遍历）
-    if (windows.length === 0) return { paths: [], truncated: false };
+    if (windows.length === 0) return { paths: [], mediaPaths: [], truncated: false };
     const result = await scanWebArtifacts(roots, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS, undefined, {
       accept: makeWebAccept(watch.sessionId, windows, startedAt),
     });
@@ -269,7 +274,7 @@ async function scanWebArtifactsLogged(watch: WebArtifactWatch): Promise<WebScanR
     return { ...result, paths };
   } catch (cause) {
     console.error("[web-artifacts] 扫描失败，本轮按没有旁路网页产物处理", cause);
-    return { paths: [], truncated: false };
+    return { paths: [], mediaPaths: [], truncated: false };
   }
 }
 
