@@ -2,6 +2,7 @@
   "expo": {
     "name": "璇玑",
     "slug": "orbita-mobile",
+    "scheme": "orbita-mobile",
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "../build/icon.png",
