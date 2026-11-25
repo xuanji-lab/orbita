@@ -6,15 +6,16 @@
  * 数据全走 `api.mobile`（契约在 src/shared/mobile.ts）：
  * - 开关 / 地址 / 端口改完，主进程回最新的 MobileSettings，页面不另拉；
  * - 设备的「此刻在线」没有推送通道，页面开着时每 3 秒拉一次 devices()（离开就停）；
- * - 主进程给的 message / hostKeyNotice 是原话，如实照显示——地址不在本机时不静默换别的；
+ * - 主进程给的 message 是原话，如实照显示——地址不在本机时不静默换别的；hostKeyNotice 只有一种
+ *   含义（主机密钥丢过、设备已清空），页面只把它当开关，用这一页自己的文案说（2026-11-25 设计审查 M6）；
  * - 配对码只在这一页上看得到：离开这一页就作废它（offerCancel），不留一组没人看着的码。
  *
  * 版式照现有设置页（`.set-page` 两栏、`SettingGroup` / `SettingRow`），控件照 SettingControls；
- * 撤销的行内二次确认照插件详情「卸载…」那一套（`.pl-ic` + `.pl-btn.solid-danger`），
- * 告示照插件页的 `.pl-note`，空态 / 加载 / 读失败照 `PanelEmpty`。
+ * 移除设备的行内二次确认照插件详情「卸载…」那一套（`.pl-ic` + `.pl-btn.solid-danger`），
+ * 告示与出错是行下的静默行（`.mobile-reason`），空态 / 加载 / 读失败照 `PanelEmpty`。
  */
 import { useEffect, useRef, useState } from "react";
-import { MOBILE_DEFAULT_PORT, type MobileBindCandidate, type MobileDevice, type MobileOffer, type MobileSettings } from "@shared/mobile";
+import { MOBILE_DEFAULT_PORT, type MobileDevice, type MobileOffer, type MobileSettings } from "@shared/mobile";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
@@ -28,6 +29,8 @@ import {
   bindView,
   formatCountdown,
   groupPairingCode,
+  isStaleDevice,
+  needsInterfaceName,
   newlyPaired,
   offerSecondsLeft,
   parsePortInput,
@@ -92,12 +95,13 @@ export function MobileSettingsPage() {
     );
   }
   if (settings.kind === "error") {
+    // IPC 的原文（通道名之类）不进正文，悬停才看得到（设计审查 M7）
     return (
       <div className="set-page">
         <PanelEmpty
           tone="danger"
           className="mobile-page-empty"
-          hint={settings.message}
+          title={settings.message}
           exit={{ label: t.common.retry, onClick: () => void loadSettings() }}
         >
           {copy.loadFailed}
@@ -107,14 +111,25 @@ export function MobileSettingsPage() {
   }
 
   const state = settings.value;
+  const view = bindView(state);
+  /** 此刻手机连得进来：开着、真在监听、地址还在本机上。生成配对码只在这时有意义 */
+  const canPair = state.enabled && state.listening && view?.missing !== true;
   const deviceList = devices.kind === "ready" ? devices.value : [];
+  const hostKeyLost = state.hostKeyNotice !== null;
   return (
     <div className="set-page">
       <SettingGroup label={copy.connectGroup}>
         <SettingRow
           name={copy.enable}
           info={copy.enableInfo}
-          note={<ListenStatus settings={state} busy={busy === "enable"} actionError={actionError} />}
+          note={
+            <ListenStatus
+              settings={state}
+              busy={busy === "enable"}
+              actionError={actionError}
+              onRetry={() => apply("enable", () => api.mobile.setEnabled(true))}
+            />
+          }
         >
           <Switch
             label={copy.enable}
@@ -132,26 +147,32 @@ export function MobileSettingsPage() {
       </SettingGroup>
       <SettingGroup label={copy.pairGroup}>
         <PairRow
-          enabled={state.enabled}
-          listening={state.enabled && state.listening}
+          canPair={canPair}
+          // 开关关着、也没有出错：是用户自己关的，叫他先打开；出过错（开关被主进程关回去）就指向上面的原因（设计审查 M4）
+          needsOn={!state.enabled && state.message === null && actionError === null}
           deviceIds={devices.kind === "ready" ? new Set(deviceList.map((device) => device.id)) : null}
           devices={deviceList}
           onRefresh={() => void loadDevices()}
         />
       </SettingGroup>
       <SettingGroup label={copy.devicesGroup}>
-        <SettingRow name={copy.devices} info={copy.devicesInfo}>
+        <SettingRow
+          name={copy.devices}
+          info={copy.devicesInfo}
+          note={
+            // 主机密钥丢过：设备被清空的说明是设备说明下面的一行静默告示（设计审查 S12、M6）
+            hostKeyLost ? (
+              <span className="set-row-note mobile-reason" role="status">
+                <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
+                <span>{copy.hostKeyLost}</span>
+              </span>
+            ) : undefined
+          }
+        >
           {devices.kind === "ready" && devices.value.length > 0 && (
             <span className="set-row-hint mobile-count">{copy.devicesCount(devices.value.length)}</span>
           )}
         </SettingRow>
-        {/* 主机密钥丢过：设备被清空的告示放在设备清单上方——它说的就是这里为什么空了 */}
-        {state.hostKeyNotice !== null && (
-          <div className="pl-note warn mobile-notice" role="alert">
-            <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
-            <span>{state.hostKeyNotice}</span>
-          </div>
-        )}
         {devices.kind === "loading" ? (
           <PanelEmpty busy className="mobile-list-empty">
             {t.common.loading}
@@ -160,15 +181,20 @@ export function MobileSettingsPage() {
           <PanelEmpty
             tone="danger"
             className="mobile-list-empty"
-            hint={devices.message}
+            title={devices.message}
             exit={{ label: t.common.retry, onClick: () => void loadDevices() }}
           >
             {copy.devicesFailed}
           </PanelEmpty>
         ) : devices.value.length === 0 ? (
-          <PanelEmpty icon={FEATURE_ICON.mobile} className="mobile-list-empty" hint={copy.devicesEmptyHint}>
-            {copy.devicesEmpty}
-          </PanelEmpty>
+          // 告示已经说了「之前的都移除了、要重新配对」，再写「还没有配对过」就成了相反的事实（设计审查 M3）
+          hostKeyLost ? null : (
+            <PanelEmpty icon={FEATURE_ICON.mobile} className="mobile-list-empty">
+              {copy.devicesEmpty}
+              {/* 配不了（开关关着、出错）时「生成配对码」按钮是灰的，不叫人去点它（设计审查 N2）；中文句号后不再补空格 */}
+              {canPair && <span className="panel-empty-hint">{copy.devicesEmptyHint}</span>}
+            </PanelEmpty>
+          )
         ) : (
           <DeviceList devices={devices.value} onChanged={(value) => setDevices({ kind: "ready", value })} />
         )}
@@ -177,8 +203,11 @@ export function MobileSettingsPage() {
   );
 }
 
-/** 开关下面那一行：在开 → 监听中（地址:端口）→ 没能监听的原因（主进程原话，红） */
-function ListenStatus(props: { settings: MobileSettings; busy: boolean; actionError: string | null }) {
+/**
+ * 开关下面那一行：在开 → 已开启（手机连得进来）→ 没能开的原因（主进程原话，红）。
+ * 只说状态、不带地址：完整地址只在配对码那一块里给，那才是要抄去手机的地方（设计审查 S3）。
+ */
+function ListenStatus(props: { settings: MobileSettings; busy: boolean; actionError: string | null; onRetry: () => void }) {
   const copy = useT().settings.mobile;
   const { settings } = props;
   if (props.busy) {
@@ -190,29 +219,37 @@ function ListenStatus(props: { settings: MobileSettings; busy: boolean; actionEr
   }
   const reason = props.actionError ?? settings.message;
   // 地址不在本机的那句由地址行说（它离「换一个地址」更近），这里不重复
-  const view = bindView(settings);
-  if (reason !== null && !(view?.missing === true && settings.enabled)) {
+  const missing = bindView(settings)?.missing === true;
+  if (reason !== null && !(missing && settings.enabled)) {
+    // 开关因为出错被主进程关回去了（例如钥匙串不可用）：句尾给一个出口（设计审查 S13）
+    const refused = !settings.enabled && settings.message !== null;
     return (
       <span className="set-row-error mobile-reason" role="alert">
         <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
-        <span>{reason}</span>
-      </span>
-    );
-  }
-  if (settings.enabled && settings.listening && view !== null) {
-    return (
-      <span className="set-row-note" role="status">
-        <Icon name="circle-check" size={12} strokeWidth={1.8} />
         <span>
-          {copy.listening} · <span className="mobile-mono">{`${view.address}:${view.port}`}</span>
+          {reason}
+          {refused && (
+            <>
+              {" "}
+              <button type="button" className="notice-exit" onClick={props.onRetry}>
+                {copy.retryEnable}
+              </button>
+            </>
+          )}
         </span>
       </span>
     );
   }
-  if (settings.enabled && !settings.listening && view?.missing !== true) {
-    return <span className="set-row-hint">{copy.notListening}</span>;
+  if (!settings.enabled || missing) return null;
+  if (settings.listening) {
+    return (
+      <span className="set-row-note" role="status">
+        <Icon name="circle-check" size={12} strokeWidth={1.8} />
+        <span>{copy.ready}</span>
+      </span>
+    );
   }
-  return null;
+  return <span className="set-row-hint">{copy.notReady}</span>;
 }
 
 /**
@@ -232,11 +269,17 @@ function AddressRow(props: { settings: MobileSettings; busy: boolean; onBind: (a
     if (committedPort !== null) setPortText(String(committedPort));
   }, [committedPort]);
 
-  const kindLabel = (candidate: Pick<MobileBindCandidate, "kind">) => copy.kind[candidate.kind];
-  const items: MenuItem[] = props.settings.candidates.map((candidate) => ({
+  const { candidates } = props.settings;
+  // IP 用等宽、与触发钮里同一种写法；网卡名只在同类地址不止一个、需要区分时才写（设计审查 S5）
+  const items: MenuItem[] = candidates.map((candidate) => ({
     id: candidate.address,
     label: candidate.address,
-    hint: `${kindLabel(candidate)} · ${candidate.interfaceName}`,
+    labelMono: true,
+    // 菜单里不一定写网卡名，但按网卡名、类别照样搜得到
+    searchText: `${copy.kind[candidate.kind]} ${candidate.interfaceName}`,
+    hint: needsInterfaceName(candidate, candidates)
+      ? `${copy.kind[candidate.kind]} · ${candidate.interfaceName}`
+      : copy.kind[candidate.kind],
     checked: candidate.address === view?.address,
     onSelect: () => props.onBind(candidate.address, parsePortInput(portText) ?? view?.port ?? MOBILE_DEFAULT_PORT),
   }));
@@ -253,7 +296,7 @@ function AddressRow(props: { settings: MobileSettings; busy: boolean; onBind: (a
 
   const note =
     view === null ? (
-      props.settings.candidates.length === 0 ? (
+      candidates.length === 0 ? (
         <span className="set-row-error" role="alert">
           {copy.noCandidates}
         </span>
@@ -291,6 +334,7 @@ function AddressRow(props: { settings: MobileSettings; busy: boolean; onBind: (a
         <Menu
           items={items}
           searchable={items.length > 8}
+          searchPlaceholder={copy.addressSearch}
           trigger={({ open, toggle }) => (
             <SelectButton open={open} onClick={toggle} title={copy.addressPick} disabled={props.busy || items.length === 0}>
               {view === null ? (
@@ -334,13 +378,16 @@ function AddressRow(props: { settings: MobileSettings; busy: boolean; onBind: (a
 }
 
 /**
- * 配对：一个主按钮「生成配对码」；有码时行底铺开一块——码、倒计时、地址，「换一组」「收起」。
- * 过期后码划掉、写「已过期」，出口是「再生成一组」。这期间冒出新设备 = 配上了：收起码，写一句「已配上」。
+ * 配对：一个主按钮「生成配对码」；有码时行底铺开一块——码、倒计时、地址，「换一个码」「收起」。
+ * 过期了就收起这一块、回到行尾的「生成配对码」，行内写一句「上一个码已过期」（设计审查 S10、S11）。
+ * 有码期间冒出新设备 = 配上了：收起码，写一句「已配上」——只在那台设备还在清单里时写（设计审查 M1）。
  * 离开这一页（卸载）时作废还在有效期里的码。
  */
 function PairRow(props: {
-  enabled: boolean;
-  listening: boolean;
+  /** 此刻手机连得进来（开着、在监听、地址在本机） */
+  canPair: boolean;
+  /** 连不进来是因为用户自己关了开关（不是出错） */
+  needsOn: boolean;
   /** 设备列表还没读到时是 null（那时不判断「配上了」） */
   deviceIds: ReadonlySet<string> | null;
   devices: readonly MobileDevice[];
@@ -352,7 +399,8 @@ function PairRow(props: {
   const [offer, setOffer] = useState<MobileOffer | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pairedName, setPairedName] = useState<string | null>(null);
+  const [pairedId, setPairedId] = useState<string | null>(null);
+  const [expired, setExpired] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   /** 生成这组码时已有的设备：之后多出来的就是用这组码配上的 */
   const baseline = useRef<ReadonlySet<string> | null>(null);
@@ -376,25 +424,35 @@ function PairRow(props: {
     [],
   );
 
-  // 监听停了（关了开关 / 地址掉了）：主进程已作废配对簿，码收起
+  // 连不进来了（关了开关 / 地址掉了）：主进程已作废配对簿，码收起
   useEffect(() => {
-    if (!props.listening) setOffer(null);
-  }, [props.listening]);
+    if (!props.canPair) setOffer(null);
+  }, [props.canPair]);
 
   // 有码期间冒出新设备：配上了
   useEffect(() => {
     if (offer === null || baseline.current === null) return;
     const paired = newlyPaired(baseline.current, props.devices);
     if (paired !== null) {
-      setPairedName(paired.name);
+      setPairedId(paired.id);
       setOffer(null);
     }
   }, [props.devices, offer]);
 
+  const secondsLeft = offer === null ? 0 : offerSecondsLeft(offer.expiresAt, now);
+  // 码过期：整块收起，行尾回到「生成配对码」
+  useEffect(() => {
+    if (offer !== null && secondsLeft === 0) {
+      setOffer(null);
+      setExpired(true);
+    }
+  }, [offer, secondsLeft]);
+
   const create = () => {
     setCreating(true);
     setError(null);
-    setPairedName(null);
+    setPairedId(null);
+    setExpired(false);
     baseline.current = props.deviceIds;
     void api.mobile
       .offerCreate()
@@ -410,22 +468,24 @@ function PairRow(props: {
     void api.mobile.offerCancel().catch(() => undefined);
   };
 
-  const secondsLeft = offer === null ? 0 : offerSecondsLeft(offer.expiresAt, now);
-  const expired = offer !== null && secondsLeft === 0;
-
+  // 配上的那台被移除了，「已配上」就不再是真话
+  const paired = pairedId === null ? undefined : props.devices.find((device) => device.id === pairedId);
+  const blockedText = props.needsOn ? copy.pairNeedsOn : copy.pairBlocked;
   const note =
     error !== null ? (
       <span className="set-row-error mobile-reason" role="alert">
         <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
         <span>{copy.pairFailed(error)}</span>
       </span>
-    ) : pairedName !== null ? (
+    ) : paired !== undefined ? (
       <span className="set-row-note" role="status">
         <Icon name="circle-check" size={12} strokeWidth={1.8} />
-        <span className="mobile-ellipsis">{copy.pairDone(pairedName)}</span>
+        <span className="mobile-ellipsis">{copy.pairDone(paired.name)}</span>
       </span>
-    ) : !props.listening ? (
-      <span className="set-row-hint">{props.enabled ? copy.pairNeedsListening : copy.pairNeedsOn}</span>
+    ) : !props.canPair ? (
+      <span className="set-row-hint">{blockedText}</span>
+    ) : expired && offer === null ? (
+      <span className="set-row-hint">{copy.pairExpiredNote}</span>
     ) : undefined;
 
   return (
@@ -435,29 +495,25 @@ function PairRow(props: {
       note={note}
       below={
         offer !== null && (
-          <div className="mobile-offer" data-expired={expired ? "" : undefined} aria-live="polite">
+          <div className="mobile-offer" aria-live="polite">
             <div className="mobile-offer-main">
               <span className="mobile-offer-label">{copy.pairCode}</span>
-              <span className="mobile-offer-code" aria-label={expired ? copy.pairExpired : copy.pairCode}>
+              <span className="mobile-offer-code" aria-label={copy.pairCode}>
                 {groupPairingCode(offer.code)}
               </span>
               <span className="mobile-offer-meta">
-                {expired ? (
-                  <span className="mobile-offer-expired">{copy.pairExpired}</span>
-                ) : (
-                  <span>{copy.pairExpiresIn(formatCountdown(secondsLeft))}</span>
-                )}
+                <span>{copy.pairExpiresIn(formatCountdown(secondsLeft))}</span>
                 <span>
                   {copy.pairAddress} <span className="mobile-mono">{`${offer.address}:${offer.port}`}</span>
                 </span>
               </span>
             </div>
+            {/* 卡里只用文字钮：卡已经是 muted 底，再叠描边钮就是一个容器两种语言（设计审查 S9） */}
             <div className="mobile-offer-acts">
-              <button type="button" className={expired ? "pl-btn btn-accent" : "pl-btn"} disabled={creating} onClick={create}>
-                <Icon name="refresh-cw" size={13} strokeWidth={1.8} />
-                {creating ? copy.pairCreating : expired ? copy.pairAgain : copy.pairRenew}
+              <button type="button" className="mg-textbtn" disabled={creating} onClick={create}>
+                {creating ? copy.pairCreating : copy.pairRenew}
               </button>
-              <button type="button" className="pl-btn" onClick={close}>
+              <button type="button" className="mg-textbtn" onClick={close}>
                 {copy.pairClose}
               </button>
             </div>
@@ -469,8 +525,8 @@ function PairRow(props: {
         <button
           type="button"
           className="pl-btn btn-accent"
-          disabled={!props.listening || creating}
-          title={props.listening ? undefined : props.enabled ? copy.pairNeedsListening : copy.pairNeedsOn}
+          disabled={!props.canPair || creating}
+          title={props.canPair ? undefined : blockedText}
           onClick={create}
         >
           {creating ? copy.pairCreating : copy.pairCreate}
@@ -480,29 +536,33 @@ function PairRow(props: {
   );
 }
 
-/** 已配对设备：一行一台，在线的在前；「撤销…」就地换成红底确认条（插件详情「卸载…」同一套） */
+/**
+ * 已配对设备：一行一台，在线的在前。行尾平时不放动作（八台设备不竖出一列「移除…」），悬停或键盘聚焦到这一行
+ * 时「移除…」浮到行尾（设计审查 S1）；很久没用的设备整行退成三级灰，行尾写「很久没用了」，动作浮上来时它让位（S2）。
+ * 「移除…」就地换成红底确认条（插件详情「卸载…」同一套），后果写在确认条里、按钮之前（S7）。
+ */
 function DeviceList(props: { devices: readonly MobileDevice[]; onChanged: (devices: MobileDevice[]) => void }) {
   const t = useT();
   const copy = t.settings.mobile;
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [revoking, setRevoking] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const keepRef = useRef<HTMLButtonElement | null>(null);
   const now = Date.now();
 
   useEffect(() => {
-    if (confirming !== null) cancelRef.current?.focus();
+    if (confirming !== null) keepRef.current?.focus();
   }, [confirming]);
 
-  const revoke = (device: MobileDevice) => {
-    setRevoking(true);
+  const remove = (device: MobileDevice) => {
+    setRemoving(true);
     setError(null);
     void api.mobile
       .revoke(device.id)
       .then((next) => props.onChanged(next))
-      .catch((cause: unknown) => setError(copy.revokeFailed(ipcErrorText(cause))))
+      .catch((cause: unknown) => setError(copy.removeFailed(ipcErrorText(cause))))
       .finally(() => {
-        setRevoking(false);
+        setRemoving(false);
         setConfirming(null);
       });
   };
@@ -510,25 +570,31 @@ function DeviceList(props: { devices: readonly MobileDevice[]; onChanged: (devic
   return (
     <div className="mobile-devices-wrap">
       {error !== null && (
-        <div className="pl-note danger" role="alert">
-          <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
+        <span className="set-row-error mobile-reason" role="alert">
+          <Icon name="triangle-alert" size={12} strokeWidth={1.8} />
           <span>{error}</span>
-        </div>
+        </span>
       )}
       <ul className="mobile-devices" aria-label={copy.devices}>
         {sortDevices(props.devices).map((device) => {
+          const stale = isStaleDevice(device, now);
           const status = device.connected
             ? copy.online
             : device.lastSeenAt !== null
               ? copy.lastSeen(relativeTime(device.lastSeenAt, t))
               : copy.neverSeen;
           return (
-            <li key={device.id} className="mobile-device" data-online={device.connected ? "" : undefined}>
+            <li
+              key={device.id}
+              className="mobile-device"
+              data-online={device.connected ? "" : undefined}
+              data-stale={stale ? "" : undefined}
+            >
               {confirming === device.id ? (
                 <div
                   className="pl-ic mobile-device-confirm"
                   role="alertdialog"
-                  aria-label={copy.revokeAsk(device.name)}
+                  aria-label={copy.removeAsk(device.name)}
                   onKeyDown={(event) => {
                     if (event.key === "Escape") {
                       event.stopPropagation();
@@ -538,15 +604,17 @@ function DeviceList(props: { devices: readonly MobileDevice[]; onChanged: (devic
                 >
                   <div className="pl-ic-bar">
                     <Icon name="triangle-alert" size={14} strokeWidth={1.8} />
-                    <span className="pl-ic-ask">{copy.revokeAsk(device.name)}</span>
-                    <button type="button" className="pl-btn solid-danger" disabled={revoking} onClick={() => revoke(device)}>
-                      {revoking ? copy.revoking : copy.revokeAction}
+                    <span className="pl-ic-ask mobile-confirm-text">
+                      <span className="mobile-confirm-ask">{copy.removeAsk(device.name)}</span>
+                      <span className="mobile-confirm-hint">{copy.removeHint}</span>
+                    </span>
+                    <button type="button" className="pl-btn solid-danger" disabled={removing} onClick={() => remove(device)}>
+                      {removing ? copy.removing : copy.removeAction}
                     </button>
-                    <button type="button" className="pl-btn" ref={cancelRef} disabled={revoking} onClick={() => setConfirming(null)}>
-                      {t.common.cancel}
+                    <button type="button" className="pl-btn" ref={keepRef} disabled={removing} onClick={() => setConfirming(null)}>
+                      {copy.removeKeep}
                     </button>
                   </div>
-                  <p className="pl-ic-hint">{copy.revokeHint}</p>
                 </div>
               ) : (
                 <>
@@ -561,16 +629,17 @@ function DeviceList(props: { devices: readonly MobileDevice[]; onChanged: (devic
                       {copy.pairedOn(formatDay(device.pairedAt, now))}
                     </span>
                   </span>
+                  {stale && <span className="row-trailing mobile-device-stale">{copy.stale}</span>}
                   <button
                     type="button"
-                    className="mg-textbtn row-trailing mobile-device-revoke"
+                    className="mg-textbtn mobile-device-remove"
                     disabled={confirming !== null}
                     onClick={() => {
                       setError(null);
                       setConfirming(device.id);
                     }}
                   >
-                    {copy.revoke}
+                    {copy.remove}
                   </button>
                 </>
               )}
