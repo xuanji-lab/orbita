@@ -104,5 +104,17 @@ describe("childRunSettled：交回时子会话的轮还没收尾，要等它的�
     assert.equal(childRunSettled([toolDone, finalText], 1), false);
     assert.equal(childRunSettled([toolDone, finalText], 2), true);
   });
+  test("error / aborted 已是终局：即使留着 toolCall 也不继续轮询", () => {
+    for (const status of ["error", "aborted"]) {
+      const ended = rec({
+        id: `a-${status}`,
+        role: "assistant",
+        content: [{ type: "toolCall", toolCallId: "dead", toolName: "bash", input: {} }],
+        timestamp: 6,
+        status,
+      });
+      assert.equal(childRunSettled([toolDone, ended], -1), true);
+    }
+  });
   test("空记录：没收尾", () => assert.equal(childRunSettled([], -1), false));
 });

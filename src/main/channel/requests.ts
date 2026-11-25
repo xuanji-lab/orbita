@@ -304,10 +304,10 @@ export async function applyChannelSend(
     }
     const parent = await deps.sessions.readMeta(sender.parentId);
     if (parent === null) return { ok: false, error: "The parent session no longer exists." };
-    if (!allowedKinds("child").includes(event.kind)) {
+    if (event.kind === "interrupted" || !allowedKinds("child").includes(event.kind)) {
       return {
         ok: false,
-        error: `"${event.kind}" is not valid for a sub-session → parent message; use question, progress, done or failed.`,
+        error: `"${event.kind}" is not valid for a sub-session → parent message; use question, progress, done or failed. Interrupted is reserved for the main process.`,
       };
     }
     const key: ChannelKey = { parentId: parent.id, childId: sender.id };
