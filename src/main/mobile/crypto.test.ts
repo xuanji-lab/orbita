@@ -24,7 +24,7 @@ import {
   sharedSecret,
   verifyPairProof,
 } from "./crypto.ts";
-import { MOBILE_CRYPTO } from "../../shared/mobile.ts";
+import { MOBILE_CRYPTO, MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES, MOBILE_OUTBOUND_WIRE_MAX_BYTES, MOBILE_PROTOCOL_VERSION } from "../../shared/mobile.ts";
 
 const hex = (bytes: Buffer): string => bytes.toString("hex");
 const fromHex = (text: string): Buffer => Buffer.from(text, "hex");
@@ -323,5 +323,21 @@ describe("配对提议的生成", () => {
     assert.notEqual(offers[0]?.wire.salt, offers[1]?.wire.salt);
     assert.notEqual(offers[0]?.wire.iv, offers[1]?.wire.iv);
     assert.notEqual(offers[0]?.offerId, offers[1]?.offerId);
+  });
+});
+
+
+describe("单帧上限：真密封一帧量线上字节", () => {
+  test("明文写满 256 KB 的出站帧，线上不超过契约给手机的 384 KB", () => {
+    const aad = VECTORS.deviceId;
+    const key = Buffer.alloc(32, 7);
+    // 每字 3 个字节：取不满 256 KB 的最大整数字数
+    const plaintext = "字".repeat(Math.floor(MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES / 3));
+    const plainBytes = Buffer.byteLength(plaintext, "utf8");
+    assert.ok(plainBytes <= MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES && plainBytes > MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES - 3);
+    const frame = { v: MOBILE_PROTOCOL_VERSION, ...sealFrame(key, "hostToDevice", Number.MAX_SAFE_INTEGER, aad, plaintext) };
+    const wire = Buffer.byteLength(JSON.stringify(frame), "utf8");
+    assert.ok(wire > MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES, `${wire}：线上比明文大，手机不能按 256 KB 设上限`);
+    assert.ok(wire <= MOBILE_OUTBOUND_WIRE_MAX_BYTES, `${wire}`);
   });
 });

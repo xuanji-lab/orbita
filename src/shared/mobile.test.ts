@@ -7,7 +7,13 @@ import {
   isBindableAddress,
   isMobilePort,
   mobileNotification,
+  MOBILE_CRYPTO,
+  MOBILE_FRAME_MAX_BYTES,
+  MOBILE_LIMITS,
   MOBILE_METHODS,
+  MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES,
+  MOBILE_OUTBOUND_WIRE_MAX_BYTES,
+  MOBILE_REQUEST_ID_MAX,
   okReply,
   sortBindCandidates,
   type MobileBindCandidate,
@@ -127,5 +133,34 @@ describe("方法名单与出站构造", () => {
       params: { sessionId: "s", rev: 12 },
     });
     assert.deepEqual(mobileNotification("host.shutdown", {}), { event: "host.shutdown", params: {} });
+  });
+});
+
+
+describe("单帧上限：线上字节与明文字节对得上（契约给两端的那几个数）", () => {
+  /** 一帧加密帧的线上字节：帧外壳 + base64(明文 ‖ 16 字节 tag)。seq 按 16 位十进制算，留足 */
+  const wireBytes = (plaintextBytes: number): number =>
+    new TextEncoder().encode(`{"v":1,"n":${Number.MAX_SAFE_INTEGER},"ct":""}`).length + 4 * Math.ceil((plaintextBytes + MOBILE_CRYPTO.tagBytes) / 3);
+
+  test("请求 id 的上限两端写死", () => {
+    assert.equal(MOBILE_REQUEST_ID_MAX, 0x7fffffff);
+  });
+
+  test("电脑 → 手机：明文写满 256 KB 的一帧，线上不超过 384 KB，且确实比明文多出 base64 的那 1/3", () => {
+    assert.equal(MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES, 256 * 1024);
+    assert.equal(MOBILE_OUTBOUND_WIRE_MAX_BYTES, 384 * 1024);
+    const wire = wireBytes(MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES);
+    assert.ok(wire <= MOBILE_OUTBOUND_WIRE_MAX_BYTES, `${wire}`);
+    assert.ok(wire > MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES, "手机按 256 KB 设入站上限会收不下");
+  });
+
+  test("手机 → 电脑：合法请求里最大的一条（4000 字、每字 4 个字节）线上远不到 64 KB", () => {
+    const body = JSON.stringify({
+      id: Number.MAX_SAFE_INTEGER,
+      method: "reply",
+      params: { sessionId: "0199a0aa-6bb0-7cc0-8000-123456789012", text: "😀".repeat(MOBILE_LIMITS.replyText), requestId: "r".repeat(MOBILE_LIMITS.requestId) },
+    });
+    const wire = wireBytes(new TextEncoder().encode(body).length);
+    assert.ok(wire < MOBILE_FRAME_MAX_BYTES / 2, `${wire}`);
   });
 });

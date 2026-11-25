@@ -28,7 +28,7 @@ import {
   mobileNotification,
   MOBILE_CRYPTO,
   MOBILE_FRAME_MAX_BYTES,
-  MOBILE_OUTBOUND_FRAME_MAX_BYTES,
+  MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES,
   MOBILE_PATH,
   MOBILE_PROTOCOL_VERSION,
   okReply,
@@ -674,8 +674,8 @@ export class MobileServer {
     if (conn.closed || conn.deviceId === null) return;
     const plaintext = JSON.stringify(payload);
     const bytes = Buffer.byteLength(plaintext, "utf8");
-    if (bytes > MOBILE_OUTBOUND_FRAME_MAX_BYTES) {
-      console.error(`[mobile] 一帧出站超了 ${MOBILE_OUTBOUND_FRAME_MAX_BYTES} 字节（${bytes}），没发`);
+    if (bytes > MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES) {
+      console.error(`[mobile] 一帧出站的明文超了 ${MOBILE_OUTBOUND_PLAINTEXT_MAX_BYTES} 字节（${bytes}），没发`);
       return;
     }
     // 出站预算：超太多就断（安全审查第 6 条：不攒到天上去）
