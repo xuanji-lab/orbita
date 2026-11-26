@@ -11,7 +11,8 @@ import { applySubAgentRequest } from "./planet/sub-agent-requests.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
-import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, type Rectangle, type WebPreferences } from "electron";
+import liquidGlass from "electron-liquid-glass";
 import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
@@ -245,6 +246,42 @@ const MAC_WINDOW = {
 } as const;
 
 /**
+ * 液态玻璃档（设置里的「液态玻璃」，2026-11-26）的窗口：macOS 26+ 的 Liquid Glass
+ * （NSGlassEffectView，经 electron-liquid-glass 插在网页底下）。它和上面的 MAC_WINDOW 是
+ * **建窗时就定死的两种窗口**：
+ *  - 必须 `transparent: true`，网页透明的地方才看得到玻璃；
+ *  - **不能**再设 vibrancy——两层系统材质叠在一起，vibrancy 会盖掉玻璃、糊成一片；
+ *  - 透明窗口里红黄绿三键要手动打开（setWindowButtonVisibility）。
+ * 为什么不沿用 vibrancy：under-window 材质只拿壁纸着色、不采样别的 app 的窗口，2026-08 起的旧毛玻璃
+ * 因此「只在桌面上生效、叠在别的 app 上不透」；Liquid Glass 透出背后的一切。
+ * macOS 26 以前没有 NSGlassEffectView，库会自己退回 under-window 的 NSVisualEffectView（仍是半透明，
+ * 只是只透壁纸）。
+ */
+const MAC_GLASS_WINDOW = {
+  titleBarStyle: MAC_WINDOW.titleBarStyle,
+  trafficLightPosition: MAC_WINDOW.trafficLightPosition,
+  transparent: true,
+} as const;
+
+/** 玻璃窗的圆角：贴住 macOS 26 窗口自己的圆角，玻璃不从四角漏出去 */
+const GLASS_CORNER_RADIUS = 16;
+
+/** 这个主题档要不要玻璃窗。system 永远落不到 glass（theme-resolve），只看手选的档 */
+function wantsGlassWindow(theme: ThemePreference): boolean {
+  return process.platform === "darwin" && theme === "glass";
+}
+
+/** 哪些主窗口是按玻璃建的：切主题时据此判断要不要重开 */
+const glassWindows = new WeakSet<BrowserWindow>();
+
+/**
+ * 切主题后让窗口的材质跟上：玻璃 ↔ 不透明是建窗时定的，换不了，只能按原位置重开一扇、
+ * 等新窗画好（ready-to-show）再关旧窗。由 app ready 里有 openLink / readLanguage 的地方装上；
+ * 设置写入的观察者（registerSettingsIpc 的 onChange）调用它。
+ */
+let matchWindowMaterial: (theme: ThemePreference, language: Language | undefined) => void = () => undefined;
+
+/**
  * `theme` 是这次启动（或这次 `activate` 重开）读到的设置里的主题偏好，原样塞进
  * `--orbita-theme=` 命令行参数（`webPreferences.additionalArguments`）——preload
  * 的 `initial-theme.ts` 原样读出来，渲染层 `main.tsx` 用它在 `createRoot` 之前
@@ -262,16 +299,22 @@ function createMainWindow(
   language: Language | undefined,
   openLink: (url: string) => void,
   readLanguage: () => Promise<Language>,
+  /** 按原位置重开（切进 / 切出液态玻璃时）；缺省按默认尺寸由系统摆放 */
+  bounds?: Rectangle,
 ): BrowserWindow {
+  const glass = wantsGlassWindow(theme);
   const window = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: bounds?.width ?? 1200,
+    height: bounds?.height ?? 800,
+    ...(bounds === undefined ? {} : { x: bounds.x, y: bounds.y }),
     minWidth: 720,
     minHeight: 520,
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === "darwin"
-      ? MAC_WINDOW
+      ? glass
+        ? MAC_GLASS_WINDOW
+        : MAC_WINDOW
       : // Windows/Linux：转帧式窗口——最小化/最大化/关闭由渲染层标题栏自绘
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
@@ -279,6 +322,15 @@ function createMainWindow(
     webPreferences: rendererPreferences(theme, language),
   });
   mainWindows.track(window);
+
+  if (glass) {
+    glassWindows.add(window);
+    window.setWindowButtonVisibility(true);
+    // 玻璃视图插在窗口内容视图的最底下；等页面载完再插，网页那一层已经在了（库的 README 的做法）
+    window.webContents.once("did-finish-load", () => {
+      liquidGlass.addView(window.getNativeWindowHandle(), { cornerRadius: GLASS_CORNER_RADIUS });
+    });
+  }
 
   // 只在内容就绪后显示，避免空窗口先出现
   window.once("ready-to-show", () => window.show());
@@ -446,8 +498,9 @@ void app.whenReady().then(async () => {
   // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
   // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
   // 不再随设置开关拉起 / 停
-  registerSettingsIpc(settings, () => {
+  registerSettingsIpc(settings, (next) => {
     void keepAwake.sync().catch(() => undefined);
+    matchWindowMaterial(next.theme, next.language);
   });
   registerWindowIpc();
   const initialSettings = await settings.read();
@@ -1578,6 +1631,17 @@ void app.whenReady().then(async () => {
   };
 
   createMainWindow(initialSettings.theme, initialSettings.language, openLink, readLanguage);
+
+  // 切进 / 切出液态玻璃：材质不对的主窗口按原位置重开（理由见 matchWindowMaterial 的声明）
+  matchWindowMaterial = (theme, language) => {
+    for (const old of mainWindows.list()) {
+      if (glassWindows.has(old) === wantsGlassWindow(theme)) continue;
+      const next = createMainWindow(theme, language, openLink, readLanguage, old.getBounds());
+      next.once("ready-to-show", () => {
+        if (!old.isDestroyed()) old.close();
+      });
+    }
+  };
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings

@@ -1453,9 +1453,11 @@ export const zh: Messages = {
   themes: {
     system: "跟随系统",
     light: "浅色",
+    glass: "液态玻璃",
     graphite: "黛",
     black: "玄",
     systemTip: "按桌面的明暗切换 · 暗色落到「玄」",
+    glassTip: "浅色，外壳和对话面换成 macOS 的液态玻璃，透出窗口背后的桌面和别的应用 · 切换时窗口会重开一次",
   },
 
   modelMenu: {

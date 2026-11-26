@@ -24,7 +24,7 @@
   text-align: left;
 }
 
-:root[data-theme="light"] .focus-pop {
+:root:is([data-theme="light"], [data-theme="glass"]) .focus-pop {
   border-color: var(--color-border-subtle);
 }
 

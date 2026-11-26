@@ -155,21 +155,34 @@
 /* ===== Theme 预览卡（ThemeCard.tsx） ===== */
 
 .theme-grid {
+  --theme-card-w: 100px;
   display: grid;
-  grid-template-columns: repeat(2, 100px);
+  grid-template-columns: repeat(2, var(--theme-card-w));
   gap: var(--space-3);
 }
 
 /* 四档主题在窄控件列里排 2×2，够宽才排 4×1：不用 flex 挤出 3+1 的残行。 */
 @container setpage (min-width: 620px) {
   .theme-grid {
-    grid-template-columns: repeat(4, 100px);
+    grid-template-columns: repeat(4, var(--theme-card-w));
+  }
+}
+
+/* macOS 多一档液态玻璃（五档）：窄时 3 + 2，够宽时一行五张——控件列只有 436 宽，卡缩到 76 才排得下 */
+.theme-grid[data-count="5"] {
+  grid-template-columns: repeat(3, var(--theme-card-w));
+}
+
+@container setpage (min-width: 620px) {
+  .theme-grid[data-count="5"] {
+    --theme-card-w: 76px;
+    grid-template-columns: repeat(5, var(--theme-card-w));
   }
 }
 
 .theme-card {
   position: relative;
-  width: 100px;
+  width: var(--theme-card-w);
   display: grid;
   gap: var(--space-1-5);
   justify-items: center;
@@ -182,8 +195,8 @@
 
 .theme-card-thumb {
   position: relative;
-  width: 100px;
-  height: 64px;
+  width: var(--theme-card-w);
+  height: calc(var(--theme-card-w) * 0.64);
   display: flex;
   overflow: hidden;
   border-radius: var(--radius-lg);
@@ -253,6 +266,19 @@
 }
 
 /* System 卡：左右两个 .theme-thumb 对半拼，各自挂 light / black 的 data-theme-preview */
+/* 液态玻璃卡：缩略窗底下垫一片示意「窗口背后」的色块，壳与井用各自的半透明地面压在上面 */
+.theme-thumb[data-theme-preview="glass"] {
+  background: var(--color-glass-preview-backdrop);
+}
+
+.theme-thumb[data-theme-preview="glass"] .theme-thumb-side {
+  background: var(--color-bg-glass-shell);
+}
+
+.theme-thumb[data-theme-preview="glass"] .theme-thumb-panel {
+  background: var(--color-bg-glass-well);
+}
+
 .theme-thumb-half {
   width: 50%;
 }

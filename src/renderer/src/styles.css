@@ -1226,6 +1226,23 @@ body {
   background: var(--color-bg-panel);
 }
 
+/*
+ * 液态玻璃档（2026-11-26）：外壳与会话井换成半透明的地面，透出主进程插在网页底下的
+ * Liquid Glass（index.ts 的 MAC_GLASS_WINDOW）。body 不上底色——上了就把玻璃整面盖住。
+ * 卡片、输入框、菜单仍走各自的实色 token，字不压在纯透明上。
+ */
+:root[data-theme="glass"] body {
+  background: transparent;
+}
+
+:root[data-theme="glass"] .layer {
+  background: var(--color-bg-glass-shell);
+}
+
+:root[data-theme="glass"] .pane {
+  background: var(--color-bg-glass-well);
+}
+
 
 /*
  * 方向 N（2026-11-07）：浅色也是「有颜色的壳 + 平的纸面井」，不再是半透明玻璃叠在桌面上——

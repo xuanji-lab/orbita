@@ -83,8 +83,11 @@ export default defineConfig({
          * node-pty（terminal runtime 的 PTY）同理：.node 预构建 + ConPTY 的
          * conpty.dll / OpenConsole.exe 靠 __dirname 定位，打进 bundle 必断。
          * N-API 预构建跨 Electron ABI，不需要 electron-rebuild。
+         *
+         * electron-liquid-glass（液态玻璃档的 NSGlassEffectView）同理：prebuilds/ 下的
+         * .node 靠 bindings 从包目录定位，打进 bundle 就找不到。
          */
-        external: [/^@napi-rs\/canvas/, /^node-pty$/],
+        external: [/^@napi-rs\/canvas/, /^node-pty$/, /^electron-liquid-glass$/],
         output: { entryFileNames: "[name].js" },
       },
     },
