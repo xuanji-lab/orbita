@@ -1390,6 +1390,12 @@ void app.whenReady().then(async () => {
     settings,
     intentIngest,
     memoryTurns,
+    // 中途起来的窗口（重开 / 刷新）问「谁在跑」：phases 表是 phase 事件记的真值，进程退出时整表清空
+    () => {
+      const live: Record<string, Exclude<SessionPhase, "idle">> = {};
+      for (const [sessionId, phase] of phases) if (phase !== "idle") live[sessionId] = phase;
+      return live;
+    },
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍

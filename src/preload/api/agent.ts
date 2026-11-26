@@ -8,6 +8,7 @@ import {
   ipcChannels,
   type AgentEvent,
   type CompactAgentInput,
+  type LiveSessionPhases,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
@@ -21,6 +22,8 @@ export const agentApi = {
   submit: (input: SubmitAgentInput): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.agentSubmit, input),
   abort: (sessionId: string): Promise<void> => ipcRenderer.invoke(ipcChannels.agentAbort, sessionId),
+  /** 此刻不在 idle 的会话：窗口中途起来（重开 / 刷新）时补上没收到的那条 phase 事件 */
+  livePhases: (): Promise<LiveSessionPhases> => ipcRenderer.invoke(ipcChannels.agentLivePhases),
 
   /** 停下当前这一轮（含工具调用），把这句话作为新一轮发出去。队列在 renderer 一侧 */
   interrupt: (input: SubmitAgentInput): Promise<void> =>

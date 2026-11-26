@@ -15,7 +15,7 @@ import {
   type TranscriptState,
 } from "@earendil-works/pi-coding-agent/client";
 import type { SessionSnapshot, ThinkingLevel as PiThinkingLevel, TranscriptItem } from "@earendil-works/pi-protocol";
-import type { AgentEvent, AgentStats, ContextRulesInventory, RetryStatus } from "@shared/agent-ipc";
+import type { AgentEvent, AgentStats, ContextRulesInventory, LiveSessionPhases, RetryStatus } from "@shared/agent-ipc";
 import type { ChannelMessage } from "@shared/channel";
 import type { PromptImage } from "@shared/prompt-images";
 import type { ComposerFileRef } from "../../shell/composer-attachments.ts";
@@ -105,6 +105,13 @@ export function parseCompactCommand(text: string): { instructions?: string } | n
 /** 一条会话在 renderer 里的全部运行时状态。 */
 export interface SessionEntry {
   transcript: TranscriptState;
+  /**
+   * 盘上的历史种进来过没有。事件就地建的槽（窗口中途才起来——切液态玻璃重开窗口、
+   * Cmd+R 刷新——收到的后半截流式帧；或从没打开过的父会话收到投递）只装着起来之后
+   * 的那一截：打开它时要把盘上的历史补到前面（seedUnderLive），不能当成「槽已在、
+   * 不用读盘」（2026-11-26 用户：切液态玻璃后历史被刷没）。
+   */
+  seeded: boolean;
   /**
    * 源侧分页的窗口状态。**盘上仍是全量**（JSONL、折叠、续聊语义一字未改），
    * 槽里只装尾部一段：分页分的是 IPC 传输量与渲染量。
@@ -251,6 +258,7 @@ export function createSessionStates(): SessionStates {
 /** 空槽是常量：首页/无选中时用它兜底，避免每次渲染新建 TranscriptState。 */
 export const EMPTY_ENTRY: SessionEntry = {
   transcript: createTranscriptState(seedSnapshot()),
+  seeded: false,
   window: { firstId: null, hasMore: false, loading: false, compactionsBefore: 0 },
   compactions: [],
   marks: [],
@@ -526,6 +534,7 @@ export function seedFromDisk(
   const next = new Map(states);
   next.set(sessionId, {
     transcript: createTranscriptState(seedSnapshot(items)),
+    seeded: true,
     window: {
       firstId: transcript[0]?.id ?? null,
       hasMore: page?.hasMore ?? false,
@@ -559,6 +568,77 @@ export function seedFromDisk(
     rules: null,
     pendingEcho: null,
   });
+  return next;
+}
+
+/**
+ * 打开会话时种盘：槽不在就整槽种（seedFromDisk）；槽在但没种过盘（事件就地建的，见
+ * `SessionEntry.seeded`）就把盘上的历史**补到实时内容前面**；种过的什么都不做。
+ *
+ * 补的时候按记录 id 去重：落盘记录与实时条目同一套 id（recorder 落的就是 progress 的
+ * item；轮尾文件卡的 turnId 就是落盘记录的 id）——窗口起来之后才落盘的那几条槽里已经
+ * 有了，只补槽里没有的（都比实时内容早）。**流式中间态一字不动**：不重建 TranscriptState，
+ * 只往 snapshot 前面拼（同 prependOlder 的理由）。
+ */
+export function seedUnderLive(
+  states: SessionStates,
+  sessionId: string,
+  transcript: readonly SessionRecord[],
+  stats: AgentStats | null = null,
+  page?: { hasMore: boolean; compactionsBefore: number },
+): SessionStates {
+  const entry = states.get(sessionId);
+  if (entry === undefined) return seedFromDisk(states, sessionId, transcript, stats, page);
+  if (entry.seeded) return states;
+  const known = loadedIds(entry);
+  const fresh = transcript.filter((record) => !known.has(record.id));
+  const older = splitRecords(fresh);
+  return new Map(states).set(sessionId, {
+    ...entry,
+    seeded: true,
+    transcript: {
+      ...entry.transcript,
+      snapshot: {
+        ...entry.transcript.snapshot,
+        transcript: [...older.items, ...entry.transcript.snapshot.transcript],
+      },
+    },
+    compactions: [...older.compactions, ...entry.compactions],
+    marks: [...older.marks, ...entry.marks],
+    fileTurns: [...older.fileTurns, ...entry.fileTurns],
+    reverts: [...older.reverts, ...entry.reverts],
+    undos: [...older.undos, ...entry.undos],
+    intentRecalls: dedupeRecalls([...older.intentRecalls, ...entry.intentRecalls]),
+    // 盘上什么都没补到（槽本来就装着全部——本窗口里新开的会话）：分页锚点照旧
+    window:
+      fresh.length === 0
+        ? entry.window
+        : {
+            firstId: fresh[0]?.id ?? entry.window.firstId,
+            hasMore: page?.hasMore ?? false,
+            loading: false,
+            compactionsBefore: page?.compactionsBefore ?? 0,
+          },
+    // 实时推来过就用实时的（更新），没有再用盘上的快照
+    stats: entry.stats ?? stats,
+  });
+}
+
+/**
+ * 窗口中途起来时补上没收到的 phase（agent:live-phases 的回执）。只改**还没收到过任何
+ * phase 事件**的槽（phaseEpoch 为 0）：回执在路上时这条会话可能已经报过 idle——那条
+ * 事件比回执新，不能被倒回去。
+ */
+export function applyLivePhases(states: SessionStates, live: LiveSessionPhases): SessionStates {
+  let next: SessionStates = states;
+  for (const [sessionId, phase] of Object.entries(live)) {
+    const entry = next.get(sessionId);
+    if (entry !== undefined && (entry.phaseEpoch !== 0 || entry.phase !== "idle")) continue;
+    next = update(next, sessionId, (current) => ({
+      ...current,
+      phase: phase === "compaction" ? "compaction" : "turn",
+    }));
+  }
   return next;
 }
 
