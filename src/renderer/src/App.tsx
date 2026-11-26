@@ -37,6 +37,7 @@ import type { SettingsTab } from "./features/settings/settings-tabs.ts";
 import { OnboardingView } from "./features/onboarding/OnboardingView";
 import { shouldAutoOpenOnboarding } from "./features/onboarding/onboarding-nav.ts";
 import { Sidebar, type Overlay } from "./shell/Sidebar";
+import { readViewHandoff, writeViewHandoff, type ViewHandoff } from "./shell/view-handoff.ts";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
@@ -190,6 +191,12 @@ export function App() {
    * 退出编排再进来重新落一次。
    */
   const landedRef = useRef(false);
+  /**
+   * 换窗口材质（切进 / 切出液态玻璃）重开的新窗：首帧读一次旧窗留下的视图，列表读完后接上
+   * （view-handoff.ts）。只有重开的窗读，冷启动照旧落首页；读完即清，不会再接第二次。
+   */
+  const handoffRef = useRef<ViewHandoff | null | undefined>(undefined);
+  if (handoffRef.current === undefined) handoffRef.current = api.reopened ? readViewHandoff(window.localStorage) : null;
   const refresh = useCallback(async () => {
     try {
       setProviders(await api.provider.list());
@@ -466,6 +473,18 @@ export function App() {
   const [newTaskSignal, setNewTaskSignal] = useState(0);
   // 星系设计稿的真源是各工作区的 planet/（与插件 planet-forge 同一份）：工作区列表一变就读一遍
   usePlanetFiles(session.workspaces);
+  // 接上旧窗的视图（handoffRef）。放在「编排先落一座星系」之前：同一拍列表读完时先接旧视图，
+  // 落地那条看到已经在看会话 / 盖着设置就不动
+  useEffect(() => {
+    const view = handoffRef.current;
+    if (view === null || view === undefined || session.loads.sessions.kind !== "ready") return;
+    handoffRef.current = null;
+    if (view.sessionId === null && view.overlay === null) return;
+    landedRef.current = true;
+    if (view.sessionId !== null) void session.openSession(view.sessionId);
+    setSettingsTab(view.settingsTab);
+    setOverlay(view.overlay);
+  }, [session]);
   useEffect(() => {
     if (!orchestrate) {
       landedRef.current = false;
@@ -529,6 +548,11 @@ export function App() {
    */
   const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
   const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
+  // 随变随记「此刻在看什么」，换窗口材质重开时新窗据此接上（view-handoff.ts）。
+  // 新窗自己在接上之前也会写一笔首页——那时旧值已经在 handoffRef 里读走了
+  useEffect(() => {
+    writeViewHandoff(window.localStorage, { sessionId: mainOpenId === "" ? null : mainOpenId, overlay, settingsTab });
+  }, [mainOpenId, overlay, settingsTab]);
   const channelParentId =
     overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";

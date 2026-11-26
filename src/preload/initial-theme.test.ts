@@ -1,6 +1,7 @@
 import { strictEqual } from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
+import { readInitialLanguage, readInitialTheme, readReopened } from "./initial-theme.ts";
+import { REOPENED_ARG } from "../shared/window.ts";
 
 describe("readInitialTheme", () => {
   it("正常：--orbita-theme= 前缀 + 合法值原样解出", () => {
@@ -30,5 +31,15 @@ describe("readInitialLanguage", () => {
     strictEqual(readInitialLanguage(["--orbita-language=fr"]), null);
     strictEqual(readInitialLanguage(["--orbita-language="]), null);
     strictEqual(readInitialLanguage(["--orbita-language=en", "--orbita-language=zh"]), "en");
+  });
+});
+
+describe("readReopened —— 换材质重开的窗口才接上旧窗视图", () => {
+  it("带参数是 true，冷启动（不带）是 false", () => {
+    strictEqual(readReopened(["electron", "--orbita-theme=glass", REOPENED_ARG]), true);
+    strictEqual(readReopened(["electron", "--orbita-theme=glass"]), false);
+  });
+  it("前缀相同的别的参数不算", () => {
+    strictEqual(readReopened([`${REOPENED_ARG}=1`, "--orbita-reopenedX"]), false);
   });
 });

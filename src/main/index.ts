@@ -107,6 +107,7 @@ import { createRecentReleases } from "./updater/recent-releases.ts";
 import { applyNativeTheme, registerSettingsIpc } from "./settings/ipc.ts";
 import { SettingsStore } from "./settings/store.ts";
 import { registerWindowIpc } from "./window/ipc.ts";
+import { REOPENED_ARG } from "../shared/window.ts";
 import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts";
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
@@ -322,7 +323,7 @@ function createMainWindow(
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
         { frame: false, backgroundColor: PAGE_BACKGROUNDS.light }),
-    webPreferences: rendererPreferences(theme, language),
+    webPreferences: rendererPreferences(theme, language, bounds !== undefined),
   });
   mainWindows.track(window);
 
@@ -399,12 +400,22 @@ function createMainWindow(
  * 工具条走同一个 preload——它是我们自己的页面，信任级与主窗口相同；网页本身在另一个
  * WebContentsView 里，不加载任何 preload（browser/sandbox.ts）。
  */
-function rendererPreferences(theme: ThemePreference, language: Language | undefined): WebPreferences {
+function rendererPreferences(
+  theme: ThemePreference,
+  language: Language | undefined,
+  /** 主窗口为换材质按原位置重开（切进 / 切出液态玻璃）：带上 REOPENED_ARG */
+  reopened = false,
+): WebPreferences {
   return {
     ...SECURITY_INVARIANTS,
     preload: join(__dirname, "../preload/index.js"),
     // 语言同理（`--orbita-language=`，preload 的 readInitialLanguage）：没选过就不传
-    additionalArguments: [`--orbita-theme=${theme}`, ...(language === undefined ? [] : [`--orbita-language=${language}`])],
+    additionalArguments: [
+      `--orbita-theme=${theme}`,
+      ...(language === undefined ? [] : [`--orbita-language=${language}`]),
+      // 按原位置重开（切进 / 切出液态玻璃）：告诉渲染层接上旧窗的视图（view-handoff.ts）
+      ...(reopened ? [REOPENED_ARG] : []),
+    ],
   };
 }
 
