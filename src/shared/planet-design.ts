@@ -19,7 +19,11 @@ export const PLANET_DIR = "planet";
 export const PLANET_DESIGN_FILE = "design.json";
 export const PLANET_GALAXY_FILE = "galaxy.json";
 export const PLANET_GALAXY_VERSION = 1;
-/** 一座星系最多读几颗子智能体（galaxy.ts 的 VISIBLE_ORBIT_CAP 是 6；多读两颗给面板，星系里照样只画 6 圈） */
+/**
+ * 一座星系最多读几颗子智能体，也是最重的主星（1.0 M☉）能带的颗数（galaxy-scale 的 starPlanetCapacity）。
+ * 编排星系的行星都带独立轨道（偏心率 / 近日点），layoutGalaxy 不按 VISIBLE_ORBIT_CAP（6）截，8 颗都画；
+ * 那个 6 只管单智能体首页按会话排的行星。
+ */
 export const PLANET_AGENTS_MAX = 8;
 
 export type PlanetComposition = "rock" | "ice" | "gas";

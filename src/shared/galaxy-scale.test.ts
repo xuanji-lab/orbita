@@ -1,8 +1,19 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  auToDisplay,
   DENSITY,
+  displayToAu,
+  displayZone,
+  INNER_ORBIT_AU_AT_SOLAR,
+  ladderOrbit,
   MASS_UNIT_PER_EARTH,
+  ORBIT_LADDER_RATIO,
+  physicalOrbitOf,
+  physicalZone,
+  starPhysicalEarth,
+  starPlanetCapacity,
+  starSolarMass,
   MIN_CLEARANCE,
   PLANET_ZONE,
   STAR_DENSITY,
@@ -15,8 +26,9 @@ import {
   seededStarMass,
   starRadius,
 } from "./galaxy-scale.ts";
-import { findSubAgentOrbit } from "./sub-agent.ts";
-import { checkSystem } from "./orbit-physics.ts";
+import { findSubAgentOrbit, ladderDisplay } from "./sub-agent.ts";
+import { checkSystem, orbitLevel, pairGapInRH } from "./orbit-physics.ts";
+import { PLANET_AGENTS_MAX } from "./planet-design.ts";
 
 /** 界面可能画出的主星质量（M⊕）：没设计过的工作区按工作区 id 在 STAR_MASS.min–max 之间播种 */
 const starMassesEarth = Array.from({ length: STAR_MASS_STEPS }, (_, index) => (STAR_MASS.min + index * 100) / MASS_UNIT_PER_EARTH);
@@ -92,41 +104,36 @@ describe("orbitClearance：行星不落进主星、不出行星区（与设计�
 });
 
 describe("findSubAgentOrbit：新行星不落进主星", () => {
-  /** 这条轨道上的新行星（按最大的那种半径算）在界面上可能画出的每一档主星之外，且不出行星区 */
-  function outsideEveryStar(a: number, massEarth: number): boolean {
-    return starMassesEarth.every(
-      (starMassEarth) => orbitClearance({ star: { mass: design(starMassEarth) }, planet: { mass: design(massEarth), composition: "gas", a, e: 0 } }).ok,
-    );
-  }
-
-  it("读不到主星质量：第一颗照旧落在 19（对最轻的那档主星也在外面）", () => {
+  it("读不到主星质量（连工作区 id 都没有）：按最轻那档（0.3 M☉）的第一档默认轨道，在那颗主星之外", () => {
     const first = findSubAgentOrbit(null, [], 2);
-    assert.equal(first, 19);
-    assert.equal(outsideEveryStar(first, 2), true);
+    assert.equal(first, ladderDisplay(STAR_MASS.min, 0));
+    assert.ok(orbitClearance({ star: { mass: STAR_MASS.min }, planet: { mass: design(4), composition: "gas", a: first as number, e: 0 } }).ok);
   });
 
-  it("读不到主星质量、已经有一颗在 19：绝不给出落进主星的轨道——排不开就如实回 null", () => {
-    const second = findSubAgentOrbit(null, [{ massEarth: 2, orbit: 19, eccentricity: 0, periapsisDeg: 0 }], 2);
-    if (second !== null) assert.equal(outsideEveryStar(second, 2), true, `第二颗落在 ${second}，落进了界面上某一档主星里`);
-    assert.notEqual(second, 4.5, "以前第二颗落在 4.5，叠在主星上");
+  it("每一档主星的每一档默认轨道都不碰主星：连最大的那种行星（4 M⊕ 气态）都放得下", () => {
+    for (let ui = STAR_MASS.min; ui <= STAR_MASS.max; ui += 10) {
+      for (let k = 0; k < starPlanetCapacity(ui); k++) {
+        assert.ok(orbitClearance({ star: { mass: ui }, planet: { mass: design(4), composition: "gas", a: ladderDisplay(ui, k), e: 0 } }).ok, `${ui} 第 ${k} 档`);
+      }
+    }
   });
 
-  it("主星质量写明了：给任何一档主星、带着一颗老行星找出来的轨道都在主星之外，行星间距也不是红区", () => {
+  it("主星质量写明了：给任何一档主星、带着一颗老行星找出来的轨道都在主星之外，物理层的行星间距也不是红区", () => {
     for (const starMassEarth of starMassesEarth) {
       for (const old of [{ massEarth: 2, orbit: 19, eccentricity: 0 }, { massEarth: 0.5, orbit: 31, eccentricity: 0.2 }]) {
         const found = findSubAgentOrbit(starMassEarth, [{ ...old, periapsisDeg: 0 }], 2);
-        if (found === null) continue;
+        assert.notEqual(found, null, `主星 ${starMassEarth} M⊕、老行星在 ${old.orbit}：应当排得下第二颗`);
         assert.ok(
-          orbitClearance({ star: { mass: design(starMassEarth) }, planet: { mass: design(2), composition: "gas", a: found, e: 0 } }).ok,
+          orbitClearance({ star: { mass: design(starMassEarth) }, planet: { mass: design(2), composition: "gas", a: found as number, e: 0 } }).ok,
           `主星 ${starMassEarth} M⊕、老行星在 ${old.orbit}：新轨道 ${found} 落进了主星`,
         );
+        const starUi = design(starMassEarth);
         const next = [
-          { mass: old.massEarth, a: old.orbit, e: old.eccentricity, omegaDeg: 0 },
-          { mass: 2, a: found, e: 0, omegaDeg: 0 },
+          physicalOrbitOf(starUi, { mass: design(old.massEarth), a: old.orbit, e: old.eccentricity, omegaDeg: 0 }),
+          physicalOrbitOf(starUi, { mass: design(2), a: found as number, e: 0, omegaDeg: 0 }),
         ];
-        // 黄区（拥挤）允许，红区不行——与原来一样
         assert.equal(
-          checkSystem({ mass: starMassEarth }, next).warnings.some((warning) => warning.level === "red" && (warning.innerIndex === 1 || warning.outerIndex === 1)),
+          checkSystem({ mass: starPhysicalEarth(starUi) }, next).warnings.some((warning) => warning.level === "red"),
           false,
           `主星 ${starMassEarth} M⊕、老行星在 ${old.orbit}：新轨道 ${found} 与老行星隔不开`,
         );
@@ -134,18 +141,96 @@ describe("findSubAgentOrbit：新行星不落进主星", () => {
     }
   });
 
-  it("主星够重时两颗排得开：第二颗落在第一颗外侧、主星之外", () => {
-    const second = findSubAgentOrbit(100, [{ massEarth: 2, orbit: 19, eccentricity: 0, periapsisDeg: 0 }], 2);
-    assert.notEqual(second, null);
-    assert.ok(second !== null && second > 19);
-    assert.equal(outsideEveryStar(second as number, 2), true);
+  it("挑不冲突的最内一档：1.0 M☉ 带一颗 e=0.3、画面 19 的老行星（物理 0.32 AU，在第一档里面），第一档与它的远日点相交，落在第二档", () => {
+    assert.ok(displayToAu(1000, 19) < ladderOrbit(1000, 0).au);
+    assert.equal(findSubAgentOrbit(100, [{ massEarth: 2.2, orbit: 19, eccentricity: 0.3, periapsisDeg: 0 }], 2), ladderDisplay(1000, 1));
   });
 
-  it("原来的行星间距规则不回退：主星 600 M⊕ 带一颗 e=0.3、a=19 的老行星，新圆轨道仍在 38", () => {
-    assert.equal(findSubAgentOrbit(600, [{ massEarth: 2.2, orbit: 19, eccentricity: 0.3, periapsisDeg: 0 }], 2), 38);
+  it("排不下时仍是 null：0.3 M☉ 带两颗很扁的大行星，整个画面行星区都与它们相交", () => {
+    assert.equal(
+      findSubAgentOrbit(30, [{ massEarth: 4, orbit: 20, eccentricity: 0.6 }, { massEarth: 4, orbit: 40, eccentricity: 0.4 }], 2),
+      null,
+    );
   });
 
-  it("排不下时仍是 null：小主星带着一颗老行星，两颗默认质量的行星在行星区里隔不开", () => {
-    assert.equal(findSubAgentOrbit(20, [{ massEarth: 2.2, orbit: 19, eccentricity: 0.3, periapsisDeg: 0 }], 2), null);
+  it("从空星系一颗一颗建到上限：都落在默认档上（等比 1.3），物理层全绿，画面上不进主星、不出行星区，画面顺序 = 物理顺序", () => {
+    for (let ui = STAR_MASS.min; ui <= STAR_MASS.max; ui += 100) {
+      const massEarth = ui / MASS_UNIT_PER_EARTH;
+      const built: { massEarth: number; orbit: number; eccentricity: number }[] = [];
+      for (let k = 0; k < starPlanetCapacity(ui); k++) {
+        const orbit = findSubAgentOrbit(massEarth, built, 2);
+        assert.equal(orbit, ladderDisplay(ui, k), `${ui / 1000} M☉ 第 ${k + 1} 颗`);
+        built.push({ massEarth: 2, orbit: orbit as number, eccentricity: 0 });
+      }
+      const physical = built.map((planet) => physicalOrbitOf(ui, { mass: design(planet.massEarth), a: planet.orbit, e: 0, omegaDeg: 0 }));
+      assert.deepEqual(checkSystem({ mass: starPhysicalEarth(ui) }, physical).warnings, [], `${ui / 1000} M☉ 满载应当全绿`);
+      for (let i = 1; i < physical.length; i++) {
+        assert.ok(Math.abs((physical[i] as { a: number }).a / (physical[i - 1] as { a: number }).a - ORBIT_LADDER_RATIO) < 1e-3);
+        assert.ok((built[i] as { orbit: number }).orbit > (built[i - 1] as { orbit: number }).orbit);
+      }
+      for (const planet of built) {
+        assert.ok(orbitClearance({ star: { mass: ui }, planet: { mass: design(4), composition: "gas", a: planet.orbit, e: 0 } }).ok, `${ui} 上 ${planet.orbit}`);
+      }
+    }
+  });
+});
+
+describe("物理层与画面层：两个数分开", () => {
+  it("主星质量：盘上 30–100 M⊕ 读作 0.3–1.0 M☉，算希尔半径时 × 333000 换成 M⊕", () => {
+    assert.equal(starSolarMass(300), 0.3);
+    assert.equal(starSolarMass(620), 0.62);
+    assert.equal(starSolarMass(1000), 1);
+    assert.equal(starSolarMass(6000), 1, "越界按最重那档");
+    assert.equal(starPhysicalEarth(1000), 333000);
+  });
+
+  it("容量表 8 档：0.3→3、0.4→4、0.5→4、0.6→5、0.7→6、0.8→7、0.9→7、1.0→8（1.0 正好是 PLANET_AGENTS_MAX）", () => {
+    assert.deepEqual(starMassesEarth.map((massEarth) => starPlanetCapacity(design(massEarth))), [3, 4, 4, 5, 6, 7, 7, 8]);
+    assert.equal(starPlanetCapacity(STAR_MASS.max), PLANET_AGENTS_MAX);
+    // 半档：0.65 M☉ → 5.5 → 6（整数算，不被浮点舍错）
+    assert.equal(starPlanetCapacity(650), 6);
+  });
+
+  it("默认轨道：a_in × 1.3^k，物理上按真实比例落在绿区（2 M⊕ 相邻约 11–17 个相互希尔半径）", () => {
+    for (let ui = STAR_MASS.min; ui <= STAR_MASS.max; ui += 100) {
+      const n = starPlanetCapacity(ui);
+      const rungs = Array.from({ length: n }, (_, k) => ladderOrbit(ui, k));
+      assert.ok(Math.abs((rungs[0] as { au: number }).au - INNER_ORBIT_AU_AT_SOLAR * starSolarMass(ui) ** 2) < 1e-12);
+      for (let k = 1; k < n; k++) {
+        const inner = rungs[k - 1] as { au: number };
+        const outer = rungs[k] as { au: number };
+        assert.ok(Math.abs(outer.au / inner.au - ORBIT_LADDER_RATIO) < 1e-12);
+        const gap = pairGapInRH({ mass: 2, a: inner.au, e: 0, omegaDeg: 0 }, { mass: 2, a: outer.au, e: 0, omegaDeg: 0 }, starPhysicalEarth(ui));
+        assert.equal(orbitLevel(gap), "green", `${ui / 1000} M☉ 第 ${k} 与 ${k + 1} 档相距 ${gap.toFixed(1)} R_H`);
+        assert.ok(gap > 10.5 && gap < 17, `${gap}`);
+      }
+      // 最外一档仍在物理行星区里，物理行星区外缘对上画面行星区外缘（保底 52）
+      const zone = physicalZone(ui);
+      assert.ok((rungs[n - 1] as { au: number }).au < zone.aOut);
+      assert.ok(Math.abs(auToDisplay(ui, zone.aOut) - PLANET_ZONE) < 1e-9);
+      assert.equal(displayZone(ui).dOut, PLANET_ZONE);
+    }
+  });
+
+  it("映射单调：画面上越外，物理上也越外（含区外的旧值，如落进主星的 4.5、出界的 60）", () => {
+    for (let ui = STAR_MASS.min; ui <= STAR_MASS.max; ui += 50) {
+      let previous = 0;
+      for (let display = 0; display <= 64; display += 0.25) {
+        const au = displayToAu(ui, display);
+        assert.ok(au > previous, `${ui}: 画面 ${display} → ${au} AU 不比 ${previous} 大`);
+        previous = au;
+      }
+    }
+  });
+
+  it("往返恒等：画面 → AU → 画面原样回来（旧 galaxy.json 里的 19、45.5 等）；AU → 画面 → AU 也一样", () => {
+    for (let ui = STAR_MASS.min; ui <= STAR_MASS.max; ui += 10) {
+      for (const display of [4.5, 11, 19, 25, 26, 30, 31, 38, 43, 45.5, 48, 52]) {
+        const back = auToDisplay(ui, displayToAu(ui, display));
+        assert.ok(Math.abs(back - display) < 1e-9, `${ui}: ${display} → ${back}`);
+        assert.equal(Math.round(back * 100) / 100, display, "按盘上的两位小数原样");
+      }
+      for (const au of [0.01, 0.1, 0.42, 1, 3]) assert.ok(Math.abs(displayToAu(ui, auToDisplay(ui, au)) / au - 1) < 1e-12);
+    }
   });
 });

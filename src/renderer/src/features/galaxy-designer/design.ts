@@ -9,7 +9,7 @@ import {
   starRadius,
   type Composition,
 } from "../chat/galaxy.ts";
-import { MASS_UNIT_PER_EARTH, orbitClearance, orbitRange, seededStarMass, STAR_MASS_DEFAULT, STAR_MASS_STEPS } from "../../../../shared/galaxy-scale.ts";
+import { MASS_UNIT_PER_EARTH, orbitClearance, orbitRange, physicalOrbitOf, seededStarMass, STAR_MASS_DEFAULT, STAR_MASS_STEPS, starPhysicalEarth } from "../../../../shared/galaxy-scale.ts";
 import type { RightPanelKind } from "../../shell/RightRail.tsx";
 import type { SubAgentProfile } from "@shared/sub-agent";
 import type { EyeStyle, PlanetMix, PlanetWriteBody, PlanetWriteRequest, WorkspacePlanets } from "@shared/planet-design";
@@ -791,7 +791,18 @@ export function writableDesign(design: GalaxyDesign): boolean {
     });
     if (!physicalOk) return false;
   }
-  return checkSystem({ mass: design.star.mass }, planets.map(orbitSpecOf)).ok;
+  // 行星之间稳不稳按物理层判（主星 M☉、轨道 AU），与主进程找空轨同一套换算
+  return checkSystem(physicalStarOf(design.star.mass), physicalSpecsOf(design.star.mass, planets)).ok;
+}
+
+/** 物理层的主星（质量换成 M⊕，与行星同一单位）：判希尔间距用 */
+export function physicalStarOf(starMass: number): { mass: number } {
+  return { mass: starPhysicalEarth(starMass) };
+}
+
+/** 一组行星的物理轨道（质量 M⊕、半长轴 AU，e 与 ω 两层共用）；画面轨道经 shared 的对数映射换过去 */
+export function physicalSpecsOf(starMass: number, planets: readonly PlanetDesign[]): OrbitSpec[] {
+  return planets.map((planet) => physicalOrbitOf(starMass, orbitSpecOf(planet)));
 }
 
 /** 面板的设计稿 → 写回请求（没有 id 的新行星按次序起一个 planet-N） */
