@@ -18,8 +18,12 @@ import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
  * **"black"**（玄 Onyx，纯灰、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
  * 契约，换的只是显示名（`themes` 在 messages-*.ts）。第三档 "dark"（Warm 微暖）
  * 2026-09-27 退役，存量设置迁移到 graphite（`parseTheme`）。
+ *
+ * **"glass"**（液态玻璃，2026-11-26 用户试用档）：浅色的 token 原样不动，只把外壳与会话井换成
+ * 半透明的地面，透出 macOS 26+ 的 Liquid Glass（主进程建窗时插在网页底下）。只在 macOS 上可选，
+ * 手动档，system 不落。玻璃窗与不透明窗是建窗时定的两种窗口，切进切出时主进程重开窗口。
  */
-export const THEME_PREFERENCES = ["system", "light", "graphite", "black"] as const;
+export const THEME_PREFERENCES = ["system", "light", "glass", "graphite", "black"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
 /** 界面语言。缺席 = "en"（语言设置落地之前的默认） */
