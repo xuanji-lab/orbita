@@ -28,6 +28,8 @@ import {
   removeSessionEntry,
   revertOptimisticTurn,
   seedFromDisk,
+  seedUnderLive,
+  applyLivePhases,
   setOlderLoading,
   setEntryPhase,
   type QueuedMessage,
@@ -467,6 +469,12 @@ export interface SessionEngine {
   readonly views: Set<ViewHandle>;
   /** 与 states 同步的镜像（见 statesRef 的历史注释，引擎内即时写） */
   readonly statesRef: Readonly<{ current: SessionStates }>;
+  /**
+   * 窗口起来时问过一次「哪些会话在跑」（agent:live-phases）并已应用。打开会话判「在跑就把
+   * 控制面绑过来」之前要等它：中途起来的窗口收不到这一轮开头的 phase，不等就会把在跑的
+   * 会话当空闲（停止键失灵、回车直发撞 already running）。问失败也算完成（退回只靠事件）。
+   */
+  readonly livePhasesReady: Promise<void>;
   /** 幂等应用一次状态变更（并同步镜像）——查看槽的队列操作走这里 */
   applyStates(fn: (prev: SessionStates) => SessionStates): void;
   /**
@@ -1034,6 +1042,30 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
   }, [applyStates, deliverNext, refreshQueue]);
 
   /**
+   * 窗口中途起来（切进 / 切出液态玻璃要重开窗口、Cmd+R 刷新）：在跑的会话这一轮开头的
+   * phase 事件发给的是别的窗口，这里只会收到后半截流式帧——就地建的槽 phase 停在 idle。
+   * 起来时问一次主进程的真值补上（applyLivePhases 只补还没收到 phase 事件的槽）。
+   */
+  const livePhases = useRef<{ promise: Promise<void>; resolve: () => void; asked: boolean } | null>(null);
+  if (livePhases.current === null) {
+    let resolve: () => void = () => undefined;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    livePhases.current = { promise, resolve, asked: false };
+  }
+  useEffect(() => {
+    const gate = livePhases.current;
+    if (gate === null || gate.asked) return;
+    gate.asked = true;
+    api.agent
+      .livePhases()
+      .then((live) => applyStates((prev) => applyLivePhases(prev, live)))
+      .catch(() => undefined)
+      .finally(() => gate.resolve());
+  }, [applyStates]);
+
+  /**
    * 子会话 PR4a：子→父投递。通道消息落账 + 广播是主进程的事（`applyChannelSend` /
    * `applyDelegate`），**排队所有权在这里**——子→父恒 followUp，进父的 renderer
    * 队列，父空闲立即开一轮、在跑等这轮结束（既有的 phase 事件 deliverNext 会
@@ -1283,6 +1315,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     answerIntentConfirm,
     setPendingEcho: setPendingEchoCb,
     statesRef,
+    livePhasesReady: livePhases.current.promise,
     views: views.current,
     applyStates,
     beginOptimisticTurn,
@@ -1992,6 +2025,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     if (key !== "main" || outboxCheckedRef.current || engine.loads.sessions.kind !== "ready") return;
     outboxCheckedRef.current = true;
     void (async () => {
+      // 「会话还在跑」靠 phase 判：刷新 / 重开后的窗口要先补上 live-phases，不然在跑的会话被当成空闲
+      await engine.livePhasesReady;
       const entries = await api.session.outboxList().catch(() => [] as OutboxEntry[]);
       const lost: OutboxEntry[] = [];
       for (const entry of entries) {
@@ -2384,18 +2419,26 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       setLoadingHistory(true);
       const ticket = openWins.begin();
       /** 把盘上的首屏尾窗种进这条会话的槽——槽已在（或本来就不用种）就什么都不做 */
+      /** 槽里有没有盘上的历史：事件就地建的槽（窗口中途起来收到的后半截）不算 */
+      const hasHistory = (): boolean => engine.statesRef.current.get(id)?.seeded === true;
+      /**
+       * 把盘上的首屏尾窗种进这条会话的槽：槽不在整槽种；槽在但只有实时那一截就把历史补到前面
+       * （seedUnderLive）；种过的什么都不做
+       */
       const seedSlot = (seed: SessionWindowDetail | null): void => {
-        if (seed === null || engine.statesRef.current.has(id)) return;
-        engine.applyStates((prev) => seedFromDisk(prev, id, seed.transcript, seed.meta.stats, seed.window));
+        if (seed === null || hasHistory()) return;
+        engine.applyStates((prev) => seedUnderLive(prev, id, seed.transcript, seed.meta.stats, seed.window));
       };
-      // 槽已经在（本次启动里打开过 / 正在跑）转录本来就不会重种，只取 meta；槽不在才读首屏尾窗
-      return readOpenDetail(id, engine.statesRef.current.has(id), api.session)
+      // 槽里已经有历史（本次启动里打开过）转录本来就不会重种，只取 meta；没有才读首屏尾窗
+      return readOpenDetail(id, hasHistory(), api.session)
         .then(async (first) => {
           // 请求发出去之后槽被清掉了（会话刚被删 / 重置）：meta 够不着历史，补读一次尾窗
           const opened =
-            first !== null && first.seed === null && !engine.statesRef.current.has(id)
+            first !== null && first.seed === null && !hasHistory()
               ? await readOpenDetail(id, false, api.session)
               : first;
+          // 「在不在跑」要等窗口起来那次 live-phases 应用完再判（见 livePhasesReady）
+          await engine.livePhasesReady;
           if (opened === null) {
             if (openWins.isLatest(ticket)) setLoadingHistory(false);
             // 盘上没有这条会话：回 false，发进常驻对话的调用方据此改开一条新会话

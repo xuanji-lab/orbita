@@ -9,6 +9,7 @@ import { mainWindows } from "../window/main-windows.ts";
 import {
   ipcChannels,
   type CompactAgentInput,
+  type LiveSessionPhases,
   type ProviderSecrets,
   type SubmitAgentInput,
 } from "../../shared/agent-ipc.ts";
@@ -152,6 +153,8 @@ export function registerAgentIpc(
   /** 记忆构建的轮次跟踪器（undefined = 测试夹具不传）。
    * submit / interrupt 判过根会话 + 用户原话后 begin，轮落定时由它交给记忆服务 */
   memoryTurns?: { begin(sessionId: string, text: string): void },
+  /** 此刻不在 idle 的会话（index.ts 按 phase 事件记的 phases 表）；agent:live-phases 回它 */
+  livePhases: () => LiveSessionPhases = () => ({}),
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
@@ -574,6 +577,7 @@ export function registerAgentIpc(
 
   ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
   ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
+  ipcMain.handle(ipcChannels.agentLivePhases, (): LiveSessionPhases => livePhases());
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，

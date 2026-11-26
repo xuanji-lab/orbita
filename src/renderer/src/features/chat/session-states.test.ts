@@ -25,6 +25,8 @@ import {
   revertOptimisticTurn,
   prependOlder,
   seedFromDisk,
+  seedUnderLive,
+  applyLivePhases,
   setOlderLoading,
   setEntryPhase,
   observedThinkingFor,
@@ -1291,5 +1293,72 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
     assert.notEqual(on, seeded);
     assert.equal(on.get("A")?.window.loading, true);
     assert.equal(seeded.get("A")?.window.loading, false);
+  });
+});
+
+// ── 窗口中途起来（切液态玻璃重开窗口 / Cmd+R 刷新）：接上在跑的会话 ──
+
+describe("seedUnderLive / applyLivePhases —— 中途起来的窗口接上在跑的会话", () => {
+  /** 新窗口刚起来只收到这一轮后半截：a2 正在流式（还没落盘） */
+  const liveOnly = (): SessionStates =>
+    applyAgentEvent(createSessionStates(), {
+      type: "progress",
+      sessionId: "A",
+      progress: { ...assistantDone("a2", "后半截"), type: "item_updated" },
+    } as AgentEvent);
+
+  test("事件就地建的槽没种过盘、phase 停在 idle（这正是 bug 的起点）", () => {
+    const states = liveOnly();
+    assert.equal(states.get("A")?.seeded, false);
+    assert.equal(states.get("A")?.phase, "idle");
+  });
+
+  test("打开时把盘上的历史补到实时内容前面：顺序对、不重复、流式那条还在", () => {
+    // 盘上：u1 a1 是更早的往来，u2 是这一轮的用户消息；a2 还没落盘
+    const disk = [userItem("u1", 1000), { ...assistantDone("a1", "早先的回答").item, timestamp: 1500 }, userItem("u2", 2000)];
+    const next = seedUnderLive(liveOnly(), "A", disk, null, { hasMore: true, compactionsBefore: 0 });
+    const entry = next.get("A")!;
+    assert.deepEqual(selectTranscript(entry.transcript).map((item) => item.id), ["u1", "a1", "u2", "a2"]);
+    assert.equal(entry.seeded, true);
+    assert.equal(entry.window.firstId, "u1");
+    assert.equal(entry.window.hasMore, true);
+  });
+
+  test("窗口起来后才落盘的条目（槽里已有）按 id 去重，轮尾文件卡同理", () => {
+    let states = liveOnly();
+    states = applyAgentEvent(states, progress("A", assistantDone("a2", "说完了")));
+    states = applyAgentEvent(states, { type: "fileTurnView", sessionId: "A", turnId: "ft1", changes: [{ path: "/x", added: 1, removed: 0 }] } as AgentEvent);
+    const fileTurn: FileTurnRecord = { role: "file-turn", id: "ft1", timestamp: 3000, changes: [] };
+    const disk: SessionRecord[] = [userItem("u2", 2000), { ...assistantDone("a2", "说完了").item, timestamp: 2500 }, fileTurn];
+    const entry = seedUnderLive(states, "A", disk).get("A")!;
+    assert.deepEqual(selectTranscript(entry.transcript).map((item) => item.id), ["u2", "a2"]);
+    assert.equal(entry.fileTurns.length, 1);
+  });
+
+  test("种过盘的槽不再动；槽不在就整槽种", () => {
+    const seeded = seedFromDisk(new Map(), "A", [userItem("u1", 1000)]);
+    assert.equal(seedUnderLive(seeded, "A", [userItem("u0", 500)]), seeded);
+    const fresh = seedUnderLive(new Map(), "B", [userItem("u1", 1000)]);
+    assert.equal(fresh.get("B")?.seeded, true);
+    assert.deepEqual(selectTranscript(fresh.get("B")!.transcript).map((item) => item.id), ["u1"]);
+  });
+
+  test("盘上什么都没补到（本窗口新开的会话）：分页锚点不动", () => {
+    let states = applyAgentEvent(createSessionStates(), progress("A", assistantDone("a1", "x")));
+    states = seedUnderLive(states, "A", [{ ...assistantDone("a1", "x").item }], null, { hasMore: true, compactionsBefore: 0 });
+    assert.equal(states.get("A")?.window.firstId, null);
+    assert.equal(states.get("A")?.window.hasMore, false);
+  });
+
+  test("live-phases 把没收到 phase 事件的槽标成在跑；压缩照实标", () => {
+    const next = applyLivePhases(liveOnly(), { A: "turn", B: "compaction", C: "retry" });
+    assert.equal(next.get("A")?.phase, "turn");
+    assert.equal(next.get("B")?.phase, "compaction");
+    assert.equal(next.get("C")?.phase, "turn");
+  });
+
+  test("回执在路上时已经报过 idle 的会话不被倒回在跑", () => {
+    const states = applyAgentEvent(liveOnly(), { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(applyLivePhases(states, { A: "turn" }).get("A")?.phase, "idle");
   });
 });
