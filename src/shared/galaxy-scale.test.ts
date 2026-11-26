@@ -21,7 +21,10 @@ import {
   STAR_MASS_DEFAULT,
   STAR_MASS_STEPS,
   bodyRadius,
+  DRAWN_INNER_PER_STAR_RADIUS,
   orbitClearance,
+  PLANET_DRAW_SCALE,
+  planetDrawRadius,
   planetRadius,
   seededStarMass,
   starRadius,
@@ -71,7 +74,7 @@ describe("orbitClearance：行星不落进主星、不出行星区（与设计�
   const planet = { mass: design(2), composition: "rock" as const };
 
   it("近日距放得下两颗天体加间距才算不撞：差一点点就是撞", () => {
-    const r = starRadius(star.mass) + planetRadius(planet) + MIN_CLEARANCE;
+    const r = starRadius(star.mass) + planetDrawRadius(planet) + MIN_CLEARANCE;
     assert.deepEqual(orbitClearance({ star, planet: { ...planet, a: r, e: 0 } }), { ok: true });
     const hit = orbitClearance({ star, planet: { ...planet, a: r - 0.01, e: 0 } });
     assert.equal(hit.ok, false);
@@ -82,7 +85,7 @@ describe("orbitClearance：行星不落进主星、不出行星区（与设计�
 
   it("偏心轨道按近日距算：同样的半长轴，越扁越容易撞；合法下限随之抬高", () => {
     const e = 0.3;
-    const min = (starRadius(star.mass) + planetRadius(planet) + MIN_CLEARANCE) / (1 - e);
+    const min = (starRadius(star.mass) + planetDrawRadius(planet) + MIN_CLEARANCE) / (1 - e);
     const hit = orbitClearance({ star, planet: { ...planet, a: min - 0.01, e } });
     assert.equal(!hit.ok && hit.kind, "collision");
     assert.ok(!hit.ok && hit.kind === "collision" && Math.abs(hit.min - min) < 1e-9);
@@ -90,7 +93,7 @@ describe("orbitClearance：行星不落进主星、不出行星区（与设计�
   });
 
   it("远日距连同行星半径要留在行星区里，越界报 far 并给合法上限", () => {
-    const max = PLANET_ZONE - planetRadius(planet);
+    const max = PLANET_ZONE - planetDrawRadius(planet);
     assert.deepEqual(orbitClearance({ star, planet: { ...planet, a: max, e: 0 } }), { ok: true });
     const far = orbitClearance({ star, planet: { ...planet, a: max + 0.01, e: 0 } });
     assert.equal(!far.ok && far.kind, "far");
@@ -172,6 +175,27 @@ describe("findSubAgentOrbit：新行星不落进主星", () => {
         assert.ok(orbitClearance({ star: { mass: ui }, planet: { mass: design(4), composition: "gas", a: planet.orbit, e: 0 } }).ok, `${ui} 上 ${planet.orbit}`);
       }
     }
+  });
+});
+
+describe("行星默认画成 0.7 倍（2026-11-26 用户定）", () => {
+  it("PLANET_DRAW_SCALE = 0.7：只缩行星的画面半径，主星不缩、物理质量与轨道不变", () => {
+    assert.equal(PLANET_DRAW_SCALE, 0.7);
+    const planet = { mass: 20, composition: "rock" as const };
+    assert.equal(planetDrawRadius(planet), planetRadius(planet) * 0.7);
+    assert.equal(starRadius(1000), Math.cbrt(1000 / STAR_DENSITY));
+    // 物理层不看画面大小：同一条画面轨道的 AU、容量都与缩放无关
+    assert.equal(starPlanetCapacity(1000), 8);
+  });
+
+  it("判据用画出来的半径：不落进主星的下限 = 主星半径 + 0.7 × 行星半径 + 间距；画面内缘的倍数按 0.7 推出", () => {
+    const planet = { mass: 20, composition: "rock" as const };
+    const r = starRadius(600) + planetRadius(planet) * 0.7 + MIN_CLEARANCE;
+    assert.deepEqual(orbitClearance({ star: { mass: 600 }, planet: { ...planet, a: r, e: 0 } }), { ok: true });
+    assert.equal(orbitClearance({ star: { mass: 600 }, planet: { ...planet, a: r - 0.01, e: 0 } }).ok, false);
+    // (1 + 0.7 / 2.16) / sin 40° + 0.2 ≈ 2.26（原大小时是 2.48）
+    assert.ok(Math.abs(DRAWN_INNER_PER_STAR_RADIUS - ((1 + 0.7 / 2.16) / Math.sin((40 * Math.PI) / 180) + 0.2)) < 1e-12);
+    assert.ok(Math.abs(displayZone(1000).dIn - DRAWN_INNER_PER_STAR_RADIUS * starRadius(1000)) < 1e-12);
   });
 });
 

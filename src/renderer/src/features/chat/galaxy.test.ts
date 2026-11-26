@@ -57,6 +57,7 @@ import {
   GALAXY_MAX_FILL,
 } from "./galaxy.ts";
 import { ORBIT_STEP } from "./galaxy-data.ts";
+import { PLANET_DRAW_SCALE, planetDrawRadius } from "../../../../shared/galaxy-scale.ts";
 
 /** 测试用的三档星系（原单智能体首页的写死 fixture；产品里已不用，只在测试里当「空 / 平常 / 满载」的形状） */
 type GalaxyFixture = "empty" | "typical" | "full";
@@ -157,7 +158,8 @@ describe("量：行星封顶、星屑聚合", () => {
     assert.ok(a !== undefined && b !== undefined && c !== undefined);
     assert.ok(Math.abs(b.orbitRadius / a.orbitRadius - 2) < 1e-9 && Math.abs(c.orbitRadius / b.orbitRadius - 2) < 1e-9);
     assert.ok(c.orbitRadius + c.radius <= PLANET_ZONE + 1e-9);
-    assert.equal(a.radius, planetRadius({ mass: 4, composition: "rock" }));
+    // 画面半径 = 物理半径 × PLANET_DRAW_SCALE（行星默认画小到 0.7 倍），轨道缩放不再改它
+    assert.equal(a.radius, planetDrawRadius({ mass: 4, composition: "rock" }));
     const narrow = layoutGalaxy({ starMass: 600, planets: [planet("a", 20)], sessions: 0 });
     assert.equal(narrow.orbitScale, 1);
   });
@@ -444,7 +446,8 @@ describe("行星表情可读（星系规则：大小差距缩小到行星表情�
         const items = drawFrame(layout, camera, vp, orbitArcs(layout, camera, vp), 3.2, min);
         const star = items.find((item) => item.kind === "star");
         const planets = items.filter((item) => item.kind === "planet");
-        for (const planet of planets) assert.ok(planet.r >= min - 1e-9);
+        // 可读下限按原大小定，画出来统一缩到 PLANET_DRAW_SCALE
+        for (const planet of planets) assert.ok(planet.r >= min * PLANET_DRAW_SCALE - 1e-9);
         const biggest = Math.max(0, ...planets.map((planet) => planet.r));
         assert.ok(star !== undefined && star.r >= biggest * 1.5, `${fixture} ${w}×${h}: 主星 ${star?.r} 行星 ${biggest}`);
       }

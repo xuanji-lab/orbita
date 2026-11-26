@@ -1,5 +1,6 @@
 import { STAR_MASS, farWindow, inFarWindow, makeCamera, project, type Camera, type Vec3 } from "../chat/galaxy.ts";
 import { minOrbit, maxOrbit, ORBIT_RANGE, orbitEccentricityOf, periapsisOf, radiusOf, type GalaxyDesign } from "./design.ts";
+import { PLANET_DRAW_SCALE } from "../../../../shared/galaxy-scale.ts";
 
 /**
  * 星系设计面板的「引力井」网格：科普里常见的「重物压在橡胶膜上」画法——一张网格布，主星压在中央，
@@ -292,7 +293,8 @@ export function orbitStage(
     const near = minOrbit(design);
     const far = maxOrbit(design);
     const at = orbitPointOnWell(scene, a, depth, PLANET_THETA, ecc, periapsis);
-    const r = Math.max(radiusOf(design, "planet") * pixelsPerUnit(scene, at), SCENE_PLANET_MIN);
+    // 行星按画面大小画（× PLANET_DRAW_SCALE，与星系页、不落进主星的判据同一个数）；主星不缩
+    const r = Math.max(radiusOf(design, "planet") * PLANET_DRAW_SCALE * pixelsPerUnit(scene, at), SCENE_PLANET_MIN * PLANET_DRAW_SCALE);
     planet = {
       a,
       ecc,

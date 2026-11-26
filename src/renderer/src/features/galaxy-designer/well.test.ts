@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { STAR_MASS } from "../chat/galaxy.ts";
+import { PLANET_DRAW_SCALE } from "../../../../shared/galaxy-scale.ts";
 import { defaultDesign, displayRadius, maxOrbit, minOrbit, PREVIEW_FRAME, radiusOf, ZOOM_DEFAULT, type CompleteDesign } from "./design.ts";
 import {
   flatStage,
   gridLines,
   ORBIT_BOX,
   orbitStage,
+  SCENE_PLANET_MIN,
   SIT,
   starStage,
   WELL,
@@ -155,7 +157,8 @@ describe("行星页：轨道场景", () => {
       assert.ok(p.y >= ORBIT_BOX.y && p.y <= ORBIT_BOX.y + ORBIT_BOX.h, `y ${p.y}`);
     }
     assert.ok(stage.star.y + stage.star.r <= ORBIT_BOX.y + ORBIT_BOX.h);
-    assert.ok(stage.planet.r >= 5);
+    // 最小像素同样按 PLANET_DRAW_SCALE 缩（5 → 3.5），仍不退成一个点
+    assert.ok(stage.planet.r >= SCENE_PLANET_MIN * PLANET_DRAW_SCALE - 1e-9);
   });
 
   test("有主星没行星：场景里只有主星，没有轨道", () => {

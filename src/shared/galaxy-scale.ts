@@ -58,6 +58,19 @@ export function planetRadius(planet: { mass: number; composition: BodyCompositio
   return bodyRadius(clamp(planet.mass, PLANET_MASS.min, PLANET_MASS.max), density);
 }
 
+/**
+ * 行星画出来的大小 = 原来的 0.7 倍（2026-11-26 用户定：「缩小 0.7 倍我觉得挺好的嘞，并不会觉得太小」——
+ * 一座星系可到 8 颗，行星小一点更显星系广袤）。只缩画面，主星不缩，质量与物理轨道不变。
+ * 所有「画多大」与「画面上撞不撞」都从这里取同一个数：星系布局与碰撞（layoutGalaxy）、屏幕上的可读半径
+ * （galaxy.ts 的 planetPx）、面板的轨道小场景（well.ts）、不落进主星 / 不出行星区（orbitRange）、画面行星区内缘（displayZone）。
+ */
+export const PLANET_DRAW_SCALE = 0.7;
+
+/** 行星在画面里的半径（与轨道同一单位）：planetRadius × PLANET_DRAW_SCALE */
+export function planetDrawRadius(planet: { mass: number; composition: BodyComposition; density?: number }): number {
+  return planetRadius(planet) * PLANET_DRAW_SCALE;
+}
+
 // ── 没设计过的工作区：主星多重 ───────────────────────────────────────────
 
 /** 主星质量的档数：STAR_MASS.min–max 之间每 100 一档 */
@@ -100,7 +113,7 @@ export function orbitRange(input: {
   e: number;
 }): { min: number; max: number } {
   const starR = starRadius(input.star.mass, input.star.density);
-  const planetR = planetRadius({ mass: input.planet.mass, composition: input.planet.composition ?? "rock", density: input.planet.density });
+  const planetR = planetDrawRadius({ mass: input.planet.mass, composition: input.planet.composition ?? "rock", density: input.planet.density });
   return {
     // 近日距 a(1−e) 至少放下两颗天体与间距
     min: (starR + planetR + MIN_CLEARANCE) / Math.max(1 - input.e, 1e-9),
@@ -175,18 +188,26 @@ export function physicalZone(starUiMass: number): { aIn: number; aOut: number; s
 }
 
 /** 最大那种行星（PLANET_MASS.max 的气态）的画面半径：画面行星区的内缘要连它都放得下 */
-const LARGEST_PLANET_RADIUS = bodyRadius(PLANET_MASS.max, DENSITY.gas);
+const LARGEST_PLANET_RADIUS = bodyRadius(PLANET_MASS.max, DENSITY.gas) * PLANET_DRAW_SCALE;
+
+/** galaxy.ts 的 STAR_OVER_PLANET × WAITING_SCALE（等你时放大的那颗也算）：行星屏幕半径最大到主星的 1/它 × PLANET_DRAW_SCALE。renderer 的测试核对两边相等 */
+export const DRAWN_STAR_OVER_PLANET = 1.6 * 1.35;
+/** galaxy.ts 的 VIEW_REF_ELEVATION：默认俯角，近侧短轴被压到 sin 40° */
+export const DRAWN_REF_ELEVATION_DEG = 40;
+/** 透视与间距的余量（× 主星半径） */
+const DRAWN_INNER_MARGIN = 0.2;
 
 /**
  * 画面行星区内缘按「画出来的大小」留的倍数（× 主星半径）。星系里的行星不按世界半径画，而是画成可读的卡通大小，
- * 最大到主星屏幕半径的 1 / (1.6 × 1.35)（galaxy.ts 的 STAR_OVER_PLANET × WAITING_SCALE，等你时放大的那颗）；
- * 默认俯角 40° 时近侧短轴被压到 sin 40° ≈ 0.64。近侧那颗不压到主星上要 a ≥ (1 + 1/2.16) / 0.64 ≈ 2.3 倍主星半径，
- * 再留一点透视与间距的余量取 2.5（1.0 M☉ → 22.4，与旧默认第一档 19 时「刚好贴着主星」的截图对得上）。
+ * 最大到主星屏幕半径的 PLANET_DRAW_SCALE / (1.6 × 1.35)；默认俯角 40° 时近侧短轴被压到 sin 40° ≈ 0.64。
+ * 近侧那颗不压到主星上要 a ≥ (1 + 0.7 / 2.16) / 0.64 ≈ 2.06 倍主星半径，再加 0.2 的余量 ≈ 2.26。
+ * （行星按原大小画时这个数是 2.48：1.0 M☉ → 22.4，与旧默认第一档 19「刚好贴着主星」的截图对得上。）
  */
-export const DRAWN_INNER_PER_STAR_RADIUS = 2.5;
+export const DRAWN_INNER_PER_STAR_RADIUS =
+  (1 + PLANET_DRAW_SCALE / DRAWN_STAR_OVER_PLANET) / Math.sin((DRAWN_REF_ELEVATION_DEG * Math.PI) / 180) + DRAWN_INNER_MARGIN;
 
 /**
- * 这颗主星的画面行星区：内缘 = max(默认密度的主星半径 + 间距 + 最大行星半径（世界半径不相撞），2.5 × 主星半径（画出来不压主星））；
+ * 这颗主星的画面行星区：内缘 = max(默认密度的主星半径 + 间距 + 最大行星的画面半径（不相撞），DRAWN_INNER_PER_STAR_RADIUS × 主星半径（画出来不压主星））；
  * 外缘 = PLANET_ZONE（保底 52，旧数据不被判出界）。只看质量不看密度：主进程读不到面板里改的密度，
  * 两边必须对同一条画面轨道说同一个 AU。
  */

@@ -536,11 +536,13 @@ export function designLevelOf(search: string): DesignLevel {
 }
 
 /**
- * 「大行星浅坑」演示（`?designer=reddwarf`）：一颗红矮星式的小主星（最轻 300 = 30 M⊕，密度 30 g/cm³——真实的比邻星约 50），
- * 带一颗气态巨行星（30 = 主星的 10%，密度 1.3）与一颗小岩质行星。按质量与成分算出的真实半径：主星 ≈ 2.15、巨行星 ≈ 2.85、
- * 岩质 ≈ 0.90（世界单位）——巨行星看起来比主星大，但质量只有主星的十分之一，引力扫描里它的坑更浅（测试钉住）。
+ * 「大行星浅坑」演示（`?designer=reddwarf`）：一颗红矮星式的小主星（最轻 300 = 30 M⊕，密度 50 g/cm³——真实的比邻星约 47），
+ * 带一颗气态巨行星（30 = 主星的 10%，密度 1.3）与一颗小岩质行星。按质量与成分算出的半径：主星 ≈ 1.82、巨行星 ≈ 2.85、
+ * 岩质 ≈ 0.90（世界单位）；行星画成 0.7 倍（PLANET_DRAW_SCALE）后巨行星画面半径 ≈ 2.0，仍比主星大，
+ * 但质量只有主星的十分之一，引力扫描里它的坑更浅（测试钉住）。
+ * 密度以前取 30：行星默认缩到 0.7 倍之后巨行星（2.0）画得比主星（2.15）还小，演示不成立，改回贴近比邻星的 50。
  */
-export const RED_DWARF = { mass: 300, density: 30 } as const;
+export const RED_DWARF = { mass: 300, density: 50 } as const;
 
 export function redDwarfDesign(): GalaxyDesign {
   const star: BodyDesign = { name: "红矮星", mass: RED_DWARF.mass, density: RED_DWARF.density, elements: { ...ALL_OFF, eyes: true }, zoom: ZOOM_DEFAULT.star };
