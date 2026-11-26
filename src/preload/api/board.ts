@@ -4,11 +4,13 @@
  */
 import { ipcRenderer } from "electron";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
-import type { BoardFrameRequest, BoardFrameResult, BoardWeekRequest, BoardWeekResponse } from "../../shared/plugin-board.ts";
+import type { BoardFrameRequest, BoardFrameResult, BoardShotRequest, BoardShotResponse, BoardWeekRequest, BoardWeekResponse } from "../../shared/plugin-board.ts";
 
 export const boardApi = {
   /** 一周 7 天的运行（带卡快照）与排期；入参当地周一 00:00，主进程会规整。weekStart 非有限数回 null */
   week: (request: BoardWeekRequest): Promise<BoardWeekResponse | null> => ipcRenderer.invoke(ipcChannels.boardWeek, request),
   /** 模板哈希 → 一次性 iframe 地址（orbita-panel://）；仓库里没有 / 哈希不合规回 null */
   frame: (request: BoardFrameRequest): Promise<BoardFrameResult> => ipcRenderer.invoke(ipcChannels.boardFrame, request),
+  /** 截当前窗口里已经画好的看板；失败回 null，调用方退回正常 iframe 加载 */
+  shot: (request: BoardShotRequest): Promise<BoardShotResponse> => ipcRenderer.invoke(ipcChannels.boardShot, request),
 };

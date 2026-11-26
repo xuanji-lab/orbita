@@ -74,6 +74,8 @@ export interface BoardGridProps {
    * 调用方去换一个新地址（换了 frameKey 卡就重建）。不给就照旧——不重换。
    */
   onFrameStale?: (cardKey: string) => void;
+  /** 某张卡的 iframe 首次 load（数据会紧接着发给模板）；会话结果用它判断什么时候可以截整板 */
+  onFrameLoad?: (cardKey: string) => void;
 }
 
 interface Toast {
@@ -145,7 +147,7 @@ export function BoardGrid(props: BoardGridProps) {
                     {card.usingSample && <SampleBadge />}
                   </div>
                 )}
-                <BoardCardFrame key={card.frameKey} sampleOutside={caption !== undefined} card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} onStale={props.onFrameStale} />
+                <BoardCardFrame key={card.frameKey} sampleOutside={caption !== undefined} card={card} unit={unit} height={box.height} theme={theme} actionName={props.actionName} onNotify={notify} onStale={props.onFrameStale} onLoad={props.onFrameLoad} />
               </div>
             );
           })}
@@ -177,6 +179,7 @@ function BoardCardFrame(props: {
   actionName: string | null;
   onNotify: (text: string, tone: Toast["tone"]) => void;
   onStale: ((cardKey: string) => void) | undefined;
+  onLoad: ((cardKey: string) => void) | undefined;
 }) {
   const t = useT().pluginPanel;
   const { card, onNotify, actionName } = props;
@@ -294,6 +297,7 @@ function BoardCardFrame(props: {
               return;
             }
             setLoaded(true);
+            props.onLoad?.(card.key);
           }}
         />
       )}
