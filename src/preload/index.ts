@@ -26,6 +26,7 @@ import { updaterApi } from "./api/updater.ts";
 import { voiceApi } from "./api/voice.ts";
 import { mcpApi, skillApi } from "./api/skill.ts";
 import { memoryApi } from "./api/memory.ts";
+import { mobileApi } from "./api/mobile.ts";
 import { panelUsageApi } from "./api/panel-usage.ts";
 import { rightPanelMemoryApi } from "./api/right-panel-memory.ts";
 import { windowApi } from "./api/window.ts";
@@ -46,6 +47,7 @@ const api = {
   plugin: pluginApi,
   memory: memoryApi,
   mcp: mcpApi,
+  mobile: mobileApi,
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,

@@ -909,3 +909,204 @@ a.exp-pr:hover {
     }
   }
 }
+
+/*
+ * ===== 设置 › 手机（MobileSettings.tsx，2026-11-25） =====
+ * 行、节、控件全照两栏设置；这里只补这一页自己的三样：地址 + 端口的一组控件、配对码那一块、设备清单。
+ * 配对码块是一页上唯一铺底的东西（muted 底、无描边——一种容器一种语言）：它是用户此刻要抄去手机的那一样。
+ */
+.mobile-mono {
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 状态句带图标时，图标挂在第一行上，长句折行不缩进 */
+.mobile-reason {
+  max-width: 52ch;
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.mobile-reason .orbita-icon {
+  flex: none;
+  margin-top: var(--space-0-5);
+}
+
+.mobile-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 主机密钥丢过的告示：在「设备」节里、清单上方 */
+.pl-note.mobile-notice {
+  margin: var(--space-1) 0 var(--space-2);
+}
+
+/* 整页读不到 / 在读：空态一句话，左缘对到行名那一栏 */
+/* 宽时站进行栏（节名栏 120 + 间距之后），窄成一栏时铺满 */
+.panel-empty.mobile-page-empty {
+  justify-self: end;
+  width: calc(100% - 120px - var(--space-6));
+  padding: var(--space-2) 0;
+}
+@container setpage (max-width: 620px) {
+  .panel-empty.mobile-page-empty {
+    width: 100%;
+  }
+}
+.panel-empty.mobile-list-empty {
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+/* 地址下拉 + 「:」+ 端口：同高 28 的一组 */
+.mobile-bind {
+  flex-wrap: nowrap;
+}
+.mobile-bind .select-control {
+  max-width: 260px;
+}
+.mobile-bind-kind {
+  color: var(--color-text-tertiary);
+}
+.mobile-port-sep {
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+.text-field.mobile-port {
+  width: 72px;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+.text-field.mobile-port[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+/* 配对码：行底整幅一块。码 xl 等宽、字重 500（越大越轻）；下面一行倒计时与地址 sm；右边两颗按钮 */
+.mobile-offer {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-muted);
+}
+.mobile-offer-main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.mobile-offer-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.mobile-offer-code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+  user-select: all;
+}
+.mobile-offer[data-expired] .mobile-offer-code {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+  user-select: none;
+}
+.mobile-offer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.mobile-offer-expired {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+.mobile-offer-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 已配对设备：一行一台，行首 14 的手机图标、名字 + 一行状态、行尾「撤销…」钉在右血线上 */
+.mobile-devices-wrap {
+  display: grid;
+  gap: var(--space-2);
+}
+.mobile-devices {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mobile-device {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: var(--list-item-rich);
+  padding: var(--space-1) 0;
+}
+.mobile-device-glyph {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.mobile-device[data-online] .mobile-device-glyph {
+  color: var(--color-text-primary);
+}
+.mobile-device-head {
+  flex: 1;
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.mobile-device-name,
+.mobile-device-meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.mobile-device-name {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+}
+.mobile-device-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.mobile-device[data-online] .mobile-device-status {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+.mobile-device-confirm {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) 0;
+}
+/* 「撤销…」：安静文字钮（浏览器页「已导入的网站」的「移除」同一个），八台设备不排出一列框；红只在确认条里出现 */
+.mg-textbtn.mobile-device-revoke {
+  font-size: var(--font-size-sm);
+}
+/* 窄窗（节宽 < 480）：地址下拉先收窄、省略地址尾巴，端口框不缩 */
+.mobile-bind > :first-child {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.mobile-bind > .mobile-port-sep,
+.mobile-bind > .text-field.mobile-port {
+  flex: none;
+}

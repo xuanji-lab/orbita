@@ -67,6 +67,15 @@ export const sessionApi = {
    */
   setUnread: (id: string, unread: { at: number; failed: boolean } | null): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionUnread, id, unread),
+  /**
+   * 某条会话的 meta 在主进程被改了（今天是手机端 `unread.clear` 清的未读）：
+   * 收到后单条重拉那一条。返回退订。
+   */
+  onMetaChanged: (listener: (id: string) => void): (() => void) => {
+    const handler = (_e: unknown, id: string) => listener(id);
+    ipcRenderer.on(ipcChannels.sessionMetaChanged, handler);
+    return () => ipcRenderer.removeListener(ipcChannels.sessionMetaChanged, handler);
+  },
   /** 归档：从主列表移走，**不是删除** */
   archive: (id: string, archived: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionArchive, id, archived),

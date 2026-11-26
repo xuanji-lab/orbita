@@ -83,8 +83,13 @@ export default defineConfig({
          * node-pty（terminal runtime 的 PTY）同理：.node 预构建 + ConPTY 的
          * conpty.dll / OpenConsole.exe 靠 __dirname 定位，打进 bundle 必断。
          * N-API 预构建跨 Electron ABI，不需要 electron-rebuild。
+         *
+         * ws（手机服务的 WebSocket）同样保持 external：它在 try/catch 里可选地 require
+         * bufferutil / utf-8-validate，打进 bundle 后 vite 把这两个缺席的可选依赖换成「模块一加载就
+         * throw」的代理，throw 落在 try 外面——主进程在 import 阶段就崩（2026-11-25 真 Electron 实测：
+         * `Could not resolve "bufferutil" imported by "ws"`，窗口都起不来）。裸 Node 的测试不打包，测不到。
          */
-        external: [/^@napi-rs\/canvas/, /^node-pty$/],
+        external: [/^@napi-rs\/canvas/, /^node-pty$/, /^ws$/],
         output: { entryFileNames: "[name].js" },
       },
     },

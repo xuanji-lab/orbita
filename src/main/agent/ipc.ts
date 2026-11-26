@@ -594,3 +594,13 @@ export function broadcastAgentEvent(event: unknown): void {
     window.webContents.send(ipcChannels.agentEvent, event);
   }
 }
+
+/**
+ * 某条会话的 meta 在主进程被改了（今天唯一生产者：手机端 `unread.clear`）→ 所有主窗口。
+ * renderer 收到后只重拉这一条（`session-list-refresh` 的 requestMeta），不整表刷新。
+ */
+export function broadcastSessionMetaChanged(sessionId: string): void {
+  for (const window of mainWindows.list()) {
+    window.webContents.send(ipcChannels.sessionMetaChanged, sessionId);
+  }
+}

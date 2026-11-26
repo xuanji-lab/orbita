@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
-import { planAwaitingIn } from "../context/plan-timeline.ts";
+import { planAwaitingIn } from "../../../../shared/plan.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
@@ -1003,8 +1003,11 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
         // 最后两条自己一起飞，就是那么来的（2026-09-06 事故）。
         if (event.type === "phase") deliverNext(event.sessionId);
       });
+    // meta 在主进程被改了（今天是手机端「清未看」）：单条重拉那一条，与 agent 事件同一条增量刷新队列
+    const offMetaChanged = api.session.onMetaChanged((id) => refreshQueue.requestMeta(id));
     return () => {
       off();
+      offMetaChanged();
       coalescer.dispose();
     };
   }, [applyStates, deliverNext, refreshQueue]);

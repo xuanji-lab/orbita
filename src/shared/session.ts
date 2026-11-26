@@ -25,6 +25,13 @@ import type { IntentConfirmAnswer } from "./intent-confirm.ts";
 export const SESSION_TITLE_MAX = 60;
 
 /**
+ * 会话 id 必须长得像 `randomUUID()`（小写）。**这是安全检查，不是洁癖**：id 会被拼进路径
+ * （`sessions/<id>.jsonl`），一个 `../` 就能摸到目录之外。会话存储与手机的线上协议共用这一条，
+ * 各写一份迟早漂移。
+ */
+export const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
  * 导入会话的 provider 占位（导入与模型解耦，2026-09-28 裁决）：导入时不在 orbita 里
  * 替源模型挑渠道，providerId 一律写这个占位，打开时用户自己选。真实 provider id 只
  * 允许小写字母 / 数字 / 连字符（provider.ts 的 ID_PATTERN），带冒号的占位永远撞不上。

@@ -5,13 +5,13 @@
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
-import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, safeStorage, shell, type WebPreferences } from "electron";
 import { randomUUID } from "node:crypto";
-import { cpus, homedir, totalmem } from "node:os";
+import { cpus, homedir, hostname, totalmem } from "node:os";
 import { join } from "node:path";
-import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
+import { AgentEventTap, SessionPhases } from "./agent/run-state.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
@@ -22,7 +22,7 @@ import { registerImportIpc } from "./session/import-ipc.ts";
 import { CustomRootsStore, dirsOf, mergeCustomRoots } from "./session/import-custom-roots.ts";
 import { baseDir, DATA_ROOT_SPECS, findDataRoots, hasDirectory } from "./session/import-locate.ts";
 import { createKimiExternalSessionReader, kimiWorkDataRoot } from "./session/external-session.ts";
-import { broadcastAgentEvent, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
+import { broadcastAgentEvent, broadcastSessionMetaChanged, registerAgentIpc, resolveProviderSecrets } from "./agent/ipc.ts";
 import type { AgentEvent } from "../shared/agent-ipc.ts";
 import { MemoryServiceHost, resolveMemoryRuntimePath } from "./memory/host.ts";
 import { MemoryServiceHostCore } from "./memory/host-core.ts";
@@ -131,6 +131,14 @@ import { resolveTurnDirectories } from "./agent/turn-directories.ts";
 import { mainWindows } from "./window/main-windows.ts";
 import { isOwnRendererPage, type RendererOriginDeps } from "./window/renderer-origin.ts";
 import { SafeStorageSecrets } from "./provider/safe-storage-secrets.ts";
+import { HostKeys } from "./mobile/host-keys.ts";
+import { registerMobileIpc } from "./mobile/ipc.ts";
+import { bindCandidates } from "./mobile/net.ts";
+import { ReplyQueue } from "./mobile/replies.ts";
+import { MobileCatalog } from "./mobile/summaries.ts";
+import { MobileServer } from "./mobile/server.ts";
+import { MobileStore } from "./mobile/store.ts";
+import { MobileTails } from "./mobile/tails.ts";
 import { devDataDirs } from "./data-dirs.ts";
 import { ProviderStore } from "./provider/store.ts";
 import { createDoubaoProtocol } from "./voice/doubao-protocol.ts";
@@ -518,8 +526,17 @@ void app.whenReady().then(async () => {
   mainWindows.onLastClosed(() => browserSandbox.dispose());
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
-  // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
-  const phases = new Map<string, SessionPhase>();
+  // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）。手机「回一句」的队列也看它
+  const phases = new SessionPhases();
+  /**
+   * agent 事件的订阅点（主进程里别处想旁听事件泵）。**放在泵的入口、所有 return 之前**，
+   * 而不是只挂在 broadcastAgentEvent 上：泵里有几条路事件到不了它，或者到的不是原样——
+   * `failed`（回合级）要先异步补额度提示才广播，会晚于紧随的 `phase idle`；`fileTurn` 广播的
+   * 是落盘之后的视图；`created` 根本不广播。手机「回一句」要按 agent 进程发出的**原始顺序**
+   * 拿到原始事件（failed 一定先于它那一轮的 idle），否则会把失败算到下一条回复头上。
+   * 窗口照旧只收 broadcastAgentEvent 的那一份，这里不改窗口看到的东西。
+   */
+  const agentEvents = new AgentEventTap();
   const channelReconciler = new ChannelReconciler({ sessions, channels, phases, broadcast: broadcastChannelEvent });
   const channelIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const cancelChannelIdleClose = (sessionId: string): void => {
@@ -539,7 +556,7 @@ void app.whenReady().then(async () => {
     channelIdleTimers.set(sessionId, timer);
   };
   const closeChannelsForLostProcess = (): void => {
-    const lost = [...phases].filter(([, phase]) => phase !== "idle").map(([sessionId]) => sessionId);
+    const lost = phases.runningIds();
     phases.clear();
     for (const sessionId of lost) {
       cancelChannelIdleClose(sessionId);
@@ -597,6 +614,8 @@ void app.whenReady().then(async () => {
     ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
   };
   const agentHost = new AgentHost(resolveRuntimePath(__dirname), agentProcessEnv, (event) => {
+    // 先给主进程里的旁听者（见 agentEvents 的说明）：原始事件、原始顺序
+    agentEvents.emit(event);
     // MCP 的连接状态由 agent 进程报上来（连接是它建的），主进程缓存最后一次快照给管理面看
     if (event.type === "mcp") mcpIpc.onAgentSnapshot(event.servers);
     // 4-3：agent 工具的写盘请求——主进程落盘、回执、广播刷新。
@@ -1131,10 +1150,13 @@ void app.whenReady().then(async () => {
       },
     },
   });
+  let mobileCatalogRef: MobileCatalog | null = null;
   registerSessionIpc(
     sessions,
     (id) => {
       agentHost.disposeSession(id);
+      // 手机正在看清单时，删会话（含级联删子会话）要推 removed
+      mobileCatalogRef?.drop(id);
       // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
       browserSandbox.closeSessionTab(id);
       intentIngest.forget(id);
@@ -1149,10 +1171,7 @@ void app.whenReady().then(async () => {
           sessions,
           workspaces,
           host: agentHost,
-          isRunning: (id) => {
-            const phase = phases.get(id);
-            return phase !== undefined && phase !== "idle";
-          },
+          isRunning: (id) => phases.isRunning(id),
         },
         ids,
         workspaceId,
@@ -1353,6 +1372,91 @@ void app.whenReady().then(async () => {
   registerChannelIpc(deps, startupChannelNotices);
 
   /*
+   * 手机服务（看与回的第一刀）：配对到这台电脑的手机只能列任务、读尾部、回一句、停止、
+   * 清未读。现有 IPC 通道没有调用方鉴权（其中一条能取回明文密钥），手机的连接**不桥接**
+   * 它们，只走 mobile/ 自己的窄口。配对与信道的约定见 src/shared/mobile.ts，
+   * 安全审查（2026-11-25）的结论落在 src/main/mobile/ 各文件的头上。
+   */
+  const mobileStore = new MobileStore(configDir);
+  const mobileHostKeys = new HostKeys({
+    secrets,
+    safeStorage: {
+      available: () => safeStorage.isEncryptionAvailable(),
+      // getSelectedStorageBackend 只有 Linux 有（electron.d.ts 标 @platform linux）：macOS / Windows 上调它是
+      // TypeError，开关一点就抛（2026-11-25 真 Electron 实测）。别的平台走系统钥匙串 / DPAPI，没有 basic_text 退化
+      backend: () => (process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : "native"),
+    },
+    deviceCount: async () => (await mobileStore.devices()).length,
+    onKeyLost: async (notice) => {
+      await mobileStore.clearDevicesForLostKey(notice);
+    },
+  });
+  const mobileCatalog = new MobileCatalog({
+    listMetas: () => sessions.list(),
+    listWorkspaces: () => workspaces.list(),
+    tailRecords: (id) => sessions.tailRecords(id),
+    tailStat: (id) => sessions.tailStat(id),
+    phaseOf: (id) => phases.get(id),
+    now: Date.now,
+  });
+  mobileCatalogRef = mobileCatalog;
+  const mobileTails = new MobileTails({
+    tailWindow: (id, options) => sessions.tailWindow(id, options),
+    tailStat: (id) => sessions.tailStat(id),
+  });
+  // 观察者要按「谁发起的」把回执发回那台手机；server 晚一拍才建好，先留个活口
+  let mobileServerRef: MobileServer | null = null;
+  const mobileReplies = new ReplyQueue(
+    {
+      readMeta: (id) => sessions.readMeta(id),
+      submitTurn: (input) => agentIpc.submitTurn(input),
+      isRunning: (id) => phases.isRunning(id),
+    },
+    {
+      sent: (reply) => mobileServerRef?.notifyReply("reply.sent", reply.source, { requestId: reply.requestId }),
+      failed: (reply, _sessionId, error) =>
+        mobileServerRef?.notifyReply("reply.failed", reply.source, { requestId: reply.requestId, error }),
+    },
+  );
+  const mobileServer = new MobileServer({
+    store: mobileStore,
+    catalog: mobileCatalog,
+    tails: mobileTails,
+    replies: mobileReplies,
+    isRunning: (id) => phases.isRunning(id),
+    abort: (sessionId) => agentHost.abort(sessionId),
+    setUnread: (id, unread) => sessions.setUnread(id, unread),
+    metaChanged: broadcastSessionMetaChanged,
+    hostName: () => hostname(),
+    now: Date.now,
+    log: (line) => console.log(line),
+  });
+  mobileServerRef = mobileServer;
+  registerMobileIpc({ store: mobileStore, server: mobileServer, hostKeys: mobileHostKeys, candidates: bindCandidates });
+  // 事件泵的旁听：回一句的队列（原始顺序）、清单的脏标记、尾部的修订号
+  agentEvents.subscribe((event) => {
+    mobileReplies.onAgentEvent(event);
+    mobileCatalog.onAgentEvent(event);
+    mobileTails.onAgentEvent(event);
+  });
+  // 启动时按落盘的开关起监听；密钥库不可用就只记日志（设置页会如实显示原因）
+  void (async () => {
+    const state = await mobileStore.read();
+    if (!state.enabled) return;
+    const keys = await mobileHostKeys.ensure();
+    if (!keys.ok) {
+      await mobileStore.setEnabled(false);
+      mobileServer.reportError(keys.reason);
+      console.warn(`[mobile] ${keys.reason}`);
+      return;
+    }
+    await mobileServer.start(keys.crypto);
+  })().catch((cause: unknown) => {
+    mobileServer.reportError("手机服务启动失败，请查看电脑上的日志");
+    console.error("[mobile] 启动监听失败", cause);
+  });
+
+  /*
    * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——
    * 同一套网络 / 代理（electron-updater 的 session，下载器也在上面）、同一份缓存、
    * 同一本限流账（见 main/updater/github-client.ts）。
@@ -1386,7 +1490,7 @@ void app.whenReady().then(async () => {
     launch: (input) => launchAutomationRun(launchDeps, input),
     deliver: (input) => deliverAutomationRun(launchDeps, input),
     sessionExists: async (sessionId) => (await sessions.readMeta(sessionId)) !== null,
-    isSessionBusy: (sessionId) => (phases.get(sessionId) ?? "idle") !== "idle",
+    isSessionBusy: (sessionId) => phases.isRunning(sessionId),
     abort: (sessionId) => agentHost.abort(sessionId),
     notify: broadcastAutomationEvent,
     onActiveChange: (count) => void keepAwake.sync(count).catch((cause: unknown) => console.error("[automation] 阻止睡眠同步失败", cause)),
@@ -1445,6 +1549,9 @@ void app.whenReady().then(async () => {
     for (const sessionId of channelIdleTimers.keys()) cancelChannelIdleClose(sessionId);
     automationScheduler.stop();
     keepAwake.release();
+    // 手机服务：待发的回复全清（队列随进程消失），给在线手机发 host.shutdown
+    mobileReplies.cancelAll({ code: "unavailable", message: "电脑退出了，这句话没有发出去" });
+    void mobileServer.stop().catch(() => undefined);
     appTray?.beginQuit();
     appTray?.destroy();
     appTray = null;
