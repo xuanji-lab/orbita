@@ -8,6 +8,7 @@ import { automationApi } from "./api/automation.ts";
 import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
+import { chatEmbedApi } from "./api/chat-embed.ts";
 import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
@@ -39,6 +40,7 @@ const api = {
   automation: automationApi,
   board: boardApi,
   channel: channelApi,
+  chatEmbed: chatEmbedApi,
   excerpt: excerptApi,
   provider: providerApi,
   session: sessionApi,
