@@ -576,6 +576,8 @@ export function Sidebar(props: {
           onClick={() => switchMode("orchestrate")}
         >
           {t.sidebar.orchestrate}
+          {/* 阶段标签：编排仍在打磨。产品阶段名，中英文界面都写 Beta，不进 i18n */}
+          <span className="mode-tab-stage">Beta</span>
         </ModeChip>
       </div>
 
@@ -2108,8 +2110,9 @@ function ModeChip(props: {
         alignItems: "center",
         justifyContent: "center",
         gap: "var(--space-1-5)",
+        // 等分起步，但不压到内容以下（min-width auto = 内容宽）：「Orchestrate Beta」放不进一半时它宽一点、
+        // 旁边窄一点，而不是把 Beta 挤出选中底
         flex: 1,
-        minWidth: 0,
         height: "var(--control-height-sm)",
         padding: "0 var(--space-2)",
         border: 0,
