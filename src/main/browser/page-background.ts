@@ -16,6 +16,8 @@ import { resolveTheme } from "../../shared/theme-resolve.ts";
 
 export const PAGE_BACKGROUNDS: Record<Exclude<ThemePreference, "system">, string> = {
   light: "#f5f5f5",
+  // 液态玻璃的空白页仍要不透明垫底（不然透出下面的 tab）：抄浅色的壳
+  glass: "#f5f5f5",
   graphite: "#202021",
   black: "#1b1e23",
 };

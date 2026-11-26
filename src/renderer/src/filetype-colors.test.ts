@@ -45,8 +45,10 @@ function themeBlock(theme: string): Map<string, string> {
   // 「色相分离不足」的假报告（2026-10，main 上真实挂过）
   const css = readFileSync(join(TOKENS, "colors.css"), "utf8").replace(/\r\n/g, "\n");
   if (theme === "light") {
-    const open = css.indexOf(":root,\n[data-theme-preview=\"light\"] {");
-    assert.ok(open >= 0, "colors.css 里找不到明档 token 块");
+    // 明档块的选择器表里还挂着液态玻璃的预览（`[data-theme-preview="glass"]`），从选择器起找到第一个 `{`
+    const head = css.indexOf(":root,\n[data-theme-preview=\"light\"]");
+    assert.ok(head >= 0, "colors.css 里找不到明档 token 块");
+    const open = css.indexOf("{", head);
     const close = css.indexOf("\n}", open);
     return varsOf(css, open, close);
   }

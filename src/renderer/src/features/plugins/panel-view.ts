@@ -32,10 +32,18 @@ export function buildPanelTheme(read: (property: string) => string, themeName: s
   return { name: themeName, scheme: read("color-scheme").includes("dark") ? "dark" : "light", vars };
 }
 
+/**
+ * 交给插件模板的主题名：液态玻璃对模板来说就是浅色（模板只认 light / graphite / black，
+ * 它的卡片自己画实色底，不参与窗口玻璃）。
+ */
+function panelThemeName(theme: string | undefined): string {
+  return theme === undefined || theme === "glass" ? "light" : theme;
+}
+
 /** 从文档根读此刻的主题（浅 / 暗 / 黛 / 纸面各档的计算值自然不同；字号基准改了 calc 也跟着变）。 */
 export function readPanelTheme(root: HTMLElement): PanelTheme {
   const style = getComputedStyle(root);
-  return buildPanelTheme((property) => (property === "color-scheme" ? style.colorScheme : style.getPropertyValue(property)), root.dataset["theme"] ?? "light");
+  return buildPanelTheme((property) => (property === "color-scheme" ? style.colorScheme : style.getPropertyValue(property)), panelThemeName(root.dataset["theme"]));
 }
 
 /** 两份主题是否一样（变了才重发，避免属性抖动时反复 postMessage）。 */

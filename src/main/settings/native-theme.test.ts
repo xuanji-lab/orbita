@@ -9,6 +9,10 @@ describe("resolveNativeThemeSource", () => {
     deepStrictEqual(resolveNativeThemeSource("graphite"), "dark");
   });
 
+  it("液态玻璃是浅色档的一种窗口材质：原生层按 light 走（玻璃与原生对话框都是浅色）", () => {
+    deepStrictEqual(resolveNativeThemeSource("glass"), "light");
+  });
+
   it("其余档原样透传", () => {
     for (const theme of ["system", "light"] as const) {
       deepStrictEqual(resolveNativeThemeSource(theme), theme);

@@ -1,4 +1,5 @@
 import { THEME_PREFERENCES, type SettingsPatch, type ThemePreference } from "@shared/settings";
+import { api } from "../../api";
 import { Icon } from "../../shell/Icon";
 import { useSettingTip } from "./InfoTip";
 import { useT } from "../../locale.ts";
@@ -10,6 +11,7 @@ import type { Messages } from "../../messages-en.ts";
  */
 function themeTip(value: ThemePreference, t: Messages): string | undefined {
   if (value === "system") return t.themes.systemTip;
+  if (value === "glass") return t.themes.glassTip;
   return undefined;
 }
 
@@ -27,9 +29,11 @@ export function ThemePicker(props: {
   onChange: (patch: SettingsPatch) => void;
 }) {
   const t = useT();
+  // 液态玻璃要 macOS 26+ 的系统玻璃，别的平台没有等价物，不列
+  const themes = THEME_PREFERENCES.filter((value) => value !== "glass" || api.platform === "darwin");
   return (
-    <div className="theme-grid" role="group" aria-label={t.settings.theme}>
-      {THEME_PREFERENCES.map((value) => (
+    <div className="theme-grid" role="group" aria-label={t.settings.theme} data-count={themes.length}>
+      {themes.map((value) => (
         <ThemeCard
           key={value}
           value={value}
