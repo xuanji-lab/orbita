@@ -14,19 +14,29 @@
  * （缓存按「语言 + 全文」，而全文每帧都在长），一帧就要几毫秒；流式期间先走无色兜底，
  * 消息落定后 MarkdownBlock 自动重渲一次补上色。
  */
-import { useEffect, useMemo, useState, isValidElement } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, isValidElement } from "react";
 import type { ReactNode } from "react";
 import { highlighterReady } from "./highlight";
 import { fenceHighlight } from "./stream-render.ts";
 import { MermaidBlock } from "./MermaidBlock.tsx";
 import { isMermaidLang } from "./mermaid-render.ts";
+import { HtmlEmbedBlock } from "./HtmlEmbedBlock.tsx";
+import { isHtmlEmbedLang } from "./html-embed.ts";
+
+/**
+ * 本块的代码围栏跑不跑 shiki：MarkdownBlock 给流式尾块传 false。走 context 而不是换一份 `pre` 组件——
+ * 换组件类型会在尾块落定那一帧把整棵子树拆了重建（见 MarkdownBlock 的 components 注释）。缺省 true（落定帧）。
+ */
+export const FenceHighlightContext = createContext(true);
 
 /** react-markdown 的 pre 元素 */
 export function MdPre(props: {
   children?: ReactNode;
-  /** 本帧跑不跑 shiki（由 MarkdownBlock 按流式与否传入，缺省视为落定帧：上色） */
+  /** 本帧跑不跑 shiki；不传时读 FenceHighlightContext（MarkdownBlock 按流式与否提供，缺省落定帧：上色） */
   highlight?: boolean;
 }) {
+  const contextHighlight = useContext(FenceHighlightContext);
+  const highlight = props.highlight ?? contextHighlight;
   const child = Array.isArray(props.children) ? props.children[0] : props.children;
   if (!isValidElement<{ className?: string; children?: ReactNode }>(child)) {
     return <pre>{props.children}</pre>;
@@ -37,7 +47,9 @@ export function MdPre(props: {
   if (lang === undefined) return <PlainFence text={text} />;
   // mermaid 围栏画成图（失败 / 未闭合时 MermaidBlock 自己退回代码块）
   if (isMermaidLang(lang)) return <MermaidBlock source={text} />;
-  return <FenceBlock lang={lang} text={text} highlight={props.highlight ?? true} />;
+  // ```html-embed 画成沙箱里的可交互图（未闭合时占位、出错时退回源码，HtmlEmbedBlock 自己管）
+  if (isHtmlEmbedLang(lang)) return <HtmlEmbedBlock source={text} />;
+  return <FenceBlock lang={lang} text={text} highlight={highlight} />;
 }
 
 /** 已知语言：shiki 双主题 HTML；未就绪或流式帧先无色 */
