@@ -194,15 +194,25 @@ describe("pdfPaneModeOf —— 容得下就并排，容不下就单栏显示 PDF
     });
   });
 
-  test("宽到容得下 → 并排，与点没点过无关", () => {
+  test("宽到容得下、焦点在源码 → 并排", () => {
     assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: false }), {
       kind: "split",
       path: "/p/main.pdf",
     });
+  });
+
+  test("宽到容得下、焦点在 PDF → 单独全幅（不再强制并排）", () => {
     assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: true }), {
-      kind: "split",
+      kind: "solo",
       path: "/p/main.pdf",
     });
+  });
+
+  test("宽窗左栏就是这份 PDF → 不并排、也不再叠一块", () => {
+    assert.deepEqual(
+      pdfPaneModeOf({ ...base, sourcePath: "/p/main.pdf", splitAllowed: true, pdfFocused: false }),
+      { kind: "none" },
+    );
   });
 
   test("关掉标签（open 空）→ 回到单栏源码", () => {

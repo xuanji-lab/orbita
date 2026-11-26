@@ -242,6 +242,12 @@ export function FilesPanel(props: {
    * 宽到容得下并排时这一位不影响任何东西。
    */
   const [pdfFocused, setPdfFocused] = useState(false);
+  /**
+   * 此刻容不容得下并排（每次渲染回填，见 pdfSplitAllowed）。程序打开 PDF 的入口
+   * （菜单「打开 PDF」、SyncTeX 正向定位、引用跳转）读它：容得下就**不设焦点**，落在并排，
+   * 不把源码藏起来；只有用户亲手点 PDF 标签才是「焦点在 PDF = 单独全幅」。
+   */
+  const pdfSplitAllowedRef = useRef(false);
   const pdfMemoryRef = useRef<Map<string, boolean>>(new Map());
   /** 刚新建的文档 / 演示文稿：对应标签一打开就进「编辑」模式（用户点标签 / 切走再回来则回到常规预览） */
   const [openInEdit, setOpenInEdit] = useState<ReadonlySet<string>>(new Set());
@@ -760,9 +766,9 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
       if (target === null) return;
       pdfMemoryRef.current = rememberPdfCollapsed(pdfMemoryRef.current, pdfMemoryKey, false);
       setPdfOpen((prev) => (prev.some((item) => samePath(item, target)) ? prev : [...prev, target]));
-      // 打开 = 要看它：窄窗单栏也直接亮出 PDF
+      // 打开 = 要看它：窄窗单栏直接亮出 PDF；宽到容得下就并排（源码仍在左边）
       setActivePdfPath(target);
-      setPdfFocused(true);
+      setPdfFocused(!pdfSplitAllowedRef.current);
     },
     [pdfFacts, pdfMemoryKey],
   );
@@ -800,6 +806,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
    * ——Word / Excel / PPT 不被塞一块 PDF（旧裁决保留）。容不下时点 PDF 标签 = 单栏占满。
    */
   const pdfSplitAllowed = (props.paperLayout === true || props.autoSplit === true) && latexBarVisible;
+  pdfSplitAllowedRef.current = pdfSplitAllowed;
   const pdfPane = pdfPaneModeOf({
     open: pdfOpen,
     facts: pdfFacts,
@@ -1340,7 +1347,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
           if (leftIsProjectPdf) return;
           if (pdfOpenPath !== null) {
             setActivePdfPath(pdfPath);
-            setPdfFocused(true);
+            // 宽到容得下并排时不抢焦点：正向定位要的是源码与落点同时看得见
+            setPdfFocused(!pdfSplitAllowedRef.current);
             return;
           }
           openPdfTab(pdfPath);
@@ -1805,7 +1813,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                       ref={active ? activeTabRef : undefined}
                       role="tab"
                       tabIndex={0}
-                      aria-selected={active}
+                      // 单独全幅看 PDF 时源码那块藏着：标签的选中态跟着「眼前是谁」走
+                      aria-selected={active && !pdfSolo}
                       className="cap-tab no-drag"
                       title={tab.path}
                       onClick={() => {
@@ -1859,7 +1868,9 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                   pdfOpen.map((path) => {
                     const fact = pdfFacts.find((item) => samePath(item.path, path));
                     if (fact === undefined) return null;
-                    const active = activePdfPath !== null && samePath(activePdfPath, path);
+                    // 选中态 = 焦点（单独全幅在看它）。并排时焦点在源码那颗标签上，
+                    // 点这颗才是「只看 PDF」——同一时刻只亮一颗，亮的就是点下去会去的地方
+                    const active = pdfSolo && pdfSidePath !== null && samePath(pdfSidePath, path);
                     const stale = pdfStale(fact.modifiedAt, latex.project?.sourceModifiedAt ?? null);
                     const pages = fact.pages;
                     return (
