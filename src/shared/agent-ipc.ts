@@ -31,6 +31,7 @@ import type {
   ChannelStatus,
 } from "./channel.ts";
 import type { AutomationToolOutcome, AutomationToolRequest } from "./automation.ts";
+import type { SubAgentsChanged, SubAgentToolOutcome, SubAgentToolRequest, SubAgentTurnIdentity } from "./sub-agent.ts";
 import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
@@ -93,6 +94,11 @@ export const ipcChannels = {
   workspaceAttachDir: "workspace:attach-dir",
   /** 从 attachedDirs 移除一条；不在列表里不报错 */
   workspaceDetachDir: "workspace:detach-dir",
+  /**
+   * 结成 / 解除联星：请求 (id, partnerId | null)，两边一次改好（同一次原子写），返回更新后的工作区列表。
+   * 两边原来各自的伴星一并解除；配自己 / 配不存在的工作区当解除（shared/workspace.ts 的 pairBinary）
+   */
+  workspaceSetBinary: "workspace:set-binary",
   providerBuiltins: "provider:builtins",
   /**
    * 「添加」页点开一张还没保存的服务商卡片：现拉一次这家的目录（节流内不拉），
@@ -190,6 +196,11 @@ export const ipcChannels = {
    * 只落 meta（intentEnabled），下一轮开轮时主进程现读现装配；输入框旁的小开关用。
    */
   sessionSetIntentEnabled: "session:set-intent-enabled",
+  /**
+   * 会话级自动压缩开关：载荷 (sessionId, boolean)，回 void。只落 meta（autoCompact），下一轮开轮时主进程现读现装配；
+   * 用量环菜单里「为这条会话打开 / 关闭自动压缩」用。
+   */
+  sessionSetAutoCompact: "session:set-auto-compact",
   /**
    * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
    * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
@@ -379,6 +390,36 @@ export const ipcChannels = {
   sessionOpenArtifactInBrowser: "session:open-artifact-in-browser",
   /** 轮尾产物打开方式二：在系统文件管理器里定位它（仅会话文件账里记过的文件） */
   sessionRevealArtifact: "session:reveal-artifact",
+  /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名），id → ArtifactSummary；读不到的 id 不在回执里 */
+  sessionArtifactSummary: "session:artifact-summary",
+  /** 发件箱（shared/outbox.ts）：发送前落盘、落账后删、启动时列出没落账的 */
+  outboxPut: "outbox:put",
+  outboxRemove: "outbox:remove",
+  outboxList: "outbox:list",
+  /** 星系设计稿（shared/planet-design.ts）：读 / 写工作区 planet/ 里的插件设计稿与伴随文件 galaxy.json */
+  planetRead: "planet:read",
+  planetWrite: "planet:write",
+  /**
+   * 子智能体档案（shared/sub-agent.ts）：星系设计面板里新建 / 改 / 删一个子智能体，写 planet/agents/<id>/agent.json
+   * 与 galaxy.json 的名单。与聊天里 create_sub_agent / update_sub_agent 写的是同一份；写完主进程广播 subAgentsChanged。
+   */
+  subAgentCreate: "subagent:create",
+  subAgentUpdate: "subagent:update",
+  subAgentDelete: "subagent:delete",
+  /**
+   * 「生成形象」（shared/planet-avatar.ts）：给一颗天体出地表候选（幕后会话跑插件 planet-render）、读当前这一轮、
+   * 按自然语言要求以旧候选为基础改、挑一张写进 planet/、取消。历史从 planet/ 里的原子写记录与插件账本合并读回。
+   * 进度经 planetAvatarEvent 推（载荷 AvatarJobEvent，带整份状态）。
+   */
+  planetAvatarGenerate: "planet:avatar-generate",
+  planetAvatarGet: "planet:avatar-get",
+  planetAvatarHistory: "planet:avatar-history",
+  planetAvatarSelect: "planet:avatar-select",
+  planetAvatarCancel: "planet:avatar-cancel",
+  planetAvatarEvent: "planet:avatar-event",
+  /** 面板「用生图工具」开关：读 / 拨（真源是插件「行星造物」的策略文件，经它的脚本读写） */
+  planetAvatarPolicyGet: "planet:avatar-policy",
+  planetAvatarPolicySet: "planet:avatar-policy-set",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
@@ -404,6 +445,10 @@ export const ipcChannels = {
    * 裁决：不考虑专注时合盖，睡就把这一轮收掉）。
    */
   focusSuspend: "focus:suspend",
+  /** 电源状态（shared/power.ts）：renderer 主动问一次，返回 PowerState */
+  powerState: "power:state",
+  /** 电源状态变了（powerMonitor 的 on-battery / on-ac，主进程 → renderer 单向广播，载荷 PowerState） */
+  powerChanged: "power:changed",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
@@ -716,6 +761,12 @@ export interface SubmitAgentInput extends AgentTurnContext {
   files?: PromptFileRef[];
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
+  /**
+   * 只在**开新会话的那一轮**有意义：false = 这条会话不自动压缩（编排入口页「新开专门的会话」）。
+   * 主进程这一轮就按它装配压缩参数，并在建 meta 时把它落成 meta.autoCompact；之后的轮次读 meta，不再看它。
+   * 缺席 = 跟随全局设置。
+   */
+  autoCompact?: false;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -926,6 +977,16 @@ export type AgentCommand =
        * automation_create / list / cancel。缺席 = 不注册，命令形状与 main 一字不差。
        */
       automationTools?: boolean;
+      /**
+       * 子智能体工具（create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents）的注册开关。**主进程装配**：
+       * 编排形态、会话属于某个工作区、且是根会话（主智能体）才带 true——星际空间没有主星，不能建行星。缺席 = 不注册。
+       */
+      subAgentTools?: boolean;
+      /**
+       * 这条会话是替哪个子智能体干活（attributionOf(meta)，指名派活时记下）：主进程每轮按它现读档案，
+       * runtime 把职能讲进系统提示。缺席 = 普通会话 / 档案读不到（降级成普通子会话，不拦开轮）。
+       */
+      subAgent?: SubAgentTurnIdentity;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -992,6 +1053,10 @@ export type AgentCommand =
       sessionMemory?: boolean;
       /** 自动化工具的注册开关，语义同 submit.automationTools */
       automationTools?: boolean;
+      /** 子智能体工具的注册开关，语义同 submit.subAgentTools */
+      subAgentTools?: boolean;
+      /** 替哪个子智能体干活，语义同 submit.subAgent */
+      subAgent?: SubAgentTurnIdentity;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
@@ -1166,6 +1231,8 @@ export type AgentCommand =
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
   /** 自动化：主进程对 automationRequest 的回执（delegateResult 同款） */
   | ({ type: "automationResult"; requestId: string } & AutomationToolOutcome)
+  /** 子智能体：主进程对 subAgentRequest 的回执（automationResult 同款 ok 双分支） */
+  | ({ type: "subAgentResult"; requestId: string } & SubAgentToolOutcome)
   | {
       /**
        * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：打开源本子 →
@@ -1278,6 +1345,8 @@ export interface DelegateCard {
   thinkingLevel: ThinkingLevel;
   /** 子会话的工作台路径——从派出卡跳到子会话的产出目录 */
   workbench: string;
+  /** 指名派给了哪个子智能体（delegate 的 subAgentId）；缺席 = 临时子会话 */
+  subAgentId?: string;
 }
 
 /** delegateRequest 的回执载荷：childId / title 供 runtime 拼给模型看的正文，card 给 UI */
@@ -1490,6 +1559,12 @@ export type AgentEvent =
        * 主进程写进 task 通道消息的 lang，子会话据此写可见文字与汇报。缺席 = 没算出来。
        */
       replyLang?: ReplyLang;
+      /**
+       * 指名派给哪个持久子智能体（planet/agents/<id>/agent.json；编排线第一次出现「归属」字段）。
+       * 主进程按父会话所在工作区读档案：读不到就拒（不静默退化成临时子会话），读到就记进子会话 meta.attribution（source assigned）、
+       * 职能讲进子会话的系统提示；档案里有默认模型且 delegate 没给 modelId 时用它。缺席 = 临时子会话（与以前一致）。
+       */
+      subAgentId?: string;
     }
   /**
    * 派发参考：agent 的 model_costs 工具请求。**数据在主进程**（任务账本 usage-tasks.json、
@@ -1505,6 +1580,12 @@ export type AgentEvent =
    * 到点把指令送回来。自动化新开的会话与子会话的请求主进程直接拒（防递归，不只靠不注册工具）。
    */
   | { type: "automationRequest"; requestId: string; sessionId: string; request: AutomationToolRequest }
+  /**
+   * 子智能体：agent 的 create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents。**存盘在主进程**（同 automationRequest）：
+   * 主进程再核一遍「编排形态 + 有工作区 + 根会话」、校验入参、写工作区 planet/，回 subAgentResult；
+   * 建完 / 改完广播 subAgentsChanged（建完 renderer 弹出星系设计面板停在新行星上）。
+   */
+  | { type: "subAgentRequest"; requestId: string; sessionId: string; request: SubAgentToolRequest }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，
@@ -1529,6 +1610,11 @@ export type AgentEvent =
  * 没有 sessionId：归属是全局事实，不属于哪条会话（同 mcp 事件）。
  */
 | { type: "skillsChanged" }
+/**
+ * 子智能体档案变了（主进程写完广播，聊天里的工具与面板都走这里）：renderer 重读这座星系的 planet/；
+ * 聊天里新建的、且正看着那条会话时，弹出右栏星系设计面板停在新行星上。
+ */
+| ({ type: "subAgentsChanged" } & SubAgentsChanged)
 /**
  * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就

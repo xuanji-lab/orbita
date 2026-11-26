@@ -327,6 +327,28 @@ function ClosedServicesNote(props: { t: Messages; models: number; onOpen?: () =>
   );
 }
 
+/** 「退回继承」那一行：设置面的两个模型选择器与星系设计面板的出图模型共用（三个消费者，同一行写法） */
+export type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
+
+/**
+ * 模型卡片顶上那行「退回上游」的取法（跟会话栏 / 同父 / 子会话模型……）：不是型号，不进左栏过滤，
+ * 调用方当 `leading` 传给 ModelPickerMenu。
+ */
+export function inheritedRow(fallback: InheritedFallback): MenuItem {
+  return {
+    id: fallback.id,
+    label: fallback.label,
+    /*
+     * 说明放哪儿分两档：模型卡片里放主行下面当副行（两行行）——卡片里其余行
+     * 都是两行行，而且右端 hint 会把那一行拉得很长、说明还被截断（2026-10-02
+     * 用户实测）；思考档菜单都是单行行，说明留在右端 hint。
+     */
+    ...(fallback.hintBelow === true ? { subLabel: fallback.hint } : { hint: fallback.hint }),
+    checked: fallback.inherited,
+    onSelect: fallback.onSelect,
+  };
+}
+
 /**
  * 模型卡片的左栏：星标 / 全部 / 各厂商（**单选互斥**）。
  *

@@ -42,6 +42,8 @@ export const FEATURE_ICON = {
   subsessions: "bot",
   /** 会话引用：从左栏拖进输入框的会话胶囊、气泡里的同一颗（2026-11-23 用户：与「这条任务」、状态卡撞了；选单个气泡，与辅助对话同一个） */
   taskRef: "message-square",
+  /** 编排：右栏「编排」面板（树状图 / 星系图 / 协作图）的入口与面板头 */
+  orchestra: "git-fork",
   /** 意图：面板头与空态、输入框旁的意图开关、召回卡 */
   intent: "waypoints",
   /** 已归档（archive 同时是「归档状态」的通用图标） */

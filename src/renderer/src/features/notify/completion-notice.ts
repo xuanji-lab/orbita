@@ -251,6 +251,9 @@ export interface RunStateSource {
   phaseOf(id: string): RunSlot["phase"];
   /** 停在「计划等你确认」上（缺席 = 不认这个来源） */
   planAwaitingOf?(id: string): boolean;
+  /** 这条会话最近一轮失败的错误（如模型返回 401）；null = 没失败。缺席 = 不认这个来源。
+   *  具体形状由来源决定（旧测试用字符串，ChatSession 用 TurnFailure）；这里只判有无。 */
+  turnErrorOf?(id: string): unknown;
 }
 
 /**

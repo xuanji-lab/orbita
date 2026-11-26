@@ -1,10 +1,15 @@
 /**
  * 语音的 contextBridge 面 —— 四层契约的第 3 层。契约在 shared/voice.ts。
- * 密钥只进不出：save 可以带它，get 只回掩码（豆包 Access Token、阶跃 API Key 同一条规矩）。
+ * 密钥只进不出：save 可以带它，get 只回掩码（豆包 Access Token、阶跃 / ElevenLabs API Key 同一条规矩）。
  */
 import { ipcRenderer } from "electron";
 import {
   voiceChannels,
+  type CallFileInput,
+  type CallSaveResult,
+  type ElevenlabsVoiceConfig,
+  type ElevenlabsVoiceInput,
+  type SpeechResult,
   type DictationEvent,
   type DictationProvider,
   type DictationSelection,
@@ -45,4 +50,14 @@ export const voiceApi = {
     ipcRenderer.on(voiceChannels.voiceDictationEvent, handler);
     return () => ipcRenderer.removeListener(voiceChannels.voiceDictationEvent, handler);
   },
+  // ── ElevenLabs 凭证（设置 › 语音）──
+  elevenlabsGet: (): Promise<ElevenlabsVoiceConfig> => ipcRenderer.invoke(voiceChannels.voiceElevenlabsGet),
+  elevenlabsSave: (input: ElevenlabsVoiceInput): Promise<ElevenlabsVoiceConfig> =>
+    ipcRenderer.invoke(voiceChannels.voiceElevenlabsSave, input),
+  /** 试听：成功时带回一句的 mp3 */
+  elevenlabsTest: (input: ElevenlabsVoiceInput): Promise<SpeechResult> =>
+    ipcRenderer.invoke(voiceChannels.voiceElevenlabsTest, input),
+  // ── 通话（编排对话页的「通话」）──
+  speechSynthesize: (text: string): Promise<SpeechResult> => ipcRenderer.invoke(voiceChannels.voiceSpeechSynthesize, text),
+  callSave: (input: CallFileInput): Promise<CallSaveResult> => ipcRenderer.invoke(voiceChannels.voiceCallSave, input),
 } as const;

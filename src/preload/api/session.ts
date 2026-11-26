@@ -6,7 +6,8 @@ import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
-import type { RevertPlan, UndoPlan } from "../../shared/revert.ts";
+import type { ArtifactSummary, RevertPlan, UndoPlan } from "../../shared/revert.ts";
+import type { OutboxEntry } from "../../shared/outbox.ts";
 import type {
   ModelAssignEntry,
   ModelAssignGroups,
@@ -61,6 +62,9 @@ export const sessionApi = {
   /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效 */
   setIntentEnabled: (id: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionSetIntentEnabled, id, enabled),
+  /** 会话级自动压缩开关：只落 meta，下一轮生效（false = 只认手动 /compact） */
+  setAutoCompact: (id: string, enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionSetAutoCompact, id, enabled),
   /**
    * 未读标记（后台跑完还没看）：标 `{ at, failed }`，null 清。落盘后重启仍在；
    * 侧栏竖条与铃铛清单都读 meta 上的它，不各存一份
@@ -104,4 +108,11 @@ export const sessionApi = {
   /** 轮尾产物在系统文件管理器里定位（仅会话文件账里记过的文件） */
   revealArtifact: (id: string, path: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRevealArtifact, id, path),
+  /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名）；读不到的 id 不在回执里 */
+  artifactSummary: (ids: readonly string[]): Promise<Record<string, ArtifactSummary>> =>
+    ipcRenderer.invoke(ipcChannels.sessionArtifactSummary, ids),
+  /** 发件箱：发送前落盘（等写完才回）、落账后删、启动时列出 */
+  outboxPut: (entry: OutboxEntry): Promise<void> => ipcRenderer.invoke(ipcChannels.outboxPut, entry),
+  outboxRemove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.outboxRemove, id),
+  outboxList: (): Promise<OutboxEntry[]> => ipcRenderer.invoke(ipcChannels.outboxList),
 };

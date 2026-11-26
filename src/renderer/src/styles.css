@@ -529,16 +529,21 @@
    于是同一个会话列下底栏比改版前窄 32px：右栏打开文档 / 演示文稿时聊天列守硬底线 410，
    底栏只剩 ~199px，模型芯片的 60px 底与档位 53px 加起来压住隔壁（实测重叠 3px）。
    这一档把两个「可缩」的芯片再让一步：模型只留头像（名字仍在 title），档位包裹层缩到 32。 */
-@container (max-width: 210px) {
-  .composer-bottom-bar .chip-model {
-    min-width: 36px;
-  }
+/* 2026-11-24 设计审查 R3 D：1024 宽开着右栏时输入框只剩 ~170px，模型芯片残成头像 + 半个字。
+   这一档先把思考档位芯片整个让出去（档位在宽一点时再出现），把位子留给模型名 */
+@container (max-width: 260px) {
+  /* 包裹层带内联 display（Menu 的锚），要盖过只能 !important */
   .composer-bottom-bar > :has(> .chip-think) {
-    min-width: 32px;
+    display: none !important;
   }
 }
-/* 更窄（面板 300 + 聊天列 330–390 的最小窗口）：36px 里只剩头像与半个字的碎片，干脆删到只留头像 */
-@container (max-width: 170px) {
+/* 再窄（New Task 页 1024 宽开着右栏，底栏只剩 ~45px）：名字放不下就整个不写，只留完整的头像键（名字在悬停提示里），
+   不留「头像 + 半个字」的碎片 */
+@container (max-width: 120px) {
+  .composer-bottom-bar .chip-model {
+    min-width: 0;
+    flex: 0 0 auto;
+  }
   .composer-bottom-bar .chip-model .chip-label {
     display: none;
   }
@@ -1404,8 +1409,13 @@ html[data-pointer-drag] iframe {
 .ws-head:hover .ws-head-acts,
 .ws-head:has(:focus-visible) .ws-head-acts,
 .ws-head:has([aria-expanded="true"]:not(.ws-fold)) .ws-head-acts,
-.ws-head-acts[data-armed] {
+.ws-head-acts[data-armed],
+.ws-head-acts[data-designing] {
   display: inline-flex;
+}
+/* 星系设计面板开着这个工作区（原型）：不悬停时只留画笔键（点亮），告诉你右栏在设计哪座星系；其余动作键照旧悬停才出 */
+.ws-head:not(:hover):not(:has(:focus-visible)) .ws-head-acts[data-designing]:not([data-armed]) > :not(.ws-diy) {
+  display: none;
 }
 .ws-head:hover .ws-agg,
 .ws-head:has(:focus-visible) .ws-agg {
@@ -1670,6 +1680,25 @@ button.ssp-group-toggle:hover {
   font-weight: var(--weight-regular);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-tertiary);
+}
+
+/* 编排树「更早的会话」组头的收起小钮（整行组头不是按钮的那一处） */
+.ssp-group-fold {
+  display: inline-grid;
+  place-items: center;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.ssp-group-fold:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .ssp-card {
@@ -2728,6 +2757,188 @@ button.ssp-group-toggle:hover {
 
 .home-stage[data-travel="prep"] .home-travel {
   transform: translateY(var(--travel-dy, 320px));
+}
+
+/*
+ * 首页星系带（HomeGalaxy.tsx，原型 proto/home-galaxy）。只用墨色与发丝线：主星 = 墨色的球（--galaxy-star），
+ * 行星按成分取三级墨的三种深浅，轨道 = 默认发丝线，星屑 = 三级墨的点（浓淡随会话数，inline opacity）。
+ * 受光面的提亮色在明主题是纸面、暗档是正墨（暗档的纸面比天体还暗，提亮会变成压暗）。
+ * 渐变只做一件事：告诉你这是被主星照亮的球，不是平面圆片。
+ */
+.home-galaxy {
+  --galaxy-light: var(--color-bg-panel);
+  /* 明主题的主星用浅一档的墨：深灰实心球在白纸上太重，会和输入框抢；暗档用次级墨，最亮的就是它 */
+  --galaxy-star: color-mix(in srgb, var(--color-text-tertiary) 50%, var(--color-bg-panel));
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+/*
+ * 编排页的星系根节点（HomeGalaxy 的 GalaxyScene，单智能体首页与编排页同一个）。
+ * clip 不是 hidden：不成滚动容器。转动层里那张碎石 SVG 比画布大得多（变换前的盘面坐标），
+ * 不裁的话它把外层撑出一条横向滚动条（2026-11-24 实测）
+ */
+.home-galaxy.gx-root {
+  position: relative;
+  overflow: clip;
+}
+/*
+ * 星系的分层（HomeGalaxy 的画家顺序）：几张铺满的静止 SVG（轨道弧、主星）与几层零尺寸的 div（在轨道上走的东西）。
+ * 走的东西是一串零尺寸、原点在左上的 div，只有 transform：轨道矩阵、合成器转动、平移、反转、逆矩阵（galaxy-motion.ts）。
+ */
+.home-galaxy .gx-plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+}
+.home-galaxy .gx-layer,
+.home-galaxy .gx-node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+/* 碎石带的半平面：远半圈 / 近半圈各一份，靠这一层裁开（主星夹在两份中间） */
+.home-galaxy .gx-half {
+  position: absolute;
+  overflow: hidden;
+}
+.home-galaxy .gx-local {
+  position: absolute;
+  overflow: visible;
+}
+:root:is([data-theme="graphite"], [data-theme="black"]) .home-galaxy {
+  --galaxy-light: var(--color-text-primary);
+  --galaxy-star: color-mix(in srgb, var(--color-text-secondary) 78%, var(--color-bg-panel));
+}
+.galaxy-orbit {
+  fill: none;
+  stroke: var(--color-border-default);
+  stroke-width: 1;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+/* 空星系的预期落位轨道：同一根发丝线、改成稀疏的虚线（墨量约为实线的三分之一）——说的是「行星会落在
+   这一带」，不是一条已有的轨道。不用 --color-border-subtle：暗档上它只有 6–7% 白，几乎看不见 */
+.galaxy-orbit-expected {
+  stroke-dasharray: 2 5;
+}
+.galaxy-dust {
+  fill: var(--color-text-tertiary);
+}
+/* 在做事的会话 = 一块碎石（不是天体）：比星屑深一档的墨，锁定框与引线标在它身上 */
+.galaxy-rock {
+  fill: var(--color-text-secondary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 1px;
+  paint-order: stroke;
+}
+/* 子智能体行星的名字：常显（它是这颗行星的身份），字号 sm、次级墨、页面底色描边压住轨道线 */
+.galaxy-name-text {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  fill: var(--color-text-secondary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+  paint-order: stroke;
+  pointer-events: none;
+}
+.galaxy-star-hi {
+  stop-color: color-mix(in srgb, var(--galaxy-star) 45%, var(--galaxy-light));
+}
+.galaxy-star-lo {
+  stop-color: var(--galaxy-star);
+}
+.galaxy-planet {
+  fill: var(--color-text-tertiary);
+}
+.galaxy-planet[data-composition="gas"] {
+  fill: color-mix(in srgb, var(--color-text-secondary) 60%, var(--color-text-tertiary));
+}
+.galaxy-planet[data-composition="ice"] {
+  fill: color-mix(in srgb, var(--color-text-tertiary) 70%, var(--color-bg-panel));
+}
+.galaxy-light {
+  stop-color: var(--galaxy-light);
+}
+/* 等你的行星：外面一圈 1px 的 warning 细环——星系里唯一的状态色，要你动手的那颗在一片墨色里认得出来
+   （与状态饼的「等你」同一个 token）。在跑的不加记号：它们本来就在转 */
+.galaxy-planet-waiting {
+  fill: none;
+  stroke: var(--color-warning);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+/* 星系里的主星画成面板里设计的那颗（StarFigure 同一套形象）：覆盖 .gd-figure 的 display，它在这里是一个 <g> */
+.galaxy-star-figure,
+.galaxy-planet-figure {
+  display: inline;
+}
+
+/*
+ * 工作区自己的 New Task 页（ChatView 的 scopedHome）。版式登记：
+ * | 版式 | 用途 | 结构 | 现有最近的同类 |
+ * | 工作区页 | 一个工作区（主智能体）的新任务页 | 上：星空（1fr，门面在左上、星系占满其余）；下：聊天页的页脚（.chat-footer + .chat-foot-col） | Claude 桌面版 Bots 的空态页；自己的聊天页骨架 |
+ * 输入框直接用聊天页页脚的两层类：发出第一句后原地变成聊天页的输入框，不滑、不跳。
+ */
+.home-stage.ws-home {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  /* 盖掉 .home-stage 的居中：不撑满的话列宽缩成内容宽，输入框只剩 300 来宽 */
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+}
+.ws-home-sky.home-fade {
+  /* 与聊天页的滚动段同样留出滚动条位（.chat-transcript 的 scrollbar-gutter），页脚右内边距补同样多（--transcript-scrollbar，
+     ChatView 量了写在 .ws-home 上）：New Task 页与对话页的输入卡左右缘逐像素一致，发出第一句时不横跳半个滚动条 */
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  min-height: 0;
+}
+/* 门面：星系名 + slogan。外层的左右内边距与页脚（.chat-footer）同一个，里层的列宽与输入框（.chat-foot-col）同一个，
+   所以任何窗口宽度下名字的左缘与输入框的左缘是同一条线 */
+.ws-home-face {
+  flex: 0 0 auto;
+  padding: var(--space-6) var(--space-5) 0;
+}
+.ws-home-face-col {
+  width: min(100%, var(--content-max-width));
+  margin: 0 auto;
+}
+.ws-home-face .home-hero {
+  align-items: flex-start;
+}
+/* 星系吃掉门面与输入框之间的全部空间；太矮时保底 160，宁可被裁也不压输入框 */
+.ws-home-galaxy {
+  flex: 1 1 auto;
+  min-height: 160px;
+}
+.ws-home-foot.home-travel {
+  transition: none;
+}
+
+/* 星系场：吃掉输入框下面剩下的全部高度（.home-col 是纵向 flex）；太矮时保底 160，宁可被 stage 裁掉也不压输入框 */
+.home-fade-galaxy {
+  flex: 1 1 auto;
+  min-height: 160px;
+  align-self: stretch;
 }
 
 /*
@@ -5865,6 +6076,104 @@ mark.intent-mark {
     margin-top: var(--space-4);
   }
 
+  /*
+   * 星系首页（原型 proto/home-galaxy）。版式登记：
+   * | 版式 | 用途 | 结构 | 现有最近的同类 |
+   * | 星系门面 | 首页说明「这是哪一座星系」，并选新任务放在哪 | 星系名（品牌衬线、slogan 档、最轻字重）+「星系」后缀（lg 次级墨）+ 16px chevron，整块是菜单按钮；下面 slogan 退成一行 base 三级墨 | Claude Projects 项目页的项目名 + 一句说明 |
+   * | 星系场 | 输入框（与记录）下面剩下的全部空间：一片安静的、会动的星系 | 填满剩余高度的 SVG，ResizeObserver 量真实尺寸；只用墨色与发丝线，不用 accent | 无（新） |
+   */
+  /* v3（2026-11-23 用户：「星系太小了……把 composer 下移，居中，然后星系占满剩余的空间」）：
+     星系首页不再要索引边栏的左偏，门面 / 输入框 / 记录在内容区水平居中、整体下移；星系占下面剩下的全部高度 */
+  .home-stage[data-galaxy="true"] {
+    padding-top: 0;
+    align-items: stretch;
+  }
+  .home-col[data-galaxy="true"] {
+    width: 100%;
+    height: 100%;
+    padding-left: 0;
+    align-items: center;
+  }
+  .home-col[data-galaxy="true"] > :is(.home-fade-head, .home-travel, .home-fade-log) {
+    flex: 0 0 auto;
+    max-width: var(--content-max-width);
+  }
+  /* 门面 + 输入框整体下移：上方留一段按窗口高度取的空（22vh，夹在 24–260px），用一个不占语义的伪元素占位——
+     这是版面位置，不是组件间距，不进 --space-* 刻度 */
+  .home-col[data-galaxy="true"]::before {
+    content: "";
+    flex: 0 0 clamp(24px, 22vh, 260px);
+  }
+  /*
+   * 星系拉高（2026-11-24 用户「拉高吧，拉到顶部都可以，但是要保持星系名字和 slogan」），两种候选（proto-variants 的 homeSky）：
+   * 两种都把标题上方那段空压到一档 --space-6（标题区上移）；
+   * rise（缺省）= 星系占输入框下面剩下的全部高度；
+   * backdrop = 星系铺满整个内容列作背景（绝对定位垫在底下），标题与输入框在上面，那一块由 HomeGalaxy 的禁区（avoid）让开。
+   */
+  .home-col[data-galaxy="true"]:is([data-sky="rise"], [data-sky="backdrop"])::before {
+    flex-basis: var(--space-6);
+  }
+  .home-col[data-galaxy="true"][data-sky="backdrop"] > .home-fade-galaxy {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+  }
+  .home-hero[data-galaxy="true"] {
+    gap: var(--space-1);
+  }
+  .home-galaxy-head {
+    margin: 0;
+    font: inherit;
+  }
+  /* 名字是全屏最大的字、也是最轻的（越大越轻）；悬停 / 展开只铺中性的行悬停底，不变色 */
+  .home-galaxy-name {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: calc(-1 * var(--space-2));
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    cursor: pointer;
+    transition: var(--transition-hover);
+  }
+  .home-galaxy-name:hover,
+  .home-galaxy-name[aria-expanded="true"] {
+    background: var(--option-hover-bg);
+  }
+  .home-galaxy-title {
+    white-space: nowrap;
+    font-family: var(--font-family-brand);
+    font-size: var(--font-size-slogan);
+    line-height: var(--line-height-brand);
+    font-weight: var(--weight-regular);
+    letter-spacing: var(--tracking-slogan);
+  }
+  .home-galaxy-suffix {
+    flex: 0 0 auto;
+    font-family: var(--font-family-brand);
+    font-size: var(--font-size-lg);
+    font-weight: var(--weight-regular);
+    color: var(--color-text-secondary);
+  }
+  .home-galaxy-name .orbita-icon {
+    flex: 0 0 auto;
+    color: var(--color-text-tertiary);
+  }
+  .home-galaxy-name:hover .orbita-icon {
+    color: var(--color-text-primary);
+  }
+  /* slogan 退成星系名下面的一句说明：品牌衬线不变，降到 base、三级墨 */
+  .home-hero[data-galaxy="true"] .home-slogan {
+    margin: 0;
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-ui);
+    color: var(--color-text-tertiary);
+  }
+
   /* 记录：一根子午线 + 若干组 */
   .home-log {
     position: relative;
@@ -7387,4 +7696,364 @@ button.turn-output-from.link:hover {
   display: grid;
   gap: var(--space-2);
   padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + var(--card-icon-w) + var(--space-3));
+}
+
+
+/*
+ * 工作区页星系上的名字与「+N」（HomeGalaxy 的 fill）。名字：等你 / 在跑里最要紧的 3 颗常显，其余悬停才出；
+ * 字号 sm（12）、次级墨，带一圈页面底色的描边（paint-order）压在轨道线上也读得清。「+N」= 碎石折掉的会话数，三级墨。
+ */
+.galaxy-tag .galaxy-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.galaxy-tag-text {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  fill: var(--color-text-secondary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+  paint-order: stroke;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.galaxy-tag[data-always] .galaxy-tag-text,
+.galaxy-tag:hover .galaxy-tag-text {
+  opacity: 1;
+}
+/*
+ * 锁定框 + 引线（HomeGalaxy 最上层：工作区页大星系与右栏编排面板的星系图共用）。
+ * 锁定框 = 四个角括号，次级墨；等你的框换 warning（状态色是第二信号，第一信号是线上写的「等你」）。
+ * 引线 = 一根 1px 次级墨的折线，任务名写在折线水平段的上方（下划线式），字号 sm、次级墨、带页面底色描边压得住轨道线。
+ * 线和字都不吃指针：悬停交给行星自己的命中圈。
+ */
+.galaxy-lock {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-linecap: square;
+  vector-effect: non-scaling-stroke;
+}
+.galaxy-lock[data-state="waiting"] {
+  stroke: var(--color-warning);
+}
+/* 走进禁区（单智能体首页「铺满作背景」时标题与输入框那一块）的行星淡出，走出来再淡入 */
+.galaxy-planet-figure {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.galaxy-planet-figure[data-masked] {
+  opacity: 0;
+}
+/* 最近但没在做事的会话：一整圈虚线框、三级墨，引线与字退一档——框得住、分得开，不和在做事的抢 */
+.galaxy-lock[data-state="recent"] {
+  stroke: var(--color-text-tertiary);
+  stroke-dasharray: 2 2;
+  stroke-linecap: butt;
+}
+.galaxy-callout[data-state="recent"] .galaxy-callout-line {
+  stroke-dasharray: 2 2;
+}
+.galaxy-callout[data-state="recent"] .galaxy-callout-text {
+  fill: var(--color-text-secondary);
+}
+.galaxy-callout-line {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.galaxy-callout[data-state="waiting"] .galaxy-callout-line {
+  stroke: var(--color-warning);
+}
+.galaxy-callout-text {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  fill: var(--color-text-primary);
+  stroke: var(--color-bg-panel);
+  stroke-width: 3px;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
+/*
+ * 星系上能点的东西（2026-11-24 设计审查 R1）：主星、子智能体行星、在做事的碎石块、会话少时的每颗碎石。
+ * 命中圈透明；悬停与键盘聚焦时亮一圈发丝细环（次级墨，不用 accent——accent 只给主操作）。
+ * svg 里的 <g> 用全局 :focus-visible 的 outline 会画成一个大方框，这里换成那圈细环。
+ */
+.galaxy-target,
+.galaxy-tag.galaxy-target,
+.galaxy-dot,
+.galaxy-callout[data-link] {
+  cursor: pointer;
+  /* 整张 .home-galaxy 是 pointer-events: none（星系只是图）；能点的这几样单独打开 */
+  pointer-events: auto;
+}
+.galaxy-target:focus-visible {
+  outline: none;
+}
+/* 会话少时每颗碎石都能点：命中圈透明，悬停时那颗加深一档 */
+.galaxy-dot-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.galaxy-dot:hover .galaxy-dust {
+  fill: var(--color-text-primary);
+}
+/*
+ * 「全部 N 条会话」：键盘 / 读屏才用的入口——平时视觉隐藏（不占画面），Tab 到它时贴着星系左下角出现，
+ * 样子与次级文字链接一致；点了打开右栏树状图。
+ */
+.galaxy-all {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.galaxy-all:focus-visible {
+  width: auto;
+  height: auto;
+  padding: var(--space-1) var(--space-2);
+  overflow: visible;
+  clip-path: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  outline: 1.5px solid var(--color-accent);
+}
+.galaxy-target .galaxy-hit {
+  fill: transparent;
+  pointer-events: all;
+}
+.galaxy-target-ring {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.galaxy-target:hover .galaxy-target-ring {
+  opacity: 0.55;
+}
+.galaxy-target:focus-visible .galaxy-target-ring {
+  opacity: 1;
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+.galaxy-target:focus-visible .galaxy-tag-text {
+  opacity: 1;
+}
+.galaxy-callout[data-link]:hover .galaxy-callout-text {
+  text-decoration: underline;
+}
+
+/* 编排侧栏的列表：下面还有内容没滚到时，底部 24px 渐隐（最后一行不被切一半还像完整的一行）；到底即消 */
+.scroll[data-fade="true"] {
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--space-6)), transparent);
+}
+.galaxy-empty-hint {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  fill: var(--color-text-tertiary);
+}
+
+/* 分段控件「单智能体 / 编排」的选中块：与页面白底同色的凸起块（不是更深的灰——灰底侧栏上灰块反差太弱） */
+.mode-tab[aria-selected="true"] {
+  background: var(--color-bg-panel);
+}
+
+/* 玄 / 黛下星系的轨道线提一档（border-default → border-strong）：量得 1.35:1 → 1.61:1（对页面底）。单智能体首页与编排页同一套 */
+:root:is([data-theme="graphite"], [data-theme="black"]) .home-galaxy .galaxy-orbit {
+  stroke: var(--color-border-strong);
+}
+
+/*
+ * 编排长对话的按天分隔（ChatView 的 DayMark）：每天第一句上方一行「日期 + 发丝线」。
+ * 一天是真正的边界，才配一根线；字是 sm、次级墨、500，线是默认发丝线。上方留的空比下方多（标题上方空气更足）。
+ */
+.day-divider {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-5) 0 var(--space-3);
+}
+.day-divider-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.day-divider-rule {
+  height: 1px;
+  background: var(--color-border-default);
+}
+
+/*
+ * 星系空白处拖动改俯角（HomeGalaxy 的 useTiltDrag）：能拖的星系根节点自己接指针（平时整张 .home-galaxy 不接），
+ * 光标 grab，拖动中 grabbing；能点的天体照旧是 pointer。拖动中不选字。
+ */
+.home-galaxy[data-tilt-drag] {
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.home-galaxy[data-tilt-dragging],
+.home-galaxy[data-tilt-dragging] * {
+  cursor: grabbing;
+}
+/* 鼠标按下会让根节点 / 天体拿到焦点：只在键盘聚焦（:focus-visible）时画焦点环，鼠标点的不画（Chromium 对 svg 的 g 会画一圈橙色 auto 环） */
+.home-galaxy[data-tilt-drag]:focus:not(:focus-visible),
+.home-galaxy .galaxy-target:focus:not(:focus-visible) {
+  outline: none;
+}
+/*
+ * 转台落位（HomeGalaxy 的 useTurntable）：松手后按新角度跑完屏幕安全布局，轨道矩阵、碎石带、主星、轨道弧从拖动时的样子
+ * 在 --duration-fast（160ms）内滑到合规的位置。只在 gx-settling 期间有过渡（拖动中每帧直接写，不能带过渡）；减少动效时不挂这个类。
+ */
+.home-galaxy.gx-settling [data-orbit],
+.home-galaxy.gx-settling [data-orbit-inv],
+.home-galaxy.gx-settling [data-belt-outer],
+.home-galaxy.gx-settling [data-belt-rot],
+.home-galaxy.gx-settling [data-belt-unrot],
+.home-galaxy.gx-settling [data-star-wrap] {
+  transition: transform var(--duration-fast) var(--ease-out-quint);
+}
+.home-galaxy.gx-settling path[data-arc] {
+  transition: d var(--duration-fast) var(--ease-out-quint);
+}
+.home-galaxy [data-star-wrap] {
+  transform-box: view-box;
+  transform-origin: 0 0;
+}
+/* 角落的角度提示（「40° · 120°」）：拖动中 / 刚按过方向键、双击复位后才出现，不吃指针；数字等宽，抬高说明是次级墨 */
+.galaxy-tilt-badge:not([data-show]) {
+  display: none;
+}
+.galaxy-tilt-badge {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: calc(100% - var(--space-6));
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  pointer-events: none;
+}
+.galaxy-tilt-value {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+.galaxy-tilt-raised {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/*
+ * 星系角落那一列（HomeGalaxy 的 plan.spill）：在跑 / 等你 / 最近、但这一刻拉不出引线的会话（碎石块那一圈被收掉、或引线放不下）。
+ * 左下角，字号 sm、次级墨，等你那一行左边一道 warning 细线（状态色是第二信号，第一信号是字里的「等你」）；不挡星系的拖动。
+ */
+.galaxy-spill {
+  position: absolute;
+  left: var(--space-3);
+  bottom: var(--space-3);
+  display: grid;
+  gap: var(--space-0-5);
+  max-width: min(50%, 320px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: none;
+}
+.galaxy-spill li {
+  display: flex;
+  min-width: 0;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--color-border-subtle);
+}
+.galaxy-spill li[data-state="waiting"] {
+  border-left-color: var(--color-warning);
+}
+.galaxy-spill li[data-state="more"] {
+  border-left-color: transparent;
+}
+.galaxy-spill-row {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-align: left;
+  pointer-events: auto;
+}
+button.galaxy-spill-row {
+  cursor: pointer;
+}
+button.galaxy-spill-row:hover {
+  color: var(--color-text-primary);
+}
+.galaxy-spill li[data-state="recent"] .galaxy-spill-row {
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * 离电省电的轻提示（App 的 powerNotice）：第一次进省电档时在窗口顶部居中、标题栏下面浮一条，六秒自己收起，只出一次。
+ * 不抢焦点；放顶上不放右下角——右下角会盖住输入框的发送键；样子是一张小便签：面板底色、发丝边、次级墨字，「在设置里改」是次级文字链接。
+ */
+.power-notice {
+  position: fixed;
+  top: calc(var(--space-8) + var(--space-6));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-float);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(420px, calc(100vw - var(--space-8)));
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.power-notice-link {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }

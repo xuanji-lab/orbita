@@ -14,7 +14,11 @@ import type { SecretsPort } from "../provider/store.ts";
 import { maskSecret } from "../../shared/provider.ts";
 import {
   DEFAULT_DOUBAO_RESOURCE_ID,
+  DEFAULT_ELEVENLABS_MODEL_ID,
+  DEFAULT_ELEVENLABS_VOICE_ID,
   type DictationProvider,
+  type ElevenlabsVoiceConfig,
+  type ElevenlabsVoiceInput,
   type DictationSelection,
   type DoubaoVoiceConfig,
   type DoubaoVoiceInput,
@@ -22,10 +26,28 @@ import {
   type StepfunVoiceInput,
 } from "../../shared/voice.ts";
 import type { DoubaoCredentials } from "./doubao-protocol.ts";
+import type { ElevenlabsCredentials } from "./elevenlabs.ts";
 
 /** secrets.json 里的账户名。provider 的账户是 `<id>-<hex>`，带冒号的撞不上 */
 const DOUBAO_TOKEN_ACCOUNT = "voice:doubao-access-token";
 const STEPFUN_API_KEY_ACCOUNT = "voice:stepfun-api-key";
+const ELEVENLABS_API_KEY_ACCOUNT = "voice:elevenlabs-api-key";
+
+interface ElevenlabsFile {
+  voiceId: string;
+  modelId: string;
+}
+
+/** 容错读 ElevenLabs 那一段：缺字段或空串回默认（音色与模型都有可用的默认，只差一把 key） */
+export function parseElevenlabs(raw: unknown): ElevenlabsFile {
+  const record = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const voiceId = typeof record["voiceId"] === "string" ? record["voiceId"].trim() : "";
+  const modelId = typeof record["modelId"] === "string" ? record["modelId"].trim() : "";
+  return {
+    voiceId: voiceId === "" ? DEFAULT_ELEVENLABS_VOICE_ID : voiceId,
+    modelId: modelId === "" ? DEFAULT_ELEVENLABS_MODEL_ID : modelId,
+  };
+}
 
 interface DoubaoFile {
   appId: string;
@@ -140,6 +162,37 @@ export class VoiceStore {
     const key = input.apiKey?.trim() ?? "";
     if (key !== "") await this.secrets.set(STEPFUN_API_KEY_ACCOUNT, key);
     return this.stepfunConfig();
+  }
+
+  // ── ElevenLabs 语音合成 ──
+
+  async elevenlabsConfig(): Promise<ElevenlabsVoiceConfig> {
+    const file = parseElevenlabs((await this.readFile()).elevenlabs);
+    const key = await this.secrets.get(ELEVENLABS_API_KEY_ACCOUNT);
+    return { ...file, apiKeyMasked: key === null || key === "" ? null : maskSecret(key) };
+  }
+
+  /** 通话合成用的完整凭证；没存 key 回 null */
+  async elevenlabsCredentials(): Promise<ElevenlabsCredentials | null> {
+    return this.elevenlabsCredentialsFor(parseElevenlabs((await this.readFile()).elevenlabs));
+  }
+
+  /** 试听用：草稿优先，key 没填拿已存的（同豆包的 CredentialsFor） */
+  async elevenlabsCredentialsFor(input: ElevenlabsVoiceInput): Promise<ElevenlabsCredentials | null> {
+    const { voiceId, modelId } = parseElevenlabs(input);
+    const typed = input.apiKey?.trim() ?? "";
+    const apiKey = typed !== "" ? typed : ((await this.secrets.get(ELEVENLABS_API_KEY_ACCOUNT)) ?? "").trim();
+    if (apiKey === "") return null;
+    return { apiKey, voiceId, modelId };
+  }
+
+  async saveElevenlabs(input: ElevenlabsVoiceInput): Promise<ElevenlabsVoiceConfig> {
+    const key = input.apiKey?.trim() ?? "";
+    // 先存 key：钥匙串不可用时这里抛，配置文件保持原样
+    if (key !== "") await this.secrets.set(ELEVENLABS_API_KEY_ACCOUNT, key);
+    const file = await this.readFile();
+    await writeJsonAtomic(this.filePath, { ...file, elevenlabs: parseElevenlabs(input) });
+    return this.elevenlabsConfig();
   }
 
   private async readFile(): Promise<VoiceFile> {

@@ -563,6 +563,7 @@ describe("内置插件与用户自己的同名技能（用真实资源跑 Plugin
         "reading/reading",
         "skill-kit/find-skills",
         "skill-kit/skill-creator",
+        "sub-agents/sub-agents",
         "terminal/terminal",
       ]);
       assert.deepEqual((await store.listViews()).flatMap((view) => view.conflicts), []);
