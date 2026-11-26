@@ -39,6 +39,7 @@ import {
   type Viewport,
 } from "./galaxy.ts";
 import { ORBIT_STEP } from "./galaxy-data.ts";
+import { PLANET_DRAW_SCALE } from "../../../../shared/galaxy-scale.ts";
 import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { LOCK_GAP } from "./callouts.ts";
 
@@ -401,6 +402,20 @@ export function fitScreenSafe(
 }
 
 /**
+ * 行星默认画成原来的 PLANET_DRAW_SCALE（0.7）倍（2026-11-26 用户定）：布局照原来的可读半径排（轨道间距、碎石带、取景都不变，
+ * 只会更松），排好之后把可读半径整体缩到 0.7 倍，但不缩到可读下限以下——窄画布上行星本来就压在下限上，再缩眼睛就挤成一个点。
+ * 物理半径那一档（不给下限时按世界半径画）已在 layoutGalaxy 里按 planetDrawRadius 缩过。
+ */
+export function drawnPlanetPx(px: number, floor: number): number {
+  return Math.max(px * PLANET_DRAW_SCALE, Math.min(px, floor));
+}
+
+function drawnSmaller(scene: SafeScene, readableMax: number): SafeScene {
+  const floor = readableMax > PLANET_READABLE_MAX ? AGENT_READABLE_FLOOR : PLANET_READABLE_MIN;
+  return { ...scene, minPlanetPx: drawnPlanetPx(scene.minPlanetPx, floor), preferredPx: drawnPlanetPx(scene.preferredPx, floor) };
+}
+
+/**
  * 布局只跟设计稿与画布有关、与视角无关：同一份输入只排一次（拖动、转方位、缩放松手时都不再重排，最坏的满载极小画布一次约 200ms）。
  * 按输入的内容做键，留最近 16 份。
  */
@@ -415,7 +430,7 @@ function cachedLayout(spec: GalaxySpec, width: number, height: number, box: { wi
     layoutCache.set(key, hit);
     return hit;
   }
-  const scene = hasIndependentOrbits(spec) ? layoutIndependent(spec, width, height, box, readableMax) : layoutOnce(spec, width, height, box, readableMax);
+  const scene = drawnSmaller(hasIndependentOrbits(spec) ? layoutIndependent(spec, width, height, box, readableMax) : layoutOnce(spec, width, height, box, readableMax), readableMax);
   layoutCache.set(key, scene);
   if (layoutCache.size > LAYOUT_CACHE_MAX) {
     const oldest = layoutCache.keys().next().value;

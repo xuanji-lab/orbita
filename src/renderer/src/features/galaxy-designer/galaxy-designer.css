@@ -538,6 +538,14 @@
   min-width: 0;
 }
 
+/* 「在改哪颗天体」：主星 + 最多 8 颗行星，一行放不下就折行；高度随行数长 */
+.seg-control.gd-body-pick {
+  flex-wrap: wrap;
+  height: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
 /* 眼睛大小：五档分段控件占满一行（和成分那组同一个控件），白眼后面一枚「规则外」小字 */
 .gd-eye-style {
   display: flex;

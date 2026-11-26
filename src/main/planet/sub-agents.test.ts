@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -9,7 +10,8 @@ import { applySubAgentRequest, type SubAgentRequestDeps } from "./sub-agent-requ
 import { DEFAULT_SETTINGS } from "../../shared/settings.ts";
 import type { SessionMeta } from "../../shared/session.ts";
 import type { SubAgentsChanged } from "../../shared/sub-agent.ts";
-import { MASS_UNIT_PER_EARTH, orbitClearance, seededStarMass, STAR_MASS } from "../../shared/galaxy-scale.ts";
+import { auToDisplay, displayToAu, MASS_UNIT_PER_EARTH, orbitClearance, seededStarMass, STAR_MASS } from "../../shared/galaxy-scale.ts";
+import { ladderDisplay } from "../../shared/sub-agent.ts";
 
 async function workspace(): Promise<string> {
   return mkdtemp(join(tmpdir(), "orbita-subagents-"));
@@ -51,8 +53,8 @@ describe("SubAgentStore：建", () => {
     const planets = galaxy["planets"] as Record<string, unknown>[];
     assert.equal(planets.length, 2);
     assert.equal(planets[1]?.["id"], "agent-1");
-    // 老轨道 e=0.3、远日距 24.7；新圆轨道在 38 首次满足 2√3 个相互希尔半径
-    assert.equal(planets[1]?.["orbit"], 38);
+    // 主星 600 M⊕ 夹到 1.0 M☉；老行星画面 19、e=0.3（旧稿默认）：第一档与它的远日点相交，落在第二档
+    assert.equal(planets[1]?.["orbit"], ladderDisplay(STAR_MASS.max, 1));
     assert.equal(planets[1]?.["eccentricity"], 0);
     assert.equal(planets[1]?.["massEarth"], 2);
     assert.deepEqual(planets[1]?.["elements"], { eyes: true });
@@ -115,14 +117,58 @@ describe("SubAgentStore：建", () => {
     await rm(dir, { recursive: true });
   });
 
-  it("轨道容量：小主星带着老行星时排不下第二颗，提示加主星质量或调远，且不先写档案", async () => {
+  it("轨道排不下：小主星带着两颗很扁的大行星时排不下第二颗，提示加主星质量或调远，且不先写档案", async () => {
     const dir = await seeded();
-    await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "红矮星", mass: { value: 20, unit: "M⊕" } }));
+    await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "红矮星", mass: { value: 30, unit: "M⊕" } }));
+    await writeFile(
+      join(dir, "planet", "galaxy.json"),
+      JSON.stringify({ version: 1, main: {}, planets: [{ id: "a", name: "甲", massEarth: 4, orbit: 20, eccentricity: 0.6 }, { id: "b", name: "乙", massEarth: 4, orbit: 40, eccentricity: 0.4 }] }),
+    );
     const result = await new SubAgentStore({ newId: counter() }).create(dir, { name: "挤不下", role: "x", massEarth: 2 }, "chat");
     assert.equal(result.ok, false);
     if (!result.ok) assert.match(result.error, /增加主星质量|调远/);
     const galaxy = await readJsonFile(join(dir, "planet", "galaxy.json"));
-    assert.equal((galaxy["planets"] as unknown[]).length, 1);
+    assert.equal((galaxy["planets"] as unknown[]).length, 2);
+    assert.deepEqual(await readdir(join(dir, "planet")), ["design.json", "galaxy.json"], "没有半个档案");
+    await rm(dir, { recursive: true });
+  });
+
+  it("主星越重带得越多：到了这颗主星的上限如实报「最多带 N 颗」，不建、不写半个档案，盘上一个字节不动", async () => {
+    for (const [massEarth, capacity] of [[30, 3], [60, 5], [100, 8]] as const) {
+      const dir = await workspace();
+      await mkdir(join(dir, "planet"), { recursive: true });
+      await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "主星", mass: { value: massEarth, unit: "M⊕" } }));
+      const store = new SubAgentStore({ newId: counter() });
+      for (let i = 0; i < capacity; i++) {
+        const made = await store.create(dir, { name: `第${i + 1}颗`, role: "x" }, "panel");
+        assert.equal(made.ok, true, made.ok ? "" : made.error);
+      }
+      const galaxyPath = join(dir, "planet", "galaxy.json");
+      const before = createHash("sha256").update(await readFile(galaxyPath)).digest("hex");
+      const agentsBefore = await readdir(join(dir, "planet", "agents"));
+      const over = await store.create(dir, { name: "多一颗", role: "x" }, "chat");
+      assert.equal(over.ok, false);
+      if (!over.ok) assert.match(over.error, new RegExp(`${massEarth / 100} M☉）最多带 ${capacity} 颗行星`));
+      assert.equal(createHash("sha256").update(await readFile(galaxyPath)).digest("hex"), before);
+      assert.deepEqual(await readdir(join(dir, "planet", "agents")), agentsBefore);
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("旧 galaxy.json 只读不改：读名单、建失败都不碰它；画面轨道经物理层往返原样", async () => {
+    const dir = await workspace();
+    await mkdir(join(dir, "planet"), { recursive: true });
+    // 0.3 M☉ 的星系已经带着 3 颗旧行星（画面 19、31、45.5，旧稿没写偏心率）：满了
+    await writeFile(join(dir, "planet", "design.json"), JSON.stringify({ name: "主星", mass: { value: 30, unit: "M⊕" } }));
+    const raw = JSON.stringify({ version: 1, main: {}, planets: [19, 31, 45.5].map((orbit, i) => ({ id: `p${i}`, name: `旧${i}`, massEarth: 2, orbit })) });
+    const galaxyPath = join(dir, "planet", "galaxy.json");
+    await writeFile(galaxyPath, raw);
+    const before = createHash("sha256").update(await readFile(galaxyPath)).digest("hex");
+    const store = new SubAgentStore({ newId: counter() });
+    assert.equal((await store.list(dir)).length, 3);
+    assert.equal((await store.create(dir, { name: "多一颗", role: "x" }, "chat")).ok, false);
+    assert.equal(createHash("sha256").update(await readFile(galaxyPath)).digest("hex"), before);
+    for (const orbit of [19, 31, 45.5]) assert.ok(Math.abs(auToDisplay(STAR_MASS.min, displayToAu(STAR_MASS.min, orbit)) - orbit) < 1e-9);
     await rm(dir, { recursive: true });
   });
 
@@ -144,24 +190,20 @@ describe("SubAgentStore：建", () => {
     assert.equal(second.ok, true, second.ok ? "" : second.error);
     const heavyPlanets = (await readJsonFile(join(heavyDir, "planet", "galaxy.json")))["planets"] as Record<string, unknown>[];
     assert.equal(heavyPlanets.length, 2);
-    assert.equal(heavyPlanets[0]?.["orbit"], 19);
+    assert.equal(heavyPlanets[0]?.["orbit"], ladderDisplay(STAR_MASS.max, 0));
     assert.ok(newPlanetClear(heavy, heavyPlanets[1]?.["orbit"]), `第二颗落在 ${String(heavyPlanets[1]?.["orbit"])}，主星 ${STAR_MASS.max / MASS_UNIT_PER_EARTH} M⊕`);
-    assert.ok((heavyPlanets[1]?.["orbit"] as number) > 19);
+    assert.equal(heavyPlanets[1]?.["orbit"], ladderDisplay(STAR_MASS.max, 1));
     await rm(heavyDir, { recursive: true });
 
-    // 主星最轻（30 M⊕）：以前第二颗被排到 4.5，整个落在主星里；现在要么落在主星之外，要么如实说排不下
+    // 主星最轻（30 M⊕ = 0.3 M☉）：以前第二颗被排到 4.5，整个落在主星里，再往后是排不下；现在第二档稳稳排下
     const light = idSeededTo(STAR_MASS.min);
     const lightDir = await workspace();
     assert.equal((await store.create(lightDir, { name: "第一颗", role: "x" }, "panel", light)).ok, true);
     const lightSecond = await store.create(lightDir, { name: "第二颗", role: "x" }, "panel", light);
     const lightPlanets = (await readJsonFile(join(lightDir, "planet", "galaxy.json")))["planets"] as Record<string, unknown>[];
-    if (lightSecond.ok) {
-      assert.equal(lightPlanets.length, 2);
-      assert.ok(newPlanetClear(light, lightPlanets[1]?.["orbit"]), `第二颗落在 ${String(lightPlanets[1]?.["orbit"])}，主星 ${STAR_MASS.min / MASS_UNIT_PER_EARTH} M⊕`);
-    } else {
-      assert.match(lightSecond.error, /排不下/);
-      assert.equal(lightPlanets.length, 1);
-    }
+    assert.equal(lightSecond.ok, true, lightSecond.ok ? "" : lightSecond.error);
+    assert.equal(lightPlanets.length, 2);
+    assert.ok(newPlanetClear(light, lightPlanets[1]?.["orbit"]), `第二颗落在 ${String(lightPlanets[1]?.["orbit"])}，主星 ${STAR_MASS.min / MASS_UNIT_PER_EARTH} M⊕`);
     await rm(lightDir, { recursive: true });
   });
 
@@ -170,7 +212,8 @@ describe("SubAgentStore：建", () => {
     const store = new SubAgentStore({ newId: counter() });
     assert.equal((await store.create(dir, { name: "第一颗", role: "x" }, "panel")).ok, true);
     const galaxy = await readJsonFile(join(dir, "planet", "galaxy.json"));
-    assert.equal((galaxy["planets"] as Record<string, unknown>[])[0]?.["orbit"], 19);
+    // 没有主星质量、也没给工作区 id：按最轻那档主星的第一档
+    assert.equal((galaxy["planets"] as Record<string, unknown>[])[0]?.["orbit"], ladderDisplay(STAR_MASS.min, 0));
     await rm(dir, { recursive: true });
   });
 });

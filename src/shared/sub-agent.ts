@@ -13,7 +13,19 @@
  * 质量单位同 planet-design：盘上 M⊕。
  */
 
-import { MASS_UNIT_PER_EARTH, orbitClearance, seededStarMass, STAR_MASS } from "./galaxy-scale.ts";
+import {
+  displayToAu,
+  displayZone,
+  ladderOrbit,
+  MASS_UNIT_PER_EARTH,
+  orbitClearance,
+  physicalOrbitOf,
+  seededStarMass,
+  STAR_MASS,
+  starPhysicalEarth,
+  starPlanetCapacity,
+  starSolarMass,
+} from "./galaxy-scale.ts";
 import { checkSystem, LEGACY_ORBIT_E, LEGACY_ORBIT_OMEGA_DEG, type OrbitSpec } from "./orbit-physics.ts";
 
 export const SUB_AGENTS_DIR = "agents";
@@ -179,6 +191,15 @@ export interface CheckedCreate {
 /** 新建的校验：名字长度与冲突、职能非空、质量不越过主星（上限跟着主星走）、名单没满 */
 export function checkCreate(raw: unknown, context: SubAgentContext): Checked<CheckedCreate> {
   if (!isRecord(raw)) return { ok: false, error: "参数要是一个对象。" };
+  // 主星越重带得越多：容量按物理层算（0.3 M☉ → 3 颗 … 1.0 M☉ → 8 颗）
+  const capacity = subAgentCapacity(context.starMassEarth);
+  if (context.agents.length >= capacity) {
+    const solar = starSolarMass(starMassOrFloor(context.starMassEarth) * MASS_UNIT_PER_EARTH);
+    return {
+      ok: false,
+      error: `这颗主星（${Number(solar.toFixed(2))} M☉）最多带 ${capacity} 颗行星，现在已经有 ${context.agents.length} 颗，子智能体尚未创建。先删掉一颗，或在星系设计里把主星调重（主星越重带得越多，1.0 M☉ 最多 8 颗）。`,
+    };
+  }
   if (context.agents.length >= context.max) return { ok: false, error: `这座星系已经有 ${context.agents.length} 个子智能体，最多 ${context.max} 个。先删掉一个再建。` };
   const name = checkName(raw["name"], context, null);
   if (!name.ok) return name;
@@ -264,28 +285,6 @@ export function checkUpdate(raw: unknown, context: SubAgentContext): Checked<Che
 }
 
 /**
- * 新行星的默认轨道（界面星系单位）：不让主智能体猜位置，只给一圈空轨道——
- * 在 19 到 48 之间按 0.5 取样，取第一个离所有已有轨道都 ≥ 12 的；都挤满了就取离已有轨道最远的那一点。
- * 这只是落盘的起点：画的时候屏幕安全布局（screen-safe.ts）照旧按屏幕防撞重排，用户再在面板里拖到想要的地方。
- */
-export const ORBIT_SLOT = { first: 19, last: 48, gap: 12, step: 0.5 } as const;
-
-export function defaultSubAgentOrbit(existing: readonly number[]): number {
-  const orbits = existing.filter((orbit) => Number.isFinite(orbit));
-  let best = ORBIT_SLOT.first;
-  let bestGap = -1;
-  for (let orbit = ORBIT_SLOT.first; orbit <= ORBIT_SLOT.last + 1e-9; orbit += ORBIT_SLOT.step) {
-    const gap = orbits.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...orbits.map((other) => Math.abs(other - orbit)));
-    if (gap >= ORBIT_SLOT.gap) return orbit;
-    if (gap > bestGap) {
-      best = orbit;
-      bestGap = gap;
-    }
-  }
-  return best;
-}
-
-/**
  * 没设计过的工作区（planet/ 里还没有主星质量）界面上画的那颗主星（M⊕）：按工作区 id 播种，与设计面板、首页星系、
  * 侧栏头像用的是同一个函数（galaxy-scale 的 seededStarMass）。新建子智能体找空轨、算行星质量上限时，读不到主星质量
  * 就按它算——两边对同一颗星说同一个质量，新行星才不会落进界面画出的主星里。
@@ -298,12 +297,35 @@ function starMassOrFloor(starMassEarth: number | null): number {
   return starMassEarth !== null && Number.isFinite(starMassEarth) && starMassEarth > 0 ? starMassEarth : STAR_MASS_EARTH_FLOOR;
 }
 
+/** 旧稿里没写轨道的第 index 颗按这个画面半径算（与 design.ts 的 defaultAgentOrbit 同一个起点与步长） */
+function legacyOrbit(index: number): number {
+  return 19 + 12 * index;
+}
+
 /**
- * 新行星的硬合法空轨：先找靠近旧默认槽位的候选，再按 0.5 步长向两边找。
- * 两道判据：不落进主星、不出行星区（与设计面板同一条，orbitClearance）；行星之间隔开 2√3 个相互希尔半径
- * （checkSystem，只看新行星涉及的冲突，旧稿本身的红区仍交给面板修）。找不到返回 null，调用方不得先落档案。
+ * 第 k 档默认轨道写到盘上的画面半径：两位小数（与面板滑块的精度同档），向外进位——第 0 档正好贴着画面行星区内缘，
+ * 四舍五入往里挪 0.005 就会碰到最大的那种行星
+ */
+export function ladderDisplay(starUiMass: number, k: number): number {
+  return Math.ceil(ladderOrbit(starUiMass, k).display * 100 - 1e-9) / 100;
+}
+
+/** 这颗主星最多带几颗行星（物理层容量，见 galaxy-scale 的 starPlanetCapacity）；读不到主星质量按最轻那档 */
+export function subAgentCapacity(starMassEarth: number | null): number {
+  return starPlanetCapacity(starMassOrFloor(starMassEarth) * MASS_UNIT_PER_EARTH);
+}
+
+/**
+ * 新行星的默认轨道（盘上写画面半径）：从离主星最近的安全物理轨道 a_in 起，每档外推 1.3 倍（ladderOrbit），
+ * 挑第一档同时满足两道判据的：
+ * - 画面层：不落进主星、不出画面行星区（orbitClearance，与设计面板同一条）；
+ * - 物理层：与已有行星隔开 2√3 个相互希尔半径（checkSystem，主星按 M☉ × 333000 M⊕、轨道按 AU；
+ *   只看新行星涉及的冲突，旧稿本身的红区仍交给面板修）。
+ * 档位都被占了（比如旧行星被拖到了档与档之间）就在画面行星区里按 0.25 的步长从内往外找；还找不到返回 null，
+ * 调用方不得先落档案。
  *
- * 以前只有第二道：候选从 4 起一路试，空工作区的第二颗被排到 4.5——按主星半径算整个落在主星里（2026-11-25）。
+ * 以前全按画面数算希尔半径：主星 30–100 M⊕、行星 2 M⊕，质量比夸张上万倍，30–70 M⊕ 的主星只排得下 1 颗（2026-11-26）；
+ * 再往前，候选从 4 起一路试，空工作区的第二颗被排到 4.5、落在主星里（2026-11-25）。
  */
 export function findSubAgentOrbit(
   starMassEarth: number | null,
@@ -311,25 +333,32 @@ export function findSubAgentOrbit(
   newMassEarth: number,
   newComposition: SubAgentComposition = "rock",
 ): number | null {
-  const star = starMassOrFloor(starMassEarth);
-  // 界面质量单位（M⊕ × 10）：半径公式与设计面板同一份
-  const starOnScreen = star * MASS_UNIT_PER_EARTH;
-  const planetOnScreen = newMassEarth * MASS_UNIT_PER_EARTH;
-  const planets: OrbitSpec[] = existing.map((planet, index) => ({
-    mass: planet.massEarth ?? SUB_AGENT_MASS_DEFAULT,
-    a: planet.orbit ?? 19 + 12 * index,
-    e: planet.eccentricity ?? LEGACY_ORBIT_E,
-    omegaDeg: planet.periapsisDeg ?? LEGACY_ORBIT_OMEGA_DEG,
-  }));
-  const preferred = defaultSubAgentOrbit(planets.map((planet) => planet.a));
-  const candidates = Array.from({ length: 97 }, (_, index) => 4 + index * 0.5).sort((a, b) => Math.abs(a - preferred) - Math.abs(b - preferred) || a - b);
-  for (const a of candidates) {
-    // 不落进主星、不出行星区：新行星从圆轨道出生，所以看的就是半长轴本身
-    if (!orbitClearance({ star: { mass: starOnScreen }, planet: { mass: planetOnScreen, composition: newComposition, a, e: 0 } }).ok) continue;
-    const next = [...planets, { mass: newMassEarth, a, e: 0, omegaDeg: LEGACY_ORBIT_OMEGA_DEG }];
-    const checked = checkSystem({ mass: star }, next);
+  const starUi = starMassOrFloor(starMassEarth) * MASS_UNIT_PER_EARTH;
+  const planetUi = newMassEarth * MASS_UNIT_PER_EARTH;
+  const physical: OrbitSpec[] = existing.map((planet, index) =>
+    physicalOrbitOf(starUi, {
+      mass: (planet.massEarth ?? SUB_AGENT_MASS_DEFAULT) * MASS_UNIT_PER_EARTH,
+      a: planet.orbit ?? legacyOrbit(index),
+      e: planet.eccentricity ?? LEGACY_ORBIT_E,
+      omegaDeg: planet.periapsisDeg ?? LEGACY_ORBIT_OMEGA_DEG,
+    }),
+  );
+  const starPhysical = { mass: starPhysicalEarth(starUi) };
+  const fits = (display: number): boolean => {
+    // 新行星从圆轨道出生，所以看的就是半长轴本身
+    if (!orbitClearance({ star: { mass: starUi }, planet: { mass: planetUi, composition: newComposition, a: display, e: 0 } }).ok) return false;
+    const next = [...physical, { mass: newMassEarth, a: displayToAu(starUi, display), e: 0, omegaDeg: LEGACY_ORBIT_OMEGA_DEG }];
     const self = next.length - 1;
-    if (checked.warnings.every((warning) => warning.level !== "red" || (warning.innerIndex !== self && warning.outerIndex !== self))) return a;
+    return checkSystem(starPhysical, next).warnings.every((warning) => warning.level !== "red" || (warning.innerIndex !== self && warning.outerIndex !== self));
+  };
+  const rungs = starPlanetCapacity(starUi);
+  for (let k = 0; k < rungs; k++) {
+    const display = ladderDisplay(starUi, k);
+    if (fits(display)) return display;
+  }
+  const { dIn, dOut } = displayZone(starUi);
+  for (let display = Math.ceil(dIn * 4) / 4; display <= dOut + 1e-9; display += 0.25) {
+    if (fits(display)) return display;
   }
   return null;
 }

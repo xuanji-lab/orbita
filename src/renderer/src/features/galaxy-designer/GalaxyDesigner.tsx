@@ -50,6 +50,7 @@ import { eyeStyleOf, storyLineOf } from "./design.ts";
 import { EYE_STYLES, type EyeStyle } from "@shared/planet-design";
 import { BodyFigure } from "./StarFigure.tsx";
 import { NewSubAgentForm, RoleSection } from "./SubAgentRole.tsx";
+import { STAR_UI_PER_SOLAR, displayToAu, starPlanetCapacity, starSolarMass } from "@shared/galaxy-scale";
 import { PLANET_AGENTS_MAX } from "@shared/planet-design";
 import { MixSection } from "./MixSection.tsx";
 import { AvatarSection } from "./AvatarSection.tsx";
@@ -174,6 +175,8 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
   const errors = validateDesign(design);
   const radius = radiusOf(design, kind);
   const range = massRange(kind, design.star?.mass ?? undefined);
+  // 主星越重带得越多（物理层容量）：满了不给新建入口，如实写这颗主星最多带几颗
+  const capacity = design.star === null ? 0 : starPlanetCapacity(design.star.mass);
   const nameFallback = kind === "star" ? props.workspace.name : tg.unnamedPlanet;
 
   return (
@@ -213,11 +216,14 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
                 {tg.readout.density}<b>{formatNumber(Math.round(bodyDensity(design, kind) * 100) / 100)}</b>
               </span>
               <span>
-                {tg.readout.mass}<b>{`${formatNumber(earth(body.mass))} M⊕`}</b>
+                {tg.readout.mass}<b data-mass-unit={kind === "star" ? "solar" : "earth"}>{massText(kind, body.mass)}</b>
               </span>
               {kind === "planet" && design.planet !== null && (
                 <span>
-                  {tg.readout.orbit}<b>{formatNumber(design.planet.orbitRadius)}</b>
+                  {tg.readout.orbit}
+                  <b data-orbit-au={auText(design, design.planet.orbitRadius)}>
+                    {tg.readout.orbitValue(auText(design, design.planet.orbitRadius), formatNumber(design.planet.orbitRadius))}
+                  </b>
                 </span>
               )}
             </p>
@@ -246,8 +252,10 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
           一个选择器挑「在改哪颗天体」：主星 | 每颗子智能体（设计审查 R13：原来的「天体类型 主星 / 行星」看着像能把行星改成主星，
           其实只是切页；两套切换上下分开放）。还没有行星时多一个「行星」，落到添加行星的空页
         */}
-        <Row name={tg.bodyGroup}>
+        {/* 一座星系最多 8 颗行星 + 主星：选择器占满一行、放不下就折行（以前最多两三颗，一行横排就够） */}
+        <Row name={tg.bodyGroup} wide>
           <Segmented<string>
+            className="gd-body-pick"
             label={tg.bodyGroup}
             value={kind === "star" ? "star" : planets.length > 0 ? `p${design.planetIndex ?? 0}` : "planet"}
             options={[
@@ -265,7 +273,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
           />
         </Row>
         {/* 新建子智能体（与聊天里的 create_sub_agent 写同一份档案）：有主星、名单没满才给 */}
-        {design.star !== null && !creating && planets.length > 0 && planets.length < PLANET_AGENTS_MAX && (
+        {design.star !== null && !creating && planets.length > 0 && planets.length < capacity && (
           <span className="gd-new-entry">
             <button type="button" className="gd-link" data-action="new-subagent" onClick={() => setCreating(true)}>
               <Icon name="plus" size={12} strokeWidth={1.8} />
@@ -273,8 +281,14 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
             </button>
           </span>
         )}
+        {design.star !== null && !creating && planets.length >= capacity && (
+          <p className="gd-orbit-notice" role="status" data-notice="capacity" data-capacity={capacity}>
+            <Icon name="info" size={12} strokeWidth={1.8} />
+            <span>{tg.capacityFull(formatNumber(starSolarMass(design.star.mass)), capacity, planets.length, capacity >= PLANET_AGENTS_MAX)}</span>
+          </p>
+        )}
         {creating && design.star !== null ? (
-          <NewSubAgentForm workspaceId={id} count={planets.length} onDone={() => setCreating(false)} />
+          <NewSubAgentForm workspaceId={id} count={planets.length} max={capacity} onDone={() => setCreating(false)} />
         ) : body === null ? (
           // 空页：没主星（主星页、行星页都是先创建主星），或有主星还没行星（行星页：添加行星）
           <div className="gd-empty" data-empty={design.star === null ? "no-star" : "no-planet"}>
@@ -314,7 +328,7 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
             )}
             <Row
               name={tg.mass}
-              desc={kind === "star" ? tg.starMassDesc(formatNumber(earth(range.min)), formatNumber(earth(range.max))) : tg.massDesc(formatNumber(earth(range.min)), formatNumber(earth(range.max)))}
+              desc={kind === "star" ? tg.starMassDesc(formatNumber(solar(range.min)), formatNumber(solar(range.max)), capacity) : tg.massDesc(formatNumber(earth(range.min)), formatNumber(earth(range.max)))}
               errors={errorsAt(errors, kind, "mass")}
               t={t}
               slider={
@@ -331,12 +345,13 @@ function Designer(props: { workspace: Workspace; focus: DesignerFocus | null; bi
                 />
               }
             >
+              {/* 主星按太阳质量写（物理层，盘上仍是 M⊕ 数 ÷ 100），行星按地球质量写 */}
               <NumberField
-                value={earth(body.mass)}
+                value={kind === "star" ? solar(body.mass) : earth(body.mass)}
                 label={tg.mass}
                 field="mass"
                 invalid={errorsAt(errors, kind, "mass").length > 0}
-                onChange={(mass) => patchBody({ mass: mass * MASS_UNIT_PER_EARTH })}
+                onChange={(mass) => patchBody({ mass: mass * (kind === "star" ? STAR_UI_PER_SOLAR : MASS_UNIT_PER_EARTH) })}
               />
             </Row>
             {massNotice !== null && kind === "star" && (
@@ -520,10 +535,28 @@ function earth(mass: number): number {
   return mass / MASS_UNIT_PER_EARTH;
 }
 
+/** 主星的物理质量（M☉）：界面质量 ÷ 1000，即盘上的 M⊕ 数 ÷ 100（换算只在 shared/galaxy-scale 一处） */
+function solar(mass: number): number {
+  return Number.isFinite(mass) ? mass / STAR_UI_PER_SOLAR : mass;
+}
+
+/** 质量带单位：主星 M☉、行星 M⊕ */
+function massText(kind: BodyKind, mass: number): string {
+  return kind === "star" ? `${formatNumber(solar(mass))} M☉` : `${formatNumber(earth(mass))} M⊕`;
+}
+
+/** 画面轨道对应的物理半长轴（AU），面板上两位有效小数就够 */
+function auText(design: GalaxyDesign, display: number): string {
+  if (design.star === null || !Number.isFinite(display)) return "—";
+  const au = displayToAu(design.star.mass, display);
+  return au >= 1 ? au.toFixed(2) : au.toPrecision(2);
+}
+
 function errorText(error: DesignError, t: Messages): string {
   const tg = t.galaxyDesigner;
   if (error.kind === "mass-range") {
-    return tg.errors.massRange(error.body === "star" ? tg.star : tg.planet, formatNumber(earth(error.value)), formatNumber(earth(error.min)), formatNumber(earth(error.max)));
+    const value = error.body === "star" ? solar : earth;
+    return tg.errors.massRange(error.body === "star" ? tg.star : tg.planet, formatNumber(value(error.value)), formatNumber(value(error.min)), formatNumber(value(error.max)));
   }
   if (error.kind === "orbit-collision") return tg.errors.collision(formatNumber(error.value), formatNumber(error.min));
   if (error.kind === "orbit-far") return tg.errors.far(formatNumber(error.value), formatNumber(error.max));
@@ -595,6 +628,7 @@ function OrbitSection(props: { design: GalaxyDesign; setDesign: (design: GalaxyD
     onBlur: finish,
     onChange: (event: React.ChangeEvent<HTMLInputElement>) => update(field, Number(event.target.value)),
   });
+  const auOf = (au: number): string => (Number.isFinite(au) ? (au >= 1 ? au.toFixed(2) : au.toPrecision(2)) : "—");
   const colors: Readonly<Record<OrbitLevel, string>> = { red: "var(--color-danger)", yellow: "var(--color-warning)", green: "var(--color-success)" };
   const aTrack = orbitTrackStops(status, ORBIT_RANGE.min, ORBIT_RANGE.max).map((stop) => `${colors[stop.color]} ${stop.at.toFixed(3)}%`).join(", ");
   const ePct = (value: number): string => `${(Number.isFinite(value) ? clampValue(value / 0.6, 0, 1) * 100 : 0).toFixed(3)}%`;
@@ -618,7 +652,7 @@ function OrbitSection(props: { design: GalaxyDesign; setDesign: (design: GalaxyD
       <PanelGroupHead label={tg.orbitGroup} />
       <Row
         name={tg.semiMajor}
-        desc={tg.semiMajorDesc(formatNumber(status.minA), formatNumber(status.maxA))}
+        desc={tg.semiMajorDesc(formatNumber(status.minA), formatNumber(status.maxA), auOf(status.minAu), auOf(status.maxAu))}
         errors={errorsAt(validateDesign(design), "planet", "orbit")}
         t={t}
         slider={

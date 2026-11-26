@@ -118,7 +118,8 @@ describe("「大行星浅坑」演示：红矮星 + 气态巨行星", () => {
     const giant = items.find((item): item is PlanetItem => item.kind === "planet" && item.planetId === "giant");
     const pebble = items.find((item): item is PlanetItem => item.kind === "planet" && item.planetId === "pebble");
     assert.ok(star !== undefined && giant !== undefined && pebble !== undefined);
-    assert.ok(giant.r > star.r * 1.1, `巨行星 ${giant.r.toFixed(1)}px 应比主星 ${star.r.toFixed(1)}px 大`);
+    // 行星画成 0.7 倍（PLANET_DRAW_SCALE）之后仍比主星大
+    assert.ok(giant.r > star.r * 1.05, `巨行星 ${giant.r.toFixed(1)}px 应比主星 ${star.r.toFixed(1)}px 大`);
     // 坑：三颗各压一个，坑深按质量；巨行星的坑比主星浅，小岩质行星最浅
     const starPit = pitDepth(galaxy.spec.starMass);
     const giantPit = pitDepth(galaxy.spec.planets.find((p) => p.id === "giant")?.mass ?? 0);
