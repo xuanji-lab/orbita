@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import {
   getDocument,
@@ -148,6 +149,11 @@ export function PdfView(props: {
    * 缺席 = 这份 PDF 不属于 LaTeX 项目（不接反查，双击保持选中文字的本意）。
    */
   onLocate?: (point: { page: number; x: number; y: number }) => void;
+  /**
+   * 工具条行尾的外来动作键（论文工作台里文件头部那几颗：复制路径 / 刷新）。
+   * 放进工具条而不是另起一行，窄栏折行时跟缩放组一起走，不盖住搜索框。
+   */
+  toolbarEnd?: ReactNode;
 }) {
   const t = useT();
   const { request, jump } = props;
@@ -618,6 +624,7 @@ export function PdfView(props: {
             <Icon name="file" size={14} />
           </button>
         </div>
+        {props.toolbarEnd !== undefined && <div className="pdf-tool-group">{props.toolbarEnd}</div>}
       </div>
 
       <div className="pdf-body">

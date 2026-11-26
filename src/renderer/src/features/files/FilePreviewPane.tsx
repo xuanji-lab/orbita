@@ -67,6 +67,11 @@ export function FilePreviewPane(props: {
   sentImage?: { name: string };
   /** 所在根的显示名（面包屑第一段：workspace / attached 的名字、session 的标题） */
   rootLabel: string;
+  /**
+   * 论文工作台的垂直空间：不画面包屑那一行（文件名在标签上，完整路径在标签的悬停提示里，
+   * 项目与产物状态在编译条上）；复制路径 / 刷新这几颗键浮到内容右上角，悬停才显形。
+   */
+  compactHeader?: boolean;
   /** PDF 引用跳转（点了正文里的引用编号）：滚到原文处并高亮。非 PDF / 没有跳转时 null */
   jump?: PdfJump | null;
   /**
@@ -109,6 +114,8 @@ export function FilePreviewPane(props: {
     onOpenSource?: (path: string, line: number | null) => void;
     /** 这次编译的问题（行内波浪线）；不在 LaTeX 项目里时缺席 */
     diagnostics?: { issues: readonly LatexIssue[]; projectDir: string } | null;
+    /** 编辑器状态行搬到哪（论文工作台：并进问题条）；缺席 = 留在编辑器底下 */
+    statusHost?: HTMLElement | null;
   };
   /** 一打开就进「编辑」模式（刚新建的文档 / 演示文稿） */
   openInEdit?: boolean;
@@ -268,88 +275,105 @@ export function FilePreviewPane(props: {
     setMode(next);
   };
 
+
+  /** 头部右端的动作键（复制路径 / 刷新 / 浏览器打开）；发送附图模式没有 */
+  const previewActions =
+    sentImage === undefined ? (
+      <div className="file-preview-actions">
+        {webPage && (
+          <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
+            <Icon name="globe" size={16} strokeWidth={1.8} />
+          </PanelIconButton>
+        )}
+        <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
+          <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
+        </PanelIconButton>
+        {/* .tex 打开后是编辑器：头部刷新只换预览数据、碰不到编辑器里的文本，
+            会让人以为「刷新就能丢弃本地改动」。重载盘上版本在冲突条里（带抉择）。
+            读不全的文件（>2 MB 截断）没有编辑器，刷新照旧给。 */}
+        {(docx || editorInitial === null) && (
+          <PanelIconButton
+            title={t.files.refreshPreview}
+            onClick={() => {
+              // 重读 docx = 卸载当前编辑器（引擎整份重新解析）：先把待存改动落盘，
+              // 失败就不重读，提示由 docx 视图自己挂（评审 2c：这里原本直接换 key，
+              // 屏幕上的字和未落盘的改动一起消失）
+              if (docx) {
+                void flushDocxForLeave(path).then((outcome) => {
+                  if (!outcome.ok) return;
+                  refresh();
+                  setDocxReload((n) => n + 1);
+                });
+                return;
+              }
+              refresh();
+              if (pdf) setPdfReload((n) => n + 1);
+              else if (xlsx) setXlsxReload((n) => n + 1);
+              else if (pptx) setPptxReload((n) => n + 1);
+              else setTextReload((n) => n + 1);
+            }}
+          >
+            <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
+          </PanelIconButton>
+        )}
+      </div>
+    ) : null;
+  /**
+   * 论文工作台（compactHeader）里显示 PDF 时，动作键并进 PDF 工具条的行尾，头部整行不画：
+   * 浮在右上角会盖住窄栏里 PDF 工具条的搜索框（389px 宽实测），给工具条让宽又会多折一行。
+   */
+  const pdfActionsInToolbar = props.compactHeader === true && pdf && !asDocument && !editing && !docx;
+
   return (
     <div className="files-panel-preview">
-      <header className="file-preview-header">
-        <Icon
-          name={fileIcon(name, "file")}
-          size={16}
-          style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
-        />
-        {/* 面包屑：从所在的根开始的路径分段 + chevron 分隔；太长时在自身容器里
-            **从左边裁**（保住末尾的文件段，激活标签上始终有文件名），完整绝对路径
-            在本容器的 title 里；meta 在容器外不受挤 */}
-        <div className="file-preview-crumb" ref={crumbRef} title={path}>
-          {segments.map((segment, index) => (
-            <Fragment key={`${index}:${segment}`}>
-              {index > 0 && (
-                <Icon
-                  name="chevron-right"
-                  size={9}
-                  strokeWidth={2.4}
-                  className="file-preview-crumb-sep"
-                />
-              )}
+      {!pdfActionsInToolbar && (
+        <header className={props.compactHeader === true ? "file-preview-header compact" : "file-preview-header"}>
+          {props.compactHeader !== true && (
+            <>
+            <Icon
+              name={fileIcon(name, "file")}
+              size={16}
+              style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
+            />
+            {/* 面包屑：从所在的根开始的路径分段 + chevron 分隔；太长时在自身容器里
+                **从左边裁**（保住末尾的文件段，激活标签上始终有文件名），完整绝对路径
+                在本容器的 title 里；meta 在容器外不受挤 */}
+            <div className="file-preview-crumb" ref={crumbRef} title={path}>
+              {segments.map((segment, index) => (
+                <Fragment key={`${index}:${segment}`}>
+                  {index > 0 && (
+                    <Icon
+                      name="chevron-right"
+                      size={9}
+                      strokeWidth={2.4}
+                      className="file-preview-crumb-sep"
+                    />
+                  )}
+                  <span
+                    className={
+                      index === segments.length - 1
+                        ? "file-preview-crumb-seg cur"
+                        : "file-preview-crumb-seg"
+                    }
+                  >
+                    {segment}
+                  </span>
+                </Fragment>
+              ))}
+            </div>
+            {state.status === "ready" && sentImage === undefined && (
               <span
-                className={
-                  index === segments.length - 1
-                    ? "file-preview-crumb-seg cur"
-                    : "file-preview-crumb-seg"
-                }
+                className="file-preview-meta"
+                title={t.time.dateTime(state.data.modifiedAt)}
               >
-                {segment}
+                {formatSize(state.data.size)} · {formatAge(state.data.modifiedAt, Date.now(), t)}
               </span>
-            </Fragment>
-          ))}
-        </div>
-        {state.status === "ready" && sentImage === undefined && (
-          <span
-            className="file-preview-meta"
-            title={t.time.dateTime(state.data.modifiedAt)}
-          >
-            {formatSize(state.data.size)} · {formatAge(state.data.modifiedAt, Date.now(), t)}
-          </span>
-        )}
-        {sentImage === undefined && (
-          <div className="file-preview-actions">
-            {webPage && (
-              <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
-                <Icon name="globe" size={16} strokeWidth={1.8} />
-              </PanelIconButton>
             )}
-            <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
-              <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
-            </PanelIconButton>
-            {/* .tex 打开后是编辑器：头部刷新只换预览数据、碰不到编辑器里的文本，
-                会让人以为「刷新就能丢弃本地改动」。重载盘上版本在冲突条里（带抉择）。
-                读不全的文件（>2 MB 截断）没有编辑器，刷新照旧给。 */}
-            {(docx || editorInitial === null) && (
-              <PanelIconButton
-                title={t.files.refreshPreview}
-                onClick={() => {
-                  // 重读 docx = 卸载当前编辑器（引擎整份重新解析）：先把待存改动落盘，
-                  // 失败就不重读，提示由 docx 视图自己挂（评审 2c：这里原本直接换 key，
-                  // 屏幕上的字和未落盘的改动一起消失）
-                  if (docx) {
-                    void flushDocxForLeave(path).then((outcome) => {
-                      if (!outcome.ok) return;
-                      refresh();
-                      setDocxReload((n) => n + 1);
-                    });
-                    return;
-                  }
-                  refresh();
-                  if (pdf) setPdfReload((n) => n + 1);
-                  else if (xlsx) setXlsxReload((n) => n + 1);
-                  else if (pptx) setPptxReload((n) => n + 1);
-                  else setTextReload((n) => n + 1);
-                }}
-              >
-                <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
-              </PanelIconButton>
-            )}          </div>
-        )}
-      </header>
+            </>
+          )}
+          {previewActions}
+        </header>
+      )}
       {(showModeToggle || canEdit) && (
         <div className="file-preview-mode-row">
           {showModeToggle && (
@@ -420,6 +444,7 @@ export function FilePreviewPane(props: {
             reloadToken={pdfReload + (props.pdfReloadToken ?? 0)}
             syncJump={props.syncJump ?? null}
             {...(props.onLocatePdf === undefined ? {} : { onLocate: props.onLocatePdf })}
+            {...(pdfActionsInToolbar && previewActions !== null ? { toolbarEnd: previewActions } : {})}
           />
         ) : editorInitial !== null ? (
           <TexEditorPane
@@ -444,6 +469,7 @@ export function FilePreviewPane(props: {
             nav={props.editor?.nav ?? null}
             {...(props.editor?.onOpenSource === undefined ? {} : { onOpenSource: props.editor.onOpenSource })}
             diagnostics={props.editor?.diagnostics ?? null}
+            {...(props.editor?.statusHost === undefined ? {} : { statusHost: props.editor.statusHost })}
           />
         ) : xlsx ? (
           <XlsxView

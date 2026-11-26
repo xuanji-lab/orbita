@@ -77,6 +77,12 @@ export function LatexProblems(props: {
   height?: number | null;
   /** 松手落盘；null = 复位回自适应（双击 / Enter） */
   onHeightCommit?: (height: number | null) => void;
+  /**
+   * 论文工作台的垂直空间：编辑器状态行（大纲 · 光标 · 保存状态）并进本行的左段，
+   * 不再在编辑器底下单占一行。给了这个回调才留宿主；缺席 = 本行只有「问题」。
+   * 放左段是因为源码一栏在左：状态落在它正下方，并排时也对得上是谁的状态。
+   */
+  statusHostRef?: (node: HTMLDivElement | null) => void;
 }) {
   const t = useT();
   const { groups } = props;
@@ -162,64 +168,69 @@ export function LatexProblems(props: {
           }}
         />
       )}
-      <button
-        type="button"
-        className="latex-problems-head quiet-control"
-        aria-expanded={openable ? props.open : undefined}
-        disabled={!openable}
-        onClick={props.onToggle}
-      >
-        <Icon name="circle-help" size={14} />
-        <span>{t.latex.problems}</span>
-        <span className="row-trailing latex-problem-counts">
-          {total === 0 ? (
-            <>
-              <Icon name="circle-check" size={12} style={{ color: "var(--color-success)" }} />
-              {t.latex.noProblems}
-            </>
-          ) : (
-            <>
-              {groups.errorCount > 0 && (
-                <span className="latex-count err">
-                  <Icon name="octagon-x" size={12} style={{ color: "var(--color-danger)" }} />
-                  {t.latex.errorCount(groups.errorCount)}
-                </span>
-              )}
-              {groups.warningCount > 0 && (
-                <span className="latex-count warn">
-                  <Icon name="triangle-alert" size={12} style={{ color: "var(--color-warning)" }} />
-                  {t.latex.warningCount(groups.warningCount)}
-                </span>
-              )}
-              {groups.pending.length > 0 && (
-                <span className="latex-count">
-                  <Icon name="clock" size={12} style={{ color: "var(--color-warning)" }} />
-                  {t.latex.pendingCount(groups.pending.length)}
-                </span>
-              )}
-              {lintIssues.length > 0 && (
-                <span className="latex-count">
-                  <Icon name="pencil-line" size={12} style={{ color: "var(--color-text-tertiary)" }} />
-                  {t.latex.lintCount(lintIssues.length)}
-                </span>
-              )}
-              {verifyRows.length > 0 && (
-                <span className="latex-count">
-                  <Icon name="shield-check" size={12} style={{ color: "var(--color-warning)" }} />
-                  {t.citeVerify.unverifiedCount(verifyRows.length)}
-                </span>
-              )}
-              {unusedCount > 0 && (
-                <span className="latex-count">
-                  <Icon name="book-open" size={12} style={{ color: "var(--color-text-tertiary)" }} />
-                  {t.citeUnused.count(unusedCount)}
-                </span>
-              )}
-              <Icon name={props.open ? "chevron-down" : "chevron-up"} size={12} />
-            </>
-          )}
-        </span>
-      </button>
+      <div className="latex-problems-bar">
+        {props.statusHostRef !== undefined && (
+          <div className="latex-problems-status" ref={props.statusHostRef} />
+        )}
+        <button
+          type="button"
+          className="latex-problems-head quiet-control"
+          aria-expanded={openable ? props.open : undefined}
+          disabled={!openable}
+          onClick={props.onToggle}
+        >
+          <Icon name="circle-help" size={14} />
+          <span>{t.latex.problems}</span>
+          <span className="row-trailing latex-problem-counts">
+            {total === 0 ? (
+              <>
+                <Icon name="circle-check" size={12} style={{ color: "var(--color-success)" }} />
+                {t.latex.noProblems}
+              </>
+            ) : (
+              <>
+                {groups.errorCount > 0 && (
+                  <span className="latex-count err">
+                    <Icon name="octagon-x" size={12} style={{ color: "var(--color-danger)" }} />
+                    {t.latex.errorCount(groups.errorCount)}
+                  </span>
+                )}
+                {groups.warningCount > 0 && (
+                  <span className="latex-count warn">
+                    <Icon name="triangle-alert" size={12} style={{ color: "var(--color-warning)" }} />
+                    {t.latex.warningCount(groups.warningCount)}
+                  </span>
+                )}
+                {groups.pending.length > 0 && (
+                  <span className="latex-count">
+                    <Icon name="clock" size={12} style={{ color: "var(--color-warning)" }} />
+                    {t.latex.pendingCount(groups.pending.length)}
+                  </span>
+                )}
+                {lintIssues.length > 0 && (
+                  <span className="latex-count">
+                    <Icon name="pencil-line" size={12} style={{ color: "var(--color-text-tertiary)" }} />
+                    {t.latex.lintCount(lintIssues.length)}
+                  </span>
+                )}
+                {verifyRows.length > 0 && (
+                  <span className="latex-count">
+                    <Icon name="shield-check" size={12} style={{ color: "var(--color-warning)" }} />
+                    {t.citeVerify.unverifiedCount(verifyRows.length)}
+                  </span>
+                )}
+                {unusedCount > 0 && (
+                  <span className="latex-count">
+                    <Icon name="book-open" size={12} style={{ color: "var(--color-text-tertiary)" }} />
+                    {t.citeUnused.count(unusedCount)}
+                  </span>
+                )}
+                <Icon name={props.open ? "chevron-down" : "chevron-up"} size={12} />
+              </>
+            )}
+          </span>
+        </button>
+      </div>
       {props.open && openable && (
         <div className="latex-problem-list">
           {props.verify !== undefined && (

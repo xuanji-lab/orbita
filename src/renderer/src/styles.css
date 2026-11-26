@@ -3885,6 +3885,54 @@ html[data-pointer-drag] iframe {
 .latex-problems-head:disabled {
   cursor: default;
 }
+/* 论文工作台：编辑器状态行并进问题条——左段是状态（落在源码一栏正下方），
+ * 其余整段仍是「问题」的展开键（计数钉在行尾） */
+.latex-problems-bar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.latex-problems-bar > .latex-problems-head {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+.latex-problems-status {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: var(--space-3);
+  padding-right: var(--space-3);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.latex-problems-status:empty {
+  display: none;
+}
+.tex-editor-status.in-host {
+  padding: 0;
+  border-top: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.latex-problems-bar .latex-problems-head {
+  white-space: nowrap;
+}
+/* 窄栏（布局 A 的 320 右栏）放不下一行：退回两行——状态在上、问题在下，
+ * 与改前同高，不挤字也不截字。阈值按满载的计数（错误 + 警告 + 待确认 + 风格 + 未引用）估 */
+.latex-problems {
+  container: latex-problems / inline-size;
+}
+@container latex-problems (max-width: 559px) {
+  .latex-problems-bar {
+    flex-wrap: wrap;
+  }
+  .latex-problems-status {
+    flex-basis: 100%;
+    margin: var(--space-1) var(--space-3) 0;
+    padding-right: 0;
+    border-right: none;
+  }
+}
 .latex-problem-counts {
   display: inline-flex;
   align-items: center;
@@ -4673,6 +4721,27 @@ a.latex-setup-action {
   flex: 0 0 auto;
   padding: var(--space-3);
   border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 论文工作台：面包屑一行不画，只剩几颗动作键，浮在内容右上角；平时隐身，
+ * 指针进了这一块（或键盘焦点落进去）才显形，不跟正文抢第一眼 */
+.files-panel-preview:has(> .file-preview-header.compact) {
+  position: relative;
+}
+.file-preview-header.compact {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-2);
+  z-index: 2;
+  padding: 0;
+  border-bottom: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  opacity: 0;
+  transition: opacity var(--duration-instant) var(--ease-standard);
+}
+.files-panel-preview:hover > .file-preview-header.compact,
+.file-preview-header.compact:focus-within {
+  opacity: 1;
 }
 .file-preview-crumb {
   display: flex;
