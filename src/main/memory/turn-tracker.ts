@@ -55,8 +55,10 @@ interface TurnState {
  * 这一轮要不要进构建：根会话（无 parentId、不是自动化跑出的）+ 用户亲口说的话（不是父子信封、
  * 不是收尾扫描的机器提问、非空）。
  */
-export function memoryBuildEligible(meta: { parentId?: string; automationId?: string } | null, text: string): boolean {
+export function memoryBuildEligible(meta: { parentId?: string; automationId?: string; backstage?: string } | null, text: string): boolean {
   if (meta?.parentId !== undefined) return false;
+  // 幕后会话（界面派的出图等）：提示词是界面拼的，不是用户说的话
+  if (meta?.backstage !== undefined) return false;
   // 自动化跑出的会话：提示词是排期时就定好的（甚至是 agent 代写的），不是用户此刻亲口说的话
   if (meta?.automationId !== undefined) return false;
   if (parseChannelPrompt(text) !== null) return false;

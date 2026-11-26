@@ -112,6 +112,11 @@ import listTree from "../../../../design-system/assets/icons/lucide/list-tree.sv
 import menu from "../../../../design-system/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../design-system/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../design-system/assets/icons/lucide/mic.svg?raw";
+import micOff from "../../../../design-system/assets/icons/lucide/mic-off.svg?raw";
+import phone from "../../../../design-system/assets/icons/lucide/phone.svg?raw";
+import phoneOff from "../../../../design-system/assets/icons/lucide/phone-off.svg?raw";
+import audioLines from "../../../../design-system/assets/icons/lucide/audio-lines.svg?raw";
+import volume2 from "../../../../design-system/assets/icons/lucide/volume-2.svg?raw";
 import minus from "../../../../design-system/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../design-system/assets/icons/lucide/pencil-line.svg?raw";
 import pause from "../../../../design-system/assets/icons/lucide/pause.svg?raw";
@@ -131,8 +136,11 @@ import messagesSquare from "../../../../design-system/assets/icons/lucide/messag
 import notebookPen from "../../../../design-system/assets/icons/lucide/notebook-pen.svg?raw";
 import octagonX from "../../../../design-system/assets/icons/lucide/octagon-x.svg?raw";
 import orbit from "../../../../design-system/assets/icons/lucide/orbit.svg?raw";
+import paintbrush from "../../../../design-system/assets/icons/lucide/paintbrush.svg?raw";
 import plus from "../../../../design-system/assets/icons/lucide/plus.svg?raw";
+import radar from "../../../../design-system/assets/icons/lucide/radar.svg?raw";
 import refreshCw from "../../../../design-system/assets/icons/lucide/refresh-cw.svg?raw";
+import shuffle from "../../../../design-system/assets/icons/lucide/shuffle.svg?raw";
 import rotateCcw from "../../../../design-system/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../design-system/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../design-system/assets/icons/lucide/square.svg?raw";
@@ -266,15 +274,23 @@ const ICONS = {
   "message-circle": messageCircle,
   "message-square": messageSquare,
   mic,
+  // 编排对话的语音通话（2026-11-24）：通话键、挂断、静音、在听、在说
+  "mic-off": micOff,
+  phone,
+  "phone-off": phoneOff,
+  "audio-lines": audioLines,
+  "volume-2": volume2,
   "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
   "notebook-pen": notebookPen,
   minus,
   "octagon-x": octagonX,
   orbit,
+  paintbrush,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  radar,
   pause,
   play,
   paperclip,
@@ -285,6 +301,7 @@ const ICONS = {
   quote,
   plus,
   "refresh-cw": refreshCw,
+  shuffle,
   "rotate-ccw": rotateCcw,
   settings,
   "shield-check": shieldCheck,

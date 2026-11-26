@@ -37,6 +37,7 @@ import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { deriveSessionTitle, type SessionMeta } from "../../shared/session.ts";
 import type { AppSettings, ModelPair } from "../../shared/settings.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
+import type { SubAgentProfile } from "../../shared/sub-agent.ts";
 import type { ChannelStore } from "./store.ts";
 import type { SessionStore } from "../session/store.ts";
 
@@ -58,6 +59,11 @@ export interface ChannelDeps {
   /** 主进程按 phase 事件维护的活会话状态；用来判断目标此刻是不是空闲 */
   phases: Map<string, SessionPhase>;
   broadcast(event: ChannelEvent): void;
+  /**
+   * 指名派活时查子智能体档案（planet/agents/<id>/agent.json）：按父会话的工作区找。
+   * 工作区不在 / 名单上没有 / 档案读不出都是 null（applyDelegate 据此拒绝，不静默退化成临时子会话）
+   */
+  subAgents: { profile(workspaceId: string, id: string): Promise<SubAgentProfile | null> };
 }
 
 function errorMessage(cause: unknown): string {
@@ -170,10 +176,27 @@ export async function applyDelegate(
     return { ok: false, error: `"${event.thinkingLevel}" is not a valid thinking level.` };
   }
 
+  // 指名派活（subAgentId）：这件活归那个子智能体。读不到档案就拒，让模型先 list_sub_agents 看清楚——
+  // 不静默派成一条临时子会话（那样「归属」就丢了，侧栏和星系上也认不出是谁在干活）
+  let subAgent: SubAgentProfile | null = null;
+  if (event.subAgentId !== undefined) {
+    if (parent.workspaceId === null) {
+      return { ok: false, error: "This session does not belong to a workspace, so it has no sub-agents; drop subAgentId." };
+    }
+    subAgent = await deps.subAgents.profile(parent.workspaceId, event.subAgentId);
+    if (subAgent === null) {
+      return {
+        ok: false,
+        error: `No sub-agent with id "${event.subAgentId}" in this workspace (or its profile has no role). Call list_sub_agents for the valid ids, or omit subAgentId for a one-off sub-session.`,
+      };
+    }
+  }
+
   const settings = await deps.settings.read();
   const providers = await deps.providers.list();
   const resolved = resolveSubSessionModel({
-    requested: event.modelId,
+    // 子智能体档案里的默认模型排在 delegate 参数之后、设置之前
+    requested: event.modelId ?? subAgent?.modelId,
     setting: settings.subSessionModel,
     parent: { providerId: parent.providerId, modelId: parent.modelId },
     providers,
@@ -217,6 +240,8 @@ export async function applyDelegate(
     cwd: parent.cwd,
     workspaceId: parent.workspaceId,
     parentId: parent.id,
+    // 归属：这条子会话替哪个子智能体干活（编排线第一个归属字段 SessionMeta.attribution；指名 = assigned，确定的）
+    ...(subAgent === null ? {} : { attribution: { subAgentId: subAgent.id, source: "assigned" as const } }),
     providerId: resolved.providerId,
     modelId: resolved.modelId,
     thinkingLevel,
@@ -278,6 +303,7 @@ export async function applyDelegate(
       modelId: resolved.modelId,
       thinkingLevel,
       workbench: deps.sessions.workbenchPath(childId),
+      ...(subAgent === null ? {} : { subAgentId: subAgent.id }),
     },
   };
 }

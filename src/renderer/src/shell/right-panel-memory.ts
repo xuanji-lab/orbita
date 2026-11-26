@@ -146,13 +146,17 @@ export function subOf<K extends SubPanelKind>(entry: PanelEntry | undefined, pan
   return entry?.subs?.[panel] as NonNullable<PanelSubs[K]> | undefined;
 }
 
-/** 把一条记忆里「开着的面板」读成活路径（panel + 它自己那份 sub） */
-export function pathOf(entry: PanelEntry, panel: PanelPath["panel"] = entry.panel): PanelPath {
+/**
+ * 把一条记忆里「开着的面板」读成活路径（panel + 它自己那份 sub）。
+ * panel 可以给右栏此刻开着的任何一块；给了不进按会话记忆的面板（星系设计、编排——工作区级的，
+ * 见 RightRail 的 RightPanelKind）读成「关着」：活路径与记忆里都不出现它们，与 parsePath 不认它们是同一条规矩
+ */
+export function pathOf(entry: PanelEntry, panel: RightPanelKind | null = entry.panel): PanelPath {
   if (hasSubLayer(panel)) {
     const sub = entry.subs?.[panel];
     return (sub === undefined ? { panel } : { panel, sub }) as PanelPath;
   }
-  return { panel } as PanelPath;
+  return parsePath({ panel }) ?? CLOSED_ENTRY;
 }
 
 /**
@@ -175,6 +179,15 @@ export function putSub(subs: PanelSubs | undefined, panel: SubPanelKind, raw: un
     if (value !== undefined) next[kind] = value;
   }
   return Object.keys(next).length === 0 ? undefined : (next as PanelSubs);
+}
+
+/**
+ * 这个形态里还能不能开着这块面板：「编排」面板只在编排形态有（入口与内容都按 appMode 给），
+ * 开着它切回单智能体时右栏框还在、里面什么都不渲染——一整块空白（2026-11-24 截图里查到）。
+ * 返回该开着的面板：不该开的收成 null。
+ */
+export function panelForMode(panel: RightPanelKind | null, orchestrate: boolean): RightPanelKind | null {
+  return panel === "orchestra" && !orchestrate ? null : panel;
 }
 
 // ── 记 / 取 / 淘汰 ───────────────────────────────────────────────────
@@ -221,7 +234,7 @@ export function panelFromHome(
   previous: string,
   target: string | null,
   current: RightPanelKind | null,
-): RightPanelKind | null {
+): "docs" | "slides" | null {
   if (previous !== "" || target === null || memory.has(target)) return null;
   return current === "docs" || current === "slides" ? current : null;
 }

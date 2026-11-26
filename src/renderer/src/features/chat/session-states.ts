@@ -753,7 +753,8 @@ export function markAllIdle(states: SessionStates): SessionStates {
     const busy =
       entry.phase !== "idle" ||
       entry.retry !== null ||
-      entry.queued.length > 0;
+      entry.queued.length > 0 ||
+      entry.pendingEcho !== null;
     if (busy) {
       next.set(sessionId, {
         ...entry,
@@ -762,6 +763,9 @@ export function markAllIdle(states: SessionStates): SessionStates {
         // runtime 进程没了：text / compact 不再留尸体；channel 正文与 pending 都在账本里，
         // 保留在 QueueStrip，用户不用刷新也知道它还没投出去，可重试或「现在讨论」。
         queued: entry.queued.filter((item) => item.kind === "channel"),
+        // 乐观回显同理：真回显再也不会来了。那句话已由发送方放回输入框（useChatSession 的快照），
+        // 对话里再留一个气泡就成了「既在对话里又在输入框里」（2026-11-24 CDP 取证抓到）
+        pendingEcho: null,
       });
       changed = true;
     } else {

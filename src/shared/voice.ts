@@ -57,6 +57,18 @@ export const voiceChannels = {
   voiceDictationCancel: "voice:dictation-cancel",
   /** 主进程 → renderer 推送 `DictationEvent` */
   voiceDictationEvent: "voice:dictation-event",
+  // ── ElevenLabs 语音合成凭证（设置 › 语音）──
+  /** 读 ElevenLabs 配置（API Key 只给掩码） */
+  voiceElevenlabsGet: "voice:elevenlabs-get",
+  /** 存 ElevenLabs 配置；apiKey 缺席或空串 = 保留已存的。回存后的配置 */
+  voiceElevenlabsSave: "voice:elevenlabs-save",
+  /** 试听：用草稿配置合成一句短话，回音频（apiKey 空 = 用已存的）。不落盘 */
+  voiceElevenlabsTest: "voice:elevenlabs-test",
+  // ── 通话（编排对话页的「通话」）──
+  /** 用已存的 ElevenLabs 配置把一段文字合成语音，回整段 mp3。不抛，失败原因在结果里 */
+  voiceSpeechSynthesize: "voice:speech-synthesize",
+  /** 通话录音落盘：写进这条会话工作台的 `calls/<callId>/<name>`。回写好的绝对路径 */
+  voiceCallSave: "voice:call-save",
 } as const;
 
 export type VoiceChannel = (typeof voiceChannels)[keyof typeof voiceChannels];
@@ -140,6 +152,62 @@ export interface VoiceFailure {
 }
 
 export type VoiceResult = { ok: true } | ({ ok: false } & VoiceFailure);
+
+// ── ElevenLabs 语音合成（通话里「它说」的那一半）──
+
+/**
+ * 默认音色与模型：用户 2026-11-23 用 ElevenLabs CLI 跑通的那一组音色（George）。模型默认取
+ * 低延迟的 flash：通话要的是开口快，设置页可以换成别的（如 eleven_v4）。
+ */
+export const DEFAULT_ELEVENLABS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb";
+export const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_flash_v2_5";
+
+/** 一次合成最多收这么多字：通话按句送，一句不会这么长；防 renderer 把整篇长文一口气塞过来 */
+export const SPEECH_TEXT_LIMIT = 1200;
+
+/** 设置页读到的 ElevenLabs 配置。API Key 只有掩码（前 3 后 4），null = 还没存 */
+export interface ElevenlabsVoiceConfig {
+  voiceId: string;
+  modelId: string;
+  apiKeyMasked: string | null;
+}
+
+export interface ElevenlabsVoiceInput {
+  voiceId: string;
+  modelId: string;
+  /** 缺席或空串 = 保留已存的 key */
+  apiKey?: string;
+}
+
+/** 有 key、有音色、有模型才能合成 */
+export function isElevenlabsConfigured(config: ElevenlabsVoiceConfig): boolean {
+  return config.apiKeyMasked !== null && config.voiceId.trim() !== "" && config.modelId.trim() !== "";
+}
+
+/** 合成的结果：整段 mp3（主进程从流式接口读完一段就回，按句送所以一段不长） */
+export type SpeechResult = { ok: true; audio: Uint8Array; mimeType: "audio/mpeg" } | ({ ok: false } & VoiceFailure);
+
+// ── 通话录音 ──
+
+/** 一次通话的目录名：`20261124-021530`（本地时间，秒级），renderer 开始通话时铸 */
+export function isCallId(value: unknown): value is string {
+  return typeof value === "string" && /^\d{8}-\d{6}$/.test(value);
+}
+
+/** 录音目录里的文件名：小写字母数字与连字符 + 三种扩展名，挡掉路径穿越 */
+export function isCallFileName(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9-]{0,47}\.(wav|mp3|json)$/.test(value);
+}
+
+export interface CallFileInput {
+  sessionId: string;
+  callId: string;
+  name: string;
+  /** 音频给字节，清单给文字 */
+  data: Uint8Array | string;
+}
+
+export type CallSaveResult = { ok: true; path: string } | { ok: false; error: string };
 
 export type DictationEvent =
   /** 这条连接到目前为止识别出的全部文字（服务端每次给全量，不是增量）；final = 服务端说这是最终结果 */

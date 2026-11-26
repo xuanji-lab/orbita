@@ -23,4 +23,7 @@ export const workspaceApi = {
   /** 从附加目录摘掉一条（幂等，不在列表里不报错）；id null = Home。返回更新后的清单 */
   detachDir: (id: string | null, dir: string): Promise<string[]> =>
     ipcRenderer.invoke(ipcChannels.workspaceDetachDir, id, dir),
+  /** 结成联星（partner = 另一个工作区 id）或解除（null）：两边一次改好，返回更新后的工作区列表 */
+  setBinary: (id: string, partner: string | null): Promise<Workspace[]> =>
+    ipcRenderer.invoke(ipcChannels.workspaceSetBinary, id, partner),
 };

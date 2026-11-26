@@ -355,3 +355,37 @@ export interface UndoPlan {
   laterTouched: readonly string[];
   unrecoverable: readonly string[];
 }
+
+// ————————————————————————————————————————————————
+// 产物摘要（编排面板协作图的「交回」边）
+// ————————————————————————————————————————————————
+
+/**
+ * 一条会话的产物摘要：文件账里记过的路径（changes 与旁路 webArtifacts 都算，同一路径只算一次）数与扩展名。
+ * 协作图上「活 → 主智能体」那条边写「N 个文件 · .md .png」——只从真实的文件账来，没有就是 0，不猜。
+ * exts 按出现次数从多到少，同数按字母；没有扩展名的文件记成 ""（界面上不列）。
+ */
+export interface ArtifactSummary {
+  files: number;
+  exts: string[];
+}
+
+export function summarizeArtifacts(turns: readonly Pick<FileTurnRecord, "changes" | "webArtifacts">[]): ArtifactSummary {
+  const paths = new Set<string>();
+  for (const turn of turns) {
+    for (const change of turn.changes) paths.add(change.path);
+    for (const path of turn.webArtifacts ?? []) paths.add(path);
+  }
+  const counts = new Map<string, number>();
+  for (const path of paths) {
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const dot = name.lastIndexOf(".");
+    const ext = dot > 0 ? name.slice(dot).toLowerCase() : "";
+    counts.set(ext, (counts.get(ext) ?? 0) + 1);
+  }
+  const exts = [...counts.entries()]
+    .filter(([ext]) => ext !== "")
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([ext]) => ext);
+  return { files: paths.size, exts };
+}
