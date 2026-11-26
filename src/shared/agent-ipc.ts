@@ -69,6 +69,12 @@ export const ipcChannels = {
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
   /**
+   * 此刻不在空闲的会话及其 phase（主进程按 phase 事件记的真值），回 LiveSessionPhases。
+   * 给**中途才起来的窗口**用：一轮开头的 phase 事件发给的是别的（或刷新前的）窗口，
+   * 这扇窗只收到后半截流式帧，不问一句就会把在跑的会话当成空闲（切液态玻璃要重开窗口，2026-11-26）
+   */
+  agentLivePhases: "agent:live-phases",
+  /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
    * - intent:edges —— 某一问的图数据（GET /edges?sessionId=&turnId=），回 IntentEdges | null
@@ -565,6 +571,9 @@ export const ipcChannels = {
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
+
+/** agent:live-phases 的回执：只列不在 idle 的会话（sessionId → phase） */
+export type LiveSessionPhases = Readonly<Record<string, Exclude<SessionPhase, "idle">>>;
 
 /**
  * 主进程交给 agent 进程的环境变量：pi.dev 目录覆盖层的缓存文件（Orbita 自己的数据目录里）。
