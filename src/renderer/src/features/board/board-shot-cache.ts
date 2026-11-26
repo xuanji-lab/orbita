@@ -2,7 +2,9 @@
  * 对话里看板「画好的样子」的跨挂载缓存。
  *
  * 看板按会话重挂；iframe 换一次性地址、加载、再收数据的期间，旧实现只留一块同高空白。
- * 这里把宿主窗口截到的 PNG 留成 ImageBitmap，重挂时同步贴上，等真 iframe 画好再换下。
+ * 这里把宿主窗口截到的像素留成 ImageBitmap，重挂时同步贴上，等真 iframe 画好再换下。
+ * 留图不在切走 / 卸载时做：看板画好后在空闲时预先留一张（按布局分开存），切走时什么都不截，
+ * 切回时有对得上的就直接贴；没有（新布局、被 LRU 挤掉）就照常等 iframe。
  *
  * 一张位图是看板的「一片」：从看板顶部往下 cssTop 像素起，cssWidth × cssHeight 大（CSS 像素）。
  * 整块都在对话区里时就是整块（cssTop = 0）；原地展开后比对话区高，只截得到此刻看得见的那一段，
@@ -122,6 +124,63 @@ export function boardShotFor(cacheKey: string, q: BoardShotQuery): BoardShot | u
     else if (nearer(shot, best, q) === shot) best = shot;
   }
   return best === undefined ? undefined : (boardShots.get(boardShotVariantKey(cacheKey, best)) ?? best);
+}
+
+/**
+ * 主进程回的 BGRA 原始像素 → ImageData 要的 RGBA（就地换 R、B 两个通道，不再拷一份）。
+ * 长度对不上 width × height × 4、尺寸不是正整数都回 null：宁可不贴，也不贴一张错位 / 局部的图。
+ */
+export function boardShotRgba(pixels: Uint8Array, width: number, height: number): Uint8ClampedArray<ArrayBuffer> | null {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) return null;
+  if (pixels.byteLength !== width * height * 4 || !(pixels.buffer instanceof ArrayBuffer)) return null;
+  const buffer = pixels.buffer;
+  if (pixels.byteOffset % 4 === 0) {
+    // 小端下一个像素读成 0xAARRGGBB，换成 0xAABBGGRR：每像素一次位运算
+    const words = new Uint32Array(buffer, pixels.byteOffset, width * height);
+    for (let i = 0; i < words.length; i += 1) {
+      const value = words[i] ?? 0;
+      words[i] = (value & 0xff00ff00) | ((value & 0xff) << 16) | ((value >>> 16) & 0xff);
+    }
+  } else {
+    for (let i = 0; i + 3 < pixels.length; i += 4) {
+      const blue = pixels[i] ?? 0;
+      pixels[i] = pixels[i + 2] ?? 0;
+      pixels[i + 2] = blue;
+    }
+  }
+  return new Uint8ClampedArray(buffer, pixels.byteOffset, pixels.byteLength);
+}
+
+/** 到点后再等页面空闲才留图（滚动、输入、会话切换的那几帧不插队）；最多再等这么久 */
+export const CAPTURE_IDLE_TIMEOUT_MS = 1000;
+
+/** idleAfter 用到的计时器与空闲回调；requestIdle 不在（老环境）时到点直接跑 */
+export interface IdleScheduler {
+  setTimeout(run: () => void, delay: number): number;
+  clearTimeout(id: number): void;
+  requestIdle: ((run: () => void, timeout: number) => number) | undefined;
+  cancelIdle(id: number): void;
+}
+
+/**
+ * 隔 delay 毫秒后、再等到页面空闲（最多 CAPTURE_IDLE_TIMEOUT_MS）才跑 run。回取消函数：
+ * 卸载（切走会话）、再次滚动时调用，计时中和已排进空闲队列的都撤掉，切走那一下不会再有留图插进来。
+ */
+export function idleAfter(scheduler: IdleScheduler, delay: number, run: () => void): () => void {
+  let idle: number | undefined;
+  let cancelled = false;
+  const timer = scheduler.setTimeout(() => {
+    if (cancelled) return;
+    if (scheduler.requestIdle === undefined) run();
+    else idle = scheduler.requestIdle(() => {
+      if (!cancelled) run();
+    }, CAPTURE_IDLE_TIMEOUT_MS);
+  }, delay);
+  return () => {
+    cancelled = true;
+    scheduler.clearTimeout(timer);
+    if (idle !== undefined) scheduler.cancelIdle(idle);
+  };
 }
 
 /** 留图前后各量一次的几何：外框在视口里的位置与大小、看得见的那一片、滚动位置 */

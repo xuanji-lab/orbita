@@ -14,7 +14,8 @@
  * 与周看板挂载「可视 ± 1 天」同一思路。
  *
  * **切走再切回不白一帧**：重挂后 iframe 要重新换地址、加载、收数据，这段时间外框里先贴上一次画好的样子（位图，
- * `board-shot-cache.ts`），等真 iframe 全部加载并合成后再换下。位图是宿主窗口在 iframe 画好后截的（`board:shot`），
+ * `board-shot-cache.ts`），等真 iframe 全部加载并合成后再换下。位图是宿主窗口在 iframe 画好后、页面空闲时预先截的（`board:shot`），
+ * 切走 / 卸载时不截——切走那一下不付任何留图的代价；
  * 1:1 贴、钉在截下来的位置：右栏开合的过渡里宽度每帧都在变，宽度对不上就拿同一块看板最接近的一张，多出来的由外框裁掉。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -31,9 +32,12 @@ import {
   boardShotFor,
   boardShotGeometrySame,
   boardShotKey,
+  boardShotRgba,
   boardShotVariantKey,
   boardShotView,
   boardShots,
+  idleAfter,
+  type IdleScheduler,
   type BoardShot,
   type BoardShotGeometry,
   type BoardShotView as BoardView,
@@ -58,6 +62,16 @@ const SCROLL_CAPTURE_DELAY_MS = 400;
 /** 留图前等几何连续这么多帧不动（虚拟列表测高、阅读位置恢复会在 iframe 就绪后继续挪页面）；最多等这么多帧 */
 const SETTLE_FRAMES = 2;
 const SETTLE_FRAME_LIMIT = 60;
+
+/** 浏览器的计时器与空闲回调（idleAfter 的依赖；requestIdleCallback 不在时为 undefined） */
+function browserScheduler(): IdleScheduler {
+  return {
+    setTimeout: (run, delay) => window.setTimeout(run, delay),
+    clearTimeout: (id) => window.clearTimeout(id),
+    requestIdle: typeof window.requestIdleCallback === "function" ? (run, timeout) => window.requestIdleCallback(run, { timeout }) : undefined,
+    cancelIdle: (id) => window.cancelIdleCallback(id),
+  };
+}
 
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
@@ -156,6 +170,8 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   const capture = useCallback(async (): Promise<void> => {
     const clip = hostRef.current?.querySelector<HTMLElement>(".board-clip");
     if (cacheKey === null || clip === null || clip === undefined || capturing.current) return;
+    // 窗口在后台（最小化、被切走）时不截：截到的未必是屏幕上的样子，也不跟前台抢主进程
+    if (document.visibilityState !== "visible") return;
     // 有卡坏了 / 还没都挂上时不截：残缺画面不该成为下次的第一帧
     if (clip.querySelectorAll("iframe.bd-iframe").length !== board.cards.length) return;
     const ratio = window.devicePixelRatio || 1;
@@ -178,12 +194,16 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
       if (same < SETTLE_FRAMES) return;
       const { view } = settled;
       const result = await api.board.shot({ rect: { x: settled.x, y: settled.y + view.top, width: settled.width, height: view.height } });
-      if (result === null) return;
-      const bytes = Uint8Array.from(atob(result.base64), (char) => char.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-      const after = geometry();
-      // 取帧 / 解码期间又挪了位置、尺寸或主题：这份旧图不能落地
-      if (after === null || !boardShotGeometrySame(after, settled) || (document.documentElement.dataset.theme ?? "") !== theme) {
+      // 取帧期间已经切走 / 挪了位置、尺寸或主题：这份旧图不能落地，也不必再花工夫转换
+      const moved = (): boolean => {
+        const after = geometry();
+        return after === null || !boardShotGeometrySame(after, settled) || (document.documentElement.dataset.theme ?? "") !== theme;
+      };
+      if (result === null || moved()) return;
+      const rgba = boardShotRgba(result.pixels, result.width, result.height);
+      if (rgba === null) return;
+      const bitmap = await createImageBitmap(new ImageData(rgba, result.width, result.height));
+      if (moved()) {
         bitmap.close();
         return;
       }
@@ -203,13 +223,13 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
   // 真 iframe 就绪后留位图；已经画着的看板改宽 / 展开 / 换主题也重新走一遍（那一片已经有图的话 capture 自己会跳过）
   useEffect(() => {
     if (!live || !liveReady) return undefined;
-    const timers = CAPTURE_ATTEMPT_DELAYS_MS.map((delay) =>
-      window.setTimeout(() => {
+    const cancels = CAPTURE_ATTEMPT_DELAYS_MS.map((delay) =>
+      idleAfter(browserScheduler(), delay, () => {
         void capture();
-      }, delay),
+      }),
     );
     return () => {
-      for (const timer of timers) window.clearTimeout(timer);
+      for (const cancel of cancels) cancel();
     };
   }, [width, expanded, theme, live, liveReady, capture]);
 
@@ -223,16 +243,16 @@ export function PluginBoardResultView(props: { sessionId: string | null; toolCal
     if (!live || !liveReady) return undefined;
     const root = hostRef.current?.closest<HTMLElement>(SCROLL_ROOT);
     if (root === null || root === undefined) return undefined;
-    let timer: number | undefined;
+    let cancel: (() => void) | undefined;
     const onScroll = (): void => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
+      cancel?.();
+      cancel = idleAfter(browserScheduler(), SCROLL_CAPTURE_DELAY_MS, () => {
         void capture();
-      }, SCROLL_CAPTURE_DELAY_MS);
+      });
     };
     root.addEventListener("scroll", onScroll, { passive: true });
     return () => {
-      window.clearTimeout(timer);
+      cancel?.();
       root.removeEventListener("scroll", onScroll);
     };
   }, [capture, live, liveReady]);

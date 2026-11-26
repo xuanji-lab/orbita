@@ -13,7 +13,7 @@ import { boardShotInViewport, boardShotRect } from "../../shared/plugin-board.ts
 import { assembleBoardWeek, type BoardWeekDeps } from "./board-week.ts";
 import { cdp, withTimeout } from "../browser/cdp.ts";
 import { captureFrame } from "../browser/frame-capture.ts";
-import { boardImagePainted, boardShotSizeMatches, boardShotViewport } from "./board-shot-image.ts";
+import { boardFullPage, boardShotPixels, boardShotViewport } from "./board-shot-image.ts";
 import { boardFrameOf, type BoardTemplateStore } from "./board-snapshot.ts";
 import type { PanelFrames } from "./panel-frame.ts";
 import { mainWindows } from "../window/main-windows.ts";
@@ -30,32 +30,24 @@ const boardShotQueues = new Map<number, Promise<BoardShotResponse>>();
 /** 原生 capturePage 没有 deadline：只给它 2 秒，挂住就换 CDP 路，不让后台留图拖住 IPC */
 const NATIVE_SHOT_TIMEOUT_MS = 2_000;
 
-/** 整窗取帧但不传裁剪矩形：原生快路省掉整页 PNG 的编码、传输与解码；尺寸不合 / 取不到再回现有 CDP 整页取帧 */
-async function boardFullPage(contents: WebContents, viewport: { width: number; height: number }, ratio: number): Promise<NativeImage | null> {
-  try {
-    const page = await withTimeout(contents.capturePage(), NATIVE_SHOT_TIMEOUT_MS, "capturePage did not respond in time.");
-    if (!page.isEmpty() && boardShotSizeMatches(page.getSize(), { width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) }, 2)) return page;
-  } catch {
-    // 换下面的 CDP 路
-  }
-  const png = await captureFrame(contents);
-  return png === null ? null : nativeImage.createFromBuffer(png);
-}
-
 function captureBoardShot(contents: WebContents, rect: NonNullable<ReturnType<typeof boardShotRect>>, viewport: { width: number; height: number }): Promise<BoardShotResponse> {
   const previous = boardShotQueues.get(contents.id) ?? Promise.resolve(null);
   const next = previous.then(async () => {
     try {
       const ratio = await contents.executeJavaScript("window.devicePixelRatio || 1");
       if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 1 || ratio > 3) return null;
-      // 原生 capturePage(rect) 曾回局部图；这里绝不给它矩形，整窗尺寸也对不上就丢弃并走 CDP
-      const page = await boardFullPage(contents, viewport, ratio);
-      if (page === null) return null;
-      const expected = { width: Math.round(rect.width * ratio), height: Math.round(rect.height * ratio) };
-      const image = page.crop({ x: Math.round(rect.x * ratio), y: Math.round(rect.y * ratio), width: expected.width, height: expected.height });
-      if (image.isEmpty() || !boardShotSizeMatches(image.getSize(), expected) || !boardImagePainted(image)) return null;
-      const size = image.getSize();
-      return { base64: image.toPNG().toString("base64"), width: size.width, height: size.height };
+      // 整窗取帧但不传裁剪矩形：原生快路省掉整页 PNG 的编码、传输与解码；尺寸不合 / 取不到再回 CDP 整页取帧
+      const full = await boardFullPage<NativeImage>(
+        {
+          native: () => withTimeout(contents.capturePage(), NATIVE_SHOT_TIMEOUT_MS, "capturePage did not respond in time."),
+          fallback: async () => {
+            const png = await captureFrame(contents);
+            return png === null ? null : nativeImage.createFromBuffer(png);
+          },
+        },
+        { width: Math.round(viewport.width * ratio), height: Math.round(viewport.height * ratio) },
+      );
+      return full === null ? null : boardShotPixels(full.page, rect, ratio);
     } catch {
       return null;
     }

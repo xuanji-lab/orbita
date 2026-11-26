@@ -282,9 +282,12 @@ export interface BoardShotRequest {
   rect: BoardShotRect;
 }
 
-/** PNG 位图与它的物理像素尺寸；截不到回 null（优化失败不影响真 iframe 挂上） */
+/**
+ * 裁好的原始像素（BGRA，逐行无填充，长度 = width × height × 4）与它的物理像素尺寸；截不到回 null（优化失败不影响真 iframe 挂上）。
+ * 不编码成 PNG：编码在主进程上要上百毫秒，原始像素走 IPC 只是一次内存拷贝，贴回去也不损画质。
+ */
 export interface BoardShotResult {
-  base64: string;
+  pixels: Uint8Array;
   width: number;
   height: number;
 }

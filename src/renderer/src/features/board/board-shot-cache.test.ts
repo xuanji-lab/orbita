@@ -7,9 +7,12 @@ import {
   boardShotFor,
   boardShotGeometrySame,
   boardShotKey,
+  boardShotRgba,
   boardShotVariantKey,
   boardShotView,
   boardShots,
+  CAPTURE_IDLE_TIMEOUT_MS,
+  idleAfter,
   type BoardShot,
   type BoardShotGeometry,
   type BoardShotQuery,
@@ -136,4 +139,86 @@ test("LRU 只留最近 8 张，最久没用的先淘汰", () => {
   assert.equal(boardShots.get(keys[0] ?? ""), undefined);
   assert.ok(boardShots.get(keys.at(-1) ?? "") !== undefined);
   for (const key of keys) boardShots.delete(key);
+});
+
+test("预取过的布局再来时已被盖住（不再取帧）；换宽度 / 主题 / DPR / 那一片就要重新留", () => {
+  const key = boardShotKey("prefetch", "call");
+  const variant = put(shot(key));
+  // 切走前在空闲时留过这一张：同一布局再走到留图逻辑时 covering 命中，直接跳过，不发 board:shot
+  assert.notEqual(boardShotCovering(key, query()), undefined);
+  // 布局一变就不算盖住：右栏开合改宽、换主题、换屏幕 DPR、原地展开后看到的是另一片
+  for (const changed of [query({ width: 600 }), query({ theme: "black" }), query({ ratio: 1.5 }), query({ top: 300, height: 400 })]) {
+    assert.equal(boardShotCovering(key, changed), undefined, JSON.stringify(changed));
+  }
+  boardShots.delete(variant);
+});
+
+test("BGRA 原始像素就地换成 RGBA；对齐与不对齐的视图结果一样", () => {
+  const bgra = [10, 20, 30, 255, 200, 100, 0, 128];
+  const aligned = boardShotRgba(new Uint8Array(bgra), 2, 1);
+  assert.deepEqual(aligned === null ? null : [...aligned], [30, 20, 10, 255, 0, 100, 200, 128]);
+  const backing = new Uint8Array(1 + bgra.length);
+  backing.set(bgra, 1);
+  const unaligned = boardShotRgba(new Uint8Array(backing.buffer, 1, bgra.length), 2, 1);
+  assert.deepEqual(unaligned === null ? null : [...unaligned], [30, 20, 10, 255, 0, 100, 200, 128]);
+});
+
+test("像素长度与宽高对不上、宽高不是正整数都拒绝：不贴错位或局部的图", () => {
+  assert.equal(boardShotRgba(new Uint8Array(4 * 4), 2, 1), null);
+  assert.equal(boardShotRgba(new Uint8Array(4 * 2), 2, 2), null);
+  assert.equal(boardShotRgba(new Uint8Array(0), 0, 0), null);
+  assert.equal(boardShotRgba(new Uint8Array(4 * 2), 1.5, 1), null);
+});
+
+/** 手动推进的假计时器：记下排了哪些计时 / 空闲回调，按需触发 */
+function fakeScheduler(withIdle = true) {
+  const timers = new Map<number, () => void>();
+  const idles = new Map<number, { run: () => void; timeout: number }>();
+  let next = 1;
+  const scheduler = {
+    setTimeout: (run: () => void) => { const id = next++; timers.set(id, run); return id; },
+    clearTimeout: (id: number) => { timers.delete(id); },
+    requestIdle: withIdle ? (run: () => void, timeout: number) => { const id = next++; idles.set(id, { run, timeout }); return id; } : undefined,
+    cancelIdle: (id: number) => { idles.delete(id); },
+  };
+  const fireTimers = () => { for (const [id, run] of [...timers]) { timers.delete(id); run(); } };
+  const fireIdles = () => { for (const [id, item] of [...idles]) { idles.delete(id); item.run(); } };
+  return { scheduler, timers, idles, fireTimers, fireIdles };
+}
+
+test("留图推迟到点之后的空闲时刻：到点只排进空闲队列，空闲了才截", () => {
+  const fake = fakeScheduler();
+  let runs = 0;
+  idleAfter(fake.scheduler, 600, () => { runs += 1; });
+  assert.equal(runs, 0);
+  fake.fireTimers();
+  assert.equal(runs, 0, "到点还不截，等空闲");
+  assert.equal([...fake.idles.values()][0]?.timeout, CAPTURE_IDLE_TIMEOUT_MS);
+  fake.fireIdles();
+  assert.equal(runs, 1);
+});
+
+test("切走（卸载）时取消：计时中、已排进空闲队列的都撤掉，之后一次也不截", () => {
+  const early = fakeScheduler();
+  let runs = 0;
+  idleAfter(early.scheduler, 600, () => { runs += 1; })();
+  assert.equal(early.timers.size, 0);
+  early.fireTimers();
+  early.fireIdles();
+  const queued = fakeScheduler();
+  const cancel = idleAfter(queued.scheduler, 600, () => { runs += 1; });
+  queued.fireTimers();
+  assert.equal(queued.idles.size, 1);
+  cancel();
+  assert.equal(queued.idles.size, 0);
+  queued.fireIdles();
+  assert.equal(runs, 0);
+});
+
+test("没有 requestIdleCallback 的环境到点直接截", () => {
+  const fake = fakeScheduler(false);
+  let runs = 0;
+  idleAfter(fake.scheduler, 400, () => { runs += 1; });
+  fake.fireTimers();
+  assert.equal(runs, 1);
 });
