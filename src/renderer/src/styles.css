@@ -575,6 +575,30 @@
   color: var(--color-text-primary);
 }
 
+/*
+ * 「编排」后面的 Beta 阶段标签：安静的事实标签，不抢选中态的 accent 字——muted 底 + 次级墨、xs 字号，
+ * 不加边框 / 阴影 / 图标；选中与否都一样（阶段不随选中变）。高度由字号 + 上下 --space-0-5 决定，
+ * 小于 tab 的 --control-height-sm，不撑高 tab；flex: none 让窄侧栏里先挤文字边距而不是把标签压没。
+ */
+.mode-tab-stage {
+  flex: none;
+  padding: var(--space-0-5) var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+}
+
+/*
+ * 英文「Agent mode / Orchestrate Beta」带图标在默认 288 侧栏里放不下（约 269 > 260px，实测），
+ * 英文去掉两枚 tab 的图标——两选一的分段控件里文字已全说清，图标是装饰；中文放得下，照旧带。
+ */
+:lang(en) .mode-tab > .orbita-icon {
+  display: none;
+}
+
 .mode-tab[aria-selected="true"]:disabled {
   background: var(--color-mode-active-bg);
   color: var(--color-mode-active-fg);
