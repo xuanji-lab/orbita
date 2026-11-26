@@ -62,7 +62,10 @@ export function PdfAnnotations(props: {
       const text = selection.toString().trim();
       if (text.length < 2) { setSel(null); return; }
       const rect = range.getBoundingClientRect();
-      const host = container.getBoundingClientRect();
+      // 浮条与草稿是 .pdf-body 的绝对定位子元素（与滚动区 .pdf-view 同级）：坐标要按
+      // .pdf-body 算。按滚动区算、又没有定位祖先时，浮条落到整块稿件区的左上——真机
+      // 并排时它跑到了左边源码栏上（11-26 截图实测）
+      const host = (container.parentElement ?? container).getBoundingClientRect();
       const pageEl = range.commonAncestorContainer instanceof Element
         ? range.commonAncestorContainer.closest(".pdf-page")
         : null;
