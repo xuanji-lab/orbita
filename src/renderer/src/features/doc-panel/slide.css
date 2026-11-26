@@ -200,8 +200,8 @@
 }
 
 /* ---- 专注写作：舞台 ---- */
-:root[data-theme="light"] [data-paper="focus"] .dp-slide,
-:root[data-theme="light"][data-paper="focus"] .dp-slide,
+:root:is([data-theme="light"], [data-theme="glass"]) [data-paper="focus"] .dp-slide,
+:root:is([data-theme="light"], [data-theme="glass"])[data-paper="focus"] .dp-slide,
 :root:not([data-theme]) [data-paper="focus"] .dp-slide,
 :root:not([data-theme])[data-paper="focus"] .dp-slide {
   --slide-bg: var(--color-text-primary);

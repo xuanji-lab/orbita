@@ -4,7 +4,8 @@
    子树因此单独复述同一批声明。三块顺序（light 在前、dark/black 在后）保证在 light
    根下渲染 dark/black 预览时，后面的块能覆盖前面的声明。 */
 :root,
-[data-theme-preview="light"] {
+[data-theme-preview="light"],
+[data-theme-preview="glass"] {
   color-scheme: light;
 
   /* surfaces — 中性灰的壳 + 近白的井（2026-11-22 用户选定，替换 2026-11-07 方向 N 的冷月白）。
@@ -106,6 +107,22 @@
      玄是氢发射品红。 */
   --color-nebula: #2f6bf0;
 
+}
+
+/* glass — 液态玻璃（2026-11-26 用户试用档）：浅色的全部 token 原样继承（上面的 :root 块），
+   只多两样**半透明的地面**，由 macOS 26+ 的 Liquid Glass（NSGlassEffectView，主进程建窗时
+   插在网页底下）透出窗口背后的一切——桌面和别的 app 都算，不只是壁纸。
+   壳 12%、井 70%：比对原型（proto/shell-glass，四扇窗并排）里用户看中的就是这组默认值。
+   只有地面透：卡片、输入框、菜单、代码块仍是实色（--glass-bg / --color-bg-panel 不动），
+   字永远压在实色或 70% 的白上。--color-bg-app 照抄浅色，是给主进程的空白页垫底色
+   （page-background.ts）与 Windows 回退用的不透明值。 */
+:root[data-theme="glass"],
+[data-theme-preview="glass"] {
+  --color-bg-app: #f5f5f5;
+  --color-bg-glass-shell: rgb(250 250 250 / 0.12);
+  --color-bg-glass-well: rgb(255 255 255 / 0.7);
+  /* 设置页预览卡里「窗口背后的东西」：缩略窗画不出真玻璃，用一片柔和的色块示意透出来的背景 */
+  --color-glass-preview-backdrop: linear-gradient(135deg, #b9cdea 0%, #ece0d2 55%, #cfe0cd 100%);
 }
 
 /*

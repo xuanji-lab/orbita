@@ -18,7 +18,8 @@ import "./browser-toolbar.css";
 // 首帧主题与语言：同主窗口 main.tsx，读建窗时塞进来的 --orbita-theme / --orbita-language
 if (api.initialTheme !== null) {
   const resolved = resolveTheme(api.initialTheme, window.matchMedia("(prefers-color-scheme: dark)").matches);
-  document.documentElement.dataset["theme"] = resolved;
+  // 沙盒浏览器窗口是不透明窗，液态玻璃在这里按浅色画（玻璃只在主窗口）
+  document.documentElement.dataset["theme"] = resolved === "glass" ? "light" : resolved;
   document.documentElement.lang = htmlLang(effectiveLanguage(api.initialLanguage ?? undefined));
 }
 

@@ -1565,9 +1565,11 @@ export const en = {
   themes: {
     system: "System",
     light: "Light",
+    glass: "Liquid Glass",
     graphite: "Slate",
     black: "Onyx",
     systemTip: "Follows your desktop's light or dark appearance · dark lands on Onyx",
+    glassTip: "Light, with the shell and the conversation on macOS Liquid Glass, so your desktop and other apps show through · the window reopens once when you switch",
   },
 
   modelMenu: {
