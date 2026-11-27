@@ -28,7 +28,9 @@ import { artifactSummaries } from "./artifact-summary.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
-import type { SessionStore } from "./store.ts";
+import { isSessionId, type SessionStore } from "./store.ts";
+import type { StatusDigestStore } from "./status-digest.ts";
+import type { StatusDigestState } from "../../shared/status-digest.ts";
 
 export function registerSessionIpc(
   store: SessionStore,
@@ -43,6 +45,8 @@ export function registerSessionIpc(
   openArtifactInBrowser: (sessionId: string, path: string) => Promise<ArtifactOpenResult>,
   /** 迁移会话（session/move.ts 的 moveSessions，index.ts 绑好工作区表与 phase 表） */
   moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>,
+  /** 状态卡摘要（status-digest.ts）：session:status-digests 的数据面 */
+  statusDigests: StatusDigestStore,
   /**
    * 会话回退成功后的钩子（index.ts 注入：意图系统作废 + 记忆系统停用 / 截段；undefined = 不启用）。
    * turnIds = 被撤回轮次的 user 记录 id；fromTurn = 回退点那条用户消息的轮号（按用户消息计、
@@ -64,6 +68,11 @@ export function registerSessionIpc(
     (_event, id: string, before: string, limit: number): Promise<SessionOlderPage> =>
       store.loadOlder(id, before, limit),
   );
+  // 状态卡摘要：一批会话 id（主会话 + 子会话）一次取回；id 在入口洗过白名单
+  ipcMain.handle(ipcChannels.sessionStatusDigests, (_event, ids: unknown): Promise<Record<string, StatusDigestState | null>> => {
+    const clean = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string" && isSessionId(id)) : [];
+    return statusDigests.digests(clean);
+  });
 
   // —— 给导入的会话分配模型（设置 › 服务商，契约在 shared/model-assign.ts） ——
   ipcMain.handle(ipcChannels.modelAssignGroups, async (): Promise<ModelAssignGroups> =>
