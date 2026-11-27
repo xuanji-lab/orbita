@@ -949,6 +949,8 @@ void app.whenReady().then(async () => {
     },
     join(configDir, "computer-use", "out"),
     async () => effectiveGuestBrowser(await settings.read()),
+    // 遮罩标签跟界面语言走（overlay 画在用户网页里：英文界面不许露中文）
+    async () => effectiveLanguage((await settings.read()).language),
   );
 
   /**

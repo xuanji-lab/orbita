@@ -1512,8 +1512,8 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
 
   const mask = fs.readFileSync(path.join(scriptDir, "CdpShotMask.cs"), "utf8");
   // 真正的注入脚本（头部注释里提到 createIsolatedWorld 是为了解释为什么不用它，不算数）
-  const scriptMatch = /internal const string MaskScript = @"([\s\S]*?)";/.exec(mask);
-  assert.ok(scriptMatch !== null, "CdpShotMask.cs 里应有 MaskScript 常量");
+  const scriptMatch = /internal const string MaskScriptTemplate = @"([\s\S]*?)";/.exec(mask);
+  assert.ok(scriptMatch !== null, "CdpShotMask.cs 里应有 MaskScriptTemplate 常量");
   const script = scriptMatch[1];
   // 三个命中规则 + 自有标记（「显示密码」翻转 type 之后的兜底）
   assert.match(script, /input\[autocomplete\*=password i\]/);
@@ -1529,9 +1529,10 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
   assert.match(mask, /executionContextCreated/);
   assert.match(mask, /auxData/);
 
-  const cdp = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+  const cdpSource = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+  const cdp = cdpSource;
   // 遮罩必须在截图之前、撤除在之后（顺序反了就是「遮罩没进图」或「overlay 留在页面上」）
-  const injectAt = cdp.indexOf("MaskForShot(mask)");
+  const injectAt = cdp.indexOf("MaskForShot(mask, maskLabel)");
   const captureAt = cdp.indexOf('Call("Page.captureScreenshot"');
   const clearAt = cdp.indexOf("ClearShotMask(mask)");
   assert.ok(injectAt > 0 && captureAt > injectAt, "先遮罩再截图");
@@ -1551,4 +1552,9 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
   assert.doesNotMatch(mask, /maskCoverage/, "曾经的 main+iframes / main-only 枚举已被两组数字取代");
   // 一个 session 要注入几个 document 由计划算（不是「一个 target 一个上下文」）
   assert.match(mask, /PlanSessionInjections/);
+  // overlay 上那行字由宿主给：模板里不许有任何语言的字面标签，标签要过转义
+  assert.doesNotMatch(script, /[一-鿿]/, "注入脚本模板里不许有硬编码中文（标签由宿主给）");
+  assert.match(mask, /MaskLabelToken/);
+  assert.match(mask, /JsSingleQuote/);
+  assert.match(cdpSource, /ExtractJsonString\(raw, "maskLabel"\)/, "桥要从 cdp-shot 的字段里读标签");
 });

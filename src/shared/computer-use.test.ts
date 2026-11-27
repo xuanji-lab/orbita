@@ -27,6 +27,7 @@ import {
   computerUseBackendChoices,
   computerUseChannels,
   computerUseDevBackendRefusal,
+  computerUseMaskLabel,
   computerUseShotMask,
   computerUseShotMaskNote,
   computerUseUiaErrors,
@@ -499,6 +500,22 @@ const shotResp = {
   maskMissing: [] as string[],
   maskMissingTotal: 0,
 };
+
+describe("computerUseMaskLabel（overlay 上那行字跟界面语言走）", () => {
+  test("中文界面：中文标签", () => {
+    assert.equal(computerUseMaskLabel("zh"), "已遮罩");
+  });
+
+  test("英文界面：英文标签", () => {
+    assert.equal(computerUseMaskLabel("en"), "Masked");
+  });
+
+  test("语言缺失 / 不认识：按英文（与 effectiveLanguage 的 en 兜底、桥的默认值一致）", () => {
+    assert.equal(computerUseMaskLabel(undefined), "Masked");
+    assert.equal(computerUseMaskLabel(""), "Masked");
+    assert.equal(computerUseMaskLabel("ja"), "Masked");
+  });
+});
 
 describe("computerUseShotMask（网页截图遮罩回执的解析）", () => {
   test("老桥没有这几个字段 → undefined（不能说遮了，也不能说没遮）", () => {

@@ -357,6 +357,38 @@ describe("sandbox_* 回执翻成人话", () => {
     assert.match(outcome.ok ? "" : outcome.error, /缺尺寸字段/);
   });
 
+  test("screenshot：overlay 的标签由宿主按界面语言给（zh→已遮罩 / en→Masked）", async () => {
+    for (const [language, expected] of [
+      ["zh", "已遮罩"],
+      ["en", "Masked"],
+    ] as const) {
+      const { guest, calls } = fakeGuest({ running: true });
+      const cdp = new CdpSession(guest, tempOutDir(), undefined, async () => language);
+      await run(cdp, { action: "sandbox-screenshot" });
+      const shot = calls.find((call) => call.command === computerUseGuestCommands.cdpShot);
+      assert.equal(shot?.fields["maskLabel"], expected, `语言 ${language} 的标签`);
+      // 老字段照旧：加一个字段不能把 maxWidth / session 挤掉
+      assert.equal(typeof shot?.fields["maxWidth"], "number");
+      assert.equal(typeof shot?.fields["session"], "string");
+    }
+  });
+
+  test("screenshot：没注入语言读取口 / 读失败时按英文（桥的默认值也是 Masked）", async () => {
+    const { guest, calls } = fakeGuest({ running: true });
+    const cdp = new CdpSession(guest, tempOutDir());
+    await run(cdp, { action: "sandbox-screenshot" });
+    const shot = calls.find((call) => call.command === computerUseGuestCommands.cdpShot);
+    assert.equal(shot?.fields["maskLabel"], "Masked");
+
+    const failing = fakeGuest({ running: true });
+    const cdp2 = new CdpSession(failing.guest, tempOutDir(), undefined, async () => {
+      throw new Error("settings 读不动");
+    });
+    await run(cdp2, { action: "sandbox-screenshot" });
+    const shot2 = failing.calls.find((call) => call.command === computerUseGuestCommands.cdpShot);
+    assert.equal(shot2?.fields["maskLabel"], "Masked");
+  });
+
   test("screenshot：桥报了遮罩就添一句人话（几块 / 几帧 / 盖到哪一层）", async () => {
     const { guest } = fakeGuest({
       running: true,
