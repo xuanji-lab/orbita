@@ -25,16 +25,29 @@ const CONCISE_LINE = "- Be concise in your responses";
 const CONCISE_LINE_REPLACEMENT = "- Be concise in your final answers.";
 
 /**
- * 进度说明段 + 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。
+ * 进度说明段（2026-10-12 起；2026-11-22 改写）。**用英文写**：段落语言会把模型往那门语言带，
+ * 回复语言另由 REPLY_LANGUAGE_GUIDELINE 管。prompt-narration.test.ts 锚定全文。
  *
- * **用英文写**：上一版是中文段落，提示词本身的语言会把模型往中文带——英文提问也回中文。
- * 段落语言中立化后，再明说「跟随用户最近一条消息的语言」，进度说明与最终答复都算。
- * prompt-narration.test.ts 锚定全文。
+ * 2026-11-22 改写的缘由（用户讨论「最后一公里 · 文档与演示文稿」）：
+ * - 界面变了：一轮只分「过程」和「产物」两处。中途写的话会收进那一行过程里，当这一段的名字；
+ *   用户看得到的是结尾回答、回答里的图、回答下面的产物卡。
+ * - 用户：「我真的不会去看这么多解释，而且工具调用夹在解释里面，显得工具调用非常的不重要一样」——
+ *   过程走「效率模式」：中途只写一行段名，不写段落；结论、要用户知道的决定放结尾。
+ *   旧版「每组工具调用前说一句要做什么」产出的是「我先读一下使用说明」这类流水账。
+ * - 用户：图片「没有跟文字放在一起」——给用户看的图写进结尾回答，图下面紧跟它那段解释。
+ * - 用户：「要是你每次写了啥，我能直接点开就好了」——文稿、演示文稿、导出的文件自动列在回答下面，
+ *   回答里不再贴长路径。
+ * 不做 Proma 那样的会话级「效率 / 解释」开关：旁白约占输出 token 的 1%，关掉它省不了什么；
+ * 要改的是旁白写什么。
  */
 export const PROGRESS_NARRATION_GUIDELINE =
-  "Tool calls and thinking are collapsed by default in the UI; the user only sees the text you write.\n" +
-  "Before a group of tool calls, say in one sentence what you are about to do; after each stage (research done, cause found, change made, verification done), state the outcome in one or two sentences.\n" +
-  "Do not narrate every tool call, and do not paste your thinking into the reply.\n";
+  "Your tool calls, thinking and mid-turn text are folded into one collapsed line in the UI; the user reliably sees only your final answer and the outputs listed under it.\n" +
+  "When you start a new stage of work, write one short line naming it (a few words, no paragraph), e.g. \"Checking how the cards are grouped\"; it becomes that stage's title in the folded process. " +
+  "Do not announce routine steps such as reading a file or a skill, and do not paste your thinking.\n" +
+  "Put conclusions, decisions the user should know about, and anything they must act on in the final answer.\n" +
+  "Decks, documents and exported files you made in this turn are listed as clickable cards under your answer: refer to them by name, do not paste their full paths.\n" +
+  "To show the user a picture, embed it in your final answer where you discuss it: ![short caption](</absolute/path/to/image.png>) on its own line, followed by the paragraph that explains it. " +
+  "The file must be inside the workspace, an attached directory or the session workbench — save screenshots and figures you make into the session workbench's shots/ folder, never /tmp, or the user sees a broken image.\n";
 
 /**
  * 回复语言（2026-10-12 用户裁决：正文跟随用户当前使用的语言）。单独成段、由 runtime
@@ -45,18 +58,31 @@ export const PROGRESS_NARRATION_GUIDELINE =
  * 正文在附件里时，消息整体被 Orbita 自动加的英文包装（点名 skill 的说明、附件清单说明）
  * 压倒，模型判成英文、整轮英文回。包装块的列表要与实际组装处保持一致（测试锚定）：
  * invocation.ts / prompt-attachments.ts / user-context.ts / memory-inject.ts / task-ref.ts / channel.ts / quote.ts。
+ *
+ * 2026-11-22：规则只写在这里一次不够——长会话里紧挨回复的是大量英文，离得近的压过离得远的；
+ * 子会话收到的全是信封，没有「用户亲手打的字」，规则又把信封排除在外，默认就写英文。
+ * 所以代码按「用户亲手打的字」算出语言，每条用户消息末尾附一行 `<reply_language>`
+ * （user-context.ts 的 wire 层；子会话的语言由父会话写进信封 lang，见 shared/reply-language.ts），
+ * 本段声明它优先，并把它加进「不算用户的字」的包装清单。信封正文在子会话一侧**不**算用户的字
+ * （二选一，选标记）：正文是父模型写的，父模型自己漂成英文时子会话不该跟着漂，
+ * 而 lang 是代码从用户的字算出来的，两条规则不打架。
  */
 export const REPLY_LANGUAGE_GUIDELINE =
   "Reply language: write all user-visible text, progress notes and final answers alike, in the language the user themselves writes in, " +
   "even if these instructions, project files or earlier messages are in another language. Switch only if the user asks you to.\n" +
+  "Each user message may end with a <reply_language lang=\"zh|en\"> marker. Orbita computes it from what the user typed (in a sub-session, " +
+  "from the user's language that your parent session carried in the channel messages), so it takes priority: write in that language, " +
+  "including every report_to_parent text and every task you hand to a sub-session. It also holds when the recent context is full of " +
+  "English (reports, tool output, channel boilerplate). Without a marker, use the rules below.\n" +
   "What counts as the user's own writing: the words they typed in their latest message, plus the prose of text they attached or pasted " +
   "(a <pasted-text> block, or a text file listed in <attached-files> once you have read it). " +
   "When the typed words are short or mixed-language and point at an attachment, follow the language of that attachment's prose.\n" +
   "What does not count: blocks that Orbita adds around the message on its own — <mentioned_tools>, <attached-files> (the listing and its " +
-  "instruction line, not the files' contents), <user_context>, <orbita-memory>, <referenced_task>, and <channel> envelopes — and the " +
-  "excerpts inside <quoted_context> (they quote earlier turns, possibly the assistant's own). These are mostly English boilerplate; " +
-  "never let their language, or how much of the message they take up, decide the reply language.\n" +
-  "When the latest message has no words the user typed (a turn opened by a <channel> report from a sub-session, an automation " +
+  "instruction line, not the files' contents), <user_context>, <reply_language>, <orbita-memory>, <referenced_task>, and <channel> envelopes — " +
+  "and the excerpts inside <quoted_context> (they quote earlier turns, possibly the assistant's own). These are mostly English boilerplate; " +
+  "never let their language, or how much of the message they take up, decide the reply language. The text of a <channel> envelope is " +
+  "not the user's writing even when it comes from your parent session: only the marker carries the user's language there.\n" +
+  "When the latest message has no words the user typed and no marker (a turn opened by a <channel> report from a sub-session, an automation " +
   "wake-up, or anything else Orbita sends on its own), keep the language of the user's most recent message that they did type; " +
   "a sub-session's report or your own task text being in another language does not change it.";
 

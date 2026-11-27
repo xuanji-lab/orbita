@@ -4,26 +4,37 @@
  *
  * checklist 全部走真实探测（latex:probe / latex:env-check），不是写死的状态；
  * 「让 agent 装/修」把修复指令交给会话（App 的 repairLatex），不在面板里自己装。
+ *
+ * 2026-11-27 三处修正（Windows 实拍 + 用户裁决）：
+ * - **行一律走 SettingRow**：原来三行是「标签 + 说明 + 按钮」塞进两列网格，第三个子元素
+ *   换到第二行第一列——「latexmk 路径」的文件夹按钮因此掉在标签下方（1600 宽全幅也一样，
+ *   不是挤的）；控件列由 `.set-row-ctl` 承担，按钮回到行尾；
+ * - **删掉「保存即编译」这一行**：它是项目级开关，住在项目 ⋮ 菜单里；设置页没有「当前项目」
+ *   这个上下文，做成开关也是错的层级。存在的提示并进顶部那句说明；
+ * - **「中文模板」不再长得像设置项**：它不是开关，是「学校模板还不能导入」这个事实，
+ *   改成一段说明文字；不再画行线与右侧值；
+ * - **文案进 messages**：这一页原来整页写死中文（切英文界面不变），现在按语言取。
  */
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { PanelIconButton } from "../../shell/RightPanel";
+import { SettingGroup } from "./SettingRow";
+import { envRowsOf, type EnvRowTexts } from "./latex-settings-rows.ts";
 import type { LatexEnvCheckResult, LatexProbeResult } from "@shared/latex";
 
-interface EnvRow {
-  id: string;
-  name: string;
-  ok: boolean;
-  detail: string;
-}
+/** 「让 agent 修」的结局：false = 没能开好会话（面板要如实说，不再静默丢掉） */
+export type RepairOutcome = { ok: boolean };
 
-export function LatexSettings(props: { onRepair: (item: string) => void }) {
+export function LatexSettings(props: { onRepair: (item: string) => Promise<RepairOutcome> }) {
   const t = useT();
   const [probe, setProbe] = useState<LatexProbeResult | null>(null);
   const [env, setEnv] = useState<LatexEnvCheckResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 正在等会话开好的那一行（按钮转圈 + 禁用，防连点开出一串任务） */
+  const [repairing, setRepairing] = useState<string | null>(null);
+  const [repairFailed, setRepairFailed] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,81 +49,97 @@ export function LatexSettings(props: { onRepair: (item: string) => void }) {
     return () => { cancelled = true; };
   }, []);
 
-  const platform = api.platform === "darwin" ? "macOS" : "Windows";
-  const rows: EnvRow[] = [
+  const texts = t.latexSettings;
+  const platform = api.platform === "darwin" ? "macOS" : t.latexSettings.platformWindows;
+  const rows = envRowsOf(
+    { probe, env },
     {
-      id: "latexmk",
-      name: "latexmk 编译器",
-      ok: probe?.ok === true,
-      detail: probe === null ? "探测中…" : probe.ok ? `${probe.latexmk ?? ""}（${probe.source ?? ""}）` : probe.message,
-    },
-    ...(env?.items.map((item) => ({
-      id: item.id,
-      name: item.id === "synctex" ? "synctex（源码↔PDF 定位）" : item.id === "chktex" ? "chktex（行内检查）" : "pandoc ≥ 3.10.2（导出 Word）",
-      ok: item.ok,
-      detail: item.detail,
-    })) ?? []),
-  ];
+      latexmk: texts.latexmk,
+      synctex: texts.synctex,
+      chktex: texts.chktex,
+      pandoc: texts.pandoc,
+      probing: texts.probing,
+      notFound: texts.notFound,
+      synctexMissing: texts.synctexMissing,
+      chktexMissing: texts.chktexMissing,
+      pandocMissing: texts.pandocMissing,
+      pandocTooOld: texts.pandocTooOld,
+      pandocReady: texts.pandocReady,
+    } satisfies EnvRowTexts,
+  );
+
+  const repair = (id: string): void => {
+    setRepairFailed(null);
+    setRepairing(id);
+    void props
+      .onRepair(id)
+      .then((outcome) => { if (!outcome.ok) setRepairFailed(texts.repairFailed); })
+      .catch((cause: unknown) => setRepairFailed(String(cause)))
+      .finally(() => setRepairing(null));
+  };
 
   return (
     <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-      <section className="set-group">
-        <span className="section-label">LaTeX 论文</span>
-        <p className="set-row-desc">
-          编译、PDF 预览、源码↔PDF 定位、引文核验、导出 Word。开启前已自动验过一遍这台机器（{platform}）。
-        </p>
-      </section>
+      <SettingGroup label={texts.title}>
+        <p className="set-row-desc">{texts.intro(platform)}</p>
+      </SettingGroup>
 
-      <section className="set-group">
-        <span className="section-label">启用检查</span>
+      <SettingGroup label={texts.checks}>
         {error !== null && <p className="set-row-desc" role="alert">{error}</p>}
+        {repairFailed !== null && <p className="set-row-error" role="alert">{repairFailed}</p>}
+        {/* 自查清单不是「设置行」：它是三列——名字 / 路径（可截断一条长路径）/ 动作。
+            用 SettingRow 的两列网格会把路径挤到名字下面、四行变成八行高；这里用
+            一个专用三列网格，路径永远单行省略号，扳手永远在同一行的最右。 */}
         {rows.map((row) => (
-          <div key={row.id} className="set-row" style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-            <Icon name={row.ok ? "circle-check" : "octagon-x"} size={14}
-              style={{ color: row.ok ? "var(--color-success)" : "var(--color-danger)" }} />
-            <span style={{ minWidth: 220 }}>{row.name}</span>
-            <span className="set-row-note" style={{ flex: 1 }} title={row.detail}>{row.detail}</span>
-            {!row.ok && (
-              <PanelIconButton title={`让 agent 修好 ${row.id}`} onClick={() => props.onRepair(row.id)}>
-                <Icon name="wrench" size={14} />
+          <div className="latex-env-row" key={row.id}>
+            <span className="latex-env-name">
+              <Icon
+                name={row.ok ? "circle-check" : "octagon-x"}
+                size={14}
+                style={{ color: row.ok ? "var(--color-success)" : "var(--color-danger)" }}
+              />
+              {row.name}
+            </span>
+            <span className="set-row-note latex-env-detail" title={row.detail}>{row.detail}</span>
+            {row.ok ? (
+              <span aria-hidden="true" />
+            ) : (
+              <PanelIconButton
+                title={repairing === row.id ? texts.repairing : texts.repair(row.id)}
+                disabled={repairing !== null}
+                onClick={() => repair(row.id)}
+              >
+                <Icon name={repairing === row.id ? "loader-circle" : "wrench"} size={14} spin={repairing === row.id} />
               </PanelIconButton>
             )}
           </div>
         ))}
-      </section>
+      </SettingGroup>
 
-      <section className="set-group">
-        <span className="section-label">配置</span>
-        <div className="set-row">
-          <span style={{ minWidth: 220 }}>latexmk 路径</span>
-          <span className="set-row-note" style={{ flex: 1 }}>
-            {probe?.ok ? probe.latexmk : "未找到（可显式指定）"}
+      <SettingGroup label={texts.config}>
+        <div className="latex-env-row">
+          <span className="latex-env-name">{texts.latexmkPath}</span>
+          <span className="set-row-note latex-env-detail" title={(probe?.ok === true ? probe.latexmk : null) ?? texts.latexmkNotFound}>
+            {(probe?.ok === true ? probe.latexmk : null) ?? texts.latexmkNotFound}
           </span>
-          <PanelIconButton title="指定位置…" onClick={() => { void api.latex.locate(); }}>
+          <PanelIconButton title={texts.locate} onClick={() => { void api.latex.locate(); }}>
             <Icon name="folder-open" size={14} />
           </PanelIconButton>
         </div>
-        <div className="set-row">
-          <span style={{ minWidth: 220 }}>保存即编译</span>
-          <span className="set-row-note" style={{ flex: 1 }}>默认关；可在项目的 ⋮ 菜单里按项目开</span>
-        </div>
-        <div className="set-row">
-          <span style={{ minWidth: 220 }}>中文模板（ctex / xelatex）</span>
-          <span className="set-row-note" style={{ flex: 1 }}>未配置 —— 需要你的学校模板</span>
-        </div>
-      </section>
+        <p className="set-row-desc">{texts.cnTemplate}</p>
+      </SettingGroup>
 
-      <section className="set-group">
-        <span className="section-label">交给 agent 修复时用的系统提示词（只读，可按项目覆盖）</span>
+      <SettingGroup label={texts.promptTitle}>
         <pre className="set-row-note" style={{
-          border: "1px solid var(--color-border-default)", borderRadius: 8,
-          padding: "var(--space-3)", whiteSpace: "pre-wrap", fontFamily: "var(--font-family-mono)",
-          fontSize: "var(--font-size-xs)", color: "var(--color-text-secondary)",
-        }}>{platform === "macOS"
-          ? "你在帮用户修好 LaTeX 环境（macOS）。先跑平台检查清单：latexmk / synctex / chktex / pandoc。缺 synctex 且 TinyTeX 是旧年度版时，不跑 tlmgr install（跨版本会拒），改为引导装 MacTeX；装之前先问。所有写入限用户确认的目录。"
-          : "你在帮用户修好 LaTeX 环境（Windows）。先跑平台检查清单：latexmk / synctex / chktex / pandoc。缺组件时优先 MiKTeX / TeX Live 的用户态安装；装之前先问。所有写入限用户确认的目录。"}
-        </pre>
-      </section>
+          border: "1px solid var(--color-border-default)",
+          borderRadius: 8,
+          padding: "var(--space-3)",
+          whiteSpace: "pre-wrap",
+          fontFamily: "var(--font-family-mono)",
+          fontSize: "var(--font-size-xs)",
+          color: "var(--color-text-secondary)",
+        }}>{api.platform === "darwin" ? texts.promptMac : texts.promptWin}</pre>
+      </SettingGroup>
     </div>
   );
 }

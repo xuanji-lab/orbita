@@ -131,7 +131,7 @@ describe("deriveHistorySegment：流式期间历史段对象身份不变", () =>
     records,
     boundary: splitAtLastUser(records).boundary,
     skills: SKILLS,
-    processView: "turn",
+    processView: "chapters",
   });
 
   test("尾段逐帧变化（流式吐字 + 工具结果进尾段）时，历史段全部产物引用不变", () => {
@@ -151,7 +151,6 @@ describe("deriveHistorySegment：流式期间历史段对象身份不变", () =>
     assert.equal(cache2.segment.turnView, cache1.segment.turnView);
     assert.equal(cache2.segment.plan, cache1.segment.plan);
     assert.equal(cache2.segment.branchRows, cache1.segment.branchRows);
-    assert.equal(cache2.segment.carryoverCards, cache1.segment.carryoverCards);
     assert.equal(cache2.segment.interruptedCalls, cache1.segment.interruptedCalls);
   });
 

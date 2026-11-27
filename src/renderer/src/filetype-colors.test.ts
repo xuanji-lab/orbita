@@ -87,12 +87,12 @@ function hueOf(hex: string): number | null {
   return h;
 }
 
-const THEMES = ["light", "graphite", "black", "copybook", "typescript"] as const;
+const THEMES = ["light", "graphite", "black"] as const;
 const TONES = ["doc", "slides", "sheet"] as const;
 
 describe("文件类型色（--color-filetype-*）", () => {
   for (const theme of THEMES) {
-    it(`${theme}：五档主题都配齐三色，且三个底面上 ≥ 3:1（图标级）`, () => {
+    it(`${theme}：三档主题都配齐三色，且三个底面上 ≥ 3:1（图标级）`, () => {
       const block = themeBlock(theme);
       for (const tone of TONES) {
         const hex = block.get(`--color-filetype-${tone}`);

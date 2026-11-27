@@ -8,6 +8,7 @@ import { automationApi } from "./api/automation.ts";
 import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
+import { chatEmbedApi } from "./api/chat-embed.ts";
 import { citeApi } from "./api/cite.ts";
 import { docxApi } from "./api/docx.ts";
 import { docxExportApi } from "./api/docx-export.ts";
@@ -17,9 +18,11 @@ import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
 import { latexApi } from "./api/latex.ts";
 import { officeApi } from "./api/office.ts";
+import { powerApi } from "./api/power.ts";
 import { importApi } from "./api/import.ts";
 import { intentApi } from "./api/intent.ts";
 import { notifyApi } from "./api/notify.ts";
+import { planetApi } from "./api/planet.ts";
 import { pluginApi } from "./api/plugin.ts";
 import { providerApi } from "./api/provider.ts";
 import { reviewApi } from "./api/review.ts";
@@ -42,6 +45,7 @@ const api = {
   automation: automationApi,
   board: boardApi,
   channel: channelApi,
+  chatEmbed: chatEmbedApi,
   excerpt: excerptApi,
   provider: providerApi,
   session: sessionApi,
@@ -49,6 +53,7 @@ const api = {
   settings: settingsApi,
   skill: skillApi,
   plugin: pluginApi,
+  planet: planetApi,
   memory: memoryApi,
   mcp: mcpApi,
   window: windowApi,
@@ -58,6 +63,7 @@ const api = {
   docxExport: docxExportApi,
   docs: docsApi,
   focus: focusApi,
+  power: powerApi,
   notify: notifyApi,
   terminal: terminalApi,
   latex: latexApi,

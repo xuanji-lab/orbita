@@ -21,7 +21,7 @@ import { parseWaitSpec, WAIT_DEFAULT_TIMEOUT_MS, WAIT_MAX_TIMEOUT_MS } from "../
  *
  * 每个会话有自己的 agent tab，与用户及其它会话互不抢；登录态全局共享（同一 partition）。
  * 权限：读取与交接三档一律放行（shared/permission.ts 的 BROWSER_READ_TOOLS）；交互照写操作过闸——
- * 所以 click / type 带一个 element 参数：模型用一句人话说它要点什么，审批卡上用户看的是这句话，
+ * 所以 click / type 带一个 element 参数：模型用一句人话说它要点什么，对话里用户看的是这句话，
  * 而不是一个没有意义的 e12（Playwright MCP 同样的做法）。
  */
 
@@ -54,7 +54,7 @@ const CONSEQUENCES = "Do not buy, pay, send, publish, delete or change account s
 
 const ELEMENT_PARAM = {
   type: "string",
-  description: "Human-readable name of the element, e.g. \"Search button\" — the user sees it on the approval card.",
+  description: "Human-readable name of the element, e.g. \"Search button\" — the user sees it in the conversation.",
 } as const;
 
 const LOGIN_HINT =

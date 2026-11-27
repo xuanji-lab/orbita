@@ -26,6 +26,9 @@ export const WORKSPACE_PAGE_SIZE = 5;
 /** TASKS 节点的固定 key。 */
 export const TASKS_FOLD_KEY = "tasks";
 
+/** 「工作区」整节的固定 key（节标题的开合，2026-11-23 起与 TASKS 一样能折）。 */
+export const WORKSPACES_FOLD_KEY = "workspaces";
+
 /** 偏离默认折叠态的组的 key 集合。 */
 export type SidebarFolds = ReadonlySet<string>;
 
@@ -34,9 +37,9 @@ export function foldKeyForWorkspace(workspaceId: string): string {
   return `workspace:${workspaceId}`;
 }
 
-/** 一组的默认折叠态：工作区组默认折叠，TASKS 默认展开。 */
+/** 一组的默认折叠态：单个工作区组默认折叠；TASKS 与「工作区」整节默认展开。 */
 export function defaultGroupFolded(key: string): boolean {
-  return key !== TASKS_FOLD_KEY;
+  return key !== TASKS_FOLD_KEY && key !== WORKSPACES_FOLD_KEY;
 }
 
 export interface SidebarGroupState {

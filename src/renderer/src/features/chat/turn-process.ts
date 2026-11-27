@@ -33,6 +33,41 @@ export function processCalls(steps: readonly ProcessStep[]): ToolCallUnit[] {
   return calls;
 }
 
+/**
+ * 这一轮被打断过吗：有工具调用的结果永远不会来（interruptedToolCallIds 判的：所在消息 aborted / error 收场且没有结果帧）。
+ * 过程行据此写「被你打断 · N 步」，而不是看起来像正常做完的「工作了 4.7 秒 · 2 步」。
+ */
+export function processInterrupted(steps: readonly ProcessStep[], interrupted: ReadonlySet<string>): boolean {
+  if (interrupted.size === 0) return false;
+  return processCalls(steps).some((call) => interrupted.has(call.toolCallId));
+}
+
+/**
+ * 跑着时点开的列表只列**已经做完**的步骤（2026-11-22 用户：「点开后实时往下长」）：还在跑的工具调用不在里面
+ * （它是最后一行「正在做」，带呼吸 / 走表 / 输出尾巴）。工具组里还在跑的成员同样剔掉，剔空的组整个不要。
+ * 思考、旁白、已落定（成功 / 失败 / 已中断）的步骤原样保留，顺序不变。
+ */
+export function finishedSteps(
+  steps: readonly ProcessStep[],
+  results: ToolResultIndex,
+  interrupted: ReadonlySet<string> = new Set(),
+): ProcessStep[] {
+  const done = (call: ToolCallUnit) => !callRunning(call, results, interrupted);
+  const out: ProcessStep[] = [];
+  for (const step of steps) {
+    if (step.kind === "toolCall") {
+      if (done(step)) out.push(step);
+    } else if (step.kind === "toolGroup") {
+      const calls = step.calls.filter(done);
+      if (calls.length === step.calls.length) out.push(step);
+      else if (calls.length > 0) out.push({ ...step, calls });
+    } else {
+      out.push(step);
+    }
+  }
+  return out;
+}
+
 export function callFailed(call: ToolCallUnit, results: ToolResultIndex): boolean {
   return results.get(call.toolCallId)?.status === "error";
 }

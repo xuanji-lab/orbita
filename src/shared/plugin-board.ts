@@ -21,6 +21,12 @@
  * 会话里的看板快照、周看板的类型（文件后段）归看板数据那条线——同文件不同段。
  */
 
+/**
+ * 看板结果工具的名字：show_plugin_board 把插件已经写好的卡快照进工具结果、显示在对话里
+ * （agent/plugin-tools.ts）。自动化调度据它收周看板的快照，renderer 据它画卡。
+ */
+export const PLUGIN_BOARD_TOOL = "show_plugin_board";
+
 // ---------- 清单与视图 ----------
 
 /** 四档尺寸（宽×高，单位格）。 */
@@ -258,6 +264,64 @@ export interface BoardFrameRequest {
 
 /** 一次性 iframe 地址（`orbita-panel://doc/<token>`，同面板）；哈希不合规 / 仓库里没有为 null */
 export type BoardFrameResult = { frameUrl: string } | null;
+
+// ---------- 切回会话时的看板位图（`board:shot`） ----------
+
+/**
+ * 宿主窗口里看板「此刻看得见的那一片」的矩形（CSS 像素；主进程按这个区域截自己这一页，不截别的窗口）。
+ * 整块看板比对话区高（原地展开）时只是其中一段，所以贴回去要钉在它从看板顶部往下的位置上。
+ */
+export interface BoardShotRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BoardShotRequest {
+  rect: BoardShotRect;
+}
+
+/**
+ * 裁好的原始像素（BGRA，逐行无填充，长度 = width × height × 4）与它的物理像素尺寸；截不到回 null（优化失败不影响真 iframe 挂上）。
+ * 不编码成 PNG：编码在主进程上要上百毫秒，原始像素走 IPC 只是一次内存拷贝，贴回去也不损画质。
+ */
+export interface BoardShotResult {
+  pixels: Uint8Array;
+  width: number;
+  height: number;
+}
+
+export type BoardShotResponse = BoardShotResult | null;
+
+/** 入参不可信：只接受有限、非负、面积有上限的矩形；小数按 capturePage 的要求取整。 */
+export function boardShotRect(raw: unknown): BoardShotRect | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const value = (raw as Record<string, unknown>)["rect"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const rect = value as Record<string, unknown>;
+  const numbers = [rect["x"], rect["y"], rect["width"], rect["height"]];
+  if (!numbers.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+  const x = Math.round(rect["x"] as number);
+  const y = Math.round(rect["y"] as number);
+  const width = Math.round(rect["width"] as number);
+  const height = Math.round(rect["height"] as number);
+  if (x < 0 || y < 0 || width < 1 || height < 1 || width > 4096 || height > 4096 || width * height > 16_777_216) return null;
+  return { x, y, width, height };
+}
+
+/**
+ * 矩形是不是整块落在这一页此刻的视口里（CSS 像素；留 1px 给取整）。视口之外的不是屏幕上已有的内容——
+ * 截出来只会是别的窗口或空白，所以不让截。
+ */
+export function boardShotInViewport(rect: BoardShotRect, viewport: { width: number; height: number }): boolean {
+  return (
+    viewport.width > 0 &&
+    viewport.height > 0 &&
+    rect.x + rect.width <= viewport.width + 1 &&
+    rect.y + rect.height <= viewport.height + 1
+  );
+}
 
 // ---------- 全局周看板（`board:week`） ----------
 

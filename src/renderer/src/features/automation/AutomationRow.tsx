@@ -16,8 +16,8 @@ export function AutomationRow(props: {
   now: number;
   /** 共用的一把尺：当前列表里所有自动化近 7 天的单日最大次数（见 sparkScale） */
   sparkMax: number;
-  /** 绑定会话的模式（this_session 且会话是 manual 档时提醒会卡在审批上）；其余 null */
-  boundSession: { mode: string; title: string } | null;
+  /** 绑定的会话（this_session 才有，行上写「送回 xx」）；其余 null */
+  boundSession: { title: string } | null;
   onOpen: () => void;
   onAct: (action: AutomationAction) => void;
 }) {
@@ -25,7 +25,7 @@ export function AutomationRow(props: {
   const a = t.automation;
   const { automation } = props;
   const state = rowStateOf(automation);
-  const note = noteOf(automation, a, props.boundSession);
+  const note = noteOf(automation, a);
   const count = countLabel(automation, a);
   const runnable = canRunNow(automation);
   const where =

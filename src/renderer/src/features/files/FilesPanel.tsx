@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { Icon, type IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { SplitHandle } from "../../shell/SplitHandle";
@@ -21,8 +22,6 @@ import {
   countLoadedEntries,
   countVisibleEntries,
   fileIcon,
-  fileIconTone,
-  FILETYPE_TONE_COLOR,
   filterCountText,
   filterEntries,
   formatSize,
@@ -153,7 +152,7 @@ export function FilesPanel(props: {
    */
   escapeRef: { current: (() => boolean) | null };
   /**
-   * PDF 引用跳转请求（实验功能「PDF 引用」）：点了正文里的引用编号，App 打开本面板并
+   * PDF 引用跳转请求：点了正文里的引用编号，App 打开本面板并
    * 递进来。token 单调递增，同一条引用连点也会重新定位；请求带着出生会话戳，
    * 换会话后由 cite-focus.ts 判作废。null = 没有请求
    */
@@ -277,8 +276,8 @@ export function FilesPanel(props: {
   // 可以当「宿主」的全部根：画进树的根 + 不进树的附件副本根 + 本会话引用过的 PDF（cited，每个文件一根）。
   // 预览白名单、引用跳转、左栏双击打开都认这一份
   const hostRoots = useMemo(
-    () => [...tree.roots, ...(tree.attachmentsRoot === null ? [] : [tree.attachmentsRoot]), ...tree.citedRoots],
-    [tree.roots, tree.attachmentsRoot, tree.citedRoots],
+    () => [...tree.roots, ...(tree.attachmentsRoot === null ? [] : [tree.attachmentsRoot]), ...tree.citedRoots, ...tree.subsessionRoots],
+    [tree.roots, tree.attachmentsRoot, tree.citedRoots, tree.subsessionRoots],
   );
 
   // 专注 / 浏览态结束（或换到另一个工作区）、以及专注到点（run → done）：之前那个
@@ -1488,7 +1487,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   );
 
 
-  // 引用跳转（实验功能「PDF 引用」）：怎么处理一条请求由 cite-focus.ts 的纯函数
+  // 引用跳转：怎么处理一条请求由 cite-focus.ts 的纯函数
   // 裁决（含「请求属于别的会话 → 作废」——面板重挂后旧会话的请求不会拿新会话的
   // 根重判、报出无关的 citeOutside，2026-10-18 修），这里只按结论改 state；
   // 已消费的 token 不重放（同一条引用连点两次，每次都是新 token）
@@ -1819,11 +1818,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                         else leaveActive(() => switchTo(tab.path));
                       }}
                     >
-                      <Icon
-                        name={fileIcon(name, "file")}
-                        size={13}
-                        style={{ flex: "0 0 auto", color: "var(--color-text-tertiary)" }}
-                      />
+                      <FileTypeIcon name={name} size={14} />
                       <span className="files-tab-name">{name}</span>
                       {/* 未保存圆点（原型场景 1 第 3 步）：脏的时候占 ✕ 的位置，鼠标
                           悬停标签时让位给 ✕——同一个槽位两个状态，不额外占宽。
@@ -2434,8 +2429,7 @@ function TreeRow(props: {
   const dotted = props.name.startsWith(".");
   const isRules = props.name === "AGENTS.md";
   const iconName = fileIcon(props.name, props.kind, props.open);
-  // 文档 / 演示 / 表格三族图标上色（fileIconTone），其余中性——名字文字仍正墨
-  const tone = fileIconTone(props.name, props.kind);
+  // 彩色文件图标（FileTypeIcon，2026-11-22）；名字文字仍正墨
   const hasMeta = props.size !== undefined;
   const isLatexRoot = props.latexRoot === true;
   // hover 行尾把 size·mtime 缩成 `48 KB · 12m`，省略的完整信息（名字、完整时间戳）
@@ -2508,14 +2502,7 @@ function TreeRow(props: {
             />
           </span>
         ) : (
-          <Icon
-            name={iconName}
-            size={14}
-            style={{
-              color: tone === null ? "var(--color-text-tertiary)" : FILETYPE_TONE_COLOR[tone],
-              flex: "0 0 auto",
-            }}
-          />
+          <FileTypeIcon name={props.name} kind={props.kind} open={props.open} size={16} />
         )}
         <span
           style={{
@@ -2683,11 +2670,7 @@ function ImageAttachmentRow(props: {
       }}
     >
       <span style={{ width: 12, flex: "0 0 auto" }} />
-      <Icon
-        name={fileIcon(name, "file")}
-        size={14}
-        style={{ color: "var(--color-text-tertiary)", flex: "0 0 auto" }}
-      />
+      <FileTypeIcon name={name} size={16} />
       <DirMarkName name={name} dir={false} wrapStyle={{ flex: "1 1 auto" }} />
     </button>
   );
@@ -2717,7 +2700,6 @@ function AttachmentRow(props: {
     statKind === "dir" || (statKind === undefined && props.declaredKind === "dir")
       ? "directory"
       : "file";
-  const tone = fileIconTone(name, kind);
   const missing = props.fact !== undefined && props.fact.kind === null;
   const owner = props.roots.find((root) => root.exists && pathWithin(root.path, props.path)) ?? null;
   const clickable = !missing && owner !== null;
@@ -2753,14 +2735,7 @@ function AttachmentRow(props: {
         }}
       >
         <span style={{ width: 12, flex: "0 0 auto" }} />
-        <Icon
-          name={fileIcon(name, kind)}
-          size={14}
-          style={{
-            color: tone === null ? "var(--color-text-tertiary)" : FILETYPE_TONE_COLOR[tone],
-            flex: "0 0 auto",
-          }}
-        />
+        <FileTypeIcon name={name} kind={kind} size={16} />
         {/* 名字 + 目录尾 `/`：共用组件 DirMarkName（胶囊 / 面板行 / 气泡三处同一段
             结构；2026-10 验收 I+K：斜杠紧跟名字，不再挂到行的另一头） */}
         <DirMarkName name={name} dir={kind === "directory"} wrapStyle={{ flex: "1 1 auto" }} />

@@ -13,18 +13,20 @@ import {
   compactionBoundaryStatus,
   enqueue,
   enqueueChannelMessage,
+  requeueFront,
   markAllIdle,
   mergeSideRecords,
   moveQueued,
   parseCompactCommand,
   createSessionStates,
-  removeApproval,
   setPendingEcho,
   nextDeliverable,
   removeSessionEntry,
   revertOptimisticTurn,
   prependOlder,
   seedFromDisk,
+  seedUnderLive,
+  applyLivePhases,
   setOlderLoading,
   setEntryPhase,
   observedThinkingFor,
@@ -55,14 +57,6 @@ const progress = (sessionId: string, item: ReturnType<typeof assistantDone>): Ag
   progress: item,
 });
 
-const permission = (sessionId: string, requestId: string): AgentEvent => ({
-  type: "permission",
-  sessionId,
-  requestId,
-  toolName: "bash",
-  input: { command: "ls src" },
-});
-
 /** 槽里 transcript 的可读形态：assistant 文本按序 */
 function texts(states: SessionStates, sessionId: string): string[] {
   const entry = states.get(sessionId);
@@ -87,14 +81,13 @@ describe("applyAgentEvent —— 每会话一槽", () => {
   test("事件照进自己的槽，与「当前看谁」无关——这就是后台累积", () => {
     // 模块没有「当前会话」的概念：老实现按 sessionRef 丢事件，这里没得丢。
     let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
-    // 期间来了 B 的 phase / 审批 / 失败，都不影响 A 的槽
+    // 期间来了 B 的 phase / 失败，都不影响 A 的槽
     states = applyAgentEvent(states, { type: "phase", sessionId: "B", phase: "turn" });
-    states = applyAgentEvent(states, permission("B", "B:tc1"));
     states = applyAgentEvent(states, progress("A", assistantDone("a2", "甲二")));
 
     assert.deepEqual(texts(states, "A"), ["甲一", "甲二"]);
-    assert.equal(states.get("A")?.approvals.length, 0);
-    assert.equal(states.get("B")?.approvals.length, 1);
+    assert.equal(states.get("A")?.phase, "idle");
+    assert.equal(states.get("B")?.phase, "turn");
   });
 
   test("未知会话的事件就地建槽", () => {
@@ -197,44 +190,12 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.equal(states.get("B")?.phase, "idle");
   });
 
-  test("审批进对应槽；按 requestId 跨槽摘除；未匹配原样返回", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, permission("B", "B:tc2"));
-
-    const afterRemove = removeApproval(states, "B:tc2");
-    assert.deepEqual(afterRemove.get("A")?.approvals, states.get("A")?.approvals);
-    assert.deepEqual(afterRemove.get("B")?.approvals, []);
-    assert.equal(removeApproval(afterRemove, "nope"), afterRemove);
-  });
-
-  /**
-   * 审批不听 abort（pi 是 await beforeToolCall 之后才查 signal），所以停止 / 抢跑时
-   * runtime 会把挂起的审批按拒绝结清。卡片必须跟着消失，否则用户会去回答一个
-   * runtime 那边已经不存在的请求（点了没任何事发生）。
-   */
-  test("phase idle 清掉挂起的审批卡，不碰别的会话", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, permission("B", "B:tc2"));
-
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
-    assert.deepEqual(states.get("A")?.approvals, [], "轮结束就不可能还有挂起的审批");
-    assert.equal(states.get("B")?.approvals.length, 1, "别的会话的审批不受影响");
-  });
-
   test("pluginsChanged 是全局信号，不属于任何会话槽：归约原样返回同一引用", () => {
     const states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
     assert.equal(applyAgentEvent(states, { type: "pluginsChanged" }), states);
     assert.equal(applyAgentEvent(states, { type: "pluginsChanged", installed: { name: "lit", sessionId: "A" } }), states);
     // 草稿事件也是给 App 层的信号，会话槽不接
     assert.equal(applyAgentEvent(states, { type: "pluginDraft", sessionId: "A", path: "/w/plugins/lit" }), states);
-  });
-
-  test("phase turn / compaction 不清审批卡——工具还在等回答", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
-    assert.equal(states.get("A")?.approvals.length, 1);
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "compaction" });
-    assert.equal(states.get("A")?.approvals.length, 1);
   });
 
   test("单条 failed 只归位那条，不存在的槽不凭空造", () => {
@@ -262,6 +223,15 @@ describe("applyAgentEvent —— 每会话一槽", () => {
     assert.equal(markAllIdle(states), states);
   });
 
+  test("failed(null) 也清掉乐观回显：runtime 没了，真回显不会再来，那句话已放回输入框，对话里不留鬼影气泡", () => {
+    let states = setPendingEcho(new Map(), "A", ["没发出去的那句"]);
+    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+    assert.deepEqual(states.get("A")?.pendingEcho?.blocks, ["没发出去的那句"]);
+    states = applyAgentEvent(states, { type: "failed", sessionId: null, message: "agent runtime exited with code 9" });
+    assert.equal(states.get("A")?.pendingEcho, null);
+    assert.equal(states.get("A")?.phase, "idle");
+  });
+
   test("ready / created 等与槽无关的事件原样穿过", () => {
     const states = new Map();
     assert.equal(
@@ -282,9 +252,8 @@ describe("applyAgentEvent —— 每会话一槽", () => {
 });
 
 describe("seedFromDisk / setEntryPhase", () => {
-  test("整槽覆盖：拿到磁盘真相，旧审批清掉，phase 归 idle", () => {
-    let states = applyAgentEvent(new Map(), permission("A", "A:tc1"));
-    states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "turn" });
+  test("整槽覆盖：拿到磁盘真相，phase 归 idle", () => {
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
 
     const diskItem: TranscriptItem = {
       id: "u1",
@@ -295,7 +264,6 @@ describe("seedFromDisk / setEntryPhase", () => {
     states = seedFromDisk(states, "A", [diskItem]);
 
     assert.equal(states.get("A")?.phase, "idle");
-    assert.deepEqual(states.get("A")?.approvals, []);
     const items = selectTranscript(states.get("A")!.transcript);
     assert.equal(items.length, 1);
     assert.equal(items[0]?.role, "user");
@@ -342,9 +310,8 @@ describe("乐观 turn 的失败归位（revertOptimisticTurn）", () => {
   });
 });
 
-test("EMPTY_ENTRY 是稳定兜底：phase idle、无审批、无重试", () => {
+test("EMPTY_ENTRY 是稳定兜底：phase idle、无重试", () => {
   assert.equal(EMPTY_ENTRY.phase, "idle");
-  assert.deepEqual(EMPTY_ENTRY.approvals, []);
   assert.deepEqual(EMPTY_ENTRY.compactions, []);
   assert.deepEqual(EMPTY_ENTRY.marks, []);
   assert.equal(EMPTY_ENTRY.retry, null);
@@ -423,6 +390,20 @@ describe("轮尾账的旁路网页产物（webArtifacts）", () => {
     assert.equal(turns.length, 1);
     assert.deepEqual(turns[0]?.changes, []);
     assert.deepEqual(turns[0]?.webArtifacts, ["/w/out/proto.html"]);
+  });
+
+  test("fileTurnView 只有 mediaArtifacts 也进槽（卡片按回答点名从候选里挑）", () => {
+    let states = applyAgentEvent(new Map(), progress("A", assistantDone("a1", "甲一")));
+    states = applyAgentEvent(states, {
+      type: "fileTurnView",
+      sessionId: "A",
+      turnId: "t1",
+      changes: [],
+      mediaArtifacts: [{ path: "/w/audio/final.mp3", duration: 231 }],
+    });
+    const turns = states.get("A")?.fileTurns ?? [];
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0]?.mediaArtifacts, [{ path: "/w/audio/final.mp3", duration: 231 }]);
   });
 
   test("fileTurnView 两样都空不进槽（没有产出的轮不产卡）", () => {
@@ -883,6 +864,14 @@ describe("子会话 PR4a：channel 队列条目", () => {
     assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m1", "m2"]);
   });
 
+  test("投递失败 requeueFront：按原顺序回队首，新到消息排后，重复 id 不翻倍", () => {
+    let states = enqueue(new Map(), "parent-1", item("m3"));
+    states = requeueFront(states, "parent-1", [item("m1"), item("m2")]);
+    assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m1", "m2", "m3"]);
+    states = requeueFront(states, "parent-1", [item("m2"), item("m1")]);
+    assert.deepEqual(states.get("parent-1")?.queued.map((entry) => entry.id), ["m2", "m1", "m3"]);
+  });
+
   test("nextDeliverable 对 channel 条目的规则同 text：只认 phase idle", () => {
     const idleStates = enqueue(new Map(), "parent-1", item("m1"));
     const idleEntry = idleStates.get("parent-1")!;
@@ -928,11 +917,28 @@ describe("nextDeliverable —— 投递节奏归我们，一次只放一条", ()
   });
 });
 
-describe("markAllIdle —— runtime 没了，排队的消息没人会发", () => {
-  test("队列一并清空，槽里不留尸体", () => {
+describe("markAllIdle —— runtime 没了，相位归位但不丢通道待投", () => {
+  test("text / compact 清空，channel 保留在 QueueStrip，无需刷新才找回", () => {
+    const channel: QueuedMessage = {
+      id: "channel-1",
+      kind: "channel",
+      childId: "child-1",
+      childWorkbench: "/wb/child-1",
+      message: {
+        id: "channel-1",
+        from: "child",
+        author: "model",
+        kind: "done",
+        text: "完成了",
+        delivery: "followUp",
+        createdAt: 1,
+      },
+    };
     let states = enqueue(new Map(), "A", { id: "1", kind: "text", text: "甲" });
+    states = enqueue(states, "A", { id: "2", kind: "compact" });
+    states = enqueue(states, "A", channel);
     states = markAllIdle(states);
-    assert.deepEqual(states.get("A")?.queued, []);
+    assert.deepEqual(states.get("A")?.queued.map((item) => item.id), ["channel-1"]);
     assert.equal(states.get("A")?.phase, "idle");
   });
 });
@@ -951,7 +957,24 @@ describe("turnError —— 回合失败标注的进出槽", () => {
     });
     const entry = states.get("A");
     assert.equal(entry?.phase, "idle");
-    assert.equal(entry?.turnError, "重试 3 次后仍失败：fetch failed");
+    assert.deepEqual(entry?.turnError, { message: "重试 3 次后仍失败：fetch failed" });
+  });
+
+  test("failed(turn) 带额度提示：结构化事实原样进槽，句子留给渲染层", () => {
+    const quota = { kind: "5h" as const, label: "5-hour window", resetsAt: 1_900_000_000_000 };
+    let states = applyAgentEvent(new Map(), { type: "phase", sessionId: "A", phase: "turn" });
+    states = applyAgentEvent(states, {
+      type: "failed",
+      sessionId: "A",
+      message: "429 {\"error\":\"insufficient_quota\"}",
+      turn: true,
+      quota,
+    });
+    // 原文与事实都在：主进程不做文案，槽里也不存拼好的句子
+    assert.deepEqual(states.get("A")?.turnError, {
+      message: "429 {\"error\":\"insufficient_quota\"}",
+      quota,
+    });
   });
 
   test("failed 不带 turn：槽里不产生标注（操作级失败走全局红字），归位照旧", () => {
@@ -971,7 +994,7 @@ describe("turnError —— 回合失败标注的进出槽", () => {
       turn: true,
     });
     states = applyAgentEvent(states, { type: "phase", sessionId: "A", phase: "idle" });
-    assert.equal(states.get("A")?.turnError, "重试 3 次后仍失败：fetch failed");
+    assert.deepEqual(states.get("A")?.turnError, { message: "重试 3 次后仍失败：fetch failed" });
   });
 
   test("新一轮开跑即清：phase turn / compaction 与乐观置 turn 都算", () => {
@@ -1270,5 +1293,72 @@ describe("prependOlder / setOlderLoading —— 源侧分页向前的方向", ()
     assert.notEqual(on, seeded);
     assert.equal(on.get("A")?.window.loading, true);
     assert.equal(seeded.get("A")?.window.loading, false);
+  });
+});
+
+// ── 窗口中途起来（切液态玻璃重开窗口 / Cmd+R 刷新）：接上在跑的会话 ──
+
+describe("seedUnderLive / applyLivePhases —— 中途起来的窗口接上在跑的会话", () => {
+  /** 新窗口刚起来只收到这一轮后半截：a2 正在流式（还没落盘） */
+  const liveOnly = (): SessionStates =>
+    applyAgentEvent(createSessionStates(), {
+      type: "progress",
+      sessionId: "A",
+      progress: { ...assistantDone("a2", "后半截"), type: "item_updated" },
+    } as AgentEvent);
+
+  test("事件就地建的槽没种过盘、phase 停在 idle（这正是 bug 的起点）", () => {
+    const states = liveOnly();
+    assert.equal(states.get("A")?.seeded, false);
+    assert.equal(states.get("A")?.phase, "idle");
+  });
+
+  test("打开时把盘上的历史补到实时内容前面：顺序对、不重复、流式那条还在", () => {
+    // 盘上：u1 a1 是更早的往来，u2 是这一轮的用户消息；a2 还没落盘
+    const disk = [userItem("u1", 1000), { ...assistantDone("a1", "早先的回答").item, timestamp: 1500 }, userItem("u2", 2000)];
+    const next = seedUnderLive(liveOnly(), "A", disk, null, { hasMore: true, compactionsBefore: 0 });
+    const entry = next.get("A")!;
+    assert.deepEqual(selectTranscript(entry.transcript).map((item) => item.id), ["u1", "a1", "u2", "a2"]);
+    assert.equal(entry.seeded, true);
+    assert.equal(entry.window.firstId, "u1");
+    assert.equal(entry.window.hasMore, true);
+  });
+
+  test("窗口起来后才落盘的条目（槽里已有）按 id 去重，轮尾文件卡同理", () => {
+    let states = liveOnly();
+    states = applyAgentEvent(states, progress("A", assistantDone("a2", "说完了")));
+    states = applyAgentEvent(states, { type: "fileTurnView", sessionId: "A", turnId: "ft1", changes: [{ path: "/x", added: 1, removed: 0 }] } as AgentEvent);
+    const fileTurn: FileTurnRecord = { role: "file-turn", id: "ft1", timestamp: 3000, changes: [] };
+    const disk: SessionRecord[] = [userItem("u2", 2000), { ...assistantDone("a2", "说完了").item, timestamp: 2500 }, fileTurn];
+    const entry = seedUnderLive(states, "A", disk).get("A")!;
+    assert.deepEqual(selectTranscript(entry.transcript).map((item) => item.id), ["u2", "a2"]);
+    assert.equal(entry.fileTurns.length, 1);
+  });
+
+  test("种过盘的槽不再动；槽不在就整槽种", () => {
+    const seeded = seedFromDisk(new Map(), "A", [userItem("u1", 1000)]);
+    assert.equal(seedUnderLive(seeded, "A", [userItem("u0", 500)]), seeded);
+    const fresh = seedUnderLive(new Map(), "B", [userItem("u1", 1000)]);
+    assert.equal(fresh.get("B")?.seeded, true);
+    assert.deepEqual(selectTranscript(fresh.get("B")!.transcript).map((item) => item.id), ["u1"]);
+  });
+
+  test("盘上什么都没补到（本窗口新开的会话）：分页锚点不动", () => {
+    let states = applyAgentEvent(createSessionStates(), progress("A", assistantDone("a1", "x")));
+    states = seedUnderLive(states, "A", [{ ...assistantDone("a1", "x").item }], null, { hasMore: true, compactionsBefore: 0 });
+    assert.equal(states.get("A")?.window.firstId, null);
+    assert.equal(states.get("A")?.window.hasMore, false);
+  });
+
+  test("live-phases 把没收到 phase 事件的槽标成在跑；压缩照实标", () => {
+    const next = applyLivePhases(liveOnly(), { A: "turn", B: "compaction", C: "retry" });
+    assert.equal(next.get("A")?.phase, "turn");
+    assert.equal(next.get("B")?.phase, "compaction");
+    assert.equal(next.get("C")?.phase, "turn");
+  });
+
+  test("回执在路上时已经报过 idle 的会话不被倒回在跑", () => {
+    const states = applyAgentEvent(liveOnly(), { type: "phase", sessionId: "A", phase: "idle" });
+    assert.equal(applyLivePhases(states, { A: "turn" }).get("A")?.phase, "idle");
   });
 });

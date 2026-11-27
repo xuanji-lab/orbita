@@ -4,21 +4,20 @@
  * 为什么要垫：没加载过任何页面的 WebContentsView 是透明的，而所有 tab 叠在同一块
  * 区域上——不垫底色，空白的用户 tab 会透出下面 agent tab 的页面。
  *
- * 为什么按档而不是按系统深浅：深色有黛 / 玄两档、浅色有明 / 两档纸面，各自的壳底不同；
+ * 为什么按档而不是按系统深浅：深色有黛 / 玄两档，各自的壳底不同；
  * 只看 nativeTheme 的深浅，空白页会和工具条、主窗口的壳对不上色。
  *
  * 主进程读不到 CSS 变量，所以这里抄一份色值；`page-background.test.ts` 逐档对照
- * tokens/colors.css 的 `--color-bg-app`，改了 token 忘了改这里会当场红。
+ * tokens/colors.css 的 `--color-bg-app`，改了 token 忘了改这里会当场红。主进程里其余要用
+ * 壳底色的地方（sandbox 的首帧垫底、Windows / Linux 窗口的 backgroundColor）都引用这张表，不另抄。
  */
 import type { ThemePreference } from "../../shared/settings.ts";
 import { resolveTheme } from "../../shared/theme-resolve.ts";
 
 export const PAGE_BACKGROUNDS: Record<Exclude<ThemePreference, "system">, string> = {
-  light: "#e7ebef",
+  light: "#f5f5f5",
   graphite: "#202021",
   black: "#1b1e23",
-  copybook: "#e6e4dc",
-  typescript: "#e6e4dc",
 };
 
 export function pageBackgroundColor(preference: ThemePreference, prefersDark: boolean): string {

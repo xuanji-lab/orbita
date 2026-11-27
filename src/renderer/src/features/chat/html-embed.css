@@ -1,0 +1,96 @@
+/*
+ * 回答里的内嵌交互图（HtmlEmbedBlock）。外框与相邻的 mermaid 图、代码块同一套：面板底、淡发丝、--radius-md、
+ * --space-3 内边距——同屏时三者是一个家族。iframe 透明（文档自己不画底色），所以图就画在这块面板上。
+ * 右上角两个键（看源码 / 复制）只在悬停或键盘聚焦时浮现，平时不占位（行尾血线规矩：悬停动作不占位）。
+ */
+.chat-md .embed-block {
+  position: relative;
+  margin: var(--space-2) 0;
+}
+
+.chat-md .embed-frame-box,
+.chat-md .embed-pending {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  /* 内容盒高度 = iframe 量到的高度（box-sizing 由 height 内联给的是内容高，这里改成边框盒会少 2×(内边距+边框)） */
+  box-sizing: content-box;
+  overflow: hidden;
+}
+
+/* 对话列被右栏挤得很窄时，图不跟着挤成一列竖排的字：iframe 保底 480 宽，框里横向滚 */
+.chat-md .embed-frame-box {
+  overflow-x: auto;
+}
+
+.chat-md .embed-frame {
+  display: block;
+  width: 100%;
+  min-width: 480px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+/* 还没就绪时不露半截排版（占位盒保持高度，图准备好一次出现） */
+.chat-md .embed-block[data-phase="loading"] .embed-frame {
+  visibility: hidden;
+}
+
+.chat-md .embed-pending {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.chat-md .embed-actions {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  z-index: 1;
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-0-5);
+  background: var(--color-bg-panel);
+  border-radius: var(--radius-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms cubic-bezier(.22, 1, .36, 1);
+}
+
+/* 指针在 iframe 里时外层没有 :hover（iframe 是独立进程的框架），由 iframe 报进出、宿主写 data-pointer */
+.chat-md .embed-block:hover .embed-actions,
+.chat-md .embed-block[data-pointer="inside"] .embed-actions,
+.chat-md .embed-block:focus-within .embed-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 失败时一行原因在上面，键落在源码块的右上角 */
+.chat-md .embed-fail + .embed-actions {
+  top: calc(var(--font-size-sm) * var(--line-height-ui) + var(--space-1) + var(--space-1));
+}
+
+.chat-md .embed-fail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.chat-md .embed-fail .orbita-icon {
+  flex: 0 0 auto;
+  color: var(--color-danger);
+}
+
+.chat-md .embed-source {
+  margin: 0;
+  max-height: 480px;
+  overflow: auto;
+}

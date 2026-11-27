@@ -3,13 +3,13 @@
  * 只给视觉模型（provider 约束，read 读图同款省略口径），details.showImage 永远
  * 全量给 UI（用户的画廊不随模型视力消失）。PNG 夹具用 1×1 最小合法图。
  */
-import { test, describe, before, after } from "node:test";
+import { test, describe, before, after, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as ncanvas from "@napi-rs/canvas";
-import { createImageTools, SHOW_IMAGE_MAX_COUNT, SHOW_IMAGE_MAX_EDGE } from "./image-tools.ts";
+import { createImageTools, insideRoots, SHOW_IMAGE_MAX_COUNT, SHOW_IMAGE_MAX_EDGE } from "./image-tools.ts";
 
 /** 1×1 红色 PNG（最小合法图，魔数 PNG） */
 const TINY_PNG = Buffer.from(
@@ -63,6 +63,13 @@ describe("show_image", () => {
     assert.equal(details.images.length, 1);
   });
 
+  test("返回的文字教模型在回答里放图：每张给绝对路径的 markdown 写法，要求每张一句解释", async () => {
+    const result = await run(["a.png"], VISION_CTX);
+    const text = (result.content[0] as { text: string }).text;
+    assert.match(text, /!\[a\.png\]\(<[^>]*a\.png>\)/);
+    assert.match(text, /one-sentence explanation/);
+  });
+
   test("上限：0 张与超过 6 张都报错带数量", async () => {
     await assert.rejects(run([]), /requires "paths"/);
     const many = Array.from({ length: SHOW_IMAGE_MAX_COUNT + 1 }, (_, i) => `${i}.png`);
@@ -92,5 +99,33 @@ describe("show_image", () => {
     assert.equal(details.images[0]!.data, contentImage.data);
     const width = Buffer.from(details.images[0]!.data, "base64").readUInt32BE(16);
     assert.equal(width, SHOW_IMAGE_MAX_EDGE);
+  });
+});
+
+describe("show_image：会话看不到的图先拷进工作台 shots/", () => {
+  it("工作台外的图拷过去，回执给新路径；工作区里的图不拷", async () => {
+    const root = await mkdtemp(join(tmpdir(), "orbita-showimg-vis-"));
+    const ws = join(root, "ws");
+    const wb = join(root, "wb");
+    const outside = join(root, "tmp");
+    await mkdir(ws, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(ws, "in.png"), TINY_PNG);
+    await writeFile(join(outside, "out.png"), TINY_PNG);
+    const t = createImageTools(ws, { roots: [], workbench: wb })[0]!;
+    const res = await t.execute("c", { paths: [join(ws, "in.png"), join(outside, "out.png")] }, undefined, undefined, VISION_CTX);
+    const text = res.content.map((c) => (c.type === "text" ? c.text : "")).join(" ");
+    assert.ok(text.includes(`(<${join(ws, "in.png")}>)`), text);
+    assert.ok(text.includes(`(<${join(wb, "shots", "out.png")}>)`), text);
+    assert.deepEqual(await readFile(join(wb, "shots", "out.png")), TINY_PNG);
+    // 再来一次同名：不覆盖，加 -2
+    const again = await t.execute("c2", { paths: [join(outside, "out.png")] }, undefined, undefined, VISION_CTX);
+    assert.ok(again.content.map((c) => (c.type === "text" ? c.text : "")).join(" ").includes("out-2.png"));
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("insideRoots：前缀相同但不是子目录的不算", () => {
+    assert.equal(insideRoots("/a/bc/x.png", ["/a/b"]), false);
+    assert.equal(insideRoots("/a/b/x.png", ["/a/b"]), true);
   });
 });

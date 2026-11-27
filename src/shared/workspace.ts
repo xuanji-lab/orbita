@@ -46,6 +46,49 @@ export interface Workspace {
    * 磁盘上缺席 = 空数组（字段之前存的工作区不迁移）。顺序是用户挂上的顺序，进 prompt 时也按它。
    */
   attachedDirs: string[];
+  /**
+   * 联星（璇玑星系规则：两个主智能体因长期共享目标、记忆与协作形成联星系统）：与哪个工作区结成联星。
+   * 用户在设计面板主星页手动选（先不自动推断）。**两边对称**：A.binaryWith = B 当且仅当 B.binaryWith = A，
+   * 写入只走 pairBinary（一次改两条，同一次原子写），读回再过 consistentBinaries 丢掉单边 / 悬空的。缺席 = 没有伴星
+   */
+  binaryWith?: string;
+}
+
+/**
+ * 结成 / 解除联星：id 与 partner 配对（partner null = 解除）。两边原来各自的伴星一并解除（一颗星只有一个伴星），
+ * 自己配自己、配不存在的工作区一律当解除。返回新列表（不改入参）。
+ */
+export function pairBinary(workspaces: readonly Workspace[], id: string, partner: string | null): Workspace[] {
+  const exists = (wid: string): boolean => workspaces.some((w) => w.id === wid);
+  const target = partner !== null && partner !== id && exists(partner) ? partner : null;
+  const self = workspaces.find((w) => w.id === id);
+  // 这次要动的：自己、新伴星、两边原来的伴星
+  const touched = new Set<string>([id]);
+  if (self?.binaryWith !== undefined) touched.add(self.binaryWith);
+  if (target !== null) {
+    touched.add(target);
+    const old = workspaces.find((w) => w.id === target)?.binaryWith;
+    if (old !== undefined) touched.add(old);
+  }
+  return workspaces.map((w) => {
+    if (!touched.has(w.id)) return w;
+    const next = target === null ? undefined : w.id === id ? target : w.id === target ? id : undefined;
+    if (next === w.binaryWith) return w;
+    const { binaryWith: _drop, ...rest } = w;
+    return next === undefined ? rest : { ...rest, binaryWith: next };
+  });
+}
+
+/** 读回时守对称：伴星不存在、或对方没有指回来的，丢掉（手改坏的文件不画出半个联星） */
+export function consistentBinaries(workspaces: readonly Workspace[]): Workspace[] {
+  const byId = new Map(workspaces.map((w) => [w.id, w]));
+  return workspaces.map((w) => {
+    if (w.binaryWith === undefined) return w;
+    const other = byId.get(w.binaryWith);
+    if (other !== undefined && other.id !== w.id && other.binaryWith === w.id) return w;
+    const { binaryWith: _drop, ...rest } = w;
+    return rest;
+  });
 }
 
 /**
@@ -116,6 +159,7 @@ export function parseWorkspace(raw: unknown): Workspace | null {
     path,
     createdAt: typeof value["createdAt"] === "number" ? value["createdAt"] : 0,
     attachedDirs: parseAttachedDirs(value["attachedDirs"]),
+    ...(typeof value["binaryWith"] === "string" && value["binaryWith"] !== "" ? { binaryWith: value["binaryWith"] } : {}),
   };
 }
 

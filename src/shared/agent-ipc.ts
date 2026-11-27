@@ -10,14 +10,14 @@
  * 事后再补这个参数意味着每一处状态读写都要回头改。
  */
 import type { SessionPhase, ThinkingLevel as PiThinkingLevel, TranscriptProgress } from "@earendil-works/pi-protocol";
-import type { PermissionAnswer, PermissionMode } from "./permission.ts";
 import type { ThinkingLevel } from "./thinking.ts";
 import type { McpServer, McpStatus, McpStatusSnapshot } from "./mcp.ts";
 import type { ModelDecl } from "./provider.ts";
 import type { CompactedRecord } from "./session.ts";
-import type { FileChangePayload, FileChangeView } from "./revert.ts";
+import type { FileChangePayload, FileChangeView, MediaArtifact } from "./revert.ts";
 import type { PromptImage, SentImage } from "./prompt-images.ts";
 import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
+import type { ReplyLang } from "./reply-language.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
@@ -35,12 +35,14 @@ import type {
   ChannelStatus,
 } from "./channel.ts";
 import type { AutomationToolOutcome, AutomationToolRequest } from "./automation.ts";
+import type { SubAgentsChanged, SubAgentToolOutcome, SubAgentToolRequest, SubAgentTurnIdentity } from "./sub-agent.ts";
 import type { IntentRecallModels } from "./intent-lab.ts";
 import type { IntentAskView, IntentRecallStreamEvent } from "./intent-recall.ts";
 import type { IntentConfirmDecision } from "./intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome, PluginAgentScope } from "./plugin.ts";
 import type { PluginBoardOutcome } from "./plugin-board.ts";
 import type { IntentRecallRecord } from "./session.ts";
+import type { QuotaExhaustedHint } from "./quota.ts";
 import type {
   MemoryBackfillProgress,
   MemoryDownloadProgress,
@@ -64,14 +66,18 @@ export const ipcChannels = {
   agentInterrupt: "agent:interrupt",
   /** 手动压缩上下文（输入框 `/compact`）。结果走 agent:event 的 compaction 链 */
   agentCompact: "agent:compact",
-  agentSetMode: "agent:set-mode",
   /** 会话内改思考档：下一轮生效（同 setModel 的语义）。只落 meta，不经 agent 进程 */
   agentSetThinkingLevel: "agent:set-thinking-level",
   /** 会话内换模型（C-4）：下一轮生效。结果走 agent:event 的 model / failed 事件 */
   agentSetModel: "agent:set-model",
-  agentAnswerPermission: "agent:answer-permission",
   /** 意图确认卡的应答（实验功能 intent-system）：载荷 requestId + IntentConfirmDecision，回 void */
   agentAnswerIntentConfirm: "agent:answer-intent-confirm",
+  /**
+   * 此刻不在空闲的会话及其 phase（主进程按 phase 事件记的真值），回 LiveSessionPhases。
+   * 给**中途才起来的窗口**用：一轮开头的 phase 事件发给的是别的（或刷新前的）窗口，
+   * 这扇窗只收到后半截流式帧，不问一句就会把在跑的会话当成空闲（切液态玻璃要重开窗口，2026-11-26）
+   */
+  agentLivePhases: "agent:live-phases",
   /**
    * 意图系统（实验）的三条主进程 HTTP 通道：
    * - intent:health —— 探活 intent-lab（GET /health），回 IntentHealth | null
@@ -98,6 +104,11 @@ export const ipcChannels = {
   workspaceAttachDir: "workspace:attach-dir",
   /** 从 attachedDirs 移除一条；不在列表里不报错 */
   workspaceDetachDir: "workspace:detach-dir",
+  /**
+   * 结成 / 解除联星：请求 (id, partnerId | null)，两边一次改好（同一次原子写），返回更新后的工作区列表。
+   * 两边原来各自的伴星一并解除；配自己 / 配不存在的工作区当解除（shared/workspace.ts 的 pairBinary）
+   */
+  workspaceSetBinary: "workspace:set-binary",
   providerBuiltins: "provider:builtins",
   /**
    * 「添加」页点开一张还没保存的服务商卡片：现拉一次这家的目录（节流内不拉），
@@ -107,6 +118,11 @@ export const ipcChannels = {
   providerDiscover: "provider:discover",
   providerTest: "provider:test",
   providerReveal: "provider:reveal",
+  /**
+   * 厂商账号额度（余额 / 套餐窗口）：入参 QuotaQuery，回 QuotaResult。
+   * 主进程负责取密钥、打厂商端点、落缓存；密钥不进返回值。
+   */
+  providerQuota: "provider:quota",
   /**
    * Claude 订阅账号的 OAuth 登录：主进程起回调服务器 + 开系统浏览器，成功后直接
    * 落盘 provider 与凭据，返回 UpsertResult。凭据（access / refresh token）全程
@@ -165,8 +181,6 @@ export const ipcChannels = {
   automationUpdate: "automation:update",
   automationAct: "automation:act",
   automationPromote: "automation:promote",
-  /** 对话里「改权限」那一行的按钮（入参 AutomationModeRowRequest，回 AutomationModeRowResult；结局以数据返回，不抛） */
-  automationModeFromRow: "automation:mode-from-row",
   /** 主进程 → renderer 推送（`AutomationEvent`）：任何一条自动化变了 */
   automationEvent: "automation:event",
   sessionList: "session:list",
@@ -183,17 +197,27 @@ export const ipcChannels = {
   sessionLoad: "session:load",
   /** 拉更早的一页（滚动触顶）：载荷 (id, before 记录 id, limit)，回 SessionOlderPage */
   sessionLoadOlder: "session:load-older",
+  /**
+   * 状态卡摘要（2026-11-27）：载荷会话 id 数组（主会话 + 全部子会话一批），回
+   * `Record<string, StatusDigestState | null>`（null = 会话已删）。主进程把每条会话的
+   * 记录 fold 成摘要（sessions/<id>.status.json），renderer 取回后只把尾窗里比摘要新的
+   * 记录用同一个 fold 叠上去——打开大会话不再逐页拉全量历史。
+   */
+  sessionStatusDigests: "session:status-digests",
   sessionRename: "session:rename",
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */
   sessionStar: "session:star",
-  /** 完成状态：open → done/done_with_todos 记关闭时刻，reopen 清空；消费者是侧栏菜单/标识、会话头部按钮与筛选 chip */
-  sessionSetCompletion: "session:set-completion",
   /**
    * 意图召回的会话级开关（实验功能 intent-system）：载荷 (sessionId, boolean)，回 void。
    * 只落 meta（intentEnabled），下一轮开轮时主进程现读现装配；输入框旁的小开关用。
    */
   sessionSetIntentEnabled: "session:set-intent-enabled",
+  /**
+   * 会话级自动压缩开关：载荷 (sessionId, boolean)，回 void。只落 meta（autoCompact），下一轮开轮时主进程现读现装配；
+   * 用量环菜单里「为这条会话打开 / 关闭自动压缩」用。
+   */
+  sessionSetAutoCompact: "session:set-auto-compact",
   /**
    * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
    * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
@@ -296,6 +320,12 @@ export const ipcChannels = {
    */
   fsWrite: "fs:write",
   /**
+   * 给音 / 视频文件要一个播放地址（同 root/dir 白名单，且须是媒体扩展名，回 `FileMediaUrl`，files.ts）。
+   * 不读字节：主进程发一个映射到 realpath 的随机 token，renderer 的 <audio> / <video> 经
+   * `orbita-media://` 协议按 Range 流式读，大文件不过 IPC
+   */
+  fsMediaUrl: "fs:media-url",
+  /**
    * 建一个文件的行索引（同 root/dir 白名单，回 `FileLineIndex`，files.ts）：大于
    * PREVIEW_TEXT_LIMIT 的文本走「按行分段预览」时，renderer 先问这份文件有多少行。
    * 主进程按 8 MB 分块扫换行、逐块让出事件循环；同一个文件同时只扫一遍（在途的请求合并），
@@ -318,6 +348,12 @@ export const ipcChannels = {
    * 网页文件的默认打开方式——系统默认应用（fs:open）退为次要按钮
    */
   fsOpenInBrowser: "fs:open-in-browser",
+  /**
+   * 网页文件的缩略图（同 root/dir 白名单，且须 isWebPageFile；回 `WebThumb | null`，files.ts）。
+   * 主进程开一个隐藏窗口真的把页面跑起来（脚本生成的内容也在）、截一张图；按「路径 + mtime + 大小」缓存，
+   * 同时只截一张。超时 / 白名单外 / 加载失败回 null，renderer 落成图标卡。
+   */
+  fsWebThumb: "fs:web-thumb",
   /**
    * 把一批绝对路径 stat 成盘上事实（回 `FsEntryFact[]`，与路径等长同序：kind 是
    * file / dir 还是 null、size 多大）。消费者是输入框的附件分拣与文件面板的已发送
@@ -399,8 +435,6 @@ export const ipcChannels = {
   docOfmResolve: "doc:ofm-resolve",
   /** 插图：复制进附件目录，回要插入的 markdown */
   docInsertImage: "doc:insert-image",
-  /** 遗留事项（收尾仪式收割）：全部清单。侧栏面板、角标与「Has todos」筛选都吃它，按 sourceSessionId 现算 */
-  carryoverList: "carryover:list",
   /** 每日 token 用量：最近 7 天（含今天，旧的在前；载荷形状在 shared/usage.ts）。回 `UsageDayTotal[]`，回填还在跑时可能是全 0——跑完会经 usage:event 推一份真值 */
   usageWeek: "usage:week",
   /** 主进程 → renderer 推送：用量账本每次变化（模型调用落账 / 回填完成）推一份新的 7 天快照（`UsageWeekEvent`） */
@@ -421,20 +455,6 @@ export const ipcChannels = {
   updaterState: "updater:state",
   /** 自动更新：最近几个版本的 Release 列表（`RecentReleasesResult`，主进程打 GitHub API 并缓存 10 分钟） */
   updaterRecentReleases: "updater:recentReleases",
-  /**
-   * 收尾（契约在 shared/wrapup.ts）：这次要扫的轮次与各轮用量。载荷 sessionId，回 `WrapupPlan | null`
-   * （会话不存在 / 没有新轮次时 null）。
-   */
-  sessionWrapupPlan: "session:wrapup-plan",
-  /** 收尾：按用户一句话改清单（家务活模型一次独立小调用，不进会话）。载荷 (sessionId, WrapupReviseInput)，回 `WrapupReviseResult` */
-  sessionWrapupRevise: "session:wrapup-revise",
-  /**
-   * 收尾确认：做完的事落进 meta.wrapups 并记进任务账本、留下的事落遗留清单、会话标完成、
-   * 这条会话在接着做的遗留事项（meta.resumedCarryovers）标为做完。载荷 (sessionId, WrapupConfirmInput)，回 void
-   */
-  sessionWrapupConfirm: "session:wrapup-confirm",
-  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
-  carryoverSetStatus: "carryover:set-status",
   /** 会话回退：算计划（确认框列清单用），不执行 */
   sessionRevertPlan: "session:revert-plan",
   /** 会话回退：撤回目标消息及之后全部（对话 + pi 本子 + 文件快照） */
@@ -447,6 +467,36 @@ export const ipcChannels = {
   sessionOpenArtifactInBrowser: "session:open-artifact-in-browser",
   /** 轮尾产物打开方式二：在系统文件管理器里定位它（仅会话文件账里记过的文件） */
   sessionRevealArtifact: "session:reveal-artifact",
+  /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名），id → ArtifactSummary；读不到的 id 不在回执里 */
+  sessionArtifactSummary: "session:artifact-summary",
+  /** 发件箱（shared/outbox.ts）：发送前落盘、落账后删、启动时列出没落账的 */
+  outboxPut: "outbox:put",
+  outboxRemove: "outbox:remove",
+  outboxList: "outbox:list",
+  /** 星系设计稿（shared/planet-design.ts）：读 / 写工作区 planet/ 里的插件设计稿与伴随文件 galaxy.json */
+  planetRead: "planet:read",
+  planetWrite: "planet:write",
+  /**
+   * 子智能体档案（shared/sub-agent.ts）：星系设计面板里新建 / 改 / 删一个子智能体，写 planet/agents/<id>/agent.json
+   * 与 galaxy.json 的名单。与聊天里 create_sub_agent / update_sub_agent 写的是同一份；写完主进程广播 subAgentsChanged。
+   */
+  subAgentCreate: "subagent:create",
+  subAgentUpdate: "subagent:update",
+  subAgentDelete: "subagent:delete",
+  /**
+   * 「生成形象」（shared/planet-avatar.ts）：给一颗天体出地表候选（幕后会话跑插件 planet-render）、读当前这一轮、
+   * 按自然语言要求以旧候选为基础改、挑一张写进 planet/、取消。历史从 planet/ 里的原子写记录与插件账本合并读回。
+   * 进度经 planetAvatarEvent 推（载荷 AvatarJobEvent，带整份状态）。
+   */
+  planetAvatarGenerate: "planet:avatar-generate",
+  planetAvatarGet: "planet:avatar-get",
+  planetAvatarHistory: "planet:avatar-history",
+  planetAvatarSelect: "planet:avatar-select",
+  planetAvatarCancel: "planet:avatar-cancel",
+  planetAvatarEvent: "planet:avatar-event",
+  /** 面板「用生图工具」开关：读 / 拨（真源是插件「行星造物」的策略文件，经它的脚本读写） */
+  planetAvatarPolicyGet: "planet:avatar-policy",
+  planetAvatarPolicySet: "planet:avatar-policy-set",
   /** 审查面板：列一个来源的全部改动（task / unstaged / staged / branch） */
   reviewList: "review:list",
   /** 审查面板：拉一个文件的 diff 正文（unified diff，按需） */
@@ -472,6 +522,10 @@ export const ipcChannels = {
    * 裁决：不考虑专注时合盖，睡就把这一轮收掉）。
    */
   focusSuspend: "focus:suspend",
+  /** 电源状态（shared/power.ts）：renderer 主动问一次，返回 PowerState */
+  powerState: "power:state",
+  /** 电源状态变了（powerMonitor 的 on-battery / on-ac，主进程 → renderer 单向广播，载荷 PowerState） */
+  powerChanged: "power:changed",
   /** 探测迁移来源：只 stat 固定清单里的路径，不读内容（返回 ImportDetectResult） */
   importDetect: "import:detect",
   /** 扫描勾选的来源（dry-run，入参 ImportScanInput）：产出可导入计划与跳过明细 */
@@ -577,15 +631,22 @@ export const ipcChannels = {
   boardWeek: "board:week",
   /** 按快照画卡：模板哈希 → 一次性 iframe 地址（入参 BoardFrameRequest，回 BoardFrameResult；哈希不合规 / 仓库里没有回 null） */
   boardFrame: "board:frame",
+  /** 截宿主窗口里的一块看板（入参 BoardShotRequest，回 BoardShotResponse；只截 event.sender 自己的页面） */
+  boardShot: "board:shot",
+  /** 回答里的 ```html-embed 内嵌交互图：包好的文档 → 一次性 iframe 地址（契约在 chat-embed.ts；入参不合规回 null） */
+  chatEmbedFrame: "chat:embed-frame",
   /**
    * 对话里「装上插件」那一行的「安装」（入参 PluginRowInstallRequest，回 PluginRowInstallResult）。
-   * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区 / manual 档）：主进程重新校验会话、
+   * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区；旧会话里还有当时在手动档留下的）：主进程重新校验会话、
    * 路径与指纹，对得上才装；不对以数据返回，不抛
    */
   pluginInstallFromRow: "plugin:install-from-row",
 } as const;
 
 export type IpcChannel = (typeof ipcChannels)[keyof typeof ipcChannels];
+
+/** agent:live-phases 的回执：只列不在 idle 的会话（sessionId → phase） */
+export type LiveSessionPhases = Readonly<Record<string, Exclude<SessionPhase, "idle">>>;
 
 /**
  * 主进程交给 agent 进程的环境变量：pi.dev 目录覆盖层的缓存文件（Orbita 自己的数据目录里）。
@@ -758,9 +819,8 @@ export interface AgentTurnContext {
   resume: { piSessionFile: string } | null;
   providerId: string;
   modelId: string;
-  mode: PermissionMode;
   /**
-   * 这轮跑在哪一档思考上。**必填**（同 mode 的理由）：可选就会静默退到
+   * 这轮跑在哪一档思考上。**必填**：可选就会静默退到
    * pi 解析链的用户全局配置——正是这一刀要修的病。真源是 SessionMeta，
    * 主进程与 renderer 都从它读；模型 clamp 后的真值经 `thinking` 事件回传。
    */
@@ -784,10 +844,11 @@ export interface SubmitAgentInput extends AgentTurnContext {
   /** 随消息发的粘贴文本块（全文、永不截断），按加入顺序；agent 进程组装进正文之后 */
   pasted?: string[];
   /**
-   * 这一轮是在接着做某条遗留事项（遗留清单的「继续」）：主进程把它记进这条会话的
-   * meta.resumedCarryovers，会话收尾确认时那条遗留事项自动标为做完。
+   * 只在**开新会话的那一轮**有意义：false = 这条会话不自动压缩（编排入口页「新开专门的会话」）。
+   * 主进程这一轮就按它装配压缩参数，并在建 meta 时把它落成 meta.autoCompact；之后的轮次读 meta，不再看它。
+   * 缺席 = 跟随全局设置。
    */
-  carryoverId?: string;
+  autoCompact?: false;
 }
 
 /** 手动压缩（renderer → 主进程）。压缩是一次真实的 LLM 调用，同样要带全套开工上下文 */
@@ -903,7 +964,6 @@ export type AgentCommand =
       workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
-      mode: PermissionMode;
       /** 这轮的思考档（同 AgentTurnContext.thinkingLevel；开轮命令必带，不退 pi 全局配置） */
       thinkingLevel: ThinkingLevel;
       /**
@@ -919,8 +979,7 @@ export type AgentCommand =
       attachmentsDir: string;
       /**
        * 工具永不许写的目录（会话账本 sessions/ 与 pi 的本子 pi-sessions/）。
-       * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：tool_call 闸门
-       * 在权限档判定**之前**拦——「会话记录不可变」是全档不变量，Skip 也抬不掉。
+       * **主进程定，agent 进程只收数据**（同 piSessionDir 的纪律）：工具闸门拦——「会话记录不可变」是不变量。
        */
       protectedPaths: string[];
       /**
@@ -969,12 +1028,6 @@ export type AgentCommand =
        * 单语主题说了算，双语主题听语言设置），runtime 只收数据。缺席 = "en"。
        */
       attributionLanguage?: Language;
-      /**
-       * 实验功能「PDF 引用」的开关（settings.experimentalFeatures["pdf-citations"]）。
-       * **主进程从设置装配**（同 gitAttribution）。开着时 runtime 才注册 cite_pdf
-       * 并讲它的用法；缺席 = 关
-       */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /**
@@ -1006,6 +1059,16 @@ export type AgentCommand =
        * automation_create / list / cancel。缺席 = 不注册，命令形状与 main 一字不差。
        */
       automationTools?: boolean;
+      /**
+       * 子智能体工具（create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents）的注册开关。**主进程装配**：
+       * 编排形态、会话属于某个工作区、且是根会话（主智能体）才带 true——星际空间没有主星，不能建行星。缺席 = 不注册。
+       */
+      subAgentTools?: boolean;
+      /**
+       * 这条会话是替哪个子智能体干活（attributionOf(meta)，指名派活时记下）：主进程每轮按它现读档案，
+       * runtime 把职能讲进系统提示。缺席 = 普通会话 / 档案读不到（降级成普通子会话，不拦开轮）。
+       */
+      subAgent?: SubAgentTurnIdentity;
     }
   /**
    * 用 text（一条用户消息）异步生成会话标题（C-3）。**结果不当场返回**：标题
@@ -1050,18 +1113,6 @@ export type AgentCommand =
     }
   | {
       /**
-       * 家务活模型的一次独立小调用（收尾清单按用户反馈改写）：system + prompt 由主进程组好，
-       * 回复原文经 `choreCompleted` 事件按 requestId 回传。不开会话、不落盘（同 summarizeFocus）。
-       */
-      type: "choreComplete";
-      requestId: string;
-      provider: ProviderSecrets;
-      modelId: string;
-      system: string;
-      prompt: string;
-    }
-  | {
-      /**
        * 连接探测（设置 › 模型服务的 Test，OAuth 令牌专用路由）：主进程的裸 fetch
        * 补齐身份头后仍被 429（实测 2026-10），官方 SDK 客户端自带的遥测指纹补不了——
        * 干脆让探测走 agent 进程里 pi 的同一个客户端，与真会话完全同源。
@@ -1084,6 +1135,10 @@ export type AgentCommand =
       sessionMemory?: boolean;
       /** 自动化工具的注册开关，语义同 submit.automationTools */
       automationTools?: boolean;
+      /** 子智能体工具的注册开关，语义同 submit.subAgentTools */
+      subAgentTools?: boolean;
+      /** 替哪个子智能体干活，语义同 submit.subAgent */
+      subAgent?: SubAgentTurnIdentity;
       /** 随消息发的图片，语义同 submit */
       images?: SentImage[];
       /** 随消息引用的文件，语义同 submit */
@@ -1097,7 +1152,6 @@ export type AgentCommand =
       workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
-      mode: PermissionMode;
       /** 这轮的思考档，语义同 submit */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
@@ -1116,8 +1170,6 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
-      /** 实验功能「PDF 引用」的开关，语义同 submit */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1166,7 +1218,6 @@ export type AgentCommand =
       workspaceName?: string;
       provider: ProviderSecrets;
       modelId: string;
-      mode: PermissionMode;
       /** 这轮的思考档，语义同 submit（压缩轮内部照旧强制 off，这里传的是会话意图档） */
       thinkingLevel: ThinkingLevel;
       piSessionDir: string;
@@ -1185,8 +1236,6 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
-      /** 实验功能「PDF 引用」的开关，语义同 submit */
-      pdfCitations?: boolean;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1209,7 +1258,7 @@ export type AgentCommand =
    * 已开会话的 customTools 在开机时已定格，不受影响；下一轮开机拿新工具集。
    */
   | { type: "mcpReload" }
-  /** 4-3：主进程对 skillWriteRequest 的回执（同 permissionAnswer 的 requestId 模式） */
+  /** 4-3：主进程对 skillWriteRequest 的回执（按 requestId 对回去） */
   | {
       type: "skillWriteResult";
       requestId: string;
@@ -1277,6 +1326,8 @@ export type AgentCommand =
   | ({ type: "channelSendResult"; requestId: string } & ChannelSendOutcome)
   /** 自动化：主进程对 automationRequest 的回执（delegateResult 同款） */
   | ({ type: "automationResult"; requestId: string } & AutomationToolOutcome)
+  /** 子智能体：主进程对 subAgentRequest 的回执（automationResult 同款 ok 双分支） */
+  | ({ type: "subAgentResult"; requestId: string } & SubAgentToolOutcome)
   | {
       /**
        * 会话回退的 pi 侧一刀（不依赖任何表，直接裁文件）：打开源本子 →
@@ -1319,7 +1370,6 @@ export type AgentCommand =
       cwd: string;
       notice: string;
     }
-  | { type: "setMode"; sessionId: string; mode: PermissionMode }
   /**
    * 会话内换模型（C-4）。provider 是主进程装配好的完整载荷（create 同款）。
    * **对正在跑的轮无效**：pi 在轮启动时快照模型，当前轮用旧模型跑完，
@@ -1340,8 +1390,6 @@ export type AgentCommand =
       cwd: string;
       roles: readonly ("user" | "assistant")[];
     }
-  /** 用户对一次工具审批的回答，按 requestId 对回去 */
-  | { type: "permissionAnswer"; requestId: string; answer: PermissionAnswer }
   /** 意图确认卡的回答（实验功能 intent-system），按 requestId 对回去；停止 / 抢跑时 runtime 侧按取消结掉 */
   | { type: "intentConfirmResult"; requestId: string; decision: IntentConfirmDecision }
   | { type: "dispose"; sessionId: string };
@@ -1392,6 +1440,8 @@ export interface DelegateCard {
   thinkingLevel: ThinkingLevel;
   /** 子会话的工作台路径——从派出卡跳到子会话的产出目录 */
   workbench: string;
+  /** 指名派给了哪个子智能体（delegate 的 subAgentId）；缺席 = 临时子会话 */
+  subAgentId?: string;
 }
 
 /** delegateRequest 的回执载荷：childId / title 供 runtime 拼给模型看的正文，card 给 UI */
@@ -1475,7 +1525,6 @@ export type AgentEvent =
    * 然后**立即**回 pluginInstallResult，不等用户：低风险直接装；其余在对话里留一行带「安装」的行
    * （数据在工具结果的 details 里，随会话落盘），用户点了走 pluginInstallFromRow。
    * scope 的 workspace 一侧由主进程按会话归属解析（agent 不知道 workspaceId，同 skillWriteRequest）。
-   * `mode` 是此刻的权限档：manual 档任何插件都不直接装（那一行就是用户的点头）。
    */
   | {
       type: "pluginInstallRequest";
@@ -1483,7 +1532,6 @@ export type AgentEvent =
       sessionId: string;
       path: string;
       scope: PluginAgentScope | null;
-      mode: PermissionMode;
     }
   /**
    * 已装的插件变了（agent 的 install_plugin 装好了一个、用户点了对话里那一行的「安装」；
@@ -1638,6 +1686,17 @@ export type AgentEvent =
       modelId?: string;
       /** 可选的思考档；缺席时跟着解析出的模型走（见上方 delegateRequest 的说明） */
       thinkingLevel?: ThinkingLevel;
+      /**
+       * 此刻用户的语言（agent 按父会话历史里「用户亲手打的字」算好，shared/reply-language.ts）：
+       * 主进程写进 task 通道消息的 lang，子会话据此写可见文字与汇报。缺席 = 没算出来。
+       */
+      replyLang?: ReplyLang;
+      /**
+       * 指名派给哪个持久子智能体（planet/agents/<id>/agent.json；编排线第一次出现「归属」字段）。
+       * 主进程按父会话所在工作区读档案：读不到就拒（不静默退化成临时子会话），读到就记进子会话 meta.attribution（source assigned）、
+       * 职能讲进子会话的系统提示；档案里有默认模型且 delegate 没给 modelId 时用它。缺席 = 临时子会话（与以前一致）。
+       */
+      subAgentId?: string;
     }
   /**
    * 派发参考：agent 的 model_costs 工具请求。**数据在主进程**（任务账本 usage-tasks.json、
@@ -1651,10 +1710,14 @@ export type AgentEvent =
    * 按这条会话所在的工作区落 `automations.json`（只能管当前工作区的）、回 automationResult。
    * 建出来**直接生效**（2026-10-31 用户裁决，不再有待启用）：默认绑定这条会话（this_session），
    * 到点把指令送回来。自动化新开的会话与子会话的请求主进程直接拒（防递归，不只靠不注册工具）。
-   * `mode` 是这条会话此刻的权限档：agent 给自动化的权限不能高于它——请求 skip 只有会话本身是「放行」才直接改，
-   * 其余在对话里留一行让用户点「允许」（automation_update / automation_create 的 mode 参数）。
    */
-  | { type: "automationRequest"; requestId: string; sessionId: string; mode: PermissionMode; request: AutomationToolRequest }
+  | { type: "automationRequest"; requestId: string; sessionId: string; request: AutomationToolRequest }
+  /**
+   * 子智能体：agent 的 create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents。**存盘在主进程**（同 automationRequest）：
+   * 主进程再核一遍「编排形态 + 有工作区 + 根会话」、校验入参、写工作区 planet/，回 subAgentResult；
+   * 建完 / 改完广播 subAgentsChanged（建完 renderer 弹出星系设计面板停在新行星上）。
+   */
+  | { type: "subAgentRequest"; requestId: string; sessionId: string; request: SubAgentToolRequest }
   /**
    * 子会话：通道发信请求，主进程写账本并回 channelSendResult。父的 reply_subsession
    * （to = { childId }，kind 恒 reply）与子的 report_to_parent（to = "parent"，
@@ -1671,6 +1734,8 @@ export type AgentEvent =
       kind: ChannelMessageKind;
       text: string;
       delivery?: ChannelDelivery;
+      /** 父→子 reply 才带：同 delegateRequest.replyLang，写进这条 reply 通道消息的 lang */
+      replyLang?: ReplyLang;
     }
 /**
  * 4-3：skills 磁盘状态变了（主进程写完广播）。Skills 面板开着就刷新——
@@ -1678,10 +1743,10 @@ export type AgentEvent =
  */
 | { type: "skillsChanged" }
 /**
- * 「以后再做」（carryovers.jsonl）有新增：agent 写 update_plan 时当场记下的事，由主进程在落盘那条
- * 记录时写进清单后广播。无载荷、无 sessionId——界面听到就重拉 carryoverList（skillsChanged 同款）。
+ * 子智能体档案变了（主进程写完广播，聊天里的工具与面板都走这里）：renderer 重读这座星系的 planet/；
+ * 聊天里新建的、且正看着那条会话时，弹出右栏星系设计面板停在新行星上。
  */
-| { type: "carryoversChanged" }
+| ({ type: "subAgentsChanged" } & SubAgentsChanged)
 /**
  * 记忆系统：记忆服务进程写盘后经主进程广播（提取落
  * 条目、事件段收尾 / 归档、记忆库写操作）。无载荷、无 sessionId——界面听到就
@@ -1719,6 +1784,11 @@ export type AgentEvent =
       changes: readonly FileChangePayload[];
       webArtifacts?: readonly string[];
       webArtifactsBatch?: number;
+      /**
+       * 音视频产物候选（脚本生成的 mp3 / mp4 等，同样走旁路扫描与时间窗；只有它、没有 changes 的轮也发）。
+       * 不参与撤销；卡片只显示回答里点了名的。
+       */
+      mediaArtifacts?: readonly MediaArtifact[];
     }
   /**
    * 轮尾账的渲染视图（主进程收到 fileTurn 落盘后广播）：剥掉快照正文，只留路径
@@ -1732,6 +1802,8 @@ export type AgentEvent =
       webArtifacts?: readonly string[];
       /** 批量折叠计数：本轮网页文件变动超过上限，不逐个列（与 webArtifacts 互斥） */
       webArtifactsBatch?: number;
+      /** 音视频产物候选（与 fileTurn 同字段） */
+      mediaArtifacts?: readonly MediaArtifact[];
     }
   /**
    * pi 本子的回退 / 撤销一刀完成（revertPiBook / undoPiBook 的回执）。主进程的
@@ -1751,8 +1823,6 @@ export type AgentEvent =
    */
   | { type: "greetingsClassified"; requestId: string; throwaway: number[] | null; error?: string }
   | { type: "focusSummarized"; requestId: string; bullets: string[] | null; error?: string }
-  /** `choreComplete` 的回执：text = 回复里全部 text 块拼接；null 时 error 说原因 */
-  | { type: "choreCompleted"; requestId: string; text: string | null; error?: string }
   /** `probeProvider` 的回执：ok = 真会话同源客户端拿到了模型响应；message 直接进 Test 的状态行 */
   | { type: "providerProbed"; requestId: string; ok: boolean; message: string }
   /**
@@ -1812,20 +1882,24 @@ export type AgentEvent =
    * runtime 翻成 phase 事件，renderer 的重试槽随任何 phase 事件一并清空（自愈）。
    */
   | { type: "retry"; sessionId: string; status: RetryStatus | null }
-  /** 工具执行前的请示。UI 要显示它并等用户回答（三档模式见 shared/permission.ts） */
-  | {
-      type: "permission";
-      sessionId: string;
-      requestId: string;
-      toolName: string;
-      input: unknown;
-    }
   /**
    * 回合级失败的标记（如重试耗尽）：true = 这一轮没跑成，renderer 把文案标注进
    * 该会话的槽、挂在这轮没送出去的消息下面（转录末尾）；缺省 = 操作级失败
    * （建会话 / 压缩 / 分支对账拒绝），仍报在输入框上方的全局红字里。
    */
-  | { type: "failed"; sessionId: string | null; message: string; turn?: true }
+  | {
+      type: "failed";
+      sessionId: string | null;
+      message: string;
+      turn?: true;
+      /**
+       * 这一轮是不是因为某个额度窗口用尽而失败。**主进程按额度缓存判定并补上**，
+       * 不是按厂商文案猜（判据见 `shared/quota.ts` 的 `quotaHintOf`）。缺席 = 不知道
+       * 或不该解释；厂商原文照旧在 `message` 里，不丢排障信息。
+       * 只在主进程补：缓存（`<userData>/quota-cache.json`）只有它读得到。
+       */
+      quota?: QuotaExhaustedHint;
+    }
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

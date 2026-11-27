@@ -3043,7 +3043,6 @@ export async function runImport(deps: RunImporterDeps, selection?: ImportSelecti
         ...(item.parentId === null ? null : { parentId: item.parentId }),
         // mode 落 "plan"（最保守）：Proma 的 permissionMode（bypassPermissions 等）
         // 与 orbita 三档不同构，导入的会话重开时用户自己再调档，不静默继承放权限
-        mode: "plan",
         thinkingLevel: sessionFile.thinkingLevel,
         piSessionFile: sessionFile.path,
         pinned: item.pinned,

@@ -1,6 +1,6 @@
 ---
 name: automation
-description: Full guide to Orbita's automation tools (automation_create / list / cancel / update): schedule format and examples, this_session vs new_session, writing the instruction, watching a long-running job, maxRuns / until, write access, the plugin parameter. Read it BEFORE the first automation_create in a conversation. Use when the user wants something scheduled, recurring, reminded or checked later (every Friday…, remind me tomorrow at 9, tell me when the build is done; 定时 / 提醒 / 每周 / 过一会儿回来看 / 跑完告诉我). Not for waits of a few seconds.
+description: Full guide to Orbita's automation tools (automation_create / list / cancel): schedule format and examples, this_session vs new_session, writing the instruction, watching a long-running job, maxRuns / until, the plugin parameter. Read it BEFORE the first automation_create in a conversation. Use when the user wants something scheduled, recurring, reminded or checked later (every Friday…, remind me tomorrow at 9, tell me when the build is done; 定时 / 提醒 / 每周 / 过一会儿回来看 / 跑完告诉我). Not for waits of a few seconds.
 ---
 
 # Automation — scheduling work to come back later
@@ -26,7 +26,6 @@ Before creating anything, call **`automation_list`** — if a task for the same 
 | `schedule` | yes | when to run (see "Schedule format") |
 | `maxRuns` / `until` | no | how long it lives (see "How long it lives") |
 | `target` | no | `this_session` (default) or `new_session` |
-| `mode` | no | `plan` / `skip`, only for `new_session`; do not pass `skip` yourself (see "Write access") |
 | `model` | no | model id for the runs, only for `new_session` |
 | `plugin` | no | a plugin whose board each run should fill (see "The `plugin` parameter") |
 
@@ -36,7 +35,6 @@ Before creating anything, call **`automation_list`** — if a task for the same 
 |---|---|---|
 | Each run goes… | back into **this** conversation, which keeps all its history | into a **fresh session** in this workspace (not shown in the sidebar; reachable from the automation's row in the Automations panel, where the user can turn it into a normal conversation) |
 | Use for | watching a job you started; reminders; follow-ups to what you just did | routines independent of this conversation ("every Friday scan X and report what is new") |
-| Permission | the conversation's own permission; `mode` is ignored | read-only (**Plan**) unless the user lets it write — see "Write access" |
 | Instruction must be | enough for **you, with this conversation's history** | **fully self-contained**: the run cannot see this conversation |
 | Previous result | already in the conversation | the previous successful final answer (up to about 2,000 characters) is attached as "上次结果" so the run can say what is new |
 | If still busy / still running | the delivery waits until the conversation is idle; several due times while waiting merge into one | the new run is **skipped** (recorded, not queued) |
@@ -90,24 +88,13 @@ Example (`new_session`, weekly): "Check https://github.com/earendil-works/pi/rel
 
 ## The `plugin` parameter
 
-`plugin` is the name of an installed plugin that is enabled in this workspace and has a board. Each run is then told to use that plugin and to finish with `show_plugin_board`, so its cards appear on the user's weekly board. Only pass it when the user wants that plugin's output on the board; check the plugin exists first (`list_plugins`). A plugin's scripts usually have to **write** data, which a read-only run cannot do — see below.
-
-## Write access (`mode`) — ask first
-
-A `new_session` run is **read-only (Plan)** by default: it cannot write files or run commands. If the routine must write (save notes or cards, run a plugin's scripts):
-
-1. Create the automation (do **not** pass `mode: "skip"` yourself).
-2. **Ask the user in one plain sentence** whether it may run with write access, unattended ("Skip"). Never request it before they agree.
-3. Only after they agree, call `automation_update` with `mode: "skip"` (`"plan"` is always applied at once).
-4. An automation can never get more permission than this conversation has. If this conversation is in Skip mode, the change is made and the user sees a row with an "undo" button. Otherwise **nothing is changed**: a row with an allow button is left in the conversation for the user to click. Refer to that button in the user's language (a Chinese user sees 「允许」), then **end your turn and do not call `automation_update` again**.
-
-`this_session` tasks have no mode of their own; they run with the conversation's permission.
+`plugin` is the name of an installed plugin that is enabled in this workspace and has a board. Each run is then told to use that plugin and to finish with `show_plugin_board`, so its cards appear on the user's weekly board. Only pass it when the user wants that plugin's output on the board; check the plugin exists first (`list_plugins`).
 
 ## The other tools
 
 - **`automation_list`** — all automations of this workspace, every status (active, paused, failed, completed) with schedule, target, run count and next run. Ids come from here or from `automation_create`'s result.
 - **`automation_cancel`** — `automationId`; the task will not run again (sessions it already started stay). Use it as soon as the job a `this_session` task was watching is done, or when the user says to stop. Cancelling an already finished task is harmless.
-- **`automation_update`** — only the permission (`mode`) of a `new_session` task. Nothing else can be changed: to change a schedule or instruction, cancel and create a new one (or let the user edit it in the panel).
+- To change a schedule or instruction, cancel and create a new one (or let the user edit it in the panel).
 
 ## After creating
 

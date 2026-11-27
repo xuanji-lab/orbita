@@ -260,7 +260,7 @@ const NEBULA_BLOBS: readonly (readonly [number, number, number])[] = [
  * `orbit=false`（窗口失焦）时碎片暂停在当前位置；减少动效与失焦暂停由 CSS 接管
  * （usage.css 的 prefers-reduced-motion、styles.css 的 anim-continuous）。
  */
-function NebulaPet(props: { tier: UsageTier; orbit: boolean; fast: boolean }) {
+export function NebulaPet(props: { tier: UsageTier; orbit: boolean; fast: boolean }) {
   // useId 带「:」等字符，不能直接当 SVG id 用（url(#…) 引用会失效），洗成字母数字
   const gradientId = `neb${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const radius = NEBULA_RADIUS[props.tier];

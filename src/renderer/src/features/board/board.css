@@ -14,9 +14,117 @@
   margin: var(--space-2) 0;
 }
 
+/* 限高外框：收起时超出约半屏的裁掉，底部一条渐隐的「展开」（原地展开；展开后去掉限高，底下出「收起」）。卡里面的样式归插件，这里只管外框 */
+.board-clip {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.board-more {
+  position: absolute;
+  z-index: 2;
+  inset: auto 0 0 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--space-1);
+  height: calc(var(--control-height-md) * 2);
+  padding: 0 0 var(--space-2);
+  border: 0;
+  background: linear-gradient(to bottom, transparent, var(--color-bg-panel) 70%);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.board-more:hover {
+  color: var(--color-text-primary);
+}
+
+/* 展开后底下的「收起」：在看板之后、占自己一行（不叠在卡上），与「展开」同一份安静的次级字 */
+.board-fold {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  height: var(--control-height-md);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.board-fold:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 「在插件里打开」：次要入口，看板右上角一枚小图标；悬停 / 键盘聚焦到看板时才出现，不盖住平时的卡面 */
+.board-open {
+  position: absolute;
+  z-index: 2;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: grid;
+  place-items: center;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  color: var(--color-text-secondary);
+  opacity: 0;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.board-result:hover .board-open,
+.board-open:focus-visible {
+  opacity: 1;
+}
+
+.board-open:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 状态卡点缩略图滚回来之后，框线闪一下（卡面是 iframe，闪背景看不见） */
+@keyframes board-revealed {
+  from { box-shadow: 0 0 0 2px var(--color-border-strong); }
+  to { box-shadow: 0 0 0 2px transparent; }
+}
+
+.board-result.board-revealed {
+  border-radius: var(--radius-xl);
+  animation: board-revealed 1.4s var(--ease-standard);
+}
+
 /* 离开视口时的占位：只占高度（iframe 已卸），不画任何东西 */
 .board-placeholder {
   min-width: 0;
+}
+
+/* 切回时先贴上次的位图：1:1 钉在它截下来的那一处（右栏过渡里宽度对不上时，多出来的由外框裁掉），真 iframe 在背后加载；
+   不接管鼠标，展开按钮仍可点 */
+.board-shot {
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  display: block;
+  pointer-events: none;
+}
+
+/* 展开钮已经含在截图里：交接期间留真实按钮接管点击，但不重复画一遍文字与渐隐 */
+.board-clip[data-shot="true"] .board-more {
+  opacity: 0;
 }
 
 .board-result-note {

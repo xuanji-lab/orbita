@@ -1,18 +1,15 @@
-import { selectableThemes, type SettingsPatch, type ThemePreference } from "@shared/settings";
+import { THEME_PREFERENCES, type SettingsPatch, type ThemePreference } from "@shared/settings";
 import { Icon } from "../../shell/Icon";
 import { useSettingTip } from "./InfoTip";
 import { useT } from "../../locale.ts";
 import type { Messages } from "../../messages-en.ts";
 
 /**
- * 需要说明的只有三档：System 是唯一「选了不知道会落在哪」的一档，纸面两档要说清
- * 只有浅色。说明挂在卡片自己身上（悬停 / 键盘聚焦），不另放 info 图标——卡片的
- * 对半缩略窗已经说了一半。名字与说明都跟界面语言走（messages-*.ts 的 themes）。
+ * System 是唯一「选了不知道会落在哪」的一档，说明挂在卡片自己身上（悬停 / 键盘聚焦），
+ * 不另放 info 图标。名字与说明都跟界面语言走（messages-*.ts 的 themes）。
  */
 function themeTip(value: ThemePreference, t: Messages): string | undefined {
   if (value === "system") return t.themes.systemTip;
-  if (value === "copybook") return t.themes.copybookTip;
-  if (value === "typescript") return t.themes.typescriptTip;
   return undefined;
 }
 
@@ -24,22 +21,15 @@ type PreviewTheme = Exclude<ThemePreference, "system">;
  * 用**各自主题**的 token 画——不是当前主题的（见 ThemeThumb 与
  * `design-system/tokens/colors.css` 的 `[data-theme-preview]` 选择器）。
  * 只有 Theme 这一行用它，不拆成多个导出。
- *
- * 可选档位过 `selectableThemes(paperThemes)`：实验功能 paper-themes 关闭时
- * 纸面两档（copybook / typescript）不出现在选择卡里。**已存的主题不受影响**
- * ——恰好存着这两档之一的用户主题照常应用，只是没有选中卡可看（不崩、不退回
- * system），开关打开即恢复可选。
  */
 export function ThemePicker(props: {
   value: ThemePreference;
-  /** 实验功能 paper-themes（设置原值）：纸面两档挂它后面 */
-  paperThemes: boolean;
   onChange: (patch: SettingsPatch) => void;
 }) {
   const t = useT();
   return (
     <div className="theme-grid" role="group" aria-label={t.settings.theme}>
-      {selectableThemes(props.paperThemes).map((value) => (
+      {THEME_PREFERENCES.map((value) => (
         <ThemeCard
           key={value}
           value={value}

@@ -79,8 +79,8 @@ describe("turnDigests", () => {
     assert.equal(one?.ask, "帮我检查侧栏");
     assert.equal(one?.steps, 2);
     assert.equal(one?.files, 1);
-    // 第一个工具之前的那句话在过程块外（它是开场白），块里按「再写笔记。」切成两章
-    assert.deepEqual(one?.chapters.map((c) => c.title), [null, "再写笔记。"]);
+    // 第一个工具之前的那句话收进过程块当第一段的段名（2026-11-22），块里按「再写笔记。」再切一章
+    assert.deepEqual(one?.chapters.map((c) => c.title), ["先读代码。", "再写笔记。"]);
     assert.equal(one?.live, false);
     assert.equal(two?.failed, 1);
     assert.equal(two?.live, true);

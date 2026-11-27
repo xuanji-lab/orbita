@@ -497,15 +497,13 @@ export interface DocxToolsOptions {
   writeRoots: readonly string[];
   /** 会话所属工作区（主进程据此现算白名单根） */
   workspaceId: string | null;
-  /** 当前权限档（plan 档只读） */
-  mode: () => string;
 }
 
 export function createDocxTools(
   broker: RequestBroker,
   sessionId: string,
   cwd: string,
-  options: DocxToolsOptions = { writeRoots: [cwd], workspaceId: null, mode: () => "default" },
+  options: DocxToolsOptions = { writeRoots: [cwd], workspaceId: null },
 ): ToolDefinition[] {
   const readDocx: ToolDefinition = {
     name: "read_docx",
@@ -730,9 +728,6 @@ export function createDocxTools(
       if (!/\.docx$/i.test(absolute)) throw new Error(`Not a Word document: ${pathRaw}`);
       if (!options.writeRoots.some((root) => isInside(root, absolute))) {
         throw new Error(`Documents must live inside the workspace (or an attached directory): ${pathRaw}`);
-      }
-      if (options.mode() === "plan") {
-        throw new Error("Plan mode does not edit documents. Ask the user to leave plan mode first.");
       }
       const replace = typeof args["replace"] === "string" ? (args["replace"] as string) : null;
       if (replace === null) throw new Error('edit_docx requires "replace" (use "" to delete the passage)');

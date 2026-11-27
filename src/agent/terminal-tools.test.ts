@@ -5,7 +5,9 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
-import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { createTerminalTools } from "./terminal-tools.ts";
+
+const TERMINAL_TOOL_NAMES = ["terminal_open", "terminal_execute", "terminal_read", "terminal_list", "terminal_interrupt", "terminal_close"];
 import type { TerminalInfo, TerminalToolOutcome } from "../shared/terminal.ts";
 import { TERMINAL_READ_DEFAULT_LIMIT, TERMINAL_READ_MAX_LIMIT } from "../shared/terminal.ts";
 
@@ -36,7 +38,7 @@ const terminal: TerminalInfo = {
 };
 
 describe("terminal_* 工具", () => {
-  test("六个工具一个不少；名单与 TERMINAL_TOOL_NAMES 对得上（权限档描述认这一份）", () => {
+  test("六个工具一个不少，不多不少", () => {
     const { tools } = setup();
     assert.deepEqual([...tools.keys()].sort(), [...TERMINAL_TOOL_NAMES].sort());
   });

@@ -341,6 +341,60 @@ describe("Kimi K3.1 Pro 在 Kimi 套餐上（目录还没收录，全靠白名�
   });
 });
 
+describe("智谱 GLM-5.4 在 Coding Plan 的 Anthropic 端点上（目录还没收录，全靠白名单）", () => {
+  test("会话里拿到 1M / 131072 与三档、收图；选的档以 adaptive + effort 原样送到——不是被端点无视的 budget_tokens", async () => {
+    const known = KNOWN_PROVIDERS.find((provider) => provider.id === "zhipu-coding");
+    assert.ok(known !== undefined);
+    const runtime = await freshRuntime();
+    // 前提：目录真的没收录（收录了的话这条测的就是目录，不是白名单）
+    assert.equal(runtime.getModel("zai-coding-cn", "glm-5.4"), undefined);
+    const model = registerAndResolveModel(
+      runtime,
+      {
+        id: known.id,
+        apiKey: "sk-test",
+        // 选了 Anthropic 协议的实例（10-24 之前建的老条目都是这个端点）
+        baseUrl: "https://open.bigmodel.cn/api/anthropic",
+        api: "anthropic-messages",
+        models: [{ id: "glm-5.4" }],
+        ...catalogPreferenceOf(known, "anthropic-messages"),
+      },
+      "glm-5.4",
+    );
+    assert.ok(model !== undefined);
+    assert.equal(model.api, "anthropic-messages");
+    assert.equal(model.contextWindow, 1_000_000);
+    assert.equal(model.maxTokens, 131_072);
+    assert.deepEqual(getSupportedThinkingLevels(model), ["low", "high", "max"]);
+    assert.deepEqual(model.input, ["text", "image"]);
+    const anthropicModel = model as Model<"anthropic-messages">;
+    for (const level of ["low", "high", "max"] as const) {
+      const payload = await outgoingPayload(anthropicModel, level);
+      assert.deepEqual(payload["output_config"], { effort: level }, `${level} 档的 effort`);
+      assert.equal((payload["thinking"] as { type?: string } | undefined)?.type, "adaptive", `${level} 档的 thinking`);
+      // pi 原样发 max_tokens：白名单不写时这里是 8192 兜底
+      assert.equal(payload["max_tokens"], 131_072);
+    }
+    // 条目的默认协议是 OpenAI Chat：那一侧不吃 adaptive 声明（档位走 reasoning_effort，上面那段逐服务商的
+    // 一致性已经核对过两边的档位表），这里只确认声明不会把协议改掉
+    const openaiSide = registerAndResolveModel(
+      await freshRuntime(),
+      {
+        id: known.id,
+        apiKey: "sk-test",
+        baseUrl: known.baseUrl,
+        api: known.api,
+        models: [{ id: "glm-5.4" }],
+        ...catalogPreferenceOf(known),
+      },
+      "glm-5.4",
+    );
+    assert.equal(openaiSide?.api, "openai-completions");
+    // compat 的类型按协议分开，用 in 判
+    assert.equal(openaiSide?.compat !== undefined && "forceAdaptiveThinking" in openaiSide.compat, false);
+  });
+});
+
 /**
  * 会话里真正发请求的协议与地址，必须就是条目自己声明的那一套。
  *

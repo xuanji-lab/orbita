@@ -4,11 +4,11 @@
  * 用户 14:23 原话：「最后这个会话里剩下的 goal 不一定会在一个会话里面完成，然后你就可以从 goal（也属于进度的面板）
  * 这里选择带着 goal 开新的 session，goal 就会把目标、研究的目标，还有已经做了哪些 todo 带上，去开新的 session」。
  *
- * 形态沿用「转成任务」那条路（carryover-resume.ts 的 buildCarryoverSeed）：**发一条可见的结构化用户消息直接开工**，
+ * 形态：**发一条可见的结构化用户消息直接开工**，
  * 不走 internal——上下文从哪来的用户看得见，也点得开。新会话里 agent 读到这条消息，会照着把目标记成自己的目标
  * （update_goal，来源就是这条消息）。
  *
- * 带什么：目标原文；做完的 todo（每条一句）；没做完的 todo；开着的以后再做；改动账的要点（最近几条，
+ * 带什么：目标原文；做完的 todo（每条一句）；没做完的 todo；改动账的要点（最近几条，
  * 从什么变成什么、为什么、谁提的）。每段有条数上限，免得种子比任务本身还长。
  *
  * 纯模块：可被 node --test 直接加载。
@@ -26,8 +26,6 @@ export interface GoalSeedInput {
   /** 来源会话的标题；null = 来源已删除 */
   sourceTitle: string | null;
   ledger: GoalLedger;
-  /** 来源会话里开着的「以后再做」（一句话 + 当时写的理由） */
-  later: readonly { title: string; detail: string }[];
 }
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -47,10 +45,6 @@ export function buildGoalSeed(t: Messages, input: GoalSeedInput): string | null 
   };
   list(t.goalSeed.done, input.ledger.todos.done);
   list(t.goalSeed.open, input.ledger.todos.open);
-  list(
-    t.goalSeed.later,
-    input.later.map((item) => (item.detail === "" ? item.title : `${item.title}（${item.detail}）`)),
-  );
   // 改动要点里的目标文字只留不同处与上下文：当前目标上面已经全文给了，历史是为了看「怎么变的」
   const changes = input.ledger.entries.slice(-SEED_MAX_CHANGES).map((entry) => {
     const what =

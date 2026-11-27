@@ -1,10 +1,20 @@
 /**
  * 语音的 IPC —— 四层契约的第 2 层。契约在 shared/voice.ts（听写厂商选择两件、豆包凭证三件、
- * 阶跃凭证三件、听写五件）。入参都是 renderer 给的：逐个校验类型，不认识的当没给。
+ * 阶跃凭证三件、听写五件、ElevenLabs 凭证三件、通话两件）。入参都是 renderer 给的：逐个校验类型，
+ * 不认识的当没给。
  */
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { ipcMain, type WebContents } from "electron";
+import { writeBytesAtomic, writeTextAtomic } from "../atomic-write.ts";
 import {
+  isCallFileName,
+  isCallId,
   isDictationProvider,
+  type CallSaveResult,
+  type ElevenlabsVoiceConfig,
+  type ElevenlabsVoiceInput,
+  type SpeechResult,
   voiceChannels,
   type DictationEvent,
   type DictationProvider,
@@ -17,6 +27,7 @@ import {
 } from "../../shared/voice.ts";
 import { createDoubaoProtocol } from "./doubao-protocol.ts";
 import { createStepfunProtocol } from "./stepfun-protocol.ts";
+import { synthesizeSpeech } from "./elevenlabs.ts";
 import type { DictationProtocol, DictationSessions } from "./dictation.ts";
 import type { VoiceStore } from "./store.ts";
 
@@ -44,6 +55,29 @@ function pcmBytes(value: unknown): Uint8Array | null {
   return null;
 }
 
+function elevenlabsInput(value: unknown): ElevenlabsVoiceInput | null {
+  if (value === null || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record["voiceId"] !== "string" || typeof record["modelId"] !== "string") return null;
+  const key = record["apiKey"];
+  return {
+    voiceId: record["voiceId"],
+    modelId: record["modelId"],
+    ...(typeof key === "string" ? { apiKey: key } : {}),
+  };
+}
+
+/** 试听那一句：短，听得出音色就行（用的是用户自己的额度） */
+const PREVIEW_TEXT = "你好，我在听。";
+
+/** 一个录音文件最多这么大（约 30 分钟 16 kHz 单声道 wav）：防 renderer 塞来离谱的东西 */
+const CALL_FILE_LIMIT = 64 * 1024 * 1024;
+
+export interface VoiceIpcDeps {
+  /** 会话工作台目录（会话 id 不合法时抛）——通话录音写进它的 calls/ 下 */
+  workbenchPath: (sessionId: string) => string;
+}
+
 function stepfunInput(value: unknown): StepfunVoiceInput | null {
   if (value === null || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
@@ -51,7 +85,7 @@ function stepfunInput(value: unknown): StepfunVoiceInput | null {
   return typeof record["apiKey"] === "string" ? { apiKey: record["apiKey"] } : null;
 }
 
-export function registerVoiceIpc(store: VoiceStore, dictation: DictationSessions): void {
+export function registerVoiceIpc(store: VoiceStore, dictation: DictationSessions, deps: VoiceIpcDeps): void {
   // ── 听写用哪家 ──
   ipcMain.handle(voiceChannels.voiceDictationSelectionGet, (): Promise<DictationSelection> =>
     store.dictationSelection(),
@@ -139,5 +173,53 @@ export function registerVoiceIpc(store: VoiceStore, dictation: DictationSessions
 
   ipcMain.handle(voiceChannels.voiceDictationCancel, (_event, sessionId: unknown): void => {
     if (isSessionId(sessionId)) dictation.cancel(sessionId);
+  });
+
+  // ── ElevenLabs 凭证 ──
+  ipcMain.handle(voiceChannels.voiceElevenlabsGet, (): Promise<ElevenlabsVoiceConfig> => store.elevenlabsConfig());
+
+  ipcMain.handle(voiceChannels.voiceElevenlabsSave, async (_event, raw: unknown): Promise<ElevenlabsVoiceConfig> => {
+    const input = elevenlabsInput(raw);
+    if (input === null) throw new Error("invalid ElevenLabs voice config");
+    return store.saveElevenlabs(input);
+  });
+
+  ipcMain.handle(voiceChannels.voiceElevenlabsTest, async (_event, raw: unknown): Promise<SpeechResult> => {
+    const input = elevenlabsInput(raw);
+    const credentials = input === null ? null : await store.elevenlabsCredentialsFor(input);
+    if (credentials === null) return { ok: false, reason: "not-configured" };
+    return synthesizeSpeech(credentials, PREVIEW_TEXT);
+  });
+
+  // ── 通话 ──
+  ipcMain.handle(voiceChannels.voiceSpeechSynthesize, async (_event, text: unknown): Promise<SpeechResult> => {
+    if (typeof text !== "string" || text.trim() === "") return { ok: false, reason: "rejected", detail: "empty text" };
+    const credentials = await store.elevenlabsCredentials();
+    if (credentials === null) return { ok: false, reason: "not-configured" };
+    return synthesizeSpeech(credentials, text);
+  });
+
+  ipcMain.handle(voiceChannels.voiceCallSave, async (_event, raw: unknown): Promise<CallSaveResult> => {
+    if (raw === null || typeof raw !== "object") return { ok: false, error: "invalid input" };
+    const record = raw as Record<string, unknown>;
+    const { sessionId, callId, name, data } = record;
+    if (typeof sessionId !== "string" || !isCallId(callId) || !isCallFileName(name)) {
+      return { ok: false, error: "invalid input" };
+    }
+    const bytes = typeof data === "string" ? null : pcmBytes(data);
+    if (typeof data !== "string" && bytes === null) return { ok: false, error: "invalid data" };
+    if ((bytes?.byteLength ?? (typeof data === "string" ? data.length : 0)) > CALL_FILE_LIMIT) {
+      return { ok: false, error: "too large" };
+    }
+    try {
+      const dir = join(deps.workbenchPath(sessionId), "calls", callId);
+      await mkdir(dir, { recursive: true });
+      const path = join(dir, name);
+      if (typeof data === "string") await writeTextAtomic(path, data);
+      else if (bytes !== null) await writeBytesAtomic(path, bytes);
+      return { ok: true, path };
+    } catch (cause) {
+      return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
+    }
   });
 }

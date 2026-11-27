@@ -391,15 +391,17 @@ export type PluginAgentScope = "workspace" | "global";
  * 工具结果本来就随会话落盘，所以这一行重开会话、隔很久都在，不另开一种会话记录。
  *
  * 一行有两种来历：
- * - `installed`：这次调用直接装上了（低风险：工作区内、链接安装、不带 MCP、范围是工作区、无冲突，
- *   且会话不在 manual 档）；
+ * - `installed`：这次调用直接装上了（低风险：工作区内、链接安装、不带 MCP、范围是工作区、无冲突）；
  * - `pending`：需要用户看一眼，工具已立即返回，装不装等用户点这一行的「安装」。`reason` 说为什么。
  * 行上显示「已装上」还是「安装」**不看 state，看渲染时的已装列表**：用户后来卸载了、或在别处装了，
  * 行都照实说（state 只是它被画出来时的样子）。
  */
 export interface PluginInstallRow {
   state: "installed" | "pending";
-  /** pending 的原因：带 MCP（会在本机启动程序）/ 范围是所有工作区 / manual 档（每个动作都要用户点头）；installed 为 null */
+  /**
+   * pending 的原因：带 MCP（会在本机启动程序）/ 范围是所有工作区；installed 为 null。
+   * `manual`（当时会话在手动档）只出现在 2026-11-16 之前落盘的旧行里：档位删了以后没有人再写它，读旧会话时照样画出当时的原因。
+   */
   reason: "mcp" | "global" | "manual" | null;
   /** 插件名（plugin.json 的 name；已装列表里按它找） */
   name: string;
@@ -578,7 +580,7 @@ export interface PluginAgentListItem {
 export type PluginAgentListOutcome = { ok: true; plugins: PluginAgentListItem[] } | { ok: false; error: string };
 
 /** 内置插件的名字表：随应用带的、默认对所有工作区启用、不可卸载。内容目录与它同名。 */
-export const BUILTIN_PLUGIN_NAMES = ["plugin-creator", "skill-kit", "docs-slides", "terminal", "automation", "reading", "browser"] as const;
+export const BUILTIN_PLUGIN_NAMES = ["plugin-creator", "skill-kit", "docs-slides", "terminal", "automation", "reading", "browser", "sub-agents"] as const;
 
 export function isBuiltinPluginName(name: string): boolean {
   return (BUILTIN_PLUGIN_NAMES as readonly string[]).includes(name);

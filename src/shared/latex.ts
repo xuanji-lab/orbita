@@ -399,8 +399,16 @@ export interface LatexProbeRequest {
 export interface LatexEnvCheckItem {
   id: "synctex" | "chktex" | "pandoc";
   ok: boolean;
-  /** 找到的路径 / 版本，或缺失时的一句话说明 */
-  detail: string;
+  /**
+   * 找到的可执行文件绝对路径；null = 没找到。
+   * **不在这里拼人话**：这句话要按界面语言说，主进程不知道用户选的是哪种语言，
+   * 旧版把中文 / 英文说明都塞进 `detail`，结果中文界面里冒出一整段英文。
+   */
+  path: string | null;
+  /** pandoc 才有：解析出的版本文本（"3.9.0"）；解析不出 / 没装 = null */
+  version?: string | null;
+  /** pandoc 才有：可用所需的最低版本（"3.10.2"） */
+  minVersion?: string;
 }
 export interface LatexEnvCheckResult {
   items: LatexEnvCheckItem[];
