@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { childSessions, type SessionMeta, type TranscriptRecord } from "@shared/session";
+import { childSessions, type SessionMeta } from "@shared/session";
 import type { Automation } from "@shared/automation";
 import type { ChannelMessage } from "@shared/channel";
 import { api } from "../../api";
@@ -17,19 +17,24 @@ import { useParentChannels } from "../chat/useChannelMessages";
 import { channelHold, useChannelHold } from "../chat/channel-hold-store.ts";
 import { Switch } from "../settings/SettingControls";
 import type { ChatFileScope } from "../chat/chat-file-scope.ts";
-import { formatDuration } from "../chat/named-outputs.ts";
+import { formatDuration } from "../../../../shared/named-outputs.ts";
 import { useMemorySession } from "../memory/useMemory.ts";
-import { useProgressDigest } from "./TaskProgress";
-import { useGoalLedger } from "./useGoalLedger.ts";
-import type { PlanStep } from "./plan-timeline.ts";
+import { buildGoalLedger } from "../../../../shared/goal-ledger.ts";
+import { ledgerEventsOf } from "./goal-ledger-records.ts";
+import { planTimeline, planView, type PlanStep } from "./plan-timeline.ts";
 import { STATUS_FOCUS_EVENT, type StatusFocusDetail } from "./chat-status-flag.ts";
 import { forgetViews, patchView, readView, type StatusView, type StatusViewPatch } from "./chat-status-memory.ts";
-import { LruCache } from "../../../../shared/lru.ts";
+import {
+  digestChildActivity,
+  digestOutputs,
+  digestTerminals,
+  type TerminalEntry,
+} from "../../../../shared/status-digest.ts";
+import { useChildDigests, useStatusDigest } from "./useStatusDigest.ts";
 import { OutputThumb, SlideStyles } from "./StatusThumb";
 import { delegationSteps } from "./delegation-steps.ts";
 import { channelEndOf, channelEndText } from "../chat/sub-sessions-rows.ts";
 import {
-  childActivityOf,
   childStateOf,
   clampPanelWidth,
   fitsPanel,
@@ -43,7 +48,6 @@ import {
   pillSignal,
   planWindow,
   sortChildren,
-  statusOutputs,
   toolCallLine,
   type ChildActivity,
   type ChildState,
@@ -124,27 +128,36 @@ export function ChatStatus(props: {
     };
   }, [squeeze, width]);
 
-  const view = useTaskRecords(sessionId, entry, true);
-  const { plan, timeline } = useProgressDigest(view, turnActive);
-  const ledger = useGoalLedger(view.records);
+  // 状态卡走主进程摘要（2026-11-27「主进程算好摘要」）：不再 useTaskRecords(…, true) 把整条历史
+  // 逐页拉进 renderer。useTaskRecords(…, false) 只给活窗（尾窗 + 在跑的轮）；摘要覆盖整条日志，
+  // 尾窗里比摘要新的记录由同一个 fold 叠上去（useStatusDigest），流式中实时更新。
+  const view = useTaskRecords(sessionId, entry, false);
+  const folded = useStatusDigest(sessionId, entry, view.current);
+  // 目标 / 计划 / 子会话挂步：拿摘要的 slim 段跑现有的批量派生（同一份代码，相等由构造保证）
+  const ledger = useMemo(() => buildGoalLedger(ledgerEventsOf(folded.slim)), [folded]);
+  const timeline = useMemo(() => planTimeline(folded.slim), [folded]);
+  const plan = useMemo(() => planView(timeline), [timeline]);
 
   // ── 子会话 ──
   const kids = useMemo(() => childSessions(session.sessions, sessionId), [session.sessions, sessionId]);
   const summaries = useChannelSummaries(sessionId);
   const kidIds = useMemo(() => kids.map((meta) => meta.id), [kids]);
   const channels = useParentChannels(sessionId, kidIds);
-  const tails = useChildTails(kids);
-  const assign = useMemo(() => delegationSteps(view.records, timeline), [view.records, timeline]);
-  const terminals = useLiveTerminals(view.records);
+  const childDigests = useChildDigests(kids);
+  const assign = useMemo(() => delegationSteps(folded.slim, timeline), [folded, timeline]);
+  const terminals = useLiveTerminals(useMemo(() => digestTerminals(folded), [folded]));
   const automations = useSessionAutomations(sessionId);
 
   // ── 走表：只有在跑项才走；窗口不在前台停；不到一分钟按秒、否则按分钟跳（chat-status.ts 的 nextTickIn）──
   const [now, setNow] = useState(() => Date.now());
   const activities = useMemo(() => {
     const map = new Map<string, ChildActivity | null>();
-    for (const meta of kids) map.set(meta.id, childActivityOf(tails.get(meta.id) ?? []));
+    for (const meta of kids) {
+      const childDigest = childDigests.get(meta.id);
+      map.set(meta.id, childDigest === null || childDigest === undefined ? null : digestChildActivity(childDigest));
+    }
     return map;
-  }, [kids, tails]);
+  }, [kids, childDigests]);
   const children = useMemo(
     () =>
       kids.map((meta) => {
@@ -170,10 +183,14 @@ export function ChatStatus(props: {
 
   // ── 产物 ──
   const outputs = useMemo(() => {
-    const own = statusOutputs(view.records, null);
-    const fromKids = kids.flatMap((meta) => statusOutputs(tails.get(meta.id) ?? [], meta.title));
+    const own = digestOutputs(folded);
+    const fromKids = kids.flatMap((meta) => {
+      const childDigest = childDigests.get(meta.id);
+      if (childDigest === null || childDigest === undefined) return [];
+      return digestOutputs(childDigest).map((output) => ({ ...output, by: meta.title }));
+    });
     return [...own, ...fromKids];
-  }, [view.records, kids, tails]);
+  }, [folded, kids, childDigests]);
 
   // ── 记忆（第二版「这次用到的」只留这一行：用户 20:58「技能、网页、上传的文件可以不要掉」）──
   const memory = useMemorySession(sessionId);
@@ -1033,60 +1050,10 @@ function useTicker(sinces: readonly number[], setNow: (now: number) => void): vo
 }
 
 /**
- * 子会话尾窗的跨挂载缓存（按子会话 id；updatedAt 没变就不重读）：状态卡按会话重挂，
- * 不缓存的话每次切回都要把每个子会话重读一遍，卡里「在跑的」先空再出。
+ * 这条会话的 agent 开的、还开着的终端：launched（terminal_execute 的结果里有 terminalId 和命令）
+ * 由状态卡摘要给出（digestTerminals），开着与否问终端列表。
  */
-const childTailCache = new LruCache<{ updatedAt: number; records: readonly TranscriptRecord[] }>(60);
-
-function cachedTails(kids: readonly SessionMeta[]): ReadonlyMap<string, readonly TranscriptRecord[]> {
-  const map = new Map<string, readonly TranscriptRecord[]>();
-  for (const meta of kids) {
-    const hit = childTailCache.get(meta.id);
-    if (hit !== undefined) map.set(meta.id, hit.records);
-  }
-  return map;
-}
-
-/** 子会话的转录尾窗（原型：每个子会话读一次尾窗，meta 的 updatedAt 变了重读；真功能里应由主进程推一行「在跑什么」） */
-function useChildTails(kids: readonly SessionMeta[]): ReadonlyMap<string, readonly TranscriptRecord[]> {
-  // 第一帧就用缓存里旧的，后台再校验
-  const [tails, setTails] = useState<ReadonlyMap<string, readonly TranscriptRecord[]>>(() => cachedTails(kids));
-  const key = kids.map((meta) => `${meta.id}:${meta.updatedAt}`).join(",");
-  useEffect(() => {
-    let alive = true;
-    setTails(cachedTails(kids));
-    void (async () => {
-      const queue = kids.filter((meta) => childTailCache.get(meta.id)?.updatedAt !== meta.updatedAt);
-      if (queue.length === 0) return;
-      const worker = async () => {
-        for (let meta = queue.shift(); meta !== undefined; meta = queue.shift()) {
-          const detail = await api.session.load(meta.id).catch(() => null);
-          childTailCache.set(meta.id, { updatedAt: meta.updatedAt, records: (detail?.transcript ?? []) as readonly TranscriptRecord[] });
-        }
-      };
-      await Promise.all([worker(), worker(), worker(), worker()]);
-      if (alive) setTails(cachedTails(kids));
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [key]);
-  return tails;
-}
-
-/** 这条会话的 agent 开的、还开着的终端：terminal_execute 的结果里有 terminalId 和命令，开着与否问终端列表 */
-function useLiveTerminals(records: readonly TranscriptRecord[]): { id: string; command: string; since: number }[] {
-  const launched = useMemo(() => {
-    const map = new Map<string, { id: string; command: string; since: number }>();
-    for (const record of records) {
-      if (record.role !== "tool" || record.toolName !== "terminal_execute" || record.status !== "complete") continue;
-      const text = record.content.map((block) => (block.type === "text" ? block.text : "")).join("\n");
-      const id = /visible terminal (\S+) \(/.exec(text)?.[1];
-      const command = (record.input as Record<string, unknown> | null)?.["command"];
-      if (id !== undefined && typeof command === "string") map.set(id, { id, command, since: record.timestamp });
-    }
-    return [...map.values()];
-  }, [records]);
+function useLiveTerminals(launched: readonly TerminalEntry[]): { id: string; command: string; since: number }[] {
   const [alive, setAlive] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
     let live = true;

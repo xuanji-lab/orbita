@@ -211,7 +211,7 @@ import {
   type OutputSource,
   type TurnOutput,
 } from "./process-rows.ts";
-import { formatDuration } from "./named-outputs.ts";
+import { formatDuration } from "../../../../shared/named-outputs.ts";
 import { fileManagerKind } from "../../file-manager.ts";
 import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { HomeHero } from "./HomeHero";

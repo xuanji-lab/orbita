@@ -92,6 +92,7 @@ import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
+import { StatusDigestStore } from "./session/status-digest.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
 import { priceChartSourceOf, registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
 import { applyModelCosts } from "./usage/model-costs.ts";
@@ -458,7 +459,15 @@ void app.whenReady().then(async () => {
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
-  const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
+  // 状态卡摘要（2026-11-27）：每条会话一份 sessions/<id>.status.json，record 落盘的同一处推进；
+  // 先于 SessionStore 建——它的钩子（onRecordAppended 等）在构造时就接上
+  const statusDigests = new StatusDigestStore(join(configDir, "sessions"));
+  const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels, {
+    onRecordAppended: (id) => statusDigests.touch(id),
+    onLogReplaced: (id) => statusDigests.invalidate(id),
+    onLogSeeded: (id, records, logBytes) => statusDigests.seed(id, records, logBytes),
+    onRemoved: (id) => void statusDigests.remove(id),
+  });
   // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
@@ -1217,6 +1226,7 @@ void app.whenReady().then(async () => {
         ids,
         workspaceId,
       ),
+    statusDigests,
     async (sessionId, reverted) => {
       await Promise.all([
         intentOnReverted(sessionId, reverted.turnIds),
@@ -1552,6 +1562,8 @@ void app.whenReady().then(async () => {
     for (const sessionId of channelIdleTimers.keys()) cancelChannelIdleClose(sessionId);
     automationScheduler.stop();
     keepAwake.release();
+    // 状态卡摘要：脏的尽力落盘（不等——落不下也没关系，重启后按 logOffset 增量补扫自愈）
+    void statusDigests.flush().catch(() => undefined);
     appTray?.beginQuit();
     appTray?.destroy();
     appTray = null;

@@ -19,6 +19,7 @@ import type {
   SessionOlderPage,
   SessionWindowDetail,
 } from "../../shared/session.ts";
+import type { StatusDigestState } from "../../shared/status-digest.ts";
 
 export const sessionApi = {
   /** 会话列表，新的在前 */
@@ -38,6 +39,13 @@ export const sessionApi = {
    */
   loadOlder: (id: string, before: string, limit: number): Promise<SessionOlderPage> =>
     ipcRenderer.invoke(ipcChannels.sessionLoadOlder, id, before, limit),
+  /**
+   * 状态卡摘要（2026-11-27）：一批会话 id（主会话 + 全部子会话）一次取回，
+   * 回 `Record<id, StatusDigestState | null>`（null = 会话已删）。renderer 取回后只把
+   * 尾窗里比摘要新的记录用同一个 fold 叠上去，不再为状态卡逐页拉全量历史。
+   */
+  statusDigests: (ids: readonly string[]): Promise<Record<string, StatusDigestState | null>> =>
+    ipcRenderer.invoke(ipcChannels.sessionStatusDigests, ids),
   /** 改名；空名字会退回从第一条用户消息推导 */
   rename: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRename, id, title),

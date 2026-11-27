@@ -84,6 +84,20 @@ export function isSessionId(id: string): boolean {
   return SESSION_ID.test(id);
 }
 
+/**
+ * 日志写事件的挂钩（状态卡摘要等派生数据的推进点）。全部可选——不传时 Store 行为与以前相同。
+ */
+export interface SessionStoreHooks {
+  /** 一条记录追加落盘后（record 的唯一收口：recorder / 轮尾账 / 回退界碑都过它） */
+  onRecordAppended?: (id: string) => void;
+  /** 日志被整份替换（导入更新 commitImportUpdate）：派生数据作废重算 */
+  onLogReplaced?: (id: string) => void;
+  /** 新会话的日志一次写成（分支 commitBranch / 导入 commitImported）：records 是初始 transcript，logBytes 是写盘字节数 */
+  onLogSeeded?: (id: string, records: readonly SessionRecord[], logBytes: number) => void;
+  /** 会话删除（级联的每一条都会过） */
+  onRemoved?: (id: string) => void;
+}
+
 const META_SUFFIX = ".meta.json";
 
 /**
@@ -192,6 +206,12 @@ export class SessionStore {
   private readonly workbenchesDir: string;
 
   /**
+   * 日志写事件的挂钩（状态卡摘要等派生数据的推进点；index.ts 接线）。全部可选——
+   * 不传时 Store 行为与以前逐字节相同。
+   */
+  private readonly hooks: SessionStoreHooks;
+
+  /**
    * 快照正文仓（sessions/<id>.snapshots/，revert.ts）：轮尾账的 before / after
    * 正文按内容寻址存在这里，JSONL 只存引用。与会话同生共死（remove 一并删）。
    */
@@ -216,10 +236,11 @@ export class SessionStore {
    */
   private readonly channels: ChannelStore | undefined;
 
-  constructor(dir: string, workbenchesDir?: string, channels?: ChannelStore) {
+  constructor(dir: string, workbenchesDir?: string, channels?: ChannelStore, hooks: SessionStoreHooks = {}) {
     this.dir = dir;
     this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
     this.channels = channels;
+    this.hooks = hooks;
     this.snapshots = new SnapshotStore(dir);
     this.citedPdfs = new CitedPdfIndex((id) => this.logPath(id));
     // 启动即建索引；调用方（list / 第一条 meta 写入）会等它。给拒绝分支挂一个空处理器，
@@ -512,6 +533,8 @@ export class SessionStore {
     if (meta === null) return; // 会话的 meta 没了就别再往日志里加，避免长出孤儿日志
     await mkdir(this.dir, { recursive: true });
     await appendFile(this.logPath(id), `${JSON.stringify(item)}\n`, "utf8");
+    // 派生数据（状态卡摘要）的推进点：追加落盘之后、meta 更新之前，同步入链不 await
+    this.hooks.onRecordAppended?.(id);
 
     // **基于链内刚读的 meta 算**，不用上面 appendFile 之前那份快照——
     // 写盘期间标题可能刚落、最近提问可能刚被别的消息推过
@@ -838,10 +861,10 @@ export class SessionStore {
     }
     await this.writeMeta({ ...plan.meta, piSessionFile });
     if (plan.records.length > 0) {
-      await writeTextAtomic(
-        this.logPath(plan.meta.id),
-        `${plan.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      );
+      const text = `${plan.records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+      await writeTextAtomic(this.logPath(plan.meta.id), text);
+      // 派生数据（状态卡摘要）直接播种：记录就在内存里，省一次全量扫
+      this.hooks.onLogSeeded?.(plan.meta.id, plan.records, Buffer.byteLength(text));
     }
   }
 
@@ -856,10 +879,9 @@ export class SessionStore {
     await mkdir(this.dir, { recursive: true });
     await this.writeMeta(meta);
     if (records.length > 0) {
-      await writeTextAtomic(
-        this.logPath(meta.id),
-        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      );
+      const text = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+      await writeTextAtomic(this.logPath(meta.id), text);
+      this.hooks.onLogSeeded?.(meta.id, records, Buffer.byteLength(text));
     }
   }
 
@@ -882,6 +904,8 @@ export class SessionStore {
       const current = await this.readMeta(id);
       if (current === null) throw new Error("the session was deleted before the update landed");
       await writeTextAtomic(this.logPath(id), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+      // 日志整份换了：派生数据（状态卡摘要）作废重算
+      this.hooks.onLogReplaced?.(id);
       await this.writeMeta({ ...current, ...patch });
     });
   }
@@ -1033,6 +1057,8 @@ export class SessionStore {
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
     this.metaById.delete(id);
+    // 派生数据（状态卡摘要的 status.json）跟会话一起走
+    this.hooks.onRemoved?.(id);
     // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」
     await rm(this.attachmentsPath(id), { recursive: true, force: true });
     // 快照正文仓同理（回退能力的代价面，跟会话一起走）

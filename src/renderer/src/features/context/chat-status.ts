@@ -10,9 +10,8 @@
 import type { TranscriptRecord } from "@shared/session";
 import type { ChannelStatus } from "@shared/channel";
 import { PLAN_TOOL_NAME } from "../../../../shared/plan.ts";
-import { parsePluginBoardDetails, type PluginBoardResult } from "../../../../shared/plugin-board.ts";
+import type { PluginBoardResult } from "../../../../shared/plugin-board.ts";
 import type { PlanStep, PlanTimeline } from "./plan-timeline.ts";
-import type { TurnOutput } from "../chat/process-rows.ts";
 import { sessionOutputs } from "../chat/child-outputs.ts";
 import { subSessionRowStatus } from "../chat/sub-sessions-rows.ts";
 
@@ -200,77 +199,29 @@ export function pillSignal(states: readonly ChildState[], extraRunning: number):
 /**
  * 状态卡里一份产物的文件类型（2026-11-22 20:58 用户：分组按文件类型，不按「怎么产生的」——第二版的「导出的文件」
  * 其实是「还没支持预览的文件」，去掉）。
+ *
+ * 词表（StatusOutput / StatusOutputKind / BoardCall / statusKindOf / boardOf / boardCallOf / extOf）
+ * 2026-11-27 搬进了 shared/status-digest.ts（状态卡摘要的 fold 与这里的批量派生共用同一份）；
+ * 这里 re-export，老调用点不动。
  */
-export type StatusOutputKind = "slides" | "pptx" | "doc" | "word" | "web" | "pdf" | "image" | "audio" | "video" | "board" | "file";
-
-export interface StatusOutput {
-  kind: StatusOutputKind;
-  path: string;
-  title: string;
-  /** 演示文稿页数等补充（量不到 null） */
-  pages: number | null;
-  /** 音视频时长（秒；agent 从容器头量到才有） */
-  duration?: number;
-  /** 子会话做的：它的标题；主会话自己的 = null */
-  by: string | null;
-  at: number;
-  /** 看板：插件名（在右栏打开它的看板用）；别的类型 = null */
-  plugin: string | null;
-  /** 看板：这次（同名看板里最后一次成功的）show_plugin_board 的调用 id 与快照——缩略图画它的第一张卡、点击滚回那次结果；别的类型 = null */
-  boardCall: BoardCall | null;
-}
-
-/** 一次成功的 show_plugin_board：调用 id（对话里那条结果的定位）+ 当时的快照 */
-export interface BoardCall {
-  toolCallId: string;
-  result: PluginBoardResult;
-}
-
-const EXT_KIND: Readonly<Record<string, StatusOutputKind>> = {
-  pdf: "pdf",
-  docx: "word",
-  doc: "word",
-  pptx: "pptx",
-  ppt: "pptx",
-  png: "image",
-  jpg: "image",
-  jpeg: "image",
-  svg: "image",
-  gif: "image",
-  webp: "image",
-};
-
-/** 结尾产物卡认的 → 文件类型（结尾卡的 file 一类按扩展名再分：PDF / Word / PPTX / 图片 / 其他） */
-export function statusKindOf(output: TurnOutput): StatusOutputKind {
-  if (output.kind === "slides") return "slides";
-  if (output.kind === "doc") return "doc";
-  if (output.kind === "web") return "web";
-  if (output.kind === "audio" || output.kind === "video") return output.kind;
-  return EXT_KIND[extOf(output.path)] ?? "file";
-}
-
-function extOf(path: string): string {
-  const name = path.split(/[\\/]/).pop() ?? "";
-  const dot = name.lastIndexOf(".");
-  return dot < 0 ? "" : name.slice(dot + 1).toLowerCase();
-}
-
-/** 插件看板结果里的看板名与插件名（details.pluginBoard.title / plugin）；没有 = null */
-export function boardOf(details: unknown): { title: string; plugin: string | null } | null {
-  if (typeof details !== "object" || details === null) return null;
-  const board = (details as Record<string, unknown>)["pluginBoard"];
-  if (typeof board !== "object" || board === null) return null;
-  const record = board as Record<string, unknown>;
-  const plugin = typeof record["plugin"] === "string" && record["plugin"] !== "" ? record["plugin"] : null;
-  const title = typeof record["title"] === "string" && record["title"] !== "" ? record["title"] : plugin;
-  return title === null ? null : { title, plugin };
-}
-
-/** 一次 show_plugin_board 结果 → 调用 id + 快照；快照读不出来（形状不对）= null（缩略图退回图标） */
-export function boardCallOf(toolCallId: string, details: unknown): BoardCall | null {
-  const result = parsePluginBoardDetails(details);
-  return result === null ? null : { toolCallId, result };
-}
+export {
+  boardCallOf,
+  boardOf,
+  statusKindOf,
+  type BoardCall,
+  type StatusOutput,
+  type StatusOutputKind,
+} from "../../../../shared/status-digest.ts";
+import {
+  boardCallOf,
+  boardOf,
+  extOf,
+  statusKindOf,
+  EXT_KIND,
+  type BoardCall,
+  type StatusOutput,
+  type StatusOutputKind,
+} from "../../../../shared/status-digest.ts";
 
 /**
  * 点状态卡里的看板产物：怎么走。
