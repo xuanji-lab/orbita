@@ -65,13 +65,41 @@ export function firstComputerUseToolCallId(transcript: readonly TranscriptItem[]
 }
 
 /**
- * 正在等授权的那条电脑工具调用（确认行的挂点）：最后一条还没有结果 / 还在跑的那条。
- * null = 没有跑着的电脑工具——此时确认行回落到输入框上方的 footer，不能让用户答不了。
+ * 正在等授权的那条电脑工具调用（确认行的挂点）：最后一条**还没有结果**的电脑工具调用。
+ *
+ * 注意它**不是「running」**：被闸门挡住的调用恰恰没有结果（不是 running、也不是成功/失败），
+ * 所以确认行的条件不能用「这一行在跑」来判——2026-11-27 真机验收就是这里没画出来
+ * （七次提问全部超时，用户根本看不到确认行）。
+ *
+ * null = 转录里没有这样的调用——此时确认行回落到输入框上方的兜底位，不能让用户答不了。
  */
-export function runningComputerUseToolCallId(transcript: readonly TranscriptItem[]): string | null {
+export function pendingComputerUseToolCallId(transcript: readonly TranscriptItem[]): string | null {
   const settled = settledResults(transcript);
   const calls = computerUseCalls(transcript).filter((call) => !settled.has(call.toolCallId));
   return calls.at(-1)?.toolCallId ?? null;
+}
+
+/**
+ * 兜底位（输入框上方）该不该画。规则是**确定性的**：行内画了（它自己登记）就不画，
+ * 没登记就画。不能用「ask 带不带 toolCallId」来推——行内是否真的渲染出来，
+ * 这个话题只有行内自己知道（折叠、分组、不在窗口里都可能没画）。
+ */
+export function shouldShowConsentAskFallback(
+  ask: { requestId: string } | null,
+  drawnAskIds: ReadonlySet<string>,
+): boolean {
+  return ask !== null && !drawnAskIds.has(ask.requestId);
+}
+
+/**
+ * 这一组工具行里是否包含正在等授权的那条。分组默认折叠（同名调用收进「用工具…」），
+ * 而挂起授权的那一条必须强制展开——否则确认行就藏在折叠里，用户依旧答不了。
+ */
+export function groupHoldsPendingAsk(
+  callIds: readonly string[],
+  askToolCallId: string | null,
+): boolean {
+  return askToolCallId !== null && callIds.includes(askToolCallId);
 }
 
 /**

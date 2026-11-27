@@ -318,11 +318,15 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
     }
   });
 
-  test("关掉出网 + 网络类错误的事件：确定句接在原话后面，原文一个字不动", async () => {
+  test("关掉出网 + 网络类错误的事件：确定句接在原话后面，且误导的「确认方式」整句被摘掉", async () => {
     const { runWith } = setup(false);
     const message = await rejection(runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: NET_ERROR }));
-    assert.ok(message.startsWith(NET_ERROR), "guest 的原话必须完整留在前面");
+    // 前半句（含错误码）与结尾那句像素工具的替代路径原样保留
+    assert.ok(message.startsWith("页面没有加载：ERR_INTERNET_DISCONNECTED"), "错误码必须还在");
     assert.ok(message.length > NET_ERROR.length);
+    // 「换一个一定能打开的地址试一次」与确定结论自相矛盾：它必须真的消失，而不是只在后面被撤回
+    assert.doesNotMatch(message, /换一个一定能打开的地址试一次/);
+    assert.match(message, /不要换地址、不要换站点/);
   });
 
   test("关掉出网 + 非网络类错误：一个字都不改（网站 500 / ERR_ABORTED 不是设置问题）", async () => {
