@@ -2518,7 +2518,6 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine, openWins],
   );
-
   /**
    * 切会话 = 把两栏整片换掉，打开着的 docx 会随之卸载。先让它们把待存改动落盘；
    * 任何一份失败（要确认整份重排 / 磁盘被外部改过 / 写盘失败）就**不切走**——
