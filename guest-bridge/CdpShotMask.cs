@@ -33,14 +33,13 @@ using System.Text;
 
 /**
  * 一个帧的静态信息（来自 `Page.getFrameTree` 的 frame 对象）。
- * `Main` = 帧树里的第一个（根帧），注入顺序从它开始。
+ * 帧树的第一条就是根帧（调用方据此认出主帧，不再另存一个 Main 标记）。
  */
 internal sealed class MaskFrame
 {
     internal string FrameId = "";
     internal string Url = "";
     internal string ParentFrameId = "";
-    internal bool Main = false;
 }
 
 /**
@@ -74,22 +73,42 @@ internal sealed class MaskFrameOutcome
 }
 
 /**
- * 一次截图的遮罩总账：按帧记结果，回执字段由它派生。
+ * 「这个 session 要注入哪几个 document」的一条计划。
  *
- * `maskCoverage` 只有两档（宿主与工具描述都按这两档说话）：
- *   `main+iframes` —— 枚举到的每个帧都注入成功了（页面没有 iframe 也算这一档：都遮了）；
- *   `main-only`    —— 至少一个帧没遮上（attach 不上 / 没有可用上下文 / 脚本报错 / 预算不足）。
- * 不写「部分遮了」第三档：模型只有两句话可说，「部分」会让它以为知道具体漏了哪块。
+ * 为什么不是「一个 session 一个上下文」：一个 OOPIF session 会报出**多个**默认上下文
+ * ——OOPIF 自己，以及它内部同源的嵌套子帧（父帧的 `Page.getFrameTree` 看不到这些）。
+ * 只挑 `frameId == targetId` 那一份，嵌套那一帧就完全不遮（验收实测：那格像素 #FFFFFF，
+ * 而回执却说 main+iframes）。所以计划 = 帧树里的每一帧 + 帧树没覆盖到的默认上下文各一份。
+ */
+internal sealed class MaskPlanItem
+{
+    internal string FrameId = "";
+    internal string Url = "";
+    /** null = 这个帧没有可用上下文（调用方要作为「没遮到」登记，而不是当成不存在） */
+    internal MaskContext Context;
+    /** true = 来自 `Page.getFrameTree`；false = 只从上下文认得（树里没有这个帧） */
+    internal bool FromTree = true;
+}
+
+/**
+ * 一次截图的遮罩总账：**按 document 记结果**，回执字段由它派生。
+ *
+ * 回执给两组数字 + 一张没遮到的清单，不再给「main+iframes / main-only」那种布尔——
+ * 布尔会被读成「所有 iframe 都盖住了」，而实际语义只是「我枚举到的每个 target 都试过」。
+ * 读者要能自己判断：检查了几个帧（`maskFramesChecked`）、盖住几个字段（`maskFieldsCovered`）、
+ * 哪几个帧没到（`maskMissing`，逐条给 url + 原因）。
  */
 internal sealed class ShotMaskReport
 {
+    /** 每个检查过的 document 一条（含失败的：失败的也要出现在清单里） */
     internal List<MaskFrameOutcome> Frames = new List<MaskFrameOutcome>();
-    /** 这一轮 `Runtime.enable` 成功的 session（收尾要把它们 disable 回去，见 ClearShotMask） */
+    /** 这一轮 `Runtime.enable` 成功的 session（页面 + 每个 iframe；收尾全部 disable 回去） */
     internal List<string> Sessions = new List<string>();
     /** 这一轮遮罩的整体失败原因（null = 没有整体性问题）。同一次回执里的 maskError */
     internal string Error;
 
-    internal int Regions
+    /** 实际盖住几个密码字段（每个字段一块 overlay，跨 document 求和） */
+    internal int FieldsCovered
     {
         get
         {
@@ -102,7 +121,14 @@ internal sealed class ShotMaskReport
         }
     }
 
-    internal int FrameCount
+    /** 检查过几个帧（含没遮到的——它们也在清单里） */
+    internal int FramesChecked
+    {
+        get { return Frames.Count; }
+    }
+
+    /** 注入脚本跑成了几个帧（哪怕命中 0 个字段） */
+    internal int FramesCovered
     {
         get
         {
@@ -115,19 +141,6 @@ internal sealed class ShotMaskReport
         }
     }
 
-    internal string Coverage
-    {
-        get
-        {
-            if (Frames.Count == 0) return "main-only";
-            for (int i = 0; i < Frames.Count; i++)
-            {
-                if (!Frames[i].Injected) return "main-only";
-            }
-            return "main+iframes";
-        }
-    }
-
     /** 记一条整体性原因（只留前两条，resp 是一整读整写的文件，不能让它长成一屏） */
     internal void Note(string reason)
     {
@@ -136,11 +149,39 @@ internal sealed class ShotMaskReport
         else if (Error.Length < 160) Error = Error + "；" + reason;
     }
 
-    /** 回执字段：宿主按名字取值（maskedRegions / maskFrames / maskCoverage / maskError） */
+    /**
+     * 回执字段（宿主按名字取值）：
+     *   maskFieldsCovered  盖住几个字段
+     *   maskFramesChecked  检查了几个帧
+     *   maskFramesCovered  几个帧注入成功
+     *   maskMissing        没遮到的帧（"url — 原因"），逐条；全遮住时是空数组
+     *   maskError          整体原因（预算不足 / 枚举失败 / 连接中断…），可缺
+     */
     internal void AppendTo(JObj o)
     {
-        o.Num("maskedRegions", Regions).Num("maskFrames", FrameCount).Str("maskCoverage", Coverage);
+        o.Num("maskFieldsCovered", FieldsCovered)
+            .Num("maskFramesChecked", FramesChecked)
+            .Num("maskFramesCovered", FramesCovered)
+            .Raw("maskMissing", MissingJson());
         if (Error != null) o.Str("maskError", Error);
+    }
+
+    /** 没遮到的帧逐条列出来（"url — 原因"）。这是「不许只给一个布尔」的那张清单 */
+    internal string MissingJson()
+    {
+        StringBuilder sb = new StringBuilder("[");
+        bool first = true;
+        for (int i = 0; i < Frames.Count; i++)
+        {
+            MaskFrameOutcome f = Frames[i];
+            if (f.Injected) continue;
+            if (!first) sb.Append(",");
+            first = false;
+            string label = f.Url == null || f.Url.Length == 0 ? "(未知帧)" : f.Url;
+            string reason = f.Error == null || f.Error.Length == 0 ? "没有遮上" : f.Error;
+            sb.Append(Program.JsonQuote(label + " — " + reason));
+        }
+        return sb.Append("]").ToString();
     }
 }
 
@@ -261,7 +302,6 @@ internal static class ShotMask
             {
                 if (f.Url == null) f.Url = "";
                 if (f.ParentFrameId == null) f.ParentFrameId = "";
-                f.Main = frames.Count == 0;
                 frames.Add(f);
             }
             if (next < 0) break;
@@ -315,40 +355,80 @@ internal static class ShotMask
     {
         if (contexts == null || frameId == null || frameId.Length == 0) return null;
         string origin = OriginOf(frameUrl);
-        MaskContext found = null;
+        // 「origin 完全对上」优先于「origin 没得比」（about:blank 的上下文 origin 是空串）：
+        // 两者都接受的话，靠后的空 origin 上下文会把真正的那个盖掉，于是脚本跑了、
+        // 却跑在一个空白 document 上——回执说遮住了，图里是明文。
+        MaskContext exact = null;
+        MaskContext loose = null;
         for (int i = 0; i < contexts.Count; i++)
         {
             MaskContext c = contexts[i];
             if (c == null || !c.IsDefault) continue;
             if (c.FrameId != frameId) continue;
             if (sessionId != null && sessionId.Length > 0 && c.SessionId != sessionId) continue;
-            if (origin.Length > 0 && c.Origin.Length > 0
-                && !string.Equals(c.Origin, origin, StringComparison.OrdinalIgnoreCase)) continue;
-            found = c;
+            if (origin.Length > 0 && c.Origin.Length > 0)
+            {
+                if (!string.Equals(c.Origin, origin, StringComparison.OrdinalIgnoreCase)) continue;
+                exact = c;
+            }
+            else
+            {
+                loose = c;
+            }
         }
-        return found;
+        return exact != null ? exact : loose;
     }
 
     /**
-     * 兜底：OOPIF 的 executionContext 里 frameId 未必等于 targetId（Chrome 版本差异），
-     * 那就按「这个 session 里 origin 与 target URL 一致的默认上下文，取最新一个」。
-     * **纯函数**。
+     * 一个 session 的注入计划：**帧树里的每一帧一条**（没有可用上下文的那条带 `Context == null`，
+     * 调用方要作为「没遮到」登记），再加上**帧树没覆盖到的默认上下文**各一条。
+     *
+     * 为什么必须扫第二遍（验收 P1）：一个 OOPIF session 的 `Runtime.enable` 会报出多个默认
+     * 上下文——它自己，以及它内部**同源嵌套子帧**。那些子帧不在父帧的 `Page.getFrameTree` 里；
+     * 只挑 `frameId == targetId` 那一份，嵌套那一帧就完全不遮。而脚本对同一 document 是幂等的
+     * （先删自己的 stale overlay、再打标记），重复执行无害。
+     *
+     * 同一 frameId 的多个默认上下文（导航残留的旧 world）只取**最新一份**：旧 world 里的
+     * document 已经没人看得见了，往那儿注入等于白跑，还会把「盖了几块」报大。
+     * **纯函数**（注入次数 / 覆盖数字都由它决定，自测直接验）。
      */
-    internal static MaskContext PickSessionContext(List<MaskContext> contexts, string sessionId, string url)
+    internal static List<MaskPlanItem> PlanSessionInjections(List<MaskFrame> tree, List<MaskContext> contexts)
     {
-        if (contexts == null) return null;
-        string origin = OriginOf(url);
-        MaskContext found = null;
-        for (int i = 0; i < contexts.Count; i++)
+        List<MaskPlanItem> plan = new List<MaskPlanItem>();
+        List<string> covered = new List<string>();
+        if (tree != null)
         {
-            MaskContext c = contexts[i];
-            if (c == null || !c.IsDefault) continue;
-            if (sessionId != null && sessionId.Length > 0 && c.SessionId != sessionId) continue;
-            if (origin.Length > 0 && c.Origin.Length > 0
-                && !string.Equals(c.Origin, origin, StringComparison.OrdinalIgnoreCase)) continue;
-            found = c;
+            for (int i = 0; i < tree.Count; i++)
+            {
+                MaskFrame f = tree[i];
+                if (f == null || f.FrameId == null || f.FrameId.Length == 0) continue;
+                MaskPlanItem item = new MaskPlanItem();
+                item.FrameId = f.FrameId;
+                item.Url = f.Url == null ? "" : f.Url;
+                item.Context = PickContext(contexts, f.FrameId, f.Url, null);
+                plan.Add(item);
+                if (!Has(covered, f.FrameId)) covered.Add(f.FrameId);
+            }
         }
-        return found;
+        if (contexts != null)
+        {
+            // 倒着扫 = 先看到最新的那份；同一 frameId 只认一次
+            List<string> seen = new List<string>();
+            for (int i = contexts.Count - 1; i >= 0; i--)
+            {
+                MaskContext c = contexts[i];
+                if (c == null || !c.IsDefault || c.Id <= 0) continue;
+                if (Has(covered, c.FrameId) || Has(seen, c.FrameId)) continue;
+                seen.Add(c.FrameId);
+                MaskPlanItem item = new MaskPlanItem();
+                item.FrameId = c.FrameId == null ? "" : c.FrameId;
+                item.Url = "";
+                item.Context = c;
+                item.FromTree = false;
+                plan.Add(item);
+            }
+        }
+        return plan;
     }
 
     /**
@@ -503,10 +583,10 @@ internal static class ShotMask
         List<MaskFrame> tree = ParseFrameTree(treeReply);
         CheckInt(failures, ref cases, "帧树：两个帧", 2, tree.Count);
         CheckString(failures, ref cases, "帧树：第一个是根帧 id", "MAIN", tree.Count > 0 ? tree[0].FrameId : null);
-        CheckTrue(failures, ref cases, "帧树：第一个标成 Main", tree.Count > 0 && tree[0].Main);
         CheckString(failures, ref cases, "帧树：根帧 url", "http://127.0.0.1:39181/", tree.Count > 0 ? tree[0].Url : null);
         CheckString(failures, ref cases, "帧树：子帧 parentId", "MAIN", tree.Count > 1 ? tree[1].ParentFrameId : null);
-        CheckTrue(failures, ref cases, "帧树：子帧不是 Main", tree.Count > 1 && !tree[1].Main);
+        CheckString(failures, ref cases, "帧树：第一条就是根帧（主帧由调用方取 tree[0]）", "MAIN",
+            tree.Count > 0 ? tree[0].FrameId : null);
         CheckInt(failures, ref cases, "帧树：空回执不炸", 0, ParseFrameTree("{}").Count);
 
         // ⑦ 上下文解析 + 挑帧：同一 frameId 的旧世界（origin 写父帧的源）必须被跳过
@@ -517,6 +597,10 @@ internal static class ShotMask
         events.Add("{\"method\":\"Runtime.executionContextCreated\",\"params\":{\"context\":{\"id\":4,"
             + "\"origin\":\"http://localhost:39182\",\"name\":\"\",\"auxData\":{\"isDefault\":true,"
             + "\"type\":\"default\",\"frameId\":\"IFRAME1\"}}},\"sessionId\":\"S-OOPIF\"}");
+        // OOPIF 内部的**同源嵌套子帧**：父帧的帧树里没有它，只在这个 session 的上下文列表里
+        events.Add("{\"method\":\"Runtime.executionContextCreated\",\"params\":{\"context\":{\"id\":6,"
+            + "\"origin\":\"http://localhost:39182\",\"name\":\"\",\"auxData\":{\"isDefault\":true,"
+            + "\"type\":\"default\",\"frameId\":\"IFRAME1-INNER\"}}},\"sessionId\":\"S-OOPIF\"}");
         events.Add("{\"method\":\"Runtime.executionContextCreated\",\"params\":{\"context\":{\"id\":5,"
             + "\"origin\":\"http://localhost:39182\",\"name\":\"\"}}}");
         List<MaskContext> pageContexts = new List<MaskContext>();
@@ -541,16 +625,61 @@ internal static class ShotMask
         CheckTrue(failures, ref cases, "挑上下文：frameId 对不上 → null",
             PickContext(twoWorlds, "NOPE", "http://127.0.0.1:39181/", "") == null);
 
+        // about:blank 的世界 origin 是空串：它排在后面也不许盖掉 origin 对得上的那个
+        List<MaskContext> blankLast = new List<MaskContext>();
+        blankLast.Add(Context(21, "MAIN", "http://127.0.0.1:39181", "S"));
+        blankLast.Add(Context(22, "MAIN", "", "S"));
+        MaskContext exactOne = PickContext(blankLast, "MAIN", "http://127.0.0.1:39181/", "S");
+        CheckInt(failures, ref cases, "挑上下文：origin 对得上的优先于 about:blank 的世界", 21,
+            exactOne == null ? -1 : exactOne.Id);
+        // 确实只有空白世界时仍要能用（否则 about:blank 页面永远遮不上）
+        List<MaskContext> onlyBlank = new List<MaskContext>();
+        onlyBlank.Add(Context(23, "MAIN", "", "S"));
+        CheckInt(failures, ref cases, "挑上下文：只剩空 origin 的上下文时也认（不然 about:blank 遮不上）", 23,
+            PickContext(onlyBlank, "MAIN", "https://x/", "S") == null ? -1 : PickContext(onlyBlank, "MAIN", "https://x/", "S").Id);
+
+        // ⑦b 注入计划（验收 P1 的根）：一个 OOPIF session 报 2 个默认上下文时，
+        //     一个 frameId == targetId、另一个是它内部的同源嵌套子帧 —— **必须注入 2 次**。
+        //     修前只挑 frameId == targetId 那一份，嵌套那一帧完全不遮而回执说 main+iframes。
         List<MaskContext> oopifContexts = new List<MaskContext>();
         ParseContexts(events, "S-OOPIF", oopifContexts);
-        CheckInt(failures, ref cases, "挑上下文：OOPIF 按 targetId 找（frameId=targetId）", 4,
-            PickContext(oopifContexts, "IFRAME1", "http://localhost:39182/", "S-OOPIF") == null
-                ? -1 : PickContext(oopifContexts, "IFRAME1", "http://localhost:39182/", "S-OOPIF").Id);
-        CheckInt(failures, ref cases, "挑上下文：OOPIF frameId 对不上时按 session+origin 兜底", 4,
-            PickSessionContext(oopifContexts, "S-OOPIF", "http://localhost:39182/") == null
-                ? -1 : PickSessionContext(oopifContexts, "S-OOPIF", "http://localhost:39182/").Id);
-        CheckTrue(failures, ref cases, "挑上下文：别的 session 的同源上下文不认",
-            PickSessionContext(oopifContexts, "S-OTHER", "http://localhost:39182/") == null);
+        List<MaskFrame> oopifTree = ParseFrameTree(
+            "{\"frameTree\":{\"frame\":{\"id\":\"IFRAME1\",\"loaderId\":\"L1\","
+            + "\"url\":\"http://localhost:39182/frame.html\"}}}");
+        List<MaskPlanItem> oopifPlan = PlanSessionInjections(oopifTree, oopifContexts);
+        CheckInt(failures, ref cases, "注入计划：帧树里那一帧 + 树外的默认上下文 = 2 次（P1 的钉子）",
+            2, oopifPlan.Count);
+        CheckInt(failures, ref cases, "注入计划：帧树那一帧用 origin 对得上的最新上下文", 4,
+            oopifPlan.Count > 0 && oopifPlan[0].Context != null ? oopifPlan[0].Context.Id : -1);
+        CheckTrue(failures, ref cases, "注入计划：树里没有的那一帧也要注入（FromTree=false）",
+            oopifPlan.Count > 1 && !oopifPlan[1].FromTree && oopifPlan[1].Context != null);
+        CheckInt(failures, ref cases, "注入计划：嵌套帧的上下文 id", 6,
+            oopifPlan.Count > 1 && oopifPlan[1].Context != null ? oopifPlan[1].Context.Id : -1);
+
+        // 同一 frameId 两个默认上下文（导航残留）：只注入最新那一份，别把块数报大
+        List<string> dupEvents = new List<string>();
+        dupEvents.Add("{\"method\":\"Runtime.executionContextCreated\",\"params\":{\"context\":{\"id\":7,"
+            + "\"origin\":\"http://localhost:39182\",\"name\":\"\",\"auxData\":{\"isDefault\":true,"
+            + "\"type\":\"default\",\"frameId\":\"IFRAME1\"}}}}");
+        dupEvents.Add("{\"method\":\"Runtime.executionContextCreated\",\"params\":{\"context\":{\"id\":8,"
+            + "\"origin\":\"http://localhost:39182\",\"name\":\"\",\"auxData\":{\"isDefault\":true,"
+            + "\"type\":\"default\",\"frameId\":\"IFRAME1\"}}}}");
+        List<MaskContext> dupContexts = new List<MaskContext>();
+        ParseContexts(dupEvents, "S-1", dupContexts);
+        List<MaskPlanItem> dupPlan = PlanSessionInjections(
+            ParseFrameTree("{\"frameTree\":{\"frame\":{\"id\":\"IFRAME1\",\"url\":\"http://localhost:39182/\"}}}"),
+            dupContexts);
+        CheckInt(failures, ref cases, "注入计划：同一帧的旧 world 不重复注入", 1, dupPlan.Count);
+        CheckInt(failures, ref cases, "注入计划：同一帧取最新那个世界", 8,
+            dupPlan.Count > 0 && dupPlan[0].Context != null ? dupPlan[0].Context.Id : -1);
+
+        // 帧树里有、但没有可用上下文的帧：计划里要有一条（Context == null），不能当成不存在
+        List<MaskPlanItem> gapPlan = PlanSessionInjections(
+            ParseFrameTree("{\"frameTree\":{\"frame\":{\"id\":\"MAIN\",\"url\":\"https://a/\"}}}"),
+            new List<MaskContext>());
+        CheckInt(failures, ref cases, "注入计划：没上下文的帧也占一条（要报「没遮到」）", 1, gapPlan.Count);
+        CheckTrue(failures, ref cases, "注入计划：那一条的 Context 是 null",
+            gapPlan.Count > 0 && gapPlan[0].Context == null);
 
         // ⑧ iframe target 归属：本标签页的认，别的标签页的不认，嵌套的认
         List<TargetInfo> targets = new List<TargetInfo>();
@@ -569,41 +698,52 @@ internal static class ShotMask
         CheckInt(failures, ref cases, "iframe 归属：没有已知帧时一个都不认", 0,
             PickIframeTargets(targets, new List<string>()).Count);
 
-        // ⑨ 回执映射：字段名是宿主按名字取的（写错就是两端脱钩）；覆盖两档都要出现
+        // ⑨ 回执映射：两组数字 + 一张清单（字段名是宿主按名字取的，写错就是两端脱钩）
         ShotMaskReport good = new ShotMaskReport();
         good.Frames.Add(Outcome("https://a/", true, 2, true));
         good.Frames.Add(Outcome("https://b/", true, 1, false));
         JObj goodJson = new JObj().Bool("ok", true);
         good.AppendTo(goodJson);
         string goodFields = goodJson.ToString();
-        CheckTrue(failures, ref cases, "回执含 maskedRegions=3", goodFields.IndexOf("\"maskedRegions\":3") >= 0);
-        CheckTrue(failures, ref cases, "回执含 maskFrames=2", goodFields.IndexOf("\"maskFrames\":2") >= 0);
-        CheckTrue(failures, ref cases, "回执含 maskCoverage=main+iframes",
-            goodFields.IndexOf("\"maskCoverage\":\"main+iframes\"") >= 0);
+        CheckTrue(failures, ref cases, "回执含 maskFieldsCovered=3",
+            goodFields.IndexOf("\"maskFieldsCovered\":3") >= 0);
+        CheckTrue(failures, ref cases, "回执含 maskFramesChecked=2",
+            goodFields.IndexOf("\"maskFramesChecked\":2") >= 0);
+        CheckTrue(failures, ref cases, "回执含 maskFramesCovered=2",
+            goodFields.IndexOf("\"maskFramesCovered\":2") >= 0);
+        CheckTrue(failures, ref cases, "全遮住时 maskMissing 是空数组",
+            goodFields.IndexOf("\"maskMissing\":[]") >= 0);
         CheckTrue(failures, ref cases, "全遮住时不写 maskError", goodFields.IndexOf("maskError") < 0);
-        CheckString(failures, ref cases, "覆盖档位：全遮住 = main+iframes", "main+iframes", good.Coverage);
-        CheckInt(failures, ref cases, "块数按注入成功的帧求和", 3, good.Regions);
+        CheckInt(failures, ref cases, "字段数按注入成功的帧求和", 3, good.FieldsCovered);
+        CheckInt(failures, ref cases, "检查帧数 = 计划条数", 2, good.FramesChecked);
+        CheckInt(failures, ref cases, "覆盖帧数只算成功的", 2, good.FramesCovered);
 
         ShotMaskReport degraded = new ShotMaskReport();
         degraded.Frames.Add(Outcome("https://a/", true, 1, true));
         degraded.Frames.Add(Outcome("https://pay/", false, 0, false));
+        degraded.Frames[1].Error = "attachToTarget 没有回 sessionId";
         degraded.Note("iframe 未遮：attachToTarget 没有回 sessionId");
         JObj badJson = new JObj().Bool("ok", true);
         degraded.AppendTo(badJson);
         string badFields = badJson.ToString();
-        CheckTrue(failures, ref cases, "iframe 没遮上 → maskCoverage=main-only",
-            badFields.IndexOf("\"maskCoverage\":\"main-only\"") >= 0);
-        CheckTrue(failures, ref cases, "iframe 没遮上 → maskError 带原因",
-            badFields.IndexOf("attachToTarget") >= 0);
-        CheckInt(failures, ref cases, "iframe 没遮上 → maskFrames 只算成功的", 1, degraded.FrameCount);
+        CheckTrue(failures, ref cases, "没遮到的帧进 maskMissing（带 url）",
+            badFields.IndexOf("\"maskMissing\":[\"https://pay/") >= 0);
+        CheckTrue(failures, ref cases, "maskMissing 带原因", badFields.IndexOf("attachToTarget") >= 0);
+        CheckTrue(failures, ref cases, "没遮到也要算进 maskFramesChecked（检查过）",
+            badFields.IndexOf("\"maskFramesChecked\":2") >= 0);
+        CheckInt(failures, ref cases, "覆盖帧数仍只算成功的", 1, degraded.FramesCovered);
+        CheckInt(failures, ref cases, "字段数仍只算成功的", 1, degraded.FieldsCovered);
 
         ShotMaskReport nothing = new ShotMaskReport();
-        CheckString(failures, ref cases, "一块都没跑 → 不许声称 main+iframes", "main-only", nothing.Coverage);
+        CheckInt(failures, ref cases, "一块都没跑：检查 0 帧", 0, nothing.FramesChecked);
+        CheckInt(failures, ref cases, "一块都没跑：盖 0 个字段", 0, nothing.FieldsCovered);
         nothing.Note("时间预算不足");
         JObj noneJson = new JObj().Bool("ok", true);
         nothing.AppendTo(noneJson);
-        CheckTrue(failures, ref cases, "整轮没跑也要写 maskError",
-            noneJson.ToString().IndexOf("\"maskError\":") >= 0);
+        string noneFields = noneJson.ToString();
+        CheckTrue(failures, ref cases, "整轮没跑也要写 maskError", noneFields.IndexOf("\"maskError\":") >= 0);
+        CheckTrue(failures, ref cases, "整轮没跑时 maskMissing 为空（没有逐条可报的帧）",
+            noneFields.IndexOf("\"maskMissing\":[]") >= 0);
 
         // ⑩ 脚本回执：异常 / CDP error / hits
         CheckTrue(failures, ref cases, "脚本异常被认出",
@@ -631,6 +771,17 @@ internal static class ShotMask
         info.Url = url;
         info.ParentFrameId = parentFrameId;
         return info;
+    }
+
+    private static MaskContext Context(int id, string frameId, string origin, string sessionId)
+    {
+        MaskContext c = new MaskContext();
+        c.Id = id;
+        c.FrameId = frameId;
+        c.Origin = origin;
+        c.SessionId = sessionId;
+        c.IsDefault = true;
+        return c;
     }
 
     private static MaskFrameOutcome Outcome(string url, bool injected, int regions, bool main)

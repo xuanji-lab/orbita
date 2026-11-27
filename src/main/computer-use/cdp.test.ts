@@ -372,9 +372,10 @@ describe("sandbox_* 回执翻成人话", () => {
             nativeHeight: 820,
             url: "https://bank.example/login",
             title: "Sign in",
-            maskedRegions: 2,
-            maskFrames: 3,
-            maskCoverage: "main+iframes",
+            maskFieldsCovered: 2,
+            maskFramesChecked: 3,
+            maskFramesCovered: 3,
+            maskMissing: [],
           },
         }),
       },
@@ -383,13 +384,14 @@ describe("sandbox_* 回执翻成人话", () => {
     const outcome = await run(cdp, { action: "sandbox-screenshot" });
     assert.equal(outcome.ok, true);
     const text = outcome.ok ? outcome.text : "";
+    assert.match(text, /checked 3 frames/);
     assert.match(text, /covered 2 password fields/);
-    assert.match(text, /main document and every iframe/);
+    assert.doesNotMatch(text, /could not reach/);
     // 原有的换道指引不能被挤掉
     assert.match(text, /sandbox_observe/);
   });
 
-  test("screenshot：main-only 时明说跨源 iframe 未遮（不许装作已遮）", async () => {
+  test("screenshot：有没到的帧时逐条点名（不许只给一个「已遮」）", async () => {
     const { guest } = fakeGuest({
       running: true,
       replies: {
@@ -404,9 +406,10 @@ describe("sandbox_* 回执翻成人话", () => {
             nativeHeight: 820,
             url: "https://bank.example/login",
             title: "Sign in",
-            maskedRegions: 1,
-            maskFrames: 1,
-            maskCoverage: "main-only",
+            maskFieldsCovered: 1,
+            maskFramesChecked: 2,
+            maskFramesCovered: 1,
+            maskMissing: ["https://pay.example/ — attachToTarget 没有回 sessionId"],
             maskError: "iframe 未遮：attachToTarget 没有回 sessionId",
           },
         }),
@@ -416,8 +419,9 @@ describe("sandbox_* 回执翻成人话", () => {
     const outcome = await run(cdp, { action: "sandbox-screenshot" });
     assert.equal(outcome.ok, true);
     const text = outcome.ok ? outcome.text : "";
-    assert.match(text, /only in the main document/);
-    assert.match(text, /cross-origin iframes were NOT masked/);
+    assert.match(text, /could not reach/);
+    assert.match(text, /https:\/\/pay\.example\//);
+    assert.match(text, /attachToTarget/);
   });
 
   test("screenshot：老桥（没有遮罩字段）不添任何遮罩的话", async () => {

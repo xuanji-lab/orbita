@@ -1428,9 +1428,10 @@ stdout: ${r.stdout}
 stderr: ${r.stderr}`);
     const parsed = JSON.parse(r.stdout.trim());
     assert.equal(parsed.ok, true, JSON.stringify(parsed));
-    // 用例数钉在 50 以上：这一组里有「同一 frameId 的旧 world 不认」「别的标签页的 iframe
-    // 不认」「iframe 没遮上不许声称 main+iframes」这些删掉就没人再发现的断言
-    assert.ok(parsed.cases >= 50, `用例数应 >= 50，实际 ${parsed.cases}`);
+    // 用例数钉在 70 以上：这一组里有「同一 frameId 的旧 world 不认」「别的标签页的 iframe
+    // 不认」「一个 OOPIF session 报 2 个默认上下文时要注入 2 次」「回执两组数字各自正确」
+    // 这些删掉就没人再发现的断言
+    assert.ok(parsed.cases >= 70, `用例数应 >= 70，实际 ${parsed.cases}`);
     assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
   },
 );
@@ -1460,7 +1461,7 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
 
   const cdp = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
   // 遮罩必须在截图之前、撤除在之后（顺序反了就是「遮罩没进图」或「overlay 留在页面上」）
-  const injectAt = cdp.indexOf("mask = MaskForShot()");
+  const injectAt = cdp.indexOf("MaskForShot(mask)");
   const captureAt = cdp.indexOf('Call("Page.captureScreenshot"');
   const clearAt = cdp.indexOf("ClearShotMask(mask)");
   assert.ok(injectAt > 0 && captureAt > injectAt, "先遮罩再截图");
@@ -1469,7 +1470,13 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
   // OOPIF 必须真的去 attach（只连 page session 的车道永远遮不到跨源 iframe）
   assert.match(cdp, /Target\.attachToTarget/);
   assert.match(cdp, /PickIframeTargets/);
-  // iframe 挂不上不许整条命令失败：降级并如实标 main-only（Coverage 由帧结果派生）
-  assert.match(mask, /main\+iframes/);
-  assert.match(mask, /main-only/);
+  // iframe 挂不上不许整条命令失败：降级并逐条登记（不是抛出去）
+  assert.match(cdp, /report\.Frames\.Add\(outcome\)/);
+  // 回执是「两组数字 + 一张没遮到的清单」，不是一个会被读成「全遮了」的布尔
+  assert.match(mask, /maskFieldsCovered/);
+  assert.match(mask, /maskFramesChecked/);
+  assert.match(mask, /maskMissing/);
+  assert.doesNotMatch(mask, /maskCoverage/, "曾经的 main+iframes / main-only 枚举已被两组数字取代");
+  // 一个 session 要注入几个 document 由计划算（不是「一个 target 一个上下文」）
+  assert.match(mask, /PlanSessionInjections/);
 });

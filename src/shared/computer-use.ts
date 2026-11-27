@@ -418,23 +418,25 @@ export const COMPUTER_USE_MASK_CACHE_MAX_AGE_MS = 30_000;
 // ── 网页截图的遮罩回执（cdp-shot，桥 0.16.0）────────────────────────
 
 /**
- * 一张**网页**截图（sandbox_screenshot）出图前遮了多少密码框、盖到了哪一层。
+ * 一张**网页**截图（sandbox_screenshot）出图前遮了哪些帧、盖住几个字段、哪几个没到。
  *
  * 与 `ComputerUseCaptureInfo` 不是一回事：那份是**像素车道**（整桌面 / 按窗口截图，靠 UIA
  * 记下的控件矩形涂黑）；网页里的密码框是 DOM，UIA 看不见，只能进页面自己盖一层 overlay。
- * 两边都叫 maskedRegions 但一个是「涂黑的矩形」、一个是「盖住的 overlay」，不要混。
+ *
+ * 为什么是两组数字 + 一张清单，而不是一个「覆盖到哪一档」的枚举：枚举会被读成
+ * 「所有 iframe 都盖住了」，而事实只是「枚举到的每个 target 都试过」——OOPIF 里再套同源子帧
+ * 时，真正盖住的范围只有桥自己知道，读者只能靠 checked / covered / missing 自己判断。
  */
 export interface ComputerUseShotMask {
-  /** 盖了几块 overlay（跨帧求和；0 = 屏幕上没有需要遮的密码框，或没遮成） */
-  maskedRegions: number;
-  /** 注入成功的帧数（主帧 + 同进程子帧 + 跨进程 iframe） */
-  maskFrames: number;
-  /**
-   * `main+iframes` = 枚举到的每个帧都注入成功；`main-only` = 至少一帧没遮上
-   * （attach 不上 / 没有可用上下文 / 脚本报错 / 预算不足）。没有第三档。
-   */
-  maskCoverage: "main+iframes" | "main-only";
-  /** 降级时的原因（桥的原话，最多 200 字）。全遮住时没有这个键 */
+  /** 实际盖住几个密码字段（每个字段一块 overlay，跨 document 求和） */
+  fieldsCovered: number;
+  /** 检查过几个帧（含没遮到的：检查过但没到的也在 missing 里） */
+  framesChecked: number;
+  /** 注入脚本跑成了几个帧（哪怕那一帧一个字段都没命中） */
+  framesCovered: number;
+  /** 没遮到的帧，逐条 "url — 原因"；全遮住时是空数组 */
+  missing: string[];
+  /** 整体原因（预算不足 / 枚举失败 / 连接中断…），最多 200 字。全好时没有这个键 */
   error?: string;
 }
 
@@ -442,46 +444,51 @@ export interface ComputerUseShotMask {
  * 从 cdp-shot 的回执里取遮罩信息。**老桥（没有这几个字段）回 undefined**：
  * 那时既不能说「遮了」也不能说「没遮」，两条都是谎话，所以正文里一个字都不添。
  *
- * `maskedRegions` 是唯一的门槛字段（它在，其余几个才可信）；缺 `maskCoverage` 时
- * 按 `main-only` 处理——宁可把话说重，不可声称跨源帧已遮。
+ * `maskFieldsCovered` 是唯一的门槛字段（它在，其余几个才可信）；缺帧数时按 0、
+ * 缺清单时按空数组——宁可少说，不可编。
  */
 export function computerUseShotMask(resp: Record<string, unknown>): ComputerUseShotMask | undefined {
-  const maskedRegions = resp["maskedRegions"];
-  if (typeof maskedRegions !== "number" || !Number.isFinite(maskedRegions) || maskedRegions < 0) return undefined;
-  const maskFrames = resp["maskFrames"];
+  const fieldsCovered = resp["maskFieldsCovered"];
+  if (typeof fieldsCovered !== "number" || !Number.isFinite(fieldsCovered) || fieldsCovered < 0) return undefined;
+  const count = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+  const rawMissing = resp["maskMissing"];
+  const missing = Array.isArray(rawMissing)
+    ? rawMissing
+        .filter((item): item is string => typeof item === "string" && item.trim() !== "")
+        .map((item) => item.trim().slice(0, 160))
+        .slice(0, 8)
+    : [];
   const error = resp["maskError"];
   return {
-    maskedRegions: Math.round(maskedRegions),
-    maskFrames:
-      typeof maskFrames === "number" && Number.isFinite(maskFrames) && maskFrames >= 0 ? Math.round(maskFrames) : 0,
-    maskCoverage: resp["maskCoverage"] === "main+iframes" ? "main+iframes" : "main-only",
+    fieldsCovered: Math.round(fieldsCovered),
+    framesChecked: count(resp["maskFramesChecked"]),
+    framesCovered: count(resp["maskFramesCovered"]),
+    missing,
     ...(typeof error === "string" && error.trim() !== "" ? { error: error.slice(0, 200) } : {}),
   };
 }
 
 /**
- * 给模型的那**一句话**：遮了多少、盖到哪一层；`main-only` 时必须写明跨源 iframe 没遮
- * （不能装作已遮——模型会据此以为图里的明文不可见）。老桥（mask === undefined）回空串。
+ * 给模型的那**一句话**：检查了几个帧、盖住几个字段；**没到的帧逐条点名**——模型据此才知道
+ * 图里哪一块（可能是明文）不可信。老桥（mask === undefined）回空串。
  */
 export function computerUseShotMaskNote(mask: ComputerUseShotMask | undefined): string {
   if (mask === undefined) return "";
-  const fields = `${mask.maskedRegions} password field${mask.maskedRegions === 1 ? "" : "s"}`;
-  if (mask.maskCoverage === "main+iframes") {
-    if (mask.maskedRegions === 0) {
-      return " No password field needed covering before this capture (the main document and every iframe were checked).";
-    }
-    const frames = `${mask.maskFrames} frame${mask.maskFrames === 1 ? "" : "s"}`;
-    return ` Before the capture it covered ${fields} with an opaque overlay across ${frames} (the main document and every iframe).`;
-  }
-  const covered =
-    mask.maskedRegions === 0
-      ? "No password field was covered"
-      : `It covered ${fields}, but only in the main document`;
-  const reason = mask.error === undefined ? "" : ` The bridge said: ${mask.error}`;
-  return (
-    ` ${covered} — cross-origin iframes were NOT masked, so everything visible inside a frame is visible in this image.` +
-    reason
-  );
+  const frames = `${mask.framesChecked} frame${mask.framesChecked === 1 ? "" : "s"}`;
+  const fields = `${mask.fieldsCovered} password field${mask.fieldsCovered === 1 ? "" : "s"}`;
+  const base =
+    mask.fieldsCovered === 0
+      ? ` Before the capture it checked ${frames} and found no password field to cover.`
+      : ` Before the capture it checked ${frames} and covered ${fields} with an opaque overlay.`;
+  const missing =
+    mask.missing.length === 0
+      ? ""
+      : ` Frames it could not reach (everything visible inside them is visible in this image): ${mask.missing.join(
+          "; ",
+        )}.`;
+  const error = mask.error === undefined ? "" : ` The bridge said: ${mask.error}`;
+  return base + missing + error;
 }
 
 /**

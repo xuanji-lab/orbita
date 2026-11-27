@@ -421,9 +421,10 @@ export function createSandboxBrowserTools(
       "selectors. This is the page viewport, not the sandbox desktop: use computer_screenshot to see the whole " +
       "Windows desktop. " +
       "Before the capture it covers every password field it finds with an opaque overlay (main document, " +
-      "same-process frames and, by attaching to them, cross-origin iframes), then removes the overlay again. " +
-      "The result text says how many it covered and whether iframes were reached; if it says main-only, treat " +
-      "anything inside a frame as visible. Two gaps stay open: a field that was turned from type=password into " +
+      "same-process frames and, by attaching to them, cross-origin iframes and frames nested inside those), " +
+      "then removes the overlay again. The result text says how many frames it checked, how many fields it " +
+      "covered, and names every frame it could not reach — treat anything visible inside a listed frame as " +
+      "visible in the image. Two gaps stay open: a field that was turned from type=password into " +
       "text and carries no autocomplete / data attribute is not recognised, and the overlay only hides pixels — " +
       "sandbox_extract still reads the value from the DOM.",
     parameters: { type: "object", properties: {}, required: [] } as never,
