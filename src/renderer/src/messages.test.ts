@@ -112,6 +112,12 @@ const ALLOWED_LATIN = new Set([
   "LaTeX",
   "latexmk",
   "tlmgr",
+  // LaTeX 工具链与中文模板的名字（设置页自检 / 修复提示词里要指名道姓的东西）
+  "ctexart",
+  "xelatex",
+  "chktex",
+  "synctex",
+  "TinyTeX",
   // TeX 发行版与它们的安装位置（引导卡要指名的路径片段与环境变量）
   "TeX",
   "Live",

@@ -1519,47 +1519,9 @@ html[data-pointer-drag] iframe {
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
-.pdf-annot-rail {
-  width: 220px;
-  flex-shrink: 0;
-  border-left: 1px solid var(--color-border-subtle);
-  background: var(--color-bg-panel);
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-.pdf-annot-rail-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border-subtle);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-}
-.annot-empty {
-  padding: var(--space-3);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.annot-card {
-  margin: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 8px;
-  background: var(--color-bg-app);
-  font-size: var(--font-size-xs);
-}
-.annot-comment {
-  color: var(--color-text-primary);
-}
-.annot-meta {
-  color: var(--color-text-tertiary);
-  margin-top: var(--space-1);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
+/* PDF 右栏批注（.pdf-annot-rail / .annot-card / .annot-meta …）已删：
+ * 2026-11-27 用户裁决，列表搬进底部问题抽屉（.latex-problem 那一套行）。
+ * 220px 常驻侧栏在 1200 宽时吃掉 PDF 面板 47%（视口 245px、26% 缩放）。 */
 
 /* ===== 改动裁决的双 diff 对照（C2） ===== */
 .pdf-diff-review {
@@ -4018,6 +3980,117 @@ html[data-pointer-drag] iframe {
 }
 
 /* 抽屉：默认一行；展开后列表自己有上限，不把文件内容挤没 */
+/* ---------- PDF 批注栏（与 tex 大纲同一套形态：工具条开合、右侧竖栏） ---------- */
+/* 工具条上的开关键：有批注时带一个小圆点计数，不占正文 */
+.pdf-annot-badge {
+  margin-left: 2px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-inset);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 14px;
+  text-align: center;
+}
+.pdf-annot-rail {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: min(240px, 55%);
+  min-height: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.pdf-annot-rail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pdf-annot-rail-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.pdf-annot-rail-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.pdf-annot-rail-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pdf-annot-rail-close {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+.pdf-annot-rail-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) 0 var(--space-2);
+}
+.pdf-annot-rail-empty {
+  margin: 0;
+  padding: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-ui);
+}
+.pdf-annot-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  margin: var(--space-1) var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-app);
+}
+.pdf-annot-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+}
+.pdf-annot-card-comment {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: var(--line-height-ui);
+}
+.pdf-annot-card-quote,
+.pdf-annot-card-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-ui);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.pdf-annot-card-del {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+
+
 .latex-problems {
   flex: 0 0 auto;
   border-top: 1px solid var(--color-border-subtle);

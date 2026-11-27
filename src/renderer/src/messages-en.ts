@@ -3415,6 +3415,63 @@ export const en = {
     cleanFailed: (message: string) => `Clean failed: ${message}`,
   },
 
+  /* ---------- 设置 › LaTeX 论文（preflight 自查） ---------- */
+  latexSettings: {
+    title: "LaTeX papers",
+    intro: (platform: string) =>
+      `Compile, preview the PDF, jump between source and PDF, verify citations, export to Word. This machine was checked once when the feature was turned on (${platform}). Compile on save is a per-project switch in the project's ⋮ menu.`,
+    platformWindows: "Windows",
+    checks: "Environment check",
+    latexmk: "latexmk compiler",
+    synctex: "synctex (source ↔ PDF)",
+    chktex: "chktex (inline checks)",
+    pandoc: "pandoc ≥ 3.10.2 (Word export)",
+    probing: "Checking…",
+    notFound: "Not found",
+    synctexMissing: "No synctex command on this machine (the TeX distribution may be missing a component)",
+    chktexMissing: "Not installed (inline checks are optional)",
+    pandocMissing: "Not installed",
+    pandocTooOld: (version: string, min: string) =>
+      `${version} is too old — Word export needs ${min} or newer`,
+    pandocReady: (version: string, path: string) => `${version} · ${path}`,
+    repair: (id: string) => `Ask the agent to fix ${id}`,
+    repairPrompt: (id: string) =>
+      `Please check and fix the ${id} part of my LaTeX toolchain. Probe first, then fix; ask me before installing anything (MacTeX, MiKTeX, TeX Live), and only write inside directories I confirm.`,
+    repairing: "Opening a task…",
+    repairFailed:
+      "Couldn't open the task in time — the message was not sent. Click the wrench again.",
+    config: "Configuration",
+    latexmkPath: "latexmk path",
+    latexmkNotFound: "Not found (you can point at it explicitly)",
+    locate: "Choose location…",
+    cnTemplate:
+      "School templates cannot be imported yet — start with ctexart, and pick xelatex (or latexmk · xelatex) in the compile bar's recipe menu.",
+    promptTitle: "System prompt sent to the agent when repairing (read-only, can be overridden per project)",
+    promptMac:
+      "You are fixing the user's LaTeX toolchain (macOS). Run the platform checklist first: latexmk / synctex / chktex / pandoc. If synctex is missing and TinyTeX is an older year release, do not run tlmgr install (cross-release installs are refused) — guide the user to MacTeX instead. Ask before installing anything. Only write inside directories the user confirmed.",
+    promptWin:
+      "You are fixing the user's LaTeX toolchain (Windows). Run the platform checklist first: latexmk / synctex / chktex / pandoc. Prefer per-user MiKTeX / TeX Live installs when a component is missing. Ask before installing anything. Only write inside directories the user confirmed.",
+  },
+  /* ---------- PDF 选区批注（论文工作台：浮条 + 问题抽屉里的一组） ---------- */
+  pdfAnnotations: {
+    write: "Add comment",
+    quote: "Quote in chat",
+    placeholder: "Write one line — the selected text and page are saved with it",
+    save: "Save comment",
+    title: "Comments",
+    count: (n: number) => (n === 1 ? "1 comment" : `${n} comments`),
+    /** 组头里的短计数（左边已经写着「Comments」，不再重复那个词） */
+    countShort: (n: number) => `${n}`,
+    /** 一条都没有时，收起态那一行写什么（不要写「0 comments」） */
+    none: "None",
+    empty: "Select text in the PDF to comment on it or quote it in the chat.",
+    locateTip: "Go to that page and highlight the quoted text",
+    deleteTip: "Delete this comment",
+    page: (n: number) => `Page ${n}`,
+    toggleTip: "Comments (they sit beside the PDF, like the outline beside the source)",
+    closeTip: "Close comments",
+  },
+
   /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */
   cite: {
     // 抽屉的定位列已经写着文件名，消息里不再重复（重复会把 300px 的面板挤成三行）

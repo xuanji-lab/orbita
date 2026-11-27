@@ -26,7 +26,7 @@ import { isLegacyXlsFile, isXlsxFile } from "@shared/xlsx";
 import { isLegacyPptFile, isPptxFile } from "@shared/pptx";
 import type { PromptImage } from "@shared/prompt-images";
 import type { CiteEntry } from "@shared/cite";
-import type { LatexIssue, LatexNav, LatexProjectIndex } from "@shared/latex";
+import type { LatexIssue, LatexNav, LatexProjectIndex, PdfAnnotation } from "@shared/latex";
 import { XlsxView } from "../xlsx/XlsxView";
 import { PptxView } from "../pptx/PptxView";
 import type { TextQuote } from "@shared/quote";
@@ -80,6 +80,17 @@ export function FilePreviewPane(props: {
   syncJump?: PdfSyncJump | null;
   /** PDF 双击 / Ctrl+单击 → 外层反查源码。缺席 = 这份 PDF 不接反查 */
   onLocatePdf?: (point: { page: number; x: number; y: number }) => void;
+  /**
+   * 批注：浮条写入 + 右侧竖栏的列表（住 PdfView 内部，工具条按键开合）。
+   * 缺席 = 这份 PDF 不接批注。
+   */
+  pdfAnnotations?: {
+    items: readonly PdfAnnotation[];
+    onSave: (annotation: PdfAnnotation) => void;
+    onRemove: (id: string) => void;
+    onJump: (item: PdfAnnotation) => void;
+    onOpen: () => void;
+  } | null;
   /**
    * 论文工作台：把编辑器的把手 / 脏状态交给 FilesPanel（编译前保存、标签圆点都靠它）。
    * 缺席时编辑器照常能改能自动保存，只是外层拿不到把手。
@@ -423,7 +434,7 @@ export function FilePreviewPane(props: {
             syncJump={props.syncJump ?? null}
             {...(props.onLocatePdf === undefined ? {} : { onLocate: props.onLocatePdf })}
             onQuote={props.onPdfQuote}
-            annotationCtx={props.pdfPreview === true ? { sessionId, workspaceId, extraWorkspaceId: props.extraWorkspaceId, root, path } : null}
+            pdfAnnotations={props.pdfPreview === true ? (props.pdfAnnotations ?? null) : null}
           />
         ) : editorInitial !== null ? (
           <TexEditorPane
