@@ -147,14 +147,15 @@ export function RoleSection(props: { workspaceId: string; planet: PlanetDesign }
 }
 
 /** 面板里新建一个子智能体：名字 + 职能，放在默认空轨道上；建好后 App 收到广播，面板落到新行星那一页 */
-export function NewSubAgentForm(props: { workspaceId: string; count: number; onDone: () => void }) {
+/** max = 这颗主星最多带几颗（物理层容量，≤ PLANET_AGENTS_MAX）；主进程建之前还会按同一条再查一遍 */
+export function NewSubAgentForm(props: { workspaceId: string; count: number; max: number; onDone: () => void }) {
   const t = useT();
   const tg = t.galaxyDesigner;
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const full = props.count >= PLANET_AGENTS_MAX;
+  const full = props.count >= Math.min(props.max, PLANET_AGENTS_MAX);
   const ready = !busy && !full && name.trim() !== "" && role.trim() !== "";
   const create = async (): Promise<void> => {
     if (!ready) return;
@@ -168,7 +169,7 @@ export function NewSubAgentForm(props: { workspaceId: string; count: number; onD
   return (
     <div className="gd-new" data-form="new-subagent">
       <PanelGroupHead label={tg.newAgentTitle} />
-      <p className="gd-role-line">{full ? tg.newAgentFull(PLANET_AGENTS_MAX) : tg.newAgentHint}</p>
+      <p className="gd-role-line">{full ? tg.newAgentFull(Math.min(props.max, PLANET_AGENTS_MAX)) : tg.newAgentHint}</p>
       <div className="gd-row gd-row-wide">
         <span className="gd-row-head">
           <span className="gd-row-name">{tg.newAgentName}</span>

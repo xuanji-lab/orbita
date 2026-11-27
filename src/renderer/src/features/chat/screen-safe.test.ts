@@ -27,7 +27,8 @@ import {
 import { orbitRadiusOf } from "./galaxy-data.ts";
 import { MIN_CLEARANCE, VIEW_REF_ELEVATION } from "./galaxy.ts";
 import type { SafeScene as SafeSceneLike } from "./screen-safe.ts";
-import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, fitScreenSafe } from "./screen-safe.ts";
+import { AGENT_READABLE_FLOOR, ROCK_CLEAR_PX, bodyGapOf, curveGap, drawnPlanetPx, fitScreenSafe } from "./screen-safe.ts";
+import { DRAWN_REF_ELEVATION_DEG, DRAWN_STAR_OVER_PLANET, PLANET_DRAW_SCALE } from "../../../../shared/galaxy-scale.ts";
 import { FAR_MARGIN } from "./galaxy-motion.ts";
 import { lockFrame } from "./callouts.ts";
 
@@ -580,5 +581,28 @@ describe("转台：转方位角不把行星缩小（近日点朝向镜头时先�
       assert.ok(scene.minPlanetPx >= base.minPlanetPx - 0.75, `方位 ${azimuth}°：${scene.minPlanetPx.toFixed(1)}px < ${base.minPlanetPx.toFixed(1)}px`);
       assert.ok(scene.layout.ecc > 0, `方位 ${azimuth}°：椭圆放圆了也不该变成正圆（${scene.layout.ecc}）`);
     }
+  });
+});
+
+describe("行星默认画成 0.7 倍（2026-11-26 用户定）", () => {
+  test("可读半径整体缩到 0.7 倍，但不缩到可读下限以下", () => {
+    assert.equal(PLANET_DRAW_SCALE, 0.7);
+    assert.ok(Math.abs(drawnPlanetPx(20, AGENT_READABLE_FLOOR) - 14) < 1e-9);
+    assert.equal(drawnPlanetPx(12, AGENT_READABLE_FLOOR), AGENT_READABLE_FLOOR);
+    // 本来就在下限以下（极小画布最后一搏）：不再放大，也不再缩
+    assert.equal(drawnPlanetPx(8, AGENT_READABLE_FLOOR), 8);
+  });
+
+  test("shared 推画面行星区内缘用的画法常数与 galaxy.ts 一致（改一边忘了另一边，「不压主星」就不成立）", () => {
+    assert.ok(Math.abs(DRAWN_STAR_OVER_PLANET - STAR_OVER_PLANET * WAITING_SCALE) < 1e-12);
+    assert.equal(DRAWN_REF_ELEVATION_DEG, VIEW_REF_ELEVATION);
+  });
+
+  test("页面大小的画布上，编排星系的行星确实画成可读半径的 0.7 倍", () => {
+    const [, spec] = AGENT_SPECS[0] as (typeof AGENT_SPECS)[number];
+    const box = galaxyBox(1088, 726, GALAXY_MAX_FILL);
+    const scene = fitScreenSafe(spec, 1088, 726, box, TILT, AGENT_READABLE_MAX);
+    assert.ok(scene.minPlanetPx <= AGENT_READABLE_MAX * PLANET_DRAW_SCALE + 1e-9, `行星 ${scene.minPlanetPx.toFixed(1)}px`);
+    assert.ok(scene.minPlanetPx >= AGENT_READABLE_FLOOR);
   });
 });

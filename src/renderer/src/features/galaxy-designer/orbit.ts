@@ -1,5 +1,17 @@
-import { checkSystem, orbitLimits, ORBIT_ECC_MAX, type OrbitLevel, type OrbitSpec } from "../../../../shared/orbit-physics.ts";
-import { commitPlanet, maxOrbit, minOrbit, normalizeDesign, orbitEccentricityOf, orbitSpecOf, periapsisOf, type GalaxyDesign, type PlanetDesign } from "./design.ts";
+import { auToDisplay, displayToAu, STAR_MASS } from "../../../../shared/galaxy-scale.ts";
+import { checkSystem, orbitLimits, ORBIT_ECC_MAX, type OrbitLevel } from "../../../../shared/orbit-physics.ts";
+import {
+  commitPlanet,
+  maxOrbit,
+  minOrbit,
+  normalizeDesign,
+  orbitEccentricityOf,
+  periapsisOf,
+  physicalSpecsOf,
+  physicalStarOf,
+  type GalaxyDesign,
+  type PlanetDesign,
+} from "./design.ts";
 
 export type OrbitField = "a" | "e" | "omega";
 
@@ -11,16 +23,31 @@ export interface OrbitUiStatus {
   comfortMaxA: number;
   maxE: number;
   comfortMaxE: number;
-  /** 与最挤邻居的间距；没有邻居为 Infinity */
+  /** 与最挤邻居的间距（物理层的相互希尔半径）；没有邻居为 Infinity */
   closestGap: number;
+  /** 当前行星的物理半长轴（AU）与硬合法区间的物理值：面板上两个数都写 */
+  au: number;
+  minAu: number;
+  maxAu: number;
+}
+
+/** 设计稿里这颗主星的界面质量（没主星时按最轻那档，只为不出 NaN） */
+function starMassOf(design: GalaxyDesign): number {
+  return design.star?.mass ?? STAR_MASS.min;
+}
+
+/** 物理层的 AU → 画面半径；±Infinity（这一侧没有邻居）原样留着 */
+function toDisplay(starMass: number, au: number): number {
+  return Number.isFinite(au) ? auToDisplay(starMass, au) : au;
+}
+
+/** 画面半径 → AU；±Infinity 原样 */
+function toAu(starMass: number, display: number): number {
+  return Number.isFinite(display) ? displayToAu(starMass, display) : display;
 }
 
 export function designPlanets(design: GalaxyDesign): readonly PlanetDesign[] {
   return design.planets ?? (design.planet === null ? [] : [design.planet]);
-}
-
-export function designOrbitSpecs(design: GalaxyDesign): OrbitSpec[] {
-  return designPlanets(design).map(orbitSpecOf);
 }
 
 function currentIndex(design: GalaxyDesign): number {
@@ -47,18 +74,25 @@ function maxEForBody(design: GalaxyDesign): number {
   return lo;
 }
 
+/**
+ * 当前行星的红 / 黄 / 绿。两层各管一样：行星之间稳不稳按物理层判（主星 M☉、轨道 AU、真实比例的希尔半径），
+ * 再把物理区间映射回画面半径给滑块（滑块仍按画面位置拖）；撞主星、出画面行星区按画面层判。映射是单调的，
+ * 物理上的「内 / 外邻居」与画面上的一致。
+ */
 export function orbitUiStatus(design: GalaxyDesign): OrbitUiStatus {
   const planets = designPlanets(design);
-  const specs = designOrbitSpecs(design);
+  const starMass = starMassOf(design);
+  const physical = physicalSpecsOf(starMass, planets);
+  const star = physicalStarOf(starMass);
   const index = currentIndex(design);
-  const self = specs[index];
-  const limits = orbitLimits({ mass: design.star?.mass ?? 1 }, specs, index);
+  const self = physical[index];
+  const limits = orbitLimits(star, physical, index);
   const single = planets.length <= 1;
-  const minA = Math.max(limits.minA, minOrbit(design));
-  const maxA = Math.min(limits.maxA, maxOrbit(design));
-  const comfortMinA = Math.max(limits.comfortMinA, minOrbit(design));
-  const comfortMaxA = Math.min(limits.comfortMaxA, maxOrbit(design));
-  const a = self?.a ?? Number.NaN;
+  const minA = Math.max(toDisplay(starMass, limits.minA), minOrbit(design));
+  const maxA = Math.min(toDisplay(starMass, limits.maxA), maxOrbit(design));
+  const comfortMinA = Math.max(toDisplay(starMass, limits.comfortMinA), minOrbit(design));
+  const comfortMaxA = Math.min(toDisplay(starMass, limits.comfortMaxA), maxOrbit(design));
+  const a = planets[index]?.orbitRadius ?? Number.NaN;
   const level = single && Number.isFinite(a) && a >= minOrbit(design) && a <= maxOrbit(design)
     ? "green"
     : !Number.isFinite(a) || a < minA || a > maxA
@@ -69,7 +103,7 @@ export function orbitUiStatus(design: GalaxyDesign): OrbitUiStatus {
   const bodyMaxE = maxEForBody(design);
   const maxE = Math.min(limits.maxE, bodyMaxE);
   const comfortMaxE = Math.min(limits.comfortMaxE, bodyMaxE);
-  const warnings = self === undefined ? [] : checkSystem({ mass: design.star?.mass ?? 1 }, specs).warnings.filter((warning) => warning.innerIndex === index || warning.outerIndex === index);
+  const warnings = self === undefined ? [] : checkSystem(star, physical).warnings.filter((warning) => warning.innerIndex === index || warning.outerIndex === index);
   return {
     level,
     minA,
@@ -79,6 +113,9 @@ export function orbitUiStatus(design: GalaxyDesign): OrbitUiStatus {
     maxE,
     comfortMaxE,
     closestGap: warnings.length === 0 ? Number.POSITIVE_INFINITY : Math.min(...warnings.map((warning) => warning.gapInRH)),
+    au: self?.a ?? Number.NaN,
+    minAu: toAu(starMass, minA),
+    maxAu: toAu(starMass, maxA),
   };
 }
 

@@ -13,6 +13,8 @@ import { zh } from "./messages-zh.ts";
 const ALLOWED_LATIN = new Set([
   // 国际单位符号：星系设计面板的密度写 g/cm³（2026-11-24，galaxyDesigner.mix；中文科普里也照写符号）
   "g",
+  // 天文单位符号：星系设计面板的物理轨道写 AU（2026-11-26，galaxyDesigner.semiMajorDesc / readout；与 M☉、M⊕ 同列，中文科普里也照写符号）
+  "AU",
   // 文件格式 / 产品专名：演示文稿导出菜单「PowerPoint」（2026-11-07，slides.* 文案）
   "PowerPoint",
   // 新手引导「文档与演示」一章：文档的写法跟 Obsidian 一致（笔记应用的产品名）

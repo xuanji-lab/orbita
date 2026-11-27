@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EYE_STYLES } from "../../../../shared/planet-design.ts";
 import { readFileSync } from "node:fs";
+import { PLANET_DRAW_SCALE } from "../../../../shared/galaxy-scale.ts";
 import { orbitStage, previewPlan } from "./well.ts";
 import { describe, test } from "node:test";
 import { DENSITY, MIN_CLEARANCE, PLANET_MASS, PLANET_ZONE, STAR_DENSITY, STAR_MASS, bodyRadius } from "../chat/galaxy.ts";
@@ -94,7 +95,8 @@ describe("参数约束", () => {
     const design = legal();
     const near = minOrbit(design);
     const e = design.planet.eccentricity ?? 0;
-    assert.ok(Math.abs(near * (1 - e) - (radiusOf(design, "star") + radiusOf(design, "planet") + MIN_CLEARANCE)) < 1e-9);
+    // 行星按画面半径（× PLANET_DRAW_SCALE）算：画小了，判据跟着用同一个半径
+    assert.ok(Math.abs(near * (1 - e) - (radiusOf(design, "star") + radiusOf(design, "planet") * PLANET_DRAW_SCALE + MIN_CLEARANCE)) < 1e-9);
     const atLimit = { ...design, planet: { ...design.planet, orbitRadius: near } };
     assert.deepEqual(validateDesign(atLimit), []);
     const inside = { ...design, planet: { ...design.planet, orbitRadius: near - 0.01 } };

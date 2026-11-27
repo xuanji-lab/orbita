@@ -10,6 +10,7 @@ import {
   STAR_DENSITY,
   STAR_MASS,
   bodyRadius,
+  planetDrawRadius,
   planetRadius,
   starRadius,
   type BodyComposition,
@@ -374,7 +375,7 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
     ? 1
     : outermost === undefined
       ? 1
-      : Math.min(1, (PLANET_ZONE - planetRadius(outermost)) / outermost.orbitRadius);
+      : Math.min(1, (PLANET_ZONE - planetDrawRadius(outermost)) / outermost.orbitRadius);
   const planets: OrbitBody[] = [];
   const adjusted: string[] = [];
   let prevOrbit = 0;
@@ -382,7 +383,8 @@ export function layoutGalaxy(spec: GalaxySpec): GalaxyLayout {
   let prevRadius = Math.max(star, spec.starExtent ?? 0);
   const ecc = eccOf(spec.eccentricity);
   for (const planet of shown) {
-    const radius = planetRadius(planet);
+    // 画面半径（× PLANET_DRAW_SCALE）：布局与碰撞按画出来的大小算
+    const radius = planetDrawRadius(planet);
     const ownEcc = eccOf(planet.eccentricity ?? (independent ? LEGACY_ORBIT_E : spec.eccentricity));
     // 旧的共用轨道仍按屏幕安全规则向外推；独立轨道的 a/e/ω 是用户设计，不在这里暗改
     const minOrbit = ecc === 0 ? prevOrbit + prevRadius + radius + MIN_CLEARANCE : prevOrbit + (prevRadius + radius + MIN_CLEARANCE) / (1 - ecc);
