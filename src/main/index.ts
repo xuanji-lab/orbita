@@ -58,7 +58,8 @@ import {
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
 import { effectiveIntentSettings } from "../shared/settings.ts";
-import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
+import { broadcastChannelEvent, broadcastClosureNotices, registerChannelIpc } from "./channel/ipc.ts";
+import { StartupClosureQueue } from "./channel/startup-closures.ts";
 import { ChannelReconciler } from "./channel/reconcile.ts";
 import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
 import { KeepAwake } from "./automation/keep-awake.ts";
@@ -1461,11 +1462,10 @@ void app.whenReady().then(async () => {
       },
     },
   };
-  const startupChannelNotices = await channelReconciler.reconcileAll().catch((cause: unknown) => {
-    console.error("[channel] 启动子会话收尾失败", cause);
-    return [];
-  });
-  registerChannelIpc(deps, startupChannelNotices);
+  // 启动收尾（上次退出时还在跑的子会话补一条终局）不挡首屏：先注册 IPC，建完主窗口再后台跑
+  // （startup-closures.ts 的理由与 Windows 实测）
+  const startupClosures = new StartupClosureQueue((notices) => broadcastClosureNotices(deps, notices));
+  registerChannelIpc(deps, startupClosures);
 
   /*
    * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——
@@ -1599,6 +1599,13 @@ void app.whenReady().then(async () => {
   };
 
   createMainWindow(initialSettings.theme, initialSettings.language, openLink, readLanguage);
+  void channelReconciler
+    .reconcileAll()
+    .catch((cause: unknown) => {
+      console.error("[channel] 启动子会话收尾失败", cause);
+      return [];
+    })
+    .then((notices) => startupClosures.resolve(notices));
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings
