@@ -43,7 +43,7 @@ import { isInside, realpathInside } from "../main/path-boundary.ts";
 import { resolveToolPath } from "./file-tracker.ts";
 import type { RequestBroker } from "./request-broker.ts";
 
-/** 本工具组的名字。权限档描述（describePermissionMode）与测试都认这一份 */
+/** 本工具组的名字：系统提示词的工具清单（runtime 的 extraToolNames）与测试都认这一份 */
 export const LATEX_TOOL_NAMES = ["compile_latex", "latex_packages", "edit_bib"] as const;
 
 /** 回执正文里最多列几条：错列到 20（修完重编即可），内容告警只列头部——它们是次要信号 */
