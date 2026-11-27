@@ -4015,14 +4015,35 @@ html[data-pointer-drag] iframe {
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
+/**
+ * 批注栏两种落位（按这一栏**自己**的宽度裁决，见下方 @container；不进 JS）：
+ *
+ * - ≥690：停靠。扣掉侧栏正文还有 450px 以上，挤一下不心疼，谁也不盖谁；
+ * - <690：**占满整栏**（与 tex 大纲同一条规则）——点开看批注、点回看稿。
+ *
+ * 为什么中间试过「浮层」又撤了（2026-11-27 实测，500px 的 PDF 栏）：
+ * 浮层 240 会盖掉**每一行**的右半（正文按适宽铺满整栏，没有可让的页边），
+ * 截图上句子都是半截；而同样宽度下「整栏切换」至少卡片与引文是完整可读的。
+ * 想同时看稿与批注，正确的杠杆是把分界线往左拖让 PDF 栏过 690——那时自动停靠。
+ */
 .pdf-annot-rail {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
-  width: min(240px, 55%);
+  width: 240px;
   min-height: 0;
   border-left: 1px solid var(--color-border-subtle);
   background: var(--color-bg-panel);
+}
+@container (max-width: 689px) {
+  .pdf-body:has(> .pdf-annot-rail) > .pdf-view,
+  .pdf-body:has(> .pdf-annot-rail) > .pdf-thumbs {
+    display: none;
+  }
+  .pdf-annot-rail {
+    width: 100%;
+    border-left: 0;
+  }
 }
 .pdf-annot-rail-head {
   display: flex;
@@ -4430,13 +4451,17 @@ a.latex-setup-action {
   background: var(--color-bg-panel);
 }
 /* 正文区 = 编辑器 + 可选的大纲抽屉（并排，不浮层：右栏本来就窄，浮层会盖住源码） */
-/* 窄栏（并排时的源码栏常态就是 320）：大纲与大屏 PDF 那条换用同一条规则——
- * 点开就看大纲，点回去看正文。挤压式并排在这个宽度里只剩 ~150px 正文，
- * 折行成一列字（2026-11-27 截图实测）。 */
+/* 大纲与批注的落位（正文保底 450px，尺寸判定全在 CSS 容器查询里，不进 JS；
+ * .files-panel-pane 是查询容器）：
+ *   扣掉侧栏还剩 450 → 停靠（挤压，谁也不盖谁）；
+ *   不够 450 → 分两种内容类型：
+ *     · 大纲是**导航**、批注是**评论**，但两者都不浮：并排时源码栏常态 345、
+ *       PDF 栏常态 500，浮层 240 会把正文每行切掉近一半（实测截图句子半截），
+ *       不如整栏切换——点开看清单、点回看正文，各自完整。 */
 .files-panel-pane {
   container-type: inline-size;
 }
-@container (max-width: 460px) {
+@container (max-width: 689px) {
   .tex-editor-body:has(> .tex-outline) .tex-editor-host {
     display: none;
   }
