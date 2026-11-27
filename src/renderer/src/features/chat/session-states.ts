@@ -413,6 +413,15 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   if (event.type === "computerUseConsentAsk") {
     return update(states, event.sessionId, (entry) => ({ ...entry, computerUseConsentAsk: event }));
   }
+  /**
+   * 这一轮结束了（停止 / 抢跑 / 会话删除 / 进程退出）：挂起的确认行作废。
+   * **不是拒绝**——主进程没写 meta，所以 computerUseConsent 一个字节都不动。
+   */
+  if (event.type === "computerUseConsentAskCancelled") {
+    return update(states, event.sessionId, (entry) =>
+      entry.computerUseConsentAsk?.requestId === event.requestId ? { ...entry, computerUseConsentAsk: null } : entry,
+    );
+  }
   if (event.type === "computerUseConsentState") {
     return update(states, event.sessionId, (entry) => ({
       ...entry,
@@ -421,8 +430,8 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
       ...(event.requestId !== undefined && entry.computerUseConsentAsk?.requestId === event.requestId
         ? { computerUseConsentAsk: null }
         : {}),
-      // 撤销 / 急停不是某一次提问结出来的：把该会话所有挂着的确认行一起收掉——
-      // 状态都已经不是 unset 了，再去回答那条提问没有意义（主进程也把等待按拒绝结掉了）。
+      // 无 requestId 的状态变化（撤销 / 急停复位）说明该会话的授权被整体改写：
+      // 把残留的确认行一并收掉（那时主进程也已经把挂起的提问取消了）。
       ...(event.requestId === undefined ? { computerUseConsentAsk: null } : {}),
     }));
   }

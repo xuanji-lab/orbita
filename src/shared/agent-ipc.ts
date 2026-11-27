@@ -22,6 +22,7 @@ import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "./computer-use.ts";
 import type {
+  ComputerUseConsentAskCancelledEvent,
   ComputerUseConsentAskEvent,
   ComputerUseConsentStateEvent,
   EmergencyStopBroadcast,
@@ -221,9 +222,10 @@ export const ipcChannels = {
    */
   sessionSetAutoCompact: "session:set-auto-compact",
   /**
-   * 电脑使用的会话授权（2026-11-27）：载荷 (sessionId, "unset" | "allowed" | "denied")，回 void。
-   * 落 meta（computerUseConsent）。界面只用它做**撤销**（写回 unset）；allowed / denied 由
-   * 主进程闸门在用户回答后自己落盘（那一刻只有主进程知道真的发生了什么）。
+   * 电脑使用的会话授权（2026-11-27）：载荷 (sessionId, 任意) —— **只写回 `"unset"`（撤销）**，
+   * 第二个参数只为占位（handler 不读它）。落 meta（computerUseConsent）。
+   * allowed / denied 只由主进程闸门在用户回答后自己落盘（那一刻只有主进程知道真的发生了
+   * 什么）；这条通道故意不能把字段写成 allowed——界面没有授予权。
    */
   sessionSetComputerUseConsent: "session:set-computer-use-consent",
   /**
@@ -1873,6 +1875,11 @@ export type AgentEvent =
    * 回答走 `computer-use:consent-answer`，状态变化由 `computerUseConsentState` 跟上。
    */
   | ComputerUseConsentAskEvent
+  /**
+   * 主进程 → renderer：这一轮结束了，挂起的提问作废（**不是拒绝**，没有写 meta）。
+   * 界面上把确认行撤掉；用户之后再也没机会回答它。
+   */
+  | ComputerUseConsentAskCancelledEvent
   /**
    * 主进程 → renderer：某条会话的授权状态变了（回答 / 超时按拒绝 / 撤销 / 急停复位）。
    * 带着 requestId 时，renderer 按它清掉那张挂起的确认行。

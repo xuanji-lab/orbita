@@ -1842,6 +1842,31 @@ export const COMPUTER_USE_CONSENT_TIMEOUT_MS = 120_000;
  */
 export const COMPUTER_USE_CONSENT_DENIED_TEXT = "用户拒绝了电脑操作，本会话不要再请求";
 
+/**
+ * 本轮被停掉时回给模型的文本（2026-11-27 验收 P1）：用户按了停止 / 抢跑 / 会话被删，
+ * 挂起的提问被取消。**这不是拒绝**——用户没有表态，不写 meta，下一次电脑操作会重新问。
+ * 为什么必须与拒绝分开说：模型看到「用户拒绝」会记住「本会话不能碰桌面」，而用户只是
+ * 停了一下这一轮；下次它就不敢再请求了。
+ */
+export const COMPUTER_USE_CONSENT_STOPPED_TEXT =
+  "这一轮已停止，电脑操作没有执行。这不是拒绝：本会话没有记录任何决定，下次需要时会重新询问用户。";
+
+/**
+ * 电脑使用**只在主会话里可用**（2026-11-27 验收 P3 裁决）。
+ *
+ * 为什么：授权确认行画在它自己那条会话的视图里，子会话 / 自动化跑出来的会话用户根本
+ * 看不到——等下去就是 120s 超时、还把会话永久写成 denied。先例：deepseek-harness 的
+ * `SYSTEM_INPUT_UNAVAILABLE`、ZCode 的「Main agent only. Never delegate Computer Use to a
+ * subagent.」——同一个结论。子会话 / 自动化在闸门处**立刻**收到这句，不要白等 120s。
+ *
+ * 下面英文那句进工具描述（描述面是英文，口径相同）。
+ */
+export const COMPUTER_USE_MAIN_SESSION_ONLY_TEXT =
+  "电脑使用只在主会话里可用：子会话 / 自动化任务看不到授权确认行，因此不能操作沙箱桌面。需要的话，把这一步交回给主会话来做。";
+export const COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE =
+  "**Main session only**: a delegated sub-session or an automation run cannot use computer use (its consent " +
+  "prompt would be invisible to the user) — hand this step back to the main conversation instead.";
+
 /** 授权状态变化的原因（事件里带上，renderer 据此决定要不要清挂起的提问行） */
 export type ComputerUseConsentSource =
   | "answered"
@@ -1870,6 +1895,18 @@ export interface ComputerUseConsentAskEvent {
   /** 触发这次提问的工具动作（renderer 只用它显示「哪类操作要用桌面」） */
   action: ComputerUseToolRequest["action"];
   askedAt: number;
+}
+
+/**
+ * 主进程 → renderer：挂起的提问被**撤掉**（本轮结束：停止 / 抢跑 / 会话删除 / 进程退出）。
+ * 这不是拒绝：没有写 meta，确认行要从界面上撤下。
+ */
+export interface ComputerUseConsentAskCancelledEvent {
+  type: "computerUseConsentAskCancelled";
+  sessionId: string;
+  requestId: string;
+  /** 只有一种：这一轮已经结束了，那个提问不可能再被回答 */
+  reason: "turn-ended";
 }
 
 /**

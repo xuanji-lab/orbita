@@ -162,6 +162,12 @@ export function registerAgentIpc(
    * undefined = 老夹具不传（按设置值算）。
    */
   runningComputerUse?: () => Promise<ComputerUseRunningFacts | null>,
+  /**
+   * 所在会话的上一轮被放弃时调（submit / interrupt / abort）——**包括不发 idle 的抢跑**
+   * （runtime 的 preempt）。电脑使用授权挂起的提问靠它作废：不然新 submit 抢跑旧轮后，
+   * 旧轮那个提问会活到新一轮里，用户点「允许」会让一个已不存在的动作真的下发。
+   */
+  onTurnAbandoned: (sessionId: string) => void = () => undefined,
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
@@ -562,6 +568,9 @@ export function registerAgentIpc(
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
   async function submitTurn(input: SubmitAgentInput): Promise<void> {
+    // 这条会话上一轮若还在跑，运行时按抢跑接下一句（旧轮不发 idle）：挂起的电脑授权提问
+    // 也随旧轮一起作废。没在跑时是 no-op（本来就没有挂起的提问）。
+    onTurnAbandoned(input.sessionId);
     const provider = await resolveForTurn(input.providerId);
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     // 意图系统（实验）：开关开着才装配（intent / backfill）与存档（ingest）。
@@ -613,9 +622,15 @@ export function registerAgentIpc(
   }
 
   ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
-  ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
+  ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => {
+    // 停止：挂起的电脑授权提问随这一轮作废（cancelled，不写 meta；见 consent.ts）
+    onTurnAbandoned(sessionId);
+    return host.abort(sessionId);
+  });
   ipcMain.handle(ipcChannels.agentLivePhases, (): LiveSessionPhases => livePhases());
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
+    // interrupt：旧轮按抢跑结束（**不发 idle**），挂起的授权提问同样要作废
+    onTurnAbandoned(input.sessionId);
     const provider = await resolveForTurn(input.providerId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
@@ -629,6 +644,8 @@ export function registerAgentIpc(
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
+    // 手动压缩先抢跑旧轮（同样不发 idle）：旧轮挂起的授权提问一并作废
+    onTurnAbandoned(input.sessionId);
     const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input.workspaceId);
     const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), computerUse: await readComputerUse(), planFirst: await readPlanFirst(), pluginTools: true }) });

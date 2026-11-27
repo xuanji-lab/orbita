@@ -1427,3 +1427,40 @@ describe("电脑使用授权的槽位（2026-11-27）", () => {
     assert.equal(states.get("fresh")?.computerUseConsentAsk, null);
   });
 });
+
+describe("电脑使用授权的槽位（2026-11-27 验收后）", () => {
+  test("本轮结束：askCancelled 撤掉确认行，但授权状态一个字节都不动（不是拒绝）", () => {
+    let states = applyAgentEvent(createSessionStates(), {
+      type: "computerUseConsentAsk",
+      sessionId: "s1",
+      requestId: "s1:consent:9",
+      action: "click",
+      askedAt: 1,
+    });
+    states = applyAgentEvent(states, {
+      type: "computerUseConsentAskCancelled",
+      sessionId: "s1",
+      requestId: "s1:consent:9",
+      reason: "turn-ended",
+    });
+    assert.equal(states.get("s1")?.computerUseConsentAsk, null);
+    assert.equal(states.get("s1")?.computerUseConsent, null, "没有写状态：它不是拒绝");
+  });
+
+  test("陈旧的 askCancelled（requestId 对不上）不动现在那一行", () => {
+    let states = applyAgentEvent(createSessionStates(), {
+      type: "computerUseConsentAsk",
+      sessionId: "s1",
+      requestId: "s1:consent:2",
+      action: "click",
+      askedAt: 1,
+    });
+    states = applyAgentEvent(states, {
+      type: "computerUseConsentAskCancelled",
+      sessionId: "s1",
+      requestId: "s1:consent:1",
+      reason: "turn-ended",
+    });
+    assert.equal(states.get("s1")?.computerUseConsentAsk?.requestId, "s1:consent:2");
+  });
+});

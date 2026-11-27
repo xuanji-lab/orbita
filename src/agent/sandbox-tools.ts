@@ -29,6 +29,7 @@ import {
   COMPUTER_USE_BROWSER_MAX,
   COMPUTER_USE_CDP_TIMEOUT_MS,
   COMPUTER_USE_CONSENT_TIMEOUT_MS,
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE,
   computerUseAudit,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
@@ -93,7 +94,8 @@ const ELEMENT_PARAM = {
 const SCOPE =
   "Operates the sandbox's browser (Edge by default; configurable in Settings › Computer use) **inside the isolated " +
   "Windows sandbox** (DOM level, via CDP) — not the user's own " +
-  "browser and not Orbita's built-in browser tab. ";
+  "browser and not Orbita's built-in browser tab. " +
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE + " ";
 
 /**
  * 每会话自己的浏览器：**不排队**。只有像素工具共享那块唯一的桌面。

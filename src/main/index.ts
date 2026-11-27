@@ -158,6 +158,7 @@ import {
   parseComputerUseConsent,
 } from "../shared/computer-use.ts";
 import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
+import { isMainSession } from "../shared/session.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { IsolationSessionController } from "./computer-use/isolation-session.ts";
@@ -510,12 +511,17 @@ void app.whenReady().then(async () => {
    */
   const computerUseConsentWaiter = new ComputerUseConsentWaiter({
     send: (event) => broadcastAgentEvent(event),
+    // 本轮结束 / 会话删除：把确认行从界面上撤下（不是拒绝，没有写 meta）
+    notifyCancelled: (event) => broadcastAgentEvent(event),
   });
   const computerUseConsentGate = createComputerUseConsentGate({
+    // 一次读盘拿两件事：授权值 + 是不是主会话（子会话 / 自动化不可用电脑使用）
     read: async (sessionId) => {
       const meta = await sessions.readMeta(sessionId);
-      return meta === null ? null : parseComputerUseConsent(meta.computerUseConsent);
+      if (meta === null) return null;
+      return { consent: parseComputerUseConsent(meta.computerUseConsent), mainSession: isMainSession(meta) };
     },
+    // write 回「真的落下了没」：`update` 对已删会话静默 no-op，不能把它当成功
     write: (sessionId, consent) => sessions.setComputerUseConsent(sessionId, consent),
     ask: (sessionId, action) => computerUseConsentWaiter.ask(sessionId, action),
     // 没人能回答就不问：窗口全关 / 只剩无界面的自动化时提问只会等到 120s 超时，
@@ -608,9 +614,10 @@ void app.whenReady().then(async () => {
   });
   registerBrowserIpc(browserSandbox, settings, configDir);
   mainWindows.onLastClosed(() => {
-    // 窗口全关 = 没有人能回答授权提问：挂起的按拒绝结掉（栅门会把 denied 落库），
-    // 不让它们悬到 120s 超时——关窗之后那一次电脑操作本来就不该发生。
-    computerUseConsentWaiter.cancelAll("cancelled");
+    // 窗口全关 = 没有人能回答授权提问：按**拒绝**结掉（与「本轮结束」不同，这条路上
+    // 「没人能答」本身就是拒绝）。紧接着应用会退出，这次写可能是 best-effort——
+    // 退不掉也是 fail closed（下次启动仍是 unset，会重新问一次）。
+    computerUseConsentWaiter.abandonAll();
     browserSandbox.dispose();
   });
 
@@ -1013,13 +1020,24 @@ void app.whenReady().then(async () => {
         .filter(([, phase]) => phase !== "idle")
         .map(([id]) => id);
       for (const sessionId of runningSessions) agentHost.abortIfRunning(sessionId);
-      // 急停还要**撕授权**（2026-11-27）：还活着的会话 `computerUseConsent` 复位成 unset——
-      // 下一次电脑操作会重新问一次用户；挂起中的提问按拒绝结掉（它们本来就没人答了）。
-      // 不碰其它会话的授权：急停针对的是“现在在跑的那些”。
-      computerUseConsentWaiter.cancelAll("cancelled");
-      for (const sessionId of runningSessions) {
-        void computerUseConsentGate.reset(sessionId, "emergency-stop");
-      }
+      /*
+       * 急停要**彻底撕掉电脑使用授权**（2026-11-27；验收后修正）：
+       *   1. 挂起的提问先按 **cancelled** 结掉（不写 meta）——把 cancel 放在 reset 之后写、
+       *      或者让 cancel 写 denied，会让最终值变成 denied（"以后不再问"），与急停相反；
+       *   2. **所有**非 unset 的会话复位成 unset：急停是全局按钮，它的语义是「我不想再让
+       *      这台桌面被动」——只复位在跑的会话会留下一个刚点过允许、正空闲的会话，下一轮
+       *      直接用、不再问（E 段验收指出的差距）。
+       * 两道写都在各自的 meta 写链上，但 canceled 的那支**不写**，所以最终值只可能是
+       * reset 写的 unset。
+       */
+      computerUseConsentWaiter.cancelAll();
+      void (async () => {
+        const all = await sessions.list().catch(() => []);
+        for (const meta of all) {
+          if (parseComputerUseConsent(meta.computerUseConsent) === "unset") continue;
+          await computerUseConsentGate.reset(meta.id, "emergency-stop");
+        }
+      })();
       broadcastAgentEvent({ type: "computerUseEmergencyStop", at, sessionIds: runningSessions });
     },
   });
@@ -1263,6 +1281,13 @@ void app.whenReady().then(async () => {
     if (event.type === "phase" && event.phase === "idle") {
       browserSandbox.cancelSessionHandoff(event.sessionId);
       /*
+       * 电脑使用授权挂起的提问一并作废（2026-11-27 验收 P1）：这一轮已经结束，
+       * 那个提问不可能再被回答。**按 cancelled 结，不按 denied**——用户没有表态；
+       * 按 denied 结会让停轮之后迟迟点在确认行上的「允许」真的执行一个已不存在的
+       * 动作，并会在 120s 后把从没拒绝过的会话永久写成 denied。
+       */
+      computerUseConsentWaiter.cancel(event.sessionId);
+      /*
        * 沙箱资源也一并让出来：轮次结束 = 这一轮不再需要它们了。abort 与急停走的都是这里
        * （abortCycle 的收尾最终发 idle，非 preempt 的预抢跑才不发），所以不需要在三条
        * 路径上各接一次。桌面键与这个会话的浏览器键一起放：不主动放的话，下一个会话要白白
@@ -1274,6 +1299,8 @@ void app.whenReady().then(async () => {
       // agent 进程整个没了：所有租约持有者与等待者都不存在了（工具调用已随进程消失），
       // 留着只会让下一个会话排满 30 秒再报一句「被某个会话占着」
       computerUseLease.revoke("agent 进程退出");
+      // 挂起的授权提问也没人再回答了：按 cancelled 结掉（不写 meta），renderer 收行
+      computerUseConsentWaiter.cancelAll();
       closeChannelsForLostProcess();
     }
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
@@ -1738,6 +1765,8 @@ void app.whenReady().then(async () => {
       agentHost.disposeSession(id);
       // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
       browserSandbox.closeSessionTab(id);
+      // 正在等授权的提问也跟着作废（按 cancelled 结，不写 meta——会话都没了）
+      computerUseConsentWaiter.cancel(id);
       // 沙箱资源：它是持有者就让出来，还在排队就把位置撤掉（否则队列名额白白被占了）；
       // 桌面键与这个会话的浏览器键一起放。硬上限标记也一并忘掉。
       computerUseLease.releaseSession(id);
@@ -1946,6 +1975,13 @@ void app.whenReady().then(async () => {
     // 出网那对值要看**正在跑的那只**（后端与开关都是下次启动才生效）：设置里选 wsb、
     // 实际跑着 L2b 时，按设置算会告诉模型「你没有出网」——而它就在本机的网络上。
     () => computerUse.runningFacts(),
+    /**
+     * 上一轮被放弃时（停止 / interrupt 抢跑 / 新 submit 抢跑）的通知。
+     * **抢跑不发 idle**（runtime 的 preempt 语义），所以只等 phase idle 会漏掉 interrupt
+     * 这条路——挂起的授权提问会活到新一轮里，用户点“允许”就能让一个已经不存在的动作
+     * 真的下发（2026-11-27 验收 P1）。这里与会话删除同一条语义：按 cancelled 结掉。
+     */
+    (sessionId) => computerUseConsentWaiter.cancel(sessionId),
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍

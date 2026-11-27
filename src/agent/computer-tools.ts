@@ -25,6 +25,7 @@ import {
   COMPUTER_USE_DELIVERY_HINTS,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_CONSENT_TIMEOUT_MS,
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE,
   computerUseAudit,
   GUEST_COMMAND_TIMEOUT_MS,
   computerUseUiaErrors,
@@ -116,7 +117,8 @@ const DELIVERY_VERIFY_HINT = `This tool is how you check: ${COMPUTER_USE_DELIVER
 const SCOPE =
   "Use this for **desktop GUI tasks** on the sandbox desktop. For web pages prefer the sandbox_* tools (DOM " +
   "level, they drive the sandbox's browser) or the host browser_* tools — they are faster and steadier than " +
-  "pixels. ";
+  "pixels. " +
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE + " ";
 
 const BUSY =
   "The sandbox desktop belongs to **one session at a time** (pixel tools share the single screen and the " +
