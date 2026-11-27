@@ -4019,12 +4019,13 @@ html[data-pointer-drag] iframe {
  * 批注栏两种落位（按这一栏**自己**的宽度裁决，见下方 @container；不进 JS）：
  *
  * - ≥690：停靠。扣掉侧栏正文还有 450px 以上，挤一下不心疼，谁也不盖谁；
- * - <690：**占满整栏**（与 tex 大纲同一条规则）——点开看批注、点回看稿。
+ * - <690：**浮层**，但**不许占满整栏**（2026-11-27 用户裁决：默认展开的区域不能过大）。
+ *   宽度上限 `min(240px, 48%)`，四边各留 8px 内缩、圆角 + 浮起阴影——读起来是一张
+ *   浮在稿子上的卡片，不是一块把 PDF 整个替掉的板子。
  *
- * 为什么中间试过「浮层」又撤了（2026-11-27 实测，500px 的 PDF 栏）：
- * 浮层 240 会盖掉**每一行**的右半（正文按适宽铺满整栏，没有可让的页边），
- * 截图上句子都是半截；而同样宽度下「整栏切换」至少卡片与引文是完整可读的。
- * 想同时看稿与批注，正确的杠杆是把分界线往左拖让 PDF 栏过 690——那时自动停靠。
+ * 浮层的代价是盖住正文右缘（正文按适宽铺满整栏，没有可让的页边），实测 500px 栏里
+ * 240 宽会盖掉每行近一半；用户选了「盖住右缘、但面板不过大」这一档，所以宽度是
+ * 上限而不是整栏。想两边都能读，把分界线往左拖让 PDF 栏过 690，那时自动停靠。
  */
 .pdf-annot-rail {
   display: flex;
@@ -4034,15 +4035,20 @@ html[data-pointer-drag] iframe {
   min-height: 0;
   border-left: 1px solid var(--color-border-subtle);
   background: var(--color-bg-panel);
+  border-radius: var(--radius-lg);
 }
 @container (max-width: 689px) {
-  .pdf-body:has(> .pdf-annot-rail) > .pdf-view,
-  .pdf-body:has(> .pdf-annot-rail) > .pdf-thumbs {
-    display: none;
-  }
+  /* 浮层：不占正文宽度，也不许占满整栏——四边留 8px，圆角 + 浮起阴影 */
   .pdf-annot-rail {
-    width: 100%;
-    border-left: 0;
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    bottom: var(--space-2);
+    /* 宽度有下限也有上限：低于 180px 卡片读不了，高于 248px 就成「过大的浮层」 */
+    width: clamp(180px, 48%, 248px);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: var(--shadow-popover);
+    z-index: 6;
   }
 }
 .pdf-annot-rail-head {
@@ -4455,19 +4461,26 @@ a.latex-setup-action {
  * .files-panel-pane 是查询容器）：
  *   扣掉侧栏还剩 450 → 停靠（挤压，谁也不盖谁）；
  *   不够 450 → 分两种内容类型：
- *     · 大纲是**导航**、批注是**评论**，但两者都不浮：并排时源码栏常态 345、
- *       PDF 栏常态 500，浮层 240 会把正文每行切掉近一半（实测截图句子半截），
- *       不如整栏切换——点开看清单、点回看正文，各自完整。 */
+ *     · 大纲与批注都**浮**，但都不许占满整栏：宽度上限 min(240px, 55%/48%)、
+ *       四边留 8px——默认展开是一张卡片，不是把正文整个替掉的板子（用户 2026-11-27 裁决）。 */
 .files-panel-pane {
   container-type: inline-size;
 }
 @container (max-width: 689px) {
-  .tex-editor-body:has(> .tex-outline) .tex-editor-host {
-    display: none;
+  /* 与批注同一条：浮层、宽度有上限、四边留 8px——「默认展开不能过大」 */
+  .tex-editor-body {
+    position: relative;
   }
   .tex-editor-body:has(> .tex-outline) .tex-outline {
-    width: 100%;
-    border-left: 0;
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    bottom: var(--space-2);
+    width: clamp(180px, 55%, 248px);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-popover);
+    z-index: 6;
   }
 }
 
