@@ -17,6 +17,23 @@ import {
   type SandboxState,
 } from "../../../../shared/computer-use.ts";
 import type { AppSettings, SettingsPatch } from "../../../../shared/settings.ts";
+import { computerUsePlatformSupport, type ComputerUsePlatformSupport } from "../../../../shared/computer-use-platform.ts";
+
+/**
+ * 设置 › 电脑使用 这一页画什么：平台支持 → 控件还是警示卡。
+ *
+ * 非 Windows 上一整组控件全是「点了必失败」——start 在主进程就拒，模型那边也不注册工具。
+ * 所以整页换成一张说明卡（不渲染任何会真去启动沙箱的按钮），但**入口不藏**：藏掉会让
+ * 用户以为页面坏了。判定与主进程、agent 工具注册读同一个谓词（shared/computer-use-platform.ts）。
+ */
+export type ComputerUsePage =
+  | { kind: "controls" }
+  | { kind: "unsupported"; support: ComputerUsePlatformSupport };
+
+export function computerUsePage(platform: string): ComputerUsePage {
+  const support = computerUsePlatformSupport(platform);
+  return support.supported ? { kind: "controls" } : { kind: "unsupported", support };
+}
 
 /** 正在途中的那次点击；null = 没有在途动作 */
 export type SandboxActionPending = "start" | "stop" | null;

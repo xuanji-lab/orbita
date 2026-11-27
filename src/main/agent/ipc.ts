@@ -247,12 +247,13 @@ export function registerAgentIpc(
 
   /**
    * 电脑使用每轮现读：实验开关决定**工具组注册**（关着时沙箱工具根本不进会话），
-   * 出网开关决定**模型怎么理解网页打不开**（见 ComputerUseTurnContext）。两个事实
+   * 平台支持再压一道（非 Windows 上不注册：拒绝文案在那里只能给「去设置里启动」），
+   * 出网开关决定**模型怎么理解网页打不开**（见 ComputerUseTurnContext）。三个事实
    * 来自同一份设置、同一次 `settings.read()`：不另开一套读写，也不会两轮之间漂移。
    * 映射本身在 turn-fields.ts 的纯函数里（那边可测；这里是唯一读设置的、要 electron 的地方）。
    */
   const readComputerUse = async (): Promise<ComputerUseTurnContext> =>
-    computerUseTurnContext(await settings.read());
+    computerUseTurnContext(await settings.read(), process.platform);
 
   /** 「先给我看计划」偏好同样每轮现读：改了下一轮即生效；缺席 = 关 */
   const readPlanFirst = async (): Promise<boolean> => (await settings.read()).planFirst === true;

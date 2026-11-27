@@ -1061,6 +1061,21 @@ export const zh: Messages = {
 
   /** 设置 › 电脑使用（computer-use-view.ts 是它的纯派生层） */
   computerUse: {
+    /* 平台不支持时的整页替换（2026-11-27）：电脑使用只在 Windows 上存在，非 Windows 上
+       不渲染任何会真去启动沙箱的控件——点了必然失败的那组按钮比一张说明卡更糟。
+       不写「敬请期待」：这不是还没做，是平台不提供（与 capability 的 platformGuidance 同口径） */
+    platformUnsupported: {
+      title: "这台电脑上不能用电脑使用",
+      // 三条按环境各说一句出路；macOS 那条必须点名「今天能用什么」，否则整个功能看起来都没了
+      body: {
+        macos:
+          "电脑使用跑在 Windows 沙箱里，macOS 上没有这个沙箱。macOS 上能用的是内置浏览器那组工具（打开网页 / 读网页 / 点击 / 截图）：网页任务照做，只是不在隔离桌面里。",
+        linux: "电脑使用跑在 Windows 沙箱里，Linux 上没有这个沙箱，也没有可替代的隔离桌面。",
+        other: "电脑使用只在 Windows 上提供，当前平台用不了。",
+      },
+      requirement:
+        "要在 Windows 上用：需要专业版 / 企业版 / 教育版（家庭版没有 Windows 沙箱功能），并在「启用或关闭 Windows 功能」里打开 Windows 沙箱。",
+    },
     capabilityGroup: "能力检测",
     sandboxFeature: "沙箱功能",
     sandboxFeatureInfo:
@@ -1075,7 +1090,7 @@ export const zh: Messages = {
     // guidance——同一张卡里逐条列在探针行下面，这里只给徽标与一句指路
     isolationTier: "隔离档位",
     isolationTierInfo:
-      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但**没有真实的鼠标键盘**——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3（Linux 微虚拟机）还在路线图上。",
+      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但**没有真实的鼠标键盘**——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3 Linux 桌面虚拟机同样只在 Windows 上（宿主侧走 Windows 的虚拟化）。",
     tierFallback: "到不了更高档，原因见上方几条",
     tiers: {
       l1: "L1 浏览器档",

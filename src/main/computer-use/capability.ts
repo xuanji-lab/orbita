@@ -137,6 +137,11 @@ export const HYPERVISOR_PROBE_ARGS = [
  * 与操作系统的虚拟化无关）；而 sandbox_* / computer_* 走的是 Windows 沙箱里的 guest 桥，
  * macOS 上根本没有那个桥。所以文案分两半说，不把 L1 写成 sandbox_*。
  *
+ * 沙箱那半句不能说「要等 L3」——L3（QEMU Linux 桌面）已经做了，它只是**同样只在 Windows 上**
+ * （宿主侧走 Windows 的 WHPX，guest 桥也是 Windows 宿主这一侧打的）。所有隔离档位（L2 沙箱 /
+ * L2b 隔离会话 / L3 桌面虚拟机）共享同一个前提：Windows 宿主。一句「还在路线图上」会让
+ * macOS 用户一直等一个永远不会到来、也不会改变结论的东西。
+ *
  * 平台不是 win32 时**只给这一条**：reg / powershell 都没跑，再说「读不到版本档位」只会稀释信号。
  */
 export function platformGuidance(platform: NodeJS.Platform): string {
@@ -144,7 +149,8 @@ export function platformGuidance(platform: NodeJS.Platform): string {
     return (
       "Windows 沙箱用不上 macOS——这是 Windows 自己的功能，不是 Orbita 还没做。" +
       "macOS 上能用的是浏览器档：内置浏览器里的 browser_navigate / browser_observe / browser_click 等工具不受影响，网页任务照做；" +
-      "沙箱里的像素操作与沙箱浏览器（computer_* / sandbox_*）要等路线图上的 Linux 微虚拟机（L3）。"
+      "沙箱里的像素操作与沙箱浏览器（computer_* / sandbox_*）在 macOS 上没有：所有隔离后端（Windows 沙箱、多会话隔离、" +
+      "Linux 桌面虚拟机）都建在 Windows 宿主之上，没有可替代的隔离桌面。"
     );
   }
   return "电脑使用沙箱只在 Windows 上提供（且需要专业版 / 企业版 / 教育版）；当前平台用不了这些工具。";

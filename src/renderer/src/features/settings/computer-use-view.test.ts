@@ -15,6 +15,7 @@ import {
   browserChoice,
   browserLabel,
   browserPatch,
+  computerUsePage,
   probeBlocksStart,
   probeVisual,
   sandboxControl,
@@ -262,5 +263,40 @@ describe("电脑使用 · 沙箱浏览器", () => {
     assert.match(en.computerUse.browserBelow, /map or copy/i);
     assert.match(en.computerUse.browserBelow, /falls back to Edge/i);
     assert.match(en.computerUse.browserInfo, /Edge is the default/i);
+  });
+});
+
+describe("电脑使用 · 平台闸门（这一页画控件还是警示卡）", () => {
+  test("Windows：照旧画整套控件", () => {
+    assert.deepEqual(computerUsePage("win32"), { kind: "controls" });
+  });
+
+  test("非 Windows：整页换成警示卡，reasonKey 指向对应那一句（macOS / Linux / 其它）", () => {
+    const mac = computerUsePage("darwin");
+    assert.equal(mac.kind, "unsupported");
+    assert.deepEqual(mac.kind === "unsupported" ? mac.support : null, {
+      supported: false,
+      kind: "macos",
+      reasonKey: "macos",
+    });
+    assert.equal(computerUsePage("linux").kind === "unsupported", true);
+    assert.equal(computerUsePage("freebsd").kind, "unsupported");
+  });
+
+  test("警示卡每一条 reasonKey 在中英两张表里都有正文（平台枚举与文案不会各长各的）", () => {
+    for (const platform of ["darwin", "linux", "freebsd"]) {
+      const page = computerUsePage(platform);
+      assert.equal(page.kind, "unsupported");
+      if (page.kind !== "unsupported" || page.support.reasonKey === null) continue;
+      const key = page.support.reasonKey;
+      for (const table of [zh, en]) {
+        assert.ok(table.computerUse.platformUnsupported.body[key].length > 0, `${platform} → ${key}`);
+      }
+    }
+    // 标题与「要什么环境」两行两张表都有
+    for (const table of [zh, en]) {
+      assert.ok(table.computerUse.platformUnsupported.title.length > 0);
+      assert.ok(table.computerUse.platformUnsupported.requirement.length > 0);
+    }
   });
 });

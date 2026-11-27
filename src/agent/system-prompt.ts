@@ -20,6 +20,7 @@ import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
 import { describeSubAgentIdentity, SUB_AGENTS_MAIN_GUIDELINE } from "./sub-agent-tools.ts";
 import type { SubAgentTurnIdentity } from "../shared/sub-agent.ts";
 import { computerUseBudgetGuideline, computerUseNetworkGuideline } from "./computer-network.ts";
+import { computerUseToolsActive } from "../shared/computer-use-platform.ts";
 import type { ComputerUseTurnContext } from "../shared/agent-ipc.ts";
 
 /**
@@ -110,9 +111,10 @@ export interface SystemPromptInput {
   /** 这条会话替哪个子智能体干活（指名派活）：它的职能整段进提示；缺席 = 普通会话 */
   subAgent?: SubAgentTurnIdentity;
   /**
-   * 电脑使用的现场（settings.experimentalFeatures["computer-use"]）。**只在开着时讲**：
-   * 关着时沙箱工具组根本没注册，讲它等于给模型一句假话。开着但出网开着时
-   * computerUseNetworkGuideline 返回空串，段会被下面滤掉。
+   * 电脑使用的现场（settings.experimentalFeatures["computer-use"] + 平台支持）。
+   * **只在工具组真注册时讲**（computerUseToolsActive：开着且是 Windows）：否则沙箱工具
+   * 根本没注册，讲它等于给模型一句假话。开着但出网开着时 computerUseNetworkGuideline
+   * 返回空串，段会被下面滤掉。
    */
   computerUse?: ComputerUseTurnContext;
 }
@@ -142,8 +144,9 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     ...(input.intentGuideline ? [{ name: "intent", text: INTENT_CONTEXT_GUIDELINE }] : []),
     { name: "quote", text: QUOTE_GUIDELINE },
     ...(computerUseNetwork !== "" ? [{ name: "computer-use-network", text: computerUseNetwork }] : []),
-    // 「每轮动作预算」只在电脑使用开着时讲（预算随工具组注册才存在）；数字与闸门同源（shared/computer-guard.ts）
-    ...(input.computerUse?.enabled === true ? [{ name: "computer-use-budget", text: computerUseBudgetGuideline() }] : []),
+    // 「每轮动作预算」只在工具组真注册时讲（预算随工具组注册才存在，非 Windows 上工具也不注册）；
+    // 数字与闸门同源（shared/computer-guard.ts）
+    ...(computerUseToolsActive(input.computerUse) ? [{ name: "computer-use-budget", text: computerUseBudgetGuideline() }] : []),
     {
       name: "git-attribution",
       text: gitAttributionGuideline(input.gitAttribution, input.attributionLanguage ?? "en"),

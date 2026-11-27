@@ -18,16 +18,21 @@ import {
 describe("提示词与工具描述", () => {
   test("开着出网：描述那段是空串，system prompt 也是空串（一个字的噪音都不加）", () => {
     assert.equal(sandboxNetworkNote(true), "");
-    assert.equal(computerUseNetworkGuideline({ enabled: true, allowNetwork: true }), "");
+    assert.equal(computerUseNetworkGuideline({ enabled: true, platformSupported: true, allowNetwork: true }), "");
+  });
+
+  test("平台不支持（非 Windows）：工具组不注册，出网一个字也不讲——讲了就是一句做不到的建议", () => {
+    assert.equal(computerUseNetworkGuideline({ enabled: true, platformSupported: false, allowNetwork: false }), "");
+    assert.equal(computerUseNetworkGuideline({ enabled: true, platformSupported: false, allowNetwork: true }), "");
   });
 
   test("开关关着（工具根本没注册）：也不讲出网，缺席（旧夹具）同样什么都不讲", () => {
-    assert.equal(computerUseNetworkGuideline({ enabled: false, allowNetwork: false }), "");
+    assert.equal(computerUseNetworkGuideline({ enabled: false, platformSupported: true, allowNetwork: false }), "");
     assert.equal(computerUseNetworkGuideline(undefined), "");
   });
 
   test("关掉出网：提示词点明「这是设置不是网站」，并给出三条纪律与恢复方式", () => {
-    const guideline = computerUseNetworkGuideline({ enabled: true, allowNetwork: false });
+    const guideline = computerUseNetworkGuideline({ enabled: true, platformSupported: true, allowNetwork: false });
     assert.match(guideline, /<orbita-sandbox-network>/);
     assert.match(guideline, /no outbound network/);
     assert.match(guideline, /Do not retry a failed sandbox_navigate/);
