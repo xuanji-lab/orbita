@@ -11,6 +11,7 @@ import {
   COMPUTER_USE_DEFAULT_BACKEND,
   COMPUTER_USE_DEFAULT_BROWSER,
   type ComputerUseBackend,
+  type ComputerUseBackendChoice,
   type ComputerUseBrowser,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -143,6 +144,47 @@ export function backendChoice(settings: AppSettings): ComputerUseBackend {
  *  设置页那一行常驻说明这件事（与出网开关同一条纪律）。 */
 export function backendPatch(backend: ComputerUseBackend): Pick<SettingsPatch, "computerUse"> {
   return { computerUse: { backend } };
+}
+
+/** 设置页要画的一档后端 */
+export interface BackendOptionView {
+  id: ComputerUseBackend;
+  /** 开发者后端（实验）：UI 用文字 / 图标标出来，不靠颜色 */
+  experimental: boolean;
+  /**
+   * 已存但不在主进程给的可选列表里（开发者开关关着）。**照样画出来、保持选中、不可点**：
+   * 静默把用户存的 qemu 改回 wsb 是在改写他的设置，而且下一次开开关时他又要重选一次。
+   */
+  locked: boolean;
+}
+
+export interface BackendChoicesView {
+  options: readonly BackendOptionView[];
+  /**
+   * 存的是开发者后端、但开关没开：**保留选中态 + 在行下画一行警示 + 启动置灰**。
+   * 主进程那边同样会拒（runtime.start 的第一道门），这里只是不让用户无谓地试。
+   */
+  devBlocked: boolean;
+}
+
+/**
+ * 主进程给的可选列表 + 已存值 → 设置页要画的形态（纯函数，单测直接验三种状态）。
+ *
+ * 三态：
+ *   开关开（列表含 qemu）           → 三档，qemu 标实验，可以点；
+ *   开关关（列表两档）+ 存的是 wsb / isolation-session → 两档；
+ *   开关关 + 存的是 qemu             → 两档 + 一个锁住的 qemu（选中），devBlocked = true。
+ */
+export function backendChoicesView(
+  saved: ComputerUseBackend,
+  choices: readonly ComputerUseBackendChoice[],
+): BackendChoicesView {
+  const options: BackendOptionView[] = choices.map((choice) => ({ ...choice, locked: false }));
+  if (!choices.some((choice) => choice.id === saved)) {
+    // 只有 qemu 会被门挡住；它的能力与开关都写在 shared 的声明里，不在这里按名字猜别的后端
+    options.push({ id: saved, experimental: true, locked: true });
+  }
+  return { options, devBlocked: options.some((option) => option.id === saved && option.locked) };
 }
 
 /**

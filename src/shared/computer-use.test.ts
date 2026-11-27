@@ -13,16 +13,20 @@ import {
   COMPUTER_USE_DEFAULT_ALLOWED_APPS,
   COMPUTER_USE_DELIVERIES,
   COMPUTER_USE_DELIVERY_HINTS,
+  COMPUTER_USE_DEV_BACKENDS_ENV,
   COMPUTER_USE_MASK_CACHE_MAX_AGE_MS,
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_NO_EVIDENCE_HINT,
   COMPUTER_USE_UIA_TIMEOUT_MS,
   captureNote,
   computerUseAudit,
+  computerUseBackendChoices,
   computerUseChannels,
+  computerUseDevBackendRefusal,
   computerUseShotMask,
   computerUseShotMaskNote,
   computerUseUiaErrors,
+  devBackendsEnabled,
   isUiaFocusRequest,
   isUiaRequest,
   isWindowScreenshotRequest,
@@ -41,6 +45,53 @@ import {
 
 /** 回图 1280×720，物理屏 2560×1440（长边缩一半的常见情形） */
 const scaled = { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440 };
+
+describe("开发者后端（qemu）的门", () => {
+  test("环境变量：缺席 / 空串 / 其它值都算关，只有 1 / true / yes / on（不分大小写）才算开", () => {
+    // 默认关是这条门的前提：没显式打开就必须没有 qemu。
+    // 边界值单列：`false` / `yes please` / `truex` 这类**前缀或子串看着对**的写法必须判关——
+    // 「按前缀猜」是这道门最危险的一种实现错误。
+    const closed = [
+      {},
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "0" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "off" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "  " },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "false" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "false please" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "yes please" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "truex" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "onward" },
+    ];
+    for (const env of closed) {
+      assert.equal(devBackendsEnabled(env), false, JSON.stringify(env));
+    }
+    for (const value of ["1", "true", "TRUE", "yes", " on "]) {
+      assert.equal(devBackendsEnabled({ [COMPUTER_USE_DEV_BACKENDS_ENV]: value }), true, value);
+    }
+  });
+
+  test("可选后端列表：开 = 三档（qemu 标实验），关 = 只有两档且不含 qemu", () => {
+    assert.deepEqual(computerUseBackendChoices(true), [
+      { id: "wsb", experimental: false },
+      { id: "isolation-session", experimental: false },
+      { id: "qemu", experimental: true },
+    ]);
+    const off = computerUseBackendChoices(false);
+    assert.deepEqual(
+      off.map((choice) => choice.id),
+      ["wsb", "isolation-session"],
+    );
+    assert.equal(off.some((choice) => choice.experimental), false);
+  });
+
+  test("拒绝文案是给人看的整句：点名开发者后端、自备镜像 / QEMU、只有截图点击打字、以及怎么开", () => {
+    const text = computerUseDevBackendRefusal();
+    for (const needle of ["开发者后端", "自备", "QEMU", "镜像", "截图", "点击", "打字", "UIA", "浏览器", "文件映射", "快照", COMPUTER_USE_DEV_BACKENDS_ENV]) {
+      assert.ok(text.includes(needle), `拒绝文案缺「${needle}」：${text}`);
+    }
+  });
+});
 
 describe("screenshotPointToNative", () => {
   test("没缩放（回图 = 物理屏）：坐标原样过", () => {

@@ -7,6 +7,7 @@
 import { ipcRenderer } from "electron";
 import {
   computerUseChannels,
+  type ComputerUseBackendChoice,
   type ComputerUseLeaseStatus,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -19,6 +20,12 @@ import {
 export const computerUseApi = {
   /** 能力探测（全只读）：Windows 版本、沙箱功能状态、可执行文件在不在；未就绪时给手动开启指引 */
   probe: (): Promise<ComputerUseProbeResult> => ipcRenderer.invoke(computerUseChannels.computerUseProbe),
+  /**
+   * 现在有哪些后端可选（只读）。开发者后端（qemu）只在 `ORBITA_CU_DEV_BACKENDS` 开着时才在
+   * 列表里——设置页不再硬编码三档，免得「UI 能选、主进程不认」。
+   */
+  backends: (): Promise<readonly ComputerUseBackendChoice[]> =>
+    ipcRenderer.invoke(computerUseChannels.computerUseBackends),
   /** 生成 .wsb 并启动沙箱。回执只说这次调用本身，最新状态一律听 onStatus 的推送 */
   start: (): Promise<ComputerUseStartResult> => ipcRenderer.invoke(computerUseChannels.computerUseStart),
   /** 停止沙箱（幂等）；starting 时它是「取消启动」，error 时它兼任复位 */

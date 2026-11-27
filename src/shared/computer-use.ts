@@ -71,6 +71,12 @@ export const computerUseChannels = {
    */
   computerUseEmergencyStopState: "computer-use:emergency-stop-state",
   /**
+   * 设置页问「现在有哪些后端可选」。**列表由主进程给**：开发者后端（qemu）只在
+   * `ORBITA_CU_DEV_BACKENDS` 开着时才出现，renderer 不自己硬编码三档。
+   * 只读，不改变任何状态。
+   */
+  computerUseBackends: "computer-use:backends",
+  /**
    * 设置页问「现在沙箱桌面被谁占着」。有主时给会话 id、标题与已持有毫秒数；
    * 没人持有给 null。**观测只读**：它的真源是主进程那份桌面租约（lease.owner），
    * 不另写一套状态——否则设置页与闸门会各说各的。
@@ -960,7 +966,67 @@ export type ComputerUseBackend = "wsb" | "isolation-session" | "qemu";
 
 export const COMPUTER_USE_DEFAULT_BACKEND: ComputerUseBackend = "wsb";
 
-export const COMPUTER_USE_BACKEND_CHOICES: readonly ComputerUseBackend[] = ["wsb", "isolation-session", "qemu"];
+/**
+ * 开发者后端的开关（**默认关**）。只有它开了，`qemu` 才会出现在设置页的可选列表里、
+ * 主进程的 start 才会放行。
+ *
+ * 为什么要有这道门：L3 的 QEMU 后端是原型——`qemu-system-x86_64.exe`、`desktop.qcow2`、
+ * `vmlinuz-virt`、`initramfs-orbita.cpio.gz` 四样都在仓外（要自己跑 `scripts/p3-desktop/` 的
+ * 构建脚本），能力也只有截图 / 点击 / 打字（`uia` / `cdp` / `sandboxFiles` 全为 false，
+ * `snapshot` 为 none）。普通用户点到一个必然起不来的选项，只会以为功能坏了。
+ *
+ * 值：`1` / `true` / `yes` / `on`（不区分大小写）都算开，其余（缺席、空串、其它字）都算关——
+ * **缺席必须等于关**，这是这条门默认安全的前提。
+ */
+export const COMPUTER_USE_DEV_BACKENDS_ENV = "ORBITA_CU_DEV_BACKENDS";
+
+/** 环境变量 → 开发者后端的开关（纯函数，主进程与单测共用；默认关） */
+export function devBackendsEnabled(env: Readonly<Record<string, string | undefined>>): boolean {
+  const raw = env[COMPUTER_USE_DEV_BACKENDS_ENV];
+  if (typeof raw !== "string") return false;
+  const value = raw.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+/**
+ * 设置页要列的一档后端。`experimental` 是给人看的标记（UI 用文字 / 图标，不靠颜色）；
+ * 它由这里声明，而不是让 renderer 按 id 猜——与 provider 的能力声明同一条纪律。
+ */
+export interface ComputerUseBackendChoice {
+  id: ComputerUseBackend;
+  experimental: boolean;
+}
+
+/**
+ * 可选后端列表（**唯一真源**，主进程经 `computer-use:backends` 发给设置页）。
+ *
+ * 开关关时只有两档（wsb / isolation-session），qemu 连出现都不出现；开关开时才把
+ * 开发者后端放进来并标成实验。renderer 不再硬编码这三档——列表从主进程拿，
+ * 免得「UI 能选、主进程不认」这种两处各说各话。
+ */
+export function computerUseBackendChoices(devEnabled: boolean): readonly ComputerUseBackendChoice[] {
+  const base: readonly ComputerUseBackendChoice[] = [
+    { id: "wsb", experimental: false },
+    { id: "isolation-session", experimental: false },
+  ];
+  return devEnabled ? [...base, { id: "qemu", experimental: true }] : base;
+}
+
+/**
+ * 开发者后端被拒时给**人**看的一句话（主进程 start 的返回值）。
+ *
+ * 三个要素必须同时在：① 这是什么（开发者后端、默认不开放）；② 为什么起不来
+ * （镜像与 QEMU 二进制自备、能力只有截图/点击/打字）；③ 怎么才能用（环境变量）。
+ * 它不是错误码——设置页会原样显示这句话，用户照着做就能继续。
+ */
+export function computerUseDevBackendRefusal(): string {
+  return (
+    "这是开发者后端（Linux 桌面 VM / L3），默认不开放：它要求自备 QEMU 与 Linux 桌面镜像" +
+    "（在仓库里跑 scripts/p3-desktop/build-image.mjs 与 scripts/p3-desktop/build-ramdisk.mjs），" +
+    "而且只有截图、点击与打字——没有 UIA 控件树、没有浏览器调试口、没有宿主文件映射、没有快照。" +
+    `要启用它，请以环境变量 ${COMPUTER_USE_DEV_BACKENDS_ENV}=1 启动本应用，再回来启动。`
+  );
+}
 
 export function isComputerUseBackend(value: unknown): value is ComputerUseBackend {
   return value === "wsb" || value === "isolation-session" || value === "qemu";

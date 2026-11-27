@@ -22,8 +22,8 @@ import type {
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, ElevenlabsVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
-import type { ComputerUseLeaseStatus, ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
-import { COMPUTER_USE_BACKEND_CHOICES, COMPUTER_USE_BROWSER_CHOICES, type ComputerUseBrowser } from "@shared/computer-use";
+import type { ComputerUseBackendChoice, ComputerUseLeaseStatus, ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
+import { COMPUTER_USE_BROWSER_CHOICES, computerUseBackendChoices, type ComputerUseBrowser } from "@shared/computer-use";
 import type { ComputerUsePlatformSupport } from "@shared/computer-use-platform";
 import { playSpeech } from "../voice/speech-playback.ts";
 import { DICTATION_PROVIDERS } from "@shared/voice";
@@ -33,6 +33,7 @@ import {
   allowNetworkEnabled,
   allowNetworkPatch,
   backendChoice,
+  backendChoicesView,
   backendPatch,
   browserChoice,
   browserLabel,
@@ -2012,6 +2013,10 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const [lease, setLease] = useState<ComputerUseLeaseStatus>(null);
   /** 关闭沙箱的二次确认：误点就丢掉沙箱里的一切，所以只在第二段才真的调 stop() */
   const [confirmStop, setConfirmStop] = useState(false);
+  /** 主进程给的可选后端（开发者开关关着时只有两档）。null = 还没拿到 */
+  const [backends, setBackends] = useState<readonly ComputerUseBackendChoice[] | null>(null);
+  /** 拉列表失败：不能静默成「一个后端都没有」——回退到默认两档并在行下说一句人话 */
+  const [backendsError, setBackendsError] = useState(false);
 
   // onStatus 返回退订函数，正好作 effect 的清理；
   // 挂载时再拉一次当前值——沙盒是应用级的，离开设置页再回来时组件重挂载，
@@ -2045,6 +2050,29 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
     };
   }, []);
 
+  /**
+   * 可选后端列表由主进程给（开发者后端的开关在主进程那边）。拉一次就够：
+   * 环境变量变了要重启应用，这个值在本次运行里不会变。
+   * **失败不能静默**：空列表会让用户看到「一个后端都没有」且无从解释。回退到默认两档
+   * （与开关关闭时同形），并把「读取失败」写在那一行下面；已存的选择一个字不改。
+   */
+  useEffect(() => {
+    let alive = true;
+    void api.computerUse
+      .backends()
+      .then((next) => {
+        if (alive) setBackends(next);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setBackends(computerUseBackendChoices(false));
+        setBackendsError(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // 状态一旦离开可关闭的那几档，第二段确认就没有意义了——收起它，免得下次停在「仍然关闭」上
   useEffect(() => {
     if (sandboxControl(status.state, pending).canStop !== true) setConfirmStop(false);
@@ -2058,6 +2086,16 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const browser = browserChoice(props.settings);
   /** 隔离后端：缺席 = Windows 沙箱（P2 是可选升级，不是默认路径） */
   const backend = backendChoice(props.settings);
+  /**
+   * 后端行要画的形态：主进程的列表 + 已存值。开关关而存的是 qemu 时不改写设置，
+   * 而是把 qemu 画成「选中 + 锁住」，并给出警示与启动置灰的理由。
+   */
+  const backendView = backends === null ? null : backendChoicesView(backend, backends);
+  /**
+   * 列表读取失败时我们**不知道**开关的真实状态，不能替主进程断言「开发者后端被关」：
+   * 只画回退列表与一句失败说明，「启动」直接交给主进程按环境变量判（它不会骗人）。
+   */
+  const backendDevBlocked = backendsError !== true && backendView?.devBlocked === true;
   /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
       用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
       沙箱回到了未启动；下一次动作即清掉。 */
@@ -2068,6 +2106,8 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
    * 它不是错误，所以走 note 的普通样式，而不是 set-row-error。
    */
   const stoppingNote = status.state === "stopping" ? t.computerUse.stoppingNote : null;
+  /** 开发者后端没开时，启动置灰的原因行（与后端行下的警示同一件事，放在按钮旁边再说一次） */
+  const devBlockedNote = backendDevBlocked ? t.computerUse.backendDevBlockedStart : null;
 
   const run = (action: "start" | "stop") => {
     setPending(action);
@@ -2094,6 +2134,10 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
               <span role="alert" className="set-row-error">
                 {errorLine}
               </span>
+            ) : devBlockedNote !== null ? (
+              <span role="status" className="set-row-note">
+                {devBlockedNote}
+              </span>
             ) : stoppingNote !== null ? (
               <span role="status" className="set-row-note">
                 {stoppingNote}
@@ -2119,7 +2163,10 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
               </>
             ) : (
               <>
-                <PanelButton onClick={() => run("start")} disabled={!control.canStart || probeBlocksStart(probeResult)}>
+                <PanelButton
+                  onClick={() => run("start")}
+                  disabled={!control.canStart || probeBlocksStart(probeResult) || backendDevBlocked}
+                >
                   <Icon name="play" size={13} /> {t.computerUse.start}
                 </PanelButton>
                 <PanelButton onClick={() => setConfirmStop(true)} disabled={!control.canStop}>
@@ -2185,20 +2232,51 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
           </span>
         </SettingRow>
         {/*
-          隔离后端：WSB（一个桌面、多会话共享）与 MXC 的 IsolationSession（每会话一个 OS 会话）。
-          两个选项都是 Chip（与这个页里其它选项集合同一个形状，设计系统不给 select 样式）；
-          不可用的那一档**照样能点**——点了会在「启动」时拿到一句带原因的错误，
-          比一个点不动的灰色芯片更容易让人知道该去装什么。
+          隔离后端：列表由主进程给（`api.computerUse.backends()`）——renderer 不自己硬编码三档。
+          开发者后端（qemu）只在 `ORBITA_CU_DEV_BACKENDS` 开着时出现，并带「实验」文字标记；
+          已存 qemu 而开关关着时**不改写设置**，而是把它画成选中且锁住的一档 + 行下警示，
+          启动按钮同时置灰并说原因（主进程 start 也会拒，这里只是不让人白点一次）。
         */}
         <SettingRow
           name={t.computerUse.backend}
           info={t.computerUse.backendInfo}
-          below={<p className="cu-hint">{t.computerUse.backendBelow}</p>}
+          below={
+            backendsError ? (
+              <p className="set-row-error" role="alert">
+                {t.computerUse.backendListFailed}
+              </p>
+            ) : backendDevBlocked ? (
+              <p className="set-row-error" role="alert">
+                {t.computerUse.backendDevBlocked}
+              </p>
+            ) : (
+              <>
+                <p className="cu-hint">{t.computerUse.backendBelow}</p>
+                {/* qemu 在列表里就把代价说清楚（不必等选中后才看到）：镜像自备 + 只有截图/点击/打字 */}
+                {backendView?.options.some((option) => option.id === "qemu") && (
+                  <p className="cu-hint">{t.computerUse.backendDevNote}</p>
+                )}
+              </>
+            )
+          }
         >
           <span className="set-chips" role="group" aria-label={t.computerUse.backendAria}>
-            {COMPUTER_USE_BACKEND_CHOICES.map((choice) => (
-              <Chip key={choice} active={backend === choice} onClick={() => props.onChange(backendPatch(choice))}>
-                {t.computerUse.backendLabels[choice]}
+            {(backendView?.options ?? []).map((option) => (
+              <Chip
+                key={option.id}
+                active={backend === option.id}
+                disabled={option.locked}
+                title={
+                  option.locked
+                    ? backendsError
+                      ? t.computerUse.backendListFailed
+                      : t.computerUse.backendDevBlocked
+                    : undefined
+                }
+                onClick={() => props.onChange(backendPatch(option.id))}
+              >
+                {t.computerUse.backendLabels[option.id]}
+                {option.experimental ? ` · ${t.computerUse.backendExperimental}` : null}
               </Chip>
             ))}
           </span>

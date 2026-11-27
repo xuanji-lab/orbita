@@ -332,6 +332,8 @@ describe("provider 面（P3 的空位与能力声明）", () => {
       isolation: iso.controller as unknown as IsolationSessionController,
       qemu,
       backend: () => "qemu",
+      // 开发者后端的门默认是关的；这条老用例测的是「选到 qemu 时怎么切换」，所以显式打开
+      devBackends: () => true,
       probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
     });
     assert.deepEqual(await runtime.start(), { ok: true });
@@ -339,6 +341,46 @@ describe("provider 面（P3 的空位与能力声明）", () => {
     assert.deepEqual(wsb.calls, ["stop"]);
     assert.deepEqual(qemuCalls, ["start"]);
     assert.deepEqual(iso.calls, []);
+    await runtime.dispose();
+  });
+
+  it("qemu + 开发者开关没开：start 在主进程被拒（人话点名开发者 / 自备镜像 / 环境变量），且不先拆掉正在跑的 WSB", async () => {
+    const wsb = fakeController("wsb", "running");
+    const iso = fakeController("iso");
+    const qemuCalls: string[] = [];
+    const qemu = {
+      ...fakeController("wsb").controller,
+      id: "qemu" as const,
+      capabilities: QEMU_CAPABILITIES,
+      status: () => ({ state: "off" }) as SandboxStatus,
+      start: async (): Promise<ComputerUseStartResult> => {
+        qemuCalls.push("start");
+        return { ok: true };
+      },
+      stop: async (): Promise<ComputerUseStopResult> => {
+        qemuCalls.push("stop");
+        return { ok: true };
+      },
+    };
+    const runtime = createComputerUseRuntime({
+      wsb: { ...wsb.controller, probe: async () => probeResult() },
+      isolation: iso.controller as unknown as IsolationSessionController,
+      qemu,
+      backend: () => "qemu",
+      devBackends: () => false,
+      probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    const started = await runtime.start();
+    assert.equal(started.ok, false);
+    const error = started.ok === false ? started.error : "";
+    // 拒绝要能照着做：说清这是开发者后端、镜像自备、以及怎么打开
+    for (const needle of ["开发者后端", "自备", "镜像", "ORBITA_CU_DEV_BACKENDS"]) {
+      assert.ok(error.includes(needle), `拒绝文案缺「${needle}」：${error}`);
+    }
+    // 被拒的档位不该先把正在跑的后端拆掉，也不该真去起 qemu
+    assert.deepEqual(wsb.calls, []);
+    assert.deepEqual(qemuCalls, []);
+    assert.equal(runtime.runningBackend(), "wsb");
     await runtime.dispose();
   });
 

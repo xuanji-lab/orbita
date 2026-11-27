@@ -7,7 +7,10 @@
 import { ipcMain } from "electron";
 import { mainWindows } from "../window/main-windows.ts";
 import {
+  computerUseBackendChoices,
   computerUseChannels,
+  devBackendsEnabled,
+  type ComputerUseBackendChoice,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
   type ComputerUseStartResult,
@@ -39,6 +42,11 @@ export interface ComputerUseIpcController {
  */
 export interface ComputerUseIpcHooks {
   beforeStop?: () => void;
+  /**
+   * 设置页要的可选后端列表。缺省读 `ORBITA_CU_DEV_BACKENDS`（缺席 = 只有 wsb / isolation-session）。
+   * 主进程在接线处显式传一份，单测与其它调用方不必给。
+   */
+  backends?: () => readonly ComputerUseBackendChoice[];
 }
 
 export function registerComputerUseIpc(
@@ -56,6 +64,15 @@ export function registerComputerUseIpc(
   lease?: ComputerUseLease,
 ): void {
   ipcMain.handle(computerUseChannels.computerUseProbe, (): Promise<ComputerUseProbeResult> => controller.probe());
+  /**
+   * 可选后端列表（只读）。每次现算：开发者开关是启动时的环境变量，变了要重启应用，
+   * 所以这里不缓存也无需订阅。
+   */
+  const backends = hooks.backends ?? (() => computerUseBackendChoices(devBackendsEnabled(process.env)));
+  ipcMain.handle(
+    computerUseChannels.computerUseBackends,
+    (): readonly ComputerUseBackendChoice[] => backends(),
+  );
   ipcMain.handle(computerUseChannels.computerUseStatusGet, (): SandboxStatus => controller.status());
   ipcMain.handle(
     computerUseChannels.computerUseStart,

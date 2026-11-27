@@ -44,6 +44,14 @@ const ALLOWED_LATIN = new Set([
   "WHPX",
   "Hyper-V",
   "guest",
+  // 开发者后端的门（电脑使用）：环境变量名与仓库里的构建脚本——用户要照抄的字面量。
+  // 环境变量 ORBITA_CU_DEV_BACKENDS 被分词成四段；脚本路径里的目录被「路径先剔掉」规则
+  // 处理，只剩开头的 scripts。
+  "ORBITA",
+  "CU",
+  "DEV",
+  "BACKENDS",
+  "scripts",
   // 设置 › 语音：通话的语音合成厂商（2026-11-24）
   "ElevenLabs",
   // 协议 / 格式 / 技术名
