@@ -1200,6 +1200,8 @@ export const en = {
       "Developer backend (experimental): bring your own images and QEMU — run scripts/p3-desktop/build-image.mjs and scripts/p3-desktop/build-ramdisk.mjs in the repo first. It only has screenshots, clicks and typing: no UIA control tree, no browser debugging channel, no host file mapping and no snapshots.",
     backendDevBlockedStart:
       "This level is a developer backend and its switch is off, so starting it will be refused (see the Isolation backend row).",
+    backendListFailed:
+      "Could not read the list of backends: fell back to the two defaults (no developer backend). Your stored selection was not changed; restart the app and try again.",
     isolationSessionRow: "Multi-session dependency",
     isolationSessionInfo:
       "One OS session per agent comes from Microsoft's MXC (IsolationSession): it needs a Node runtime that can load native modules plus the IsoSession service that ships with Windows. When it is unavailable this row says what is missing.",

@@ -1118,6 +1118,8 @@ export const zh: Messages = {
     backendDevNote:
       "开发者后端（实验）：镜像与 QEMU 要自备——先在仓库里跑 scripts/p3-desktop/build-image.mjs 与 scripts/p3-desktop/build-ramdisk.mjs；它只有截图、点击与打字，没有 UIA 控件树、没有浏览器调试口、没有宿主文件映射、也没有快照。",
     backendDevBlockedStart: "这一档是开发者后端，开关没开：启动会被拒绝（原因见「隔离后端」一行）。",
+    backendListFailed:
+      "读取可选后端列表失败：已回退到默认两档（不含开发者后端），已存的选择没有被改写；重启应用后再试。",
     isolationSessionRow: "多会话隔离依赖",
     isolationSessionInfo:
       "每个智能体一个独立 OS 会话走的是微软官方的 MXC（IsolationSession）：需要一个能加载原生模块的 Node 运行时与 Windows 自带的 IsoSession 服务。不可用时这一行会说是缺什么。",

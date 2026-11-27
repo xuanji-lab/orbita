@@ -381,6 +381,7 @@ describe("provider 面（P3 的空位与能力声明）", () => {
     assert.deepEqual(wsb.calls, []);
     assert.deepEqual(qemuCalls, []);
     assert.equal(runtime.runningBackend(), "wsb");
+    await runtime.dispose();
   });
 
   it("三个后端的租约粒度只在 provider 里定义一次（门面不再按 id 猜）", () => {

@@ -48,8 +48,22 @@ const scaled = { width: 1280, height: 720, nativeWidth: 2560, nativeHeight: 1440
 
 describe("开发者后端（qemu）的门", () => {
   test("环境变量：缺席 / 空串 / 其它值都算关，只有 1 / true / yes / on（不分大小写）才算开", () => {
-    // 默认关是这条门的前提：没显式打开就必须没有 qemu
-    for (const env of [{}, { [COMPUTER_USE_DEV_BACKENDS_ENV]: "" }, { [COMPUTER_USE_DEV_BACKENDS_ENV]: "0" }, { [COMPUTER_USE_DEV_BACKENDS_ENV]: "off" }, { [COMPUTER_USE_DEV_BACKENDS_ENV]: "  " }]) {
+    // 默认关是这条门的前提：没显式打开就必须没有 qemu。
+    // 边界值单列：`false` / `yes please` / `truex` 这类**前缀或子串看着对**的写法必须判关——
+    // 「按前缀猜」是这道门最危险的一种实现错误。
+    const closed = [
+      {},
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "0" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "off" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "  " },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "false" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "false please" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "yes please" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "truex" },
+      { [COMPUTER_USE_DEV_BACKENDS_ENV]: "onward" },
+    ];
+    for (const env of closed) {
       assert.equal(devBackendsEnabled(env), false, JSON.stringify(env));
     }
     for (const value of ["1", "true", "TRUE", "yes", " on "]) {

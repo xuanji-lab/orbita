@@ -23,7 +23,7 @@ import type {
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, ElevenlabsVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
 import type { ComputerUseBackendChoice, ComputerUseLeaseStatus, ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
-import { COMPUTER_USE_BROWSER_CHOICES, type ComputerUseBrowser } from "@shared/computer-use";
+import { COMPUTER_USE_BROWSER_CHOICES, computerUseBackendChoices, type ComputerUseBrowser } from "@shared/computer-use";
 import type { ComputerUsePlatformSupport } from "@shared/computer-use-platform";
 import { playSpeech } from "../voice/speech-playback.ts";
 import { DICTATION_PROVIDERS } from "@shared/voice";
@@ -2015,6 +2015,8 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const [confirmStop, setConfirmStop] = useState(false);
   /** 主进程给的可选后端（开发者开关关着时只有两档）。null = 还没拿到 */
   const [backends, setBackends] = useState<readonly ComputerUseBackendChoice[] | null>(null);
+  /** 拉列表失败：不能静默成「一个后端都没有」——回退到默认两档并在行下说一句人话 */
+  const [backendsError, setBackendsError] = useState(false);
 
   // onStatus 返回退订函数，正好作 effect 的清理；
   // 挂载时再拉一次当前值——沙盒是应用级的，离开设置页再回来时组件重挂载，
@@ -2050,8 +2052,9 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
 
   /**
    * 可选后端列表由主进程给（开发者后端的开关在主进程那边）。拉一次就够：
-   * 环境变量变了要重启应用，这个值在本次运行里不会变。失败静默——这一行会退成
-   * 空列表，但启动按钮的状态仍由已存值与主进程的拒绝兜底。
+   * 环境变量变了要重启应用，这个值在本次运行里不会变。
+   * **失败不能静默**：空列表会让用户看到「一个后端都没有」且无从解释。回退到默认两档
+   * （与开关关闭时同形），并把「读取失败」写在那一行下面；已存的选择一个字不改。
    */
   useEffect(() => {
     let alive = true;
@@ -2060,7 +2063,11 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
       .then((next) => {
         if (alive) setBackends(next);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!alive) return;
+        setBackends(computerUseBackendChoices(false));
+        setBackendsError(true);
+      });
     return () => {
       alive = false;
     };
@@ -2084,7 +2091,11 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
    * 而是把 qemu 画成「选中 + 锁住」，并给出警示与启动置灰的理由。
    */
   const backendView = backends === null ? null : backendChoicesView(backend, backends);
-  const backendDevBlocked = backendView?.devBlocked === true;
+  /**
+   * 列表读取失败时我们**不知道**开关的真实状态，不能替主进程断言「开发者后端被关」：
+   * 只画回退列表与一句失败说明，「启动」直接交给主进程按环境变量判（它不会骗人）。
+   */
+  const backendDevBlocked = backendsError !== true && backendView?.devBlocked === true;
   /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
       用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
       沙箱回到了未启动；下一次动作即清掉。 */
@@ -2230,7 +2241,11 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
           name={t.computerUse.backend}
           info={t.computerUse.backendInfo}
           below={
-            backendDevBlocked ? (
+            backendsError ? (
+              <p className="set-row-error" role="alert">
+                {t.computerUse.backendListFailed}
+              </p>
+            ) : backendDevBlocked ? (
               <p className="set-row-error" role="alert">
                 {t.computerUse.backendDevBlocked}
               </p>
@@ -2251,7 +2266,13 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
                 key={option.id}
                 active={backend === option.id}
                 disabled={option.locked}
-                title={option.locked ? t.computerUse.backendDevBlocked : undefined}
+                title={
+                  option.locked
+                    ? backendsError
+                      ? t.computerUse.backendListFailed
+                      : t.computerUse.backendDevBlocked
+                    : undefined
+                }
                 onClick={() => props.onChange(backendPatch(option.id))}
               >
                 {t.computerUse.backendLabels[option.id]}
