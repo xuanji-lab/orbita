@@ -238,7 +238,18 @@ internal static class ShotMask
     internal const string MarkAttr = "data-orbita-masked";
 
     /**
-     * 注入脚本：在**帧自己的**上下文里跑，按 `getBoundingClientRect()` 给每个命中元素
+     * overlay 上那行字。**桥不猜语言**：`cdp-shot` 的 `maskLabel` 字段由宿主按界面语言给
+     * （中文界面「已遮罩」/ 英文界面 "Masked"）。这行字是画在**用户网页**里的，写死一种语言
+     * 会在另一种语言的界面上露出夹生字。字段缺席 / 空串 / 超长时回落到这里的英文默认值。
+     */
+    internal const string DefaultMaskLabel = "Masked";
+    /** 标签长度上限（字符）。再长就不像「一句话」，也会把 overlay 撑成一整行 */
+    internal const int MaskLabelMax = 32;
+    /** 脚本模板里放标签字面量的占位符（`MaskScriptFor` 换成转义后的 JS 字符串字面量） */
+    internal const string MaskLabelToken = "__ORBITA_MASK_LABEL__";
+
+    /**
+     * 注入脚本模板：在**帧自己的**上下文里跑，按 `getBoundingClientRect()` 给每个命中元素
      * 钉一块 `position:fixed` 的深色块。
      *
      * 为什么不改元素自身的样式：改 `background` / `color` 会跟站点自己的样式打架，
@@ -247,7 +258,7 @@ internal static class ShotMask
      * 开头先清掉上一轮遗留的 overlay：万一上次撤除失败（页面卡住 / 连接断了），
      * 这一次不会把两块叠在一起。
      */
-    internal const string MaskScript = @"(function () {
+    internal const string MaskScriptTemplate = @"(function () {
   var SEL = 'input[autocomplete*=password i], [data-sensitive], input[type=password], [data-orbita-masked]';
   var stale = document.querySelectorAll('[data-orbita-mask]');
   for (var s = 0; s < stale.length; s++) stale[s].parentNode.removeChild(stale[s]);
@@ -269,7 +280,7 @@ internal static class ShotMask
       'width:' + r.width + 'px;height:' + r.height + 'px;background:#15181d;color:#cfd6dd;' +
       'font:12px monospace;display:flex;align-items:center;justify-content:center;' +
       'letter-spacing:2px;border-radius:4px;';
-    d.textContent = '已遮罩';
+    d.textContent = __ORBITA_MASK_LABEL__;
     root.appendChild(d);
     hits++;
     if (el.matches && el.matches('input[autocomplete*=password i]')) kinds.push('autocomplete');
@@ -279,6 +290,49 @@ internal static class ShotMask
   }
   return { hits: hits, kinds: kinds.join(','), frame: (window === window.top ? 'main' : 'sub') };
 })()";
+
+    /** 正式标签：去掉首尾空白，空串回默认，超长截到 MaskLabelMax */
+    internal static string NormalizeMaskLabel(string raw)
+    {
+        if (raw == null) return DefaultMaskLabel;
+        string v = raw.Trim();
+        if (v.Length == 0) return DefaultMaskLabel;
+        if (v.Length > MaskLabelMax) v = v.Substring(0, MaskLabelMax);
+        return v;
+    }
+
+    /**
+     * 把标签拼成**可安全嵌进脚本**的 JS 单引号字面量。**纯函数**。
+     *
+     * 这是拼字符串，不是 HTML：要挡的是「把字面量提前闭合 / 让脚本语法坏掉」的那几个字符
+     * —— `\` 与 `'` 反斜杠转义；换行 / 制表 / 控制字符 / U+2028 U+2029（JS 里算行终止符，
+     * 直接放进去会让整段脚本语法错误）一律换成空格。浏览器侧的用法是 `textContent` 赋值，
+     * 不经过 HTML 解析，所以 `<` `&` 不用动。
+     */
+    internal static string JsSingleQuote(string value)
+    {
+        string v = value == null ? "" : value;
+        StringBuilder sb = new StringBuilder(v.Length + 8);
+        sb.Append('\'');
+        for (int i = 0; i < v.Length; i++)
+        {
+            char c = v[i];
+            if (c == '\\') sb.Append("\\\\");
+            else if (c == '\'') sb.Append("\\'");
+            else if (c == '\n' || c == '\r' || c == '\t'
+                || c == '\u2028' || c == '\u2029' || c < ' ')
+                sb.Append(' ');
+            else sb.Append(c);
+        }
+        sb.Append('\'');
+        return sb.ToString();
+    }
+
+    /** 这一轮要注入的脚本（标签由宿主给；缺省用英文默认值） */
+    internal static string MaskScriptFor(string label)
+    {
+        return MaskScriptTemplate.Replace(MaskLabelToken, JsSingleQuote(NormalizeMaskLabel(label)));
+    }
 
     /** 撤遮罩：只删自己插的 overlay（`data-orbita-masked` 标记留着，它是下一次的线索） */
     internal const string CleanupScript = @"(function () {
@@ -567,27 +621,63 @@ internal static class ShotMask
                 < Selector.IndexOf("type=password", StringComparison.Ordinal));
 
         // ② 注入脚本：用的是同一份选择器；overlay 的几何 / 层级 / 不挡点击；打标兜底
+        //    脚本现在是模板 + 宿主给的标签；以默认标签生成一份来验内容
+        string defaultScript = MaskScriptFor(DefaultMaskLabel);
         CheckTrue(failures, ref cases, "脚本里插的就是同一份选择器",
-            MaskScript.IndexOf("input[autocomplete*=password i], [data-sensitive], input[type=password], [data-orbita-masked]",
+            defaultScript.IndexOf("input[autocomplete*=password i], [data-sensitive], input[type=password], [data-orbita-masked]",
                 StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "脚本按 getBoundingClientRect 定位",
-            MaskScript.IndexOf("getBoundingClientRect()", StringComparison.Ordinal) >= 0);
+            defaultScript.IndexOf("getBoundingClientRect()", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "overlay 是 position:fixed（不占文档流）",
-            MaskScript.IndexOf("position:fixed", StringComparison.Ordinal) >= 0);
+            defaultScript.IndexOf("position:fixed", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "overlay 层级最高",
-            MaskScript.IndexOf("z-index:2147483647", StringComparison.Ordinal) >= 0);
+            defaultScript.IndexOf("z-index:2147483647", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "overlay 不挡点击（pointer-events:none）",
-            MaskScript.IndexOf("pointer-events:none", StringComparison.Ordinal) >= 0);
+            defaultScript.IndexOf("pointer-events:none", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "给命中元素打 data-orbita-masked",
-            MaskScript.IndexOf("setAttribute('data-orbita-masked', '1')", StringComparison.Ordinal) >= 0);
+            defaultScript.IndexOf("setAttribute('data-orbita-masked', '1')", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "overlay 节点带 data-orbita-mask（撤遮罩靠它）",
-            MaskScript.IndexOf("setAttribute('data-orbita-mask', '1')", StringComparison.Ordinal) >= 0);
+            defaultScript.IndexOf("setAttribute('data-orbita-mask', '1')", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "注入前先清上一轮遗留的 overlay",
-            MaskScript.IndexOf("querySelectorAll('[data-orbita-mask]')", StringComparison.Ordinal) >= 0);
-        CheckTrue(failures, ref cases, "脚本有可见的遮罩文案",
-            MaskScript.IndexOf("已遮罩", StringComparison.Ordinal) >= 0);
+            defaultScript.IndexOf("querySelectorAll('[data-orbita-mask]')", StringComparison.Ordinal) >= 0);
         CheckTrue(failures, ref cases, "**不用** Page.createIsolatedWorld（对子帧是假成功）",
-            MaskScript.IndexOf("createIsolatedWorld", StringComparison.Ordinal) < 0);
+            defaultScript.IndexOf("createIsolatedWorld", StringComparison.Ordinal) < 0);
+
+        // ②b 标签：由宿主给，**桥不猜语言**；模板本身不能带任何语言的文字
+        CheckTrue(failures, ref cases, "模板里没有硬编码的中文标签",
+            MaskScriptTemplate.IndexOf("已遮罩", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "模板里只有占位符（不含任何 CJK）",
+            MaskLabelToken == "__ORBITA_MASK_LABEL__" && !ContainsCjk(MaskScriptTemplate));
+        CheckTrue(failures, ref cases, "缺省标签是英文 Masked（桥端不猜语言）",
+            defaultScript.IndexOf("d.textContent = 'Masked';", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "中文标签原样进脚本",
+            MaskScriptFor("已遮罩").IndexOf("d.textContent = '已遮罩';", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "英文标签原样进脚本",
+            MaskScriptFor("Masked").IndexOf("d.textContent = 'Masked';", StringComparison.Ordinal) >= 0);
+        CheckString(failures, ref cases, "标签前后空白被去掉", "'Masked'", JsSingleQuote(NormalizeMaskLabel("  Masked  ")));
+        CheckString(failures, ref cases, "空标签回默认", "Masked", NormalizeMaskLabel("   "));
+        CheckString(failures, ref cases, "null 标签回默认", "Masked", NormalizeMaskLabel(null));
+        CheckInt(failures, ref cases, "超长标签截到 32 字", MaskLabelMax,
+            NormalizeMaskLabel(new string('a', 100)).Length);
+
+        // ②c 转义：引号 / 反斜杠 / 换行 / U+2028 都不能把字面量提前闭合、也不能让脚本语法坏掉
+        string quoted = MaskScriptFor("Bob's 'pw'");
+        CheckTrue(failures, ref cases, "单引号被转义（\'）",
+            quoted.IndexOf("d.textContent = 'Bob\\'s \\'pw\\'';", StringComparison.Ordinal) >= 0);
+        // 字面量里只剩两端的定界符：中间每个单引号都被反斜杠转义了
+        CheckInt(failures, ref cases, "字面量只剩两端的定界符（中间的单引号都已转义）", 2,
+            CountUnescapedQuotes(ExtractLabelLiteral(quoted)));
+        string hostile = MaskScriptFor("a'b\\c\nd");
+        string hostileLiteral = ExtractLabelLiteral(hostile);
+        CheckTrue(failures, ref cases, "反斜杠被双写转义", hostileLiteral.IndexOf("\\\\") >= 0);
+        CheckTrue(failures, ref cases, "换行不留在标签字面量里（不会把脚本断成两行）",
+            hostileLiteral.IndexOf("\n", StringComparison.Ordinal) < 0
+                && hostileLiteral.IndexOf("\r", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "U+2028 / U+2029 也被换成空格",
+            MaskScriptFor("a\u2028b\u2029c").IndexOf("\u2028", StringComparison.Ordinal) < 0
+                && MaskScriptFor("a\u2028b\u2029c").IndexOf("\u2029", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "标签里的占位符不会残留 / 被二次替换",
+            hostile.IndexOf(MaskLabelToken, StringComparison.Ordinal) < 0);
 
         // ③ 撤遮罩：只删自己的节点
         CheckTrue(failures, ref cases, "撤遮罩按 data-orbita-mask 找节点",
@@ -826,6 +916,47 @@ internal static class ShotMask
         info.Url = url;
         info.ParentFrameId = parentFrameId;
         return info;
+    }
+
+    /** 脚本里 d.textContent = 后面那个字面量（含两端引号），自测用 */
+    private static string ExtractLabelLiteral(string script)
+    {
+        string marker = "d.textContent = ";
+        int at = script.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0) return "";
+        int start = at + marker.Length;
+        int end = script.IndexOf(";", start, StringComparison.Ordinal);
+        return end < 0 ? "" : script.Substring(start, end - start);
+    }
+
+    /** 没被反斜杠转义的单引号个数（字面量两端各一个才算干净），自测用 */
+    private static int CountUnescapedQuotes(string literal)
+    {
+        int count = 0;
+        int backslashes = 0;
+        for (int i = 0; i < literal.Length; i++)
+        {
+            char c = literal[i];
+            if (c == '\\') { backslashes++; continue; }
+            if (c == '\'')
+            {
+                if (backslashes % 2 == 0) count++;
+                backslashes = 0;
+                continue;
+            }
+            backslashes = 0;
+        }
+        return count;
+    }
+
+    private static bool ContainsCjk(string text)
+    {
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c >= '\u4e00' && c <= '\u9fff') return true;
+        }
+        return false;
     }
 
     private static int CountEntries(string jsonArray)

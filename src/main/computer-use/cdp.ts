@@ -27,6 +27,7 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   computerUseBrowserErrors,
   computerUseGuestCommands,
+  computerUseMaskLabel,
   computerUseShotMask,
   computerUseShotMaskNote,
   isComputerUseBrowser,
@@ -104,10 +105,37 @@ export class CdpSession {
    */
   private readonly browsers = new Map<string, { browser: string; fallbackFrom?: string }>();
 
-  constructor(guest: CdpGuest, outDir: string, browser?: () => string | Promise<string>) {
+  /**
+   * 界面语言的读取口（缺省 = en）。它只影响 overlay 上那行字（`maskLabel`）：
+   * 那行字画在用户网页里，英文界面下露出中文就是夹生字。每次截图现读一次，改语言立刻跟上。
+   */
+  private readonly language: (() => string | Promise<string>) | undefined;
+
+  constructor(
+    guest: CdpGuest,
+    outDir: string,
+    browser?: () => string | Promise<string>,
+    language?: () => string | Promise<string>,
+  ) {
     this.guest = guest;
     this.outDir = outDir;
     this.browser = browser;
+    this.language = language;
+  }
+
+  /** 现在的界面语言（读不到 / 没注入都按 en：与 effectiveLanguage 的兜底一致） */
+  private async languageNow(): Promise<string> {
+    if (this.language === undefined) return "en";
+    try {
+      const raw = await this.language();
+      return typeof raw === "string" && raw !== "" ? raw : "en";
+    } catch (cause: unknown) {
+      console.warn(
+        `[computer-use] 读不到界面语言设置，遮罩标签按英文处理：` +
+          (cause instanceof Error ? cause.message : String(cause)),
+      );
+      return "en";
+    }
   }
 
   /** 当前设置下的浏览器（不在五个选项里的一律按 edge；读失败也按 edge 并留一行日志） */
@@ -288,7 +316,12 @@ export class CdpSession {
   async shot(sessionId: string, maxWidth: number): Promise<{ jpeg: Uint8Array; resp: Record<string, unknown> }> {
     const session = safeBrowserSessionId(sessionId);
     await this.ensureOpen(session);
-    const result = await this.guest.guestShot(computerUseGuestCommands.cdpShot, { maxWidth, session });
+    // 标签由宿主给（桥不猜语言）：中文界面「已遮罩」，英文界面 "Masked"
+    const result = await this.guest.guestShot(computerUseGuestCommands.cdpShot, {
+      maxWidth,
+      session,
+      maskLabel: computerUseMaskLabel(await this.languageNow()),
+    });
     if (!result.ok) throw new Error(result.error);
     return { jpeg: result.jpeg, resp: result.resp };
   }

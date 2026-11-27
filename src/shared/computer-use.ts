@@ -485,6 +485,23 @@ export function computerUseShotMask(resp: Record<string, unknown>): ComputerUseS
 }
 
 /**
+ * overlay 上那行字（画在**用户网页**里，所以必须跟界面语言一致：中文界面纯中文、英文界面纯英文）。
+ * 桥不猜语言——`cdp-shot` 的 `maskLabel` 字段带过去，缺省时桥用英文 `Masked`。
+ */
+export const COMPUTER_USE_MASK_LABEL_ZH = "已遮罩";
+export const COMPUTER_USE_MASK_LABEL_EN = "Masked";
+
+/**
+ * 按界面语言（`settings.language` 归一后的值）取遮罩标签。**纯函数**。
+ *
+ * 不认识的取值（缺省 / 脏数据）一律按英文——与 `effectiveLanguage` 的兜底一致（缺省 en），
+ * 也与桥在字段缺席时用的默认值一致：两处都落在英文，不会出现一半中文一半英文。
+ */
+export function computerUseMaskLabel(language: string | undefined): string {
+  return language === "zh" ? COMPUTER_USE_MASK_LABEL_ZH : COMPUTER_USE_MASK_LABEL_EN;
+}
+
+/**
  * 给模型的那**一句话**：检查了几个帧、盖住几个字段；**没到的帧逐条点名**——模型据此才知道
  * 图里哪一块（可能是明文）不可信。老桥（mask === undefined）回空串。
  */
