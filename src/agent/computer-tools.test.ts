@@ -543,7 +543,9 @@ describe("computerUseTurnPlan（这一轮装配什么）", () => {
     );
   });
 
-  test("computerUse 缺席（旧命令形状 / 开关从没打开）：不注册，出网按缺省允许、缺省后端 wsb 能断", () => {
-    assert.deepEqual(computerUseTurnPlan(undefined), { tools: false, allowNetwork: true, networkControlled: true });
+  test("computerUse 缺席（旧命令形状 / 开关从没打开）：不注册；缺了 networkControlled 一格就按「做不到」算", () => {
+    // 缺席不能按 true（wsb 能断）：同一轮的提示词把缺格当「做不到」、工具描述若按 true 就会说
+    // 「This sandbox has no outbound network」——两个消费者当场互相打脸（验收实测过）。
+    assert.deepEqual(computerUseTurnPlan(undefined), { tools: false, allowNetwork: true, networkControlled: false });
   });
 });

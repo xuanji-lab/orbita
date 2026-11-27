@@ -236,6 +236,18 @@ describe("电脑使用 · 出网开关在三个后端上能不能动", () => {
     assert.equal(row.reason, zh.computerUse.allowNetworkLocked);
   });
 
+  test("置灰时悬停 info 也换掉：L2b 上不能再承诺「关掉就不上网」", () => {
+    for (const table of [zh, en] as const) {
+      assert.ok(table.computerUse.allowNetworkInfoLocked.length > 0, "必须有一句替代文案");
+    }
+    // 原句在那一档是做不到的承诺：L2b 关掉开关照样联网
+    assert.match(zh.computerUse.allowNetworkInfo, /关掉后沙箱里的进程不能上网/);
+    assert.doesNotMatch(zh.computerUse.allowNetworkInfoLocked, /关掉后.*不能上网/);
+    assert.match(zh.computerUse.allowNetworkInfoLocked, /断不了/);
+    assert.match(en.computerUse.allowNetworkInfoLocked, /cannot block its network/);
+    assert.doesNotMatch(en.computerUse.allowNetworkInfoLocked, /Off keeps everything in the sandbox off the network/);
+  });
+
   test("英文口径同义（同一句原因，不各写一套）", () => {
     const row = allowNetworkRow("isolation-session", en);
     if (row.editable) assert.fail("L2b 上这一行必须是不可操作的");

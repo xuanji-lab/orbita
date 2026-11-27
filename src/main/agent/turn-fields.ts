@@ -13,7 +13,7 @@ import type {
 } from "../../shared/agent-ipc.ts";
 import type { AppSettings, CompactionSetting, Language } from "../../shared/settings.ts";
 import { effectiveAllowNetwork, effectiveComputerUseBackend } from "../../shared/settings.ts";
-import { backendNetworkControl } from "../../shared/computer-use.ts";
+import { backendNetworkControl, type ComputerUseRunningFacts } from "../../shared/computer-use.ts";
 import { computerUsePlatformSupport } from "../../shared/computer-use-platform.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 
@@ -30,17 +30,25 @@ export function computerUseTurnContext(
   settings: AppSettings | undefined,
   /** process.platform：平台这层判定只有 win32 算支持；由 ipc.ts 传进来，这里不读全局 */
   platform: string,
+  /**
+   * 正在跑的那只隔离启动时定下来的事实（运行时门面的 runningFacts()）；没在跑 = null。
+   * **以它为准，不以设置为准**：后端与出网开关都是「下次启动才生效」，拿设置算会在
+   * 「设置选 wsb / 实际跑着 L2b」或「运行中把开关关掉」时对模型说假话。
+   */
+  running?: ComputerUseRunningFacts | null,
 ): ComputerUseTurnContext {
+  // 在跑的那只的后端才是真值；一只都没跑时退回设置值（那时工具只会回「沙箱没运行」，
+  // 宣不宣称都没有实际影响）
+  const backend = running?.backend ?? effectiveComputerUseBackend(settings);
   return {
     enabled: settings?.experimentalFeatures?.["computer-use"] === true,
     // 与设置页读同一个谓词（shared/computer-use-platform.ts）：非 Windows 上工具组不注册
     platformSupported: computerUsePlatformSupport(platform).supported,
-    // 缺省允许（effectiveAllowNetwork）：老 settings.json 没这个键 = 与开关做出来之前一样
-    allowNetwork: effectiveAllowNetwork(settings),
+    // 开关同样用启动时那份：运行中改了不会影响这一局，说「网页打不开」会是假话
+    allowNetwork: running === undefined || running === null ? effectiveAllowNetwork(settings) : running.allowNetwork,
     // 两个事实分开算：用户选了什么（上一行）与这个后端做不做得到（这一行）。
-    // 缺省后端 wsb 做得到；选了 L2b 而开关还关着时，模型得到的是一句「断不了网」，
-    // 不是「你没有网」——见 agent/computer-network.ts 的四象限。
-    networkControlled: backendNetworkControl(effectiveComputerUseBackend(settings)) === "enforced",
+    // 「在跑的是断不了网的 L2b」时得到的是「断不了网」那句，不是「你没有网」。
+    networkControlled: backendNetworkControl(backend) === "enforced",
   };
 }
 

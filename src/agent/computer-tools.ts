@@ -70,7 +70,9 @@ export interface ComputerUseTurnPlan {
   /**
    * 这个后端能不能真的把出网关掉（shared/computer-use.ts 的 backendNetworkControl）。
    * 与 allowNetwork 一起交给 sandbox_* 工具组：少这一格，L2b 上的描述与失败文案会把
-   * 「断不了网」说成「你没网」。缺省 true（与缺省后端 wsb 一致；ctx 缺席时 tools 也是 false）。
+   * 「断不了网」说成「你没网」。**缺席时按 false**（做不到）：两个消费者（提示词与工具描述）
+   * 必须在同一轮说同一句话，而「不宣称」是两者都能接受的那一侧——按 true 会让描述说
+   * 「This sandbox has no outbound network」而提示词说「断不了网」，同一轮自相矛盾。
    */
   networkControlled: boolean;
 }
@@ -79,7 +81,7 @@ export function computerUseTurnPlan(computerUse: ComputerUseTurnContext | undefi
   return {
     tools: computerUseToolsActive(computerUse),
     allowNetwork: computerUse?.allowNetwork ?? true,
-    networkControlled: computerUse?.networkControlled ?? true,
+    networkControlled: computerUse?.networkControlled ?? false,
   };
 }
 

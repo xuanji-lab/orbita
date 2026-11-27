@@ -2160,7 +2160,7 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
             否则用户关掉开关、看到「已关」、而它照样联网——那就是设置骗人。 */}
         <SettingRow
           name={t.computerUse.allowNetwork}
-          info={t.computerUse.allowNetworkInfo}
+          info={networkRow.editable ? t.computerUse.allowNetworkInfo : t.computerUse.allowNetworkInfoLocked}
           below={
             <p className="cu-hint">
               {networkRow.editable ? t.computerUse.allowNetworkBelow : networkRow.reason}

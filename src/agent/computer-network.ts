@@ -107,7 +107,7 @@ export function computerUseNetworkGuideline(computerUse: ComputerUseTurnContext 
   }
   return [
     "<orbita-sandbox-network>",
-    "The Windows sandbox is set to **no outbound network** (the user turned off Settings › Experimental " +
+    "This sandbox is set to **no outbound network** (the user turned off Settings › Experimental " +
       "features › Computer use › Sandbox › \"Allow network access\"). Web pages in it will not load: that is " +
       "the setting, not the site. Do not retry a failed sandbox_navigate, do not try other URLs to see whether " +
       "the network is back, and do not silently move the same web task to another tool. Tell the user the " +

@@ -967,6 +967,25 @@ export function isComputerUseBackend(value: unknown): value is ComputerUseBacken
 }
 
 /**
+ * 正在跑的那只隔离**在启动那一刻**定下来的两个事实。
+ *
+ * 为什么一定要记当时的、不能用当前的设置算：设置页的「隔离后端」与「允许沙箱出网」都是
+ * **下次启动才生效**（backendPatch 明写不自动重启）。于是运行中改设置，模型那边就会拿到
+ * 一组与真实沙箱无关的值——「设置选 wsb、实际跑着断不了网的 L2b」时被告知「你没有出网」，
+ * 或者「运行中把开关关掉」时被告知「网页打不开」而沙箱其实还连着。这两句都是这次要修的那种谎，
+ * 只是换了个触发路径。
+ */
+export interface ComputerUseRunningFacts {
+  /** 真正在跑的那个后端（不是设置里选的那个） */
+  backend: ComputerUseBackend;
+  /**
+   * 启动时读到的「允许沙箱出网」。L2b 也记：它不改变网络，但这个值仍是用户的意图，
+   * 提示词靠它说「你要求断网，但这个后端断不了」。
+   */
+  allowNetwork: boolean;
+}
+
+/**
  * 「设置里的『允许沙箱出网』关掉」这件事，在某个后端上到底能不能兑现。
  *
  *   enforced          关掉就是真的没有出网，模型该知道「网页打不开是设置造成的」；
@@ -992,8 +1011,8 @@ export function isComputerUseBackend(value: unknown): value is ComputerUseBacken
 export type ComputerUseNetworkControl = "enforced" | "not-enforceable";
 
 export function backendNetworkControl(backend: ComputerUseBackend): ComputerUseNetworkControl {
-  // 逐个列名字而不是「只排除一个」：将来加后端时，忘记表态会在这里读出一个默认的
-  // enforced——而默认「能断网」正是这次要修的那个谎。所以反过来写：只有真做得到的才算。
+  // 只有明确做得到的两个返回 enforced，其余（含将来新增、还没在 这个谓词里表态的后端）
+  // 一律 not-enforceable：默认「能断网」正是这次要修的那个谎，所以缺席时按做不到算。
   return backend === "wsb" || backend === "qemu" ? "enforced" : "not-enforceable";
 }
 

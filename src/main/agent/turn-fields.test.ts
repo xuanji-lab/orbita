@@ -16,6 +16,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { computerUseTurnContext, turnFields } from "./turn-fields.ts";
+import { computerUseTurnPlan } from "../../agent/computer-tools.ts";
+import { createSandboxBrowserTools } from "../../agent/sandbox-tools.ts";
+import { RequestBroker } from "../../agent/request-broker.ts";
+import { computerUseNetworkGuideline } from "../../agent/computer-network.ts";
 import type { AppSettings, CompactionSetting } from "../../shared/settings.ts";
 
 const input = {
@@ -238,5 +242,96 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       allowNetwork: false,
       networkControlled: false,
     });
+  });
+});
+
+/**
+ * 「设置选 wsb、实际跑着 L2b」——**必改 2 的守护测试**。
+ *
+ * 后端与出网开关都是下次启动才生效（backendPatch 明写不自动重启），所以拿设置算出来的
+ * `enforced` 可能在说一只并不在跑的沙箱。这条测试把两边拆开：设置里是 wsb + 关，运行
+ * 事实注入成 L2b + 关。期望：networkControlled 为 false（不宣称能断网），而且同一轮里
+ * 提示词与工具描述说的是同一件事——描述里不出现「no outbound network」。
+ *
+ * 同时钉住「两个消费者不能互相打脸」：ctx 里缺 networkControlled 这一格时（老夹具 /
+ * 旧命令），提示词按「做不到」说、工具描述也不能按 true 去说「没有出网」。
+ */
+describe("出网：运行中的后端与设置不一致时，模型听到的是运行中那只", () => {
+  const settings = (value: { backend?: "wsb" | "isolation-session" | "qemu"; allowNetwork?: boolean }): AppSettings =>
+    ({
+      theme: "system",
+      drawer: { width: 320, docked: [] },
+      experimentalFeatures: { "computer-use": true },
+      computerUse: value,
+    }) as AppSettings;
+
+  /** 拿一份 ctx 走完整条链：开轮装配 → 工具描述 + 提示词 */
+  const chain = (computerUse: ReturnType<typeof computerUseTurnContext>) => {
+    const plan = computerUseTurnPlan(computerUse);
+    const tools = createSandboxBrowserTools(new RequestBroker(() => undefined), "s1", {
+      allowNetwork: plan.allowNetwork,
+      networkControlled: plan.networkControlled,
+    });
+    return { plan, tools, guideline: computerUseNetworkGuideline(computerUse) };
+  };
+
+  test("设置 wsb / 跑着 L2b：networkControlled 为 false，描述里不出现「no outbound network」", () => {
+    const ctx = computerUseTurnContext(
+      settings({ backend: "wsb", allowNetwork: false }),
+      "win32",
+      { backend: "isolation-session", allowNetwork: false },
+    );
+    assert.equal(ctx.networkControlled, false);
+    assert.equal(ctx.allowNetwork, false, "开关取启动时那份（这里与设置同值）");
+
+    const { plan, tools, guideline } = chain(ctx);
+    assert.equal(plan.networkControlled, false);
+    for (const tool of tools) {
+      assert.doesNotMatch(tool.description, /no outbound network/, tool.name);
+      assert.match(tool.description, /cannot block its network/, tool.name);
+    }
+    assert.match(guideline, /cannot block its network/);
+    assert.doesNotMatch(guideline, /no outbound network/);
+  });
+
+  test("设置 wsb / 跑着 qemu：仍然按运行中的 qemu 算（能断），开关取启动时那份", () => {
+    const ctx = computerUseTurnContext(
+      settings({ backend: "wsb", allowNetwork: true }),
+      "win32",
+      { backend: "qemu", allowNetwork: false },
+    );
+    assert.equal(ctx.networkControlled, true);
+    // 运行中把设置改成「允许」，这只 VM 仍按启动时的「关」
+    assert.equal(ctx.allowNetwork, false);
+    const { tools } = chain(ctx);
+    for (const tool of tools) assert.match(tool.description, /no outbound network/, tool.name);
+  });
+
+  test("没在跑（running = null）：退回设置值——那是「下一局会怎么样」", () => {
+    const ctx = computerUseTurnContext(settings({ backend: "isolation-session", allowNetwork: false }), "win32", null);
+    assert.equal(ctx.networkControlled, false);
+    assert.equal(ctx.allowNetwork, false);
+  });
+
+  test("ctx 缺 networkControlled 一格：两个消费者说同一句话（都不宣称没网）", () => {
+    // 旧命令 / 老夹具的形状：这一格还没有。验收实测过：提示词按「缺格 = 做不到」说
+    // 「断不了网」，而工具描述按 `?? true` 说「This sandbox has no outbound network」
+    // ——同一轮两句相反。两边的缺席语义必须都落在「不宣称」。
+    const legacy = { enabled: true, platformSupported: true, allowNetwork: false } as never;
+
+    const guideline = computerUseNetworkGuideline(legacy);
+    assert.match(guideline, /cannot block its network/);
+    assert.doesNotMatch(guideline, /no outbound network/);
+
+    const plan = computerUseTurnPlan(legacy);
+    assert.deepEqual(plan, { tools: true, allowNetwork: false, networkControlled: false });
+    const tools = createSandboxBrowserTools(new RequestBroker(() => undefined), "s1", {
+      allowNetwork: plan.allowNetwork,
+      networkControlled: plan.networkControlled,
+    });
+    for (const tool of tools) {
+      assert.doesNotMatch(tool.description, /no outbound network/, tool.name);
+      assert.match(tool.description, /cannot block its network/, tool.name);
+    }
   });
 });

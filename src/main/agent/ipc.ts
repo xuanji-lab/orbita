@@ -46,6 +46,7 @@ import { memoryBuildEligible } from "../memory/turn-tracker.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
 import type { ComputerUseTurnContext, IntentTurnContext } from "../../shared/agent-ipc.ts";
+import type { ComputerUseRunningFacts } from "../../shared/computer-use.ts";
 import {
   mergeMcpConfigs,
   resolveServersForWorkspace,
@@ -155,6 +156,12 @@ export function registerAgentIpc(
   memoryTurns?: { begin(sessionId: string, text: string): void },
   /** 此刻不在 idle 的会话（index.ts 按 phase 事件记的 phases 表）；agent:live-phases 回它 */
   livePhases: () => LiveSessionPhases = () => ({}),
+  /**
+   * 正在跑的那只隔离启动时定下来的事实（运行时门面的 runningFacts()）。
+   * **出网这一对值以它为准**：设置改了不自动重启，拿设置算会对模型说假话。
+   * undefined = 老夹具不传（按设置值算）。
+   */
+  runningComputerUse?: () => Promise<ComputerUseRunningFacts | null>,
 ): { submitTurn(input: SubmitAgentInput): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
@@ -248,12 +255,30 @@ export function registerAgentIpc(
   /**
    * 电脑使用每轮现读：实验开关决定**工具组注册**（关着时沙箱工具根本不进会话），
    * 平台支持再压一道（非 Windows 上不注册：拒绝文案在那里只能给「去设置里启动」），
-   * 出网开关决定**模型怎么理解网页打不开**（见 ComputerUseTurnContext）。三个事实
-   * 来自同一份设置、同一次 `settings.read()`：不另开一套读写，也不会两轮之间漂移。
-   * 映射本身在 turn-fields.ts 的纯函数里（那边可测；这里是唯一读设置的、要 electron 的地方）。
+   * **正在跑的那只后端** + 它启动时的出网开关决定模型怎么理解网页打不开（见
+   * ComputerUseTurnContext）。
+   *
+   * 出网那两个值为什么取「运行中」而不是设置：后端与开关都是**下次启动才生效**，
+   * 拿设置算会在「设置选 wsb / 实际跑着 L2b」与「运行中把开关关掉」两种情形下
+   * 向模型宣一个与真实沙箱无关的事实。运行时门面的 runningFacts() 是这两个值
+   * 的唯一真源（沙箱没跑时它回 null，那时「设置值」就是「下一局会怎么样」）。
+   * 映射本身在 turn-fields.ts 的纯函数里（那边可测；这里是要 electron 的那一层）。
    */
   const readComputerUse = async (): Promise<ComputerUseTurnContext> =>
-    computerUseTurnContext(await settings.read(), process.platform);
+    computerUseTurnContext(await settings.read(), process.platform, await readRunningComputerUse());
+
+  /** 运行中的隔离事实；读取本身出错时当作「没在跑」（不因此拦开轮，也不凭它宣称能断网） */
+  const readRunningComputerUse = async (): Promise<ComputerUseRunningFacts | null> => {
+    if (runningComputerUse === undefined) return null;
+    try {
+      return await runningComputerUse();
+    } catch (cause: unknown) {
+      console.warn(
+        `[agent] 读不到运行中的隔离事实，按设置值算：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      return null;
+    }
+  };
 
   /** 「先给我看计划」偏好同样每轮现读：改了下一轮即生效；缺席 = 关 */
   const readPlanFirst = async (): Promise<boolean> => (await settings.read()).planFirst === true;

@@ -1877,6 +1877,9 @@ void app.whenReady().then(async () => {
       for (const [sessionId, phase] of phases) if (phase !== "idle") live[sessionId] = phase;
       return live;
     },
+    // 出网那对值要看**正在跑的那只**（后端与开关都是下次启动才生效）：设置里选 wsb、
+    // 实际跑着 L2b 时，按设置算会告诉模型「你没有出网」——而它就在本机的网络上。
+    () => computerUse.runningFacts(),
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
