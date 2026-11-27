@@ -1474,3 +1474,81 @@ test(
     }
   },
 );
+
+// ── 网页截图前的密码框遮罩（cdp-shot，浏览器车道）──────────────────────────────
+//
+// 为什么它必须存在：sandbox_screenshot 的图直接进模型上下文，而网页里的密码框是 DOM，
+// 像素车道（UIA 控件矩形）看不见它。遮罩 = 出图前往每个帧注入 overlay、出图后撤掉。
+// 纯函数（选择器 / 脚本 / 帧与上下文挑选 / 回执字段）在宿主上验；真沙箱里的实际像素
+// （OOPIF 里那块真的黑了吗）交给沙箱验收。
+//
+// 这里额外用源码级断言钉住三件「删掉就再也发现不了」的事：
+//   ① 注入脚本必须含三个选择器与自有打标（少一条，翻转 type 之后就漏）；
+//   ② 不许用 Page.createIsolatedWorld（对跨源子帧是假成功，图里明文照旧）；
+//   ③ 遮罩要接在 captureScreenshot 之前、撤遮罩在之后，且回执带两档覆盖字段。
+
+test(
+  "网页截图遮罩 selftest：选择器 / 注入脚本 / 帧树与上下文挑选 / 回执字段（不启 Edge、不碰桌面）",
+  { skip: !isWindows && "仅在 Windows 上运行" },
+  () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const r = spawnSync(exePath, ["--selftest-shotmask"], { encoding: "utf8", windowsHide: true });
+    assert.equal(r.status, 0, `selftest 应成功退出
+stdout: ${r.stdout}
+stderr: ${r.stderr}`);
+    const parsed = JSON.parse(r.stdout.trim());
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    // 用例数钉在 70 以上：这一组里有「同一 frameId 的旧 world 不认」「别的标签页的 iframe
+    // 不认」「一个 OOPIF session 报 2 个默认上下文时要注入 2 次」「回执两组数字各自正确」
+    // 这些删掉就没人再发现的断言
+    assert.ok(parsed.cases >= 70, `用例数应 >= 70，实际 ${parsed.cases}`);
+    assert.equal(parsed.failures, undefined, "ok 时不该有 failures");
+  },
+);
+
+test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标，不用 createIsolatedWorld（源码级，不真截图）", () => {
+  const program = fs.readFileSync(path.join(scriptDir, "Program.cs"), "utf8");
+  assert.match(program, /--selftest-shotmask/, "纯函数自测要能从命令行跑到");
+
+  const mask = fs.readFileSync(path.join(scriptDir, "CdpShotMask.cs"), "utf8");
+  // 真正的注入脚本（头部注释里提到 createIsolatedWorld 是为了解释为什么不用它，不算数）
+  const scriptMatch = /internal const string MaskScript = @"([\s\S]*?)";/.exec(mask);
+  assert.ok(scriptMatch !== null, "CdpShotMask.cs 里应有 MaskScript 常量");
+  const script = scriptMatch[1];
+  // 三个命中规则 + 自有标记（「显示密码」翻转 type 之后的兜底）
+  assert.match(script, /input\[autocomplete\*=password i\]/);
+  assert.match(script, /\[data-sensitive\]/);
+  assert.match(script, /input\[type=password\]/);
+  assert.match(script, /data-orbita-masked/);
+  // overlay 的几何与不挡点击
+  assert.match(script, /position:fixed/);
+  assert.match(script, /pointer-events:none/);
+  assert.match(script, /getBoundingClientRect/);
+  // 跨源子帧只能用 executionContextCreated 报出的默认上下文
+  assert.doesNotMatch(script, /createIsolatedWorld/, "对子帧是假成功，禁止使用");
+  assert.match(mask, /executionContextCreated/);
+  assert.match(mask, /auxData/);
+
+  const cdp = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+  // 遮罩必须在截图之前、撤除在之后（顺序反了就是「遮罩没进图」或「overlay 留在页面上」）
+  const injectAt = cdp.indexOf("MaskForShot(mask)");
+  const captureAt = cdp.indexOf('Call("Page.captureScreenshot"');
+  const clearAt = cdp.indexOf("ClearShotMask(mask)");
+  assert.ok(injectAt > 0 && captureAt > injectAt, "先遮罩再截图");
+  assert.ok(clearAt > captureAt, "截完再撤遮罩");
+  assert.match(cdp, /mask\.AppendTo\(o\)/, "回执要带遮罩字段");
+  // OOPIF 必须真的去 attach（只连 page session 的车道永远遮不到跨源 iframe）
+  assert.match(cdp, /Target\.attachToTarget/);
+  assert.match(cdp, /PickIframeTargets/);
+  // iframe 挂不上不许整条命令失败：降级并逐条登记（不是抛出去）
+  assert.match(cdp, /report\.Frames\.Add\(outcome\)/);
+  // 回执是「两组数字 + 一张没遮到的清单」，不是一个会被读成「全遮了」的布尔
+  assert.match(mask, /maskFieldsCovered/);
+  assert.match(mask, /maskFramesChecked/);
+  assert.match(mask, /maskMissing/);
+  // 清单会被截断（8 条）：必须同时给总数，宿主才能说「还有 N 条未列」
+  assert.match(mask, /maskMissingTotal/);
+  assert.doesNotMatch(mask, /maskCoverage/, "曾经的 main+iframes / main-only 枚举已被两组数字取代");
+  // 一个 session 要注入几个 document 由计划算（不是「一个 target 一个上下文」）
+  assert.match(mask, /PlanSessionInjections/);
+});

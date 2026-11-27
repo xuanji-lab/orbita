@@ -20,6 +20,8 @@ import {
   captureNote,
   computerUseAudit,
   computerUseChannels,
+  computerUseShotMask,
+  computerUseShotMaskNote,
   computerUseUiaErrors,
   isUiaFocusRequest,
   isUiaRequest,
@@ -34,6 +36,7 @@ import {
   type ComputerUseEvidence,
   type ComputerUseToolRequest,
   type ComputerUseCaptureInfo,
+  type ComputerUseShotMask,
 } from "./computer-use.ts";
 
 /** 回图 1280×720，物理屏 2560×1440（长边缩一半的常见情形） */
@@ -422,6 +425,143 @@ describe("captureNote（截图回执里那句「遮了 / 没遮」）", () => {
 
   test("过期线与桥的 CacheMaxAgeMs 同一个数（C# 与 TS 各一份，改了这里会红）", () => {
     assert.equal(COMPUTER_USE_MASK_CACHE_MAX_AGE_MS, 30_000);
+  });
+});
+
+/** 一张「检查 3 帧、盖住 2 个字段、没有漏掉的帧」的基准回执 */
+const shotMasked: ComputerUseShotMask = {
+  fieldsCovered: 2,
+  framesChecked: 3,
+  framesCovered: 3,
+  missing: [],
+  missingTotal: 0,
+};
+/** 同一份东西在**回执里**的样子（宿主按桥的字段名取值，两套名字不能混） */
+const shotResp = {
+  maskFieldsCovered: 2,
+  maskFramesChecked: 3,
+  maskFramesCovered: 3,
+  maskMissing: [] as string[],
+  maskMissingTotal: 0,
+};
+
+describe("computerUseShotMask（网页截图遮罩回执的解析）", () => {
+  test("老桥没有这几个字段 → undefined（不能说遮了，也不能说没遮）", () => {
+    assert.equal(computerUseShotMask({ ok: true, width: 1 }), undefined);
+  });
+
+  test("门槛字段是 maskFieldsCovered：负数 / 非数字都不认", () => {
+    assert.equal(computerUseShotMask({ maskFieldsCovered: -1 }), undefined);
+    assert.equal(computerUseShotMask({ maskFieldsCovered: "2" }), undefined);
+  });
+
+  test("缺帧数按 0、缺清单按空数组（宁可少说，不可编）", () => {
+    assert.deepEqual(computerUseShotMask({ maskFieldsCovered: 1 }), {
+      fieldsCovered: 1,
+      framesChecked: 0,
+      framesCovered: 0,
+      missing: [],
+      missingTotal: 0,
+    });
+  });
+
+  test("清单只收非空字符串、每条截到 160 字、最多 8 条", () => {
+    const many = Array.from({ length: 12 }, (_, i) => `https://f${i}/ — 没遮上`);
+    const mask = computerUseShotMask({ maskFieldsCovered: 0, maskMissing: [...many, "  ", 42] });
+    assert.equal(mask?.missing.length, 8);
+    assert.match(mask?.missing[0] ?? "", /^https:\/\/f0\//);
+    const long = computerUseShotMask({ maskFieldsCovered: 0, maskMissing: ["x".repeat(400)] });
+    assert.equal(long?.missing[0]?.length, 160);
+  });
+
+  test("missingTotal：桥给的为准；缺字段时按数组长度兜底，且不小于列出来的条数", () => {
+    assert.equal(computerUseShotMask({ maskFieldsCovered: 0, maskMissing: ["a — x"], maskMissingTotal: 9 })?.missingTotal, 9);
+    assert.equal(computerUseShotMask({ maskFieldsCovered: 0, maskMissing: ["a — x"] })?.missingTotal, 1);
+    assert.equal(computerUseShotMask({ maskFieldsCovered: 0, maskMissingTotal: 0 })?.missingTotal, 0);
+  });
+
+  test("字段原样取回；maskError 空白时不带这个键", () => {
+    assert.deepEqual(computerUseShotMask({ ...shotResp }), shotMasked);
+    assert.deepEqual(computerUseShotMask({ ...shotResp, maskError: "  " }), shotMasked);
+    assert.match(
+      computerUseShotMask({ ...shotResp, maskMissing: ["https://pay/ — attach 失败"], maskError: "attach 失败" })
+        ?.error ?? "",
+      /attach/,
+    );
+  });
+});
+
+describe("computerUseShotMaskNote（给模型的那一句实话）", () => {
+  test("两组数字都要出现：checked N frames, covered M password fields", () => {
+    const note = computerUseShotMaskNote(shotMasked);
+    assert.match(note, /checked 3 frames/);
+    assert.match(note, /covered 2 password fields/);
+    assert.doesNotMatch(note, /could not reach/);
+  });
+
+  test("一块都没有但都检查过：说清检查了几帧，不说「遮住了」", () => {
+    const note = computerUseShotMaskNote({ ...shotMasked, fieldsCovered: 0 });
+    assert.match(note, /checked 3 frames and found no password field to cover/);
+    assert.doesNotMatch(note, /covered 0/);
+  });
+
+  test("有没到的帧：**逐条点名**，并说明那里面的东西在图里是可见的", () => {
+    const note = computerUseShotMaskNote({
+      ...shotMasked,
+      fieldsCovered: 1,
+      missing: ["https://pay.example/ — attachToTarget 没有回 sessionId", "(帧 1A2B3C4D) — 没有可用的执行上下文"],
+    });
+    assert.match(note, /could not reach/);
+    assert.match(note, /https:\/\/pay\.example\//);
+    assert.match(note, /1A2B3C4D/);
+    assert.match(note, /visible in this image/);
+  });
+
+  test("桥给了整体原因就带上（模型要知道是「没设备」还是「没去」）", () => {
+    const note = computerUseShotMaskNote({ ...shotMasked, error: "目标浏览器未就绪" });
+    assert.match(note, /The bridge said: 目标浏览器未就绪/);
+  });
+
+  test("**零帧被检查**时不许说「没有密码字段」：这张图没被检查过", () => {
+    // 预算闸把整轮跳过：framesChecked=0 却说「checked 0 frames and found no password field」
+    // 就是把「没检查」说成了「检查过且干净」——模型会据此相信图里没有明文。
+    const note = computerUseShotMaskNote({
+      fieldsCovered: 0,
+      framesChecked: 0,
+      framesCovered: 0,
+      missing: [],
+      missingTotal: 0,
+      error: "时间预算不足（剩 3000ms），这张没遮",
+    });
+    assert.match(note, /skipped the password-field check/);
+    assert.match(note, /has not been checked for password fields/);
+    assert.doesNotMatch(note, /found no password field/);
+    assert.match(note, /时间预算不足/); // 原因照带，模型知道下次可以重试
+  });
+
+  test("清单被截断时说清「还有 N 条未列」（读者不会以为列全了）", () => {
+    const note = computerUseShotMaskNote({
+      ...shotMasked,
+      fieldsCovered: 1,
+      missing: ["https://a/ — 没遮上", "https://b/ — 没遮上"],
+      missingTotal: 5,
+    });
+    assert.match(note, /and 3 more not listed/);
+  });
+
+  test("一帧没到且零字段：中性说「covered no password field」，不下「没有密码字段」的结论", () => {
+    const note = computerUseShotMaskNote({
+      ...shotMasked,
+      fieldsCovered: 0,
+      missing: ["https://pay/ — attach 失败"],
+      missingTotal: 1,
+    });
+    assert.match(note, /covered no password field/);
+    assert.doesNotMatch(note, /found no password field/);
+  });
+
+  test("老桥（undefined）一个字都不添", () => {
+    assert.equal(computerUseShotMaskNote(undefined), "");
   });
 });
 

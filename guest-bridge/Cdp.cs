@@ -173,6 +173,12 @@ internal sealed class CdpSession
     private Process _edge;
     private int _nextId = 0;
     private bool _connecting = false;
+    /**
+     * iframe target → 它在**这条连接**上的 flatten sessionId（遮罩车道用）。
+     * 同一张截图会重复用到同一批 iframe（滚动一屏再拍一次很常见），每次重 attach 会
+     * 在浏览器里堆一堆无人回收的 session。连接一断这些 id 就全废了——InvalidateSession 清空。
+     */
+    private readonly Dictionary<string, string> _iframeSessions = new Dictionary<string, string>();
 
     // ── 连接层自愈的状态（每条命令在 Execute 里重置）──────────────────────────────
     /** 本条命令的连接层重试截止时刻（超过就不再重连 / 重启） */
@@ -864,10 +870,19 @@ internal sealed class CdpSession
         }
     }
 
+    /**
+     * 丢掉 socket。**iframe 的 flatten session 一并作废**（它们属于这条连接）：清理放在这里
+     * 而不是只放在 InvalidateSession，是因为 ReceiveMessage 超时会直接 CloseSocket。
+     *
+     * 已知残留（认领，不回收）：`cdp-tabs` 切到别的标签页后，旧标签页的 iframe 条目还留在
+     * `_iframeSessions` 里——它们对这条连接仍然有效、只是再也不会用到（每条约几百字节）。
+     * 复用同一个 targetId 时 stale 检测（Session with given id not found）会把它换掉。
+     */
     private void CloseSocket()
     {
         ClientWebSocket ws = _ws;
         _ws = null;
+        _iframeSessions.Clear();
         if (ws == null) return;
         try { ws.Dispose(); } catch { }
     }
@@ -1254,6 +1269,9 @@ internal sealed class CdpSession
             info.Type = Program.ExtractString(chunk, "type");
             info.Title = Program.ExtractString(chunk, "title");
             info.Url = Program.ExtractString(chunk, "url");
+            // 跨进程 iframe 靠 parentFrameId 认领「它是本标签页的哪个帧」的（见 ShotMask.PickIframeTargets）
+            info.ParentFrameId = Program.ExtractString(chunk, "parentFrameId");
+            if (info.ParentFrameId == null) info.ParentFrameId = "";
             if (info.Id == null) info.Id = "";
             if (info.Type == null) info.Type = "";
             if (info.Title == null) info.Title = "";
@@ -1326,6 +1344,12 @@ internal sealed class CdpSession
      */
     private string CallSession(bool sessionLevel, string method, string paramsJson, int timeoutMs)
     {
+        return CallSession(sessionLevel, method, paramsJson, timeoutMs, null);
+    }
+
+    /** 同上，**顺手收集这条命令期间到达的事件**（见 Exchange 的 5 参版本） */
+    private string CallSession(bool sessionLevel, string method, string paramsJson, int timeoutMs, List<string> events)
+    {
         while (true)
         {
             string reply = null;
@@ -1353,7 +1377,7 @@ internal sealed class CdpSession
                         useSession = _sessionId;
                         if (useSession == null || useSession.Length == 0) throw new Exception("CDP 连接已断开（没有 session）");
                     }
-                    reply = Exchange(useSession, method, paramsJson, timeoutMs);
+                    reply = Exchange(useSession, method, paramsJson, timeoutMs, events);
                 }
                 catch (Exception ex)
                 {
@@ -1575,6 +1599,19 @@ internal sealed class CdpSession
     /** 发一条 CDP 消息并等它自己的回执（只发、不重试、不解释错误） */
     private string Exchange(string sessionId, string method, string paramsJson, int timeoutMs)
     {
+        return Exchange(sessionId, method, paramsJson, timeoutMs, null);
+    }
+
+    /**
+     * 同上，**顺手收集事件**（`events` 非 null 时）。
+     *
+     * 为什么必须有这一条：`Runtime.enable` 的回执只是一句 `{}`，真正的信息在它之前发出的
+     * `Runtime.executionContextCreated` 事件里（每个帧的默认上下文 id）——原来的循环把事件
+     * 一律丢掉，于是注入脚本根本没有 `contextId` 可用。只收这一条命令自己的事件，
+     * 不建全局事件缓冲：命令之间的事件（Page.loadEventFired 等）仍然照旧丢掉。
+     */
+    private string Exchange(string sessionId, string method, string paramsJson, int timeoutMs, List<string> events)
+    {
         // 单条消息也不许活过这条命令的预算：否则一次判死恢复里「8s 端口 + 8s attach + 4s 验过」
         // 就能把整条命令拖过 worker 的 40s 杀线（杀掉就连回执都写不出去）。
         int budgetLeft = RemainingMs() - 1200;
@@ -1607,8 +1644,10 @@ internal sealed class CdpSession
             int left = (int)Math.Max(1, (deadline - DateTime.UtcNow).TotalMilliseconds);
             string text = ReceiveMessage(left);
             if (text == null) break;
-            // **没有 id 的是事件**（Page.loadEventFired / Network.* 等），一律丢掉
+            // **没有 id 的是事件**（Page.loadEventFired / Network.* 等）：只有调用方点名要
+            // 收集时（遮罩车道的 Runtime.enable）才留下，其余一律丢掉
             if (HasId(text, id)) return text;
+            if (events != null) events.Add(text);
         }
         // 超时之后这条 session 也可能已经废了（真机：下一条命令会撞 Session not found），
         // 连同 socket 一起丢掉；_targetId 留着，重连时回到同一个标签页。
@@ -1622,6 +1661,7 @@ internal sealed class CdpSession
      */
     private void InvalidateSession()
     {
+        // iframe 的 flatten session 由 CloseSocket 一并清掉（它们绑在这条连接上）
         CloseSocket();
         _sessionId = "";
     }
@@ -2762,10 +2802,444 @@ internal sealed class CdpSession
 
     // ── cdp-shot ─────────────────────────────────────────────────────────────────
 
+    // ── 截图前的密码框遮罩（浏览器车道）──────────────────────────────────────
+    //
+    // 为什么在出图前遮：模型吃进去的是**像素**。像素车道（Mask.cs：UIA 控件矩形 + 涂黑）
+    // 看不见网页里的密码框——那是 DOM，不是 Win32 控件；只能进页面自己盖一层。遮罩只挡像素、
+    // 不挡 DOM（`sandbox_extract` 仍读得到值），这条在工具描述里也写着。
+    //
+    // 为什么按帧注入、以及三条坑（真机 + 小样实测，照抄别重新发明）：
+    //   ① 真跨进程 iframe（OOPIF）不在父帧的 `Page.getFrameTree` 里：只能从 `Target.getTargets`
+    //      按 `type:"iframe"` 枚举 → `attachToTarget(flatten)` → 在那个 session 里 `Runtime.enable`
+    //      → 用 `executionContextCreated` 报出的**默认上下文**注入；
+    //   ② `Page.createIsolatedWorld(子帧)` 是假成功（上下文落在主帧），一次都不用；
+    //   ③ 同一 frameId 有多个默认上下文（导航残留），按 origin 过滤取最新（ShotMask.PickContext）。
+    //
+    // 注入单位是 **document**：一个 OOPIF session 会报出多个默认上下文（它自己 + 它内部同源的
+    // 嵌套子帧，后者不在父帧的帧树里），每一个都要注入——只挑 frameId == targetId 那一份，
+    // 嵌套那一帧就完全不遮（验收实测那个框像素 #FFFFFF，回执却说全遮了）。
+    //
+    // 回执给两组数字（checked / covered）+ 一张没遮到的清单，不给「main+iframes」那种布尔：
+    // 布尔会被读成「所有 iframe 都盖住了」，而事实只是「枚举到的每个 target 都试过」。
+    //
+    // 硬规矩：遮罩失败**绝不连坐截图**。任何一帧遮不上就记进清单并写原因，截图照拍——
+    // 模型宁可拿到一张没遮的图和一句真话，也不要一条没有截图的报错。
+
+    /** 余下预算低于这个就不进遮罩（要给 captureScreenshot 留够时间，worker 杀线 40s） */
+    private const int MaskMinBudgetMs = 12000;
+    /** 单帧注入 / 撤除的求值上限：iframe 的脚本卡住不能把整条命令拖到杀线 */
+    private const int MaskEvalTimeoutMs = 4000;
+    /** 注入之后等一帧再拍（合成器要拿到新的一帧，overlay 才会进图） */
+    private const int MaskSettleMs = 160;
+    /**
+     * iframe 嵌套的轮数上限。一轮 = 认领当前认得出来的 OOPIF；它们的帧树里可能又有
+     * 更深的 OOPIF（parentFrameId 落在外一层的树里）。真站点两三轮就到底，8 轮只是防病态环。
+     */
+    private const int MaskMaxIframeRounds = 8;
+
+    /**
+     * 给这一张截图按帧注入遮罩，账记进调用方的 `report`（**调用方持有它**：中途抛异常时已经
+     * 注入的帧不能丢，见 Shot()）。
+     *
+     * 注入单位是 **document**，不是 target：一个 OOPIF session 会报出多个默认上下文
+     * （它自己 + 它内部同源的嵌套子帧），每一个都要注入；注入计划由
+     * `ShotMask.PlanSessionInjections` 算（自测直接验「2 个默认上下文 → 注入 2 次」）。
+     */
+    private void MaskForShot(ShotMaskReport report)
+    {
+        if (RemainingMs() < MaskMinBudgetMs)
+        {
+            report.Note("时间预算不足（剩 " + RemainingMs() + "ms），这张没遮");
+            return;
+        }
+
+        // ① 本标签页的帧清单（主帧 + 同进程子帧）。根帧是第一个。
+        List<MaskFrame> tree;
+        try { tree = ShotMask.ParseFrameTree(Call("Page.getFrameTree", "{}", 6000)); }
+        catch (Exception ex)
+        {
+            report.Note("取帧树失败：" + Snippet(ex.Message));
+            return;
+        }
+        if (tree.Count == 0)
+        {
+            report.Note("帧树是空的（Page.getFrameTree 没回 frame）");
+            return;
+        }
+        string baseSession = _sessionId;
+        string mainFrameId = tree[0].FrameId;
+
+        // ② 页面 session 的上下文：主帧与同进程子帧都在它上面
+        List<MaskContext> pageContexts = new List<MaskContext>();
+        if (!CollectMaskContexts("", true, pageContexts, report)) return;
+        // enable 期间可能重连过：以现在的 session 为准（事件就是它报的）
+        List<string> known = new List<string>();
+        for (int i = 0; i < tree.Count; i++) known.Add(tree[i].FrameId);
+        InjectPlan(ShotMask.PlanSessionInjections(tree, pageContexts), mainFrameId, report);
+        if (_sessionId != baseSession)
+        {
+            report.Note("连接重建过，跨源 iframe 这一轮没遮");
+            SettleAndLogMask(report);
+            return;
+        }
+
+        // ③ 本标签页的 iframe target：按 parentFrameId 认领（别的标签页的不碰），
+        //    逐轮往里走——嵌套 OOPIF 的 parentFrameId 是外一层 OOPIF 帧树里的帧 id，
+        //    要等外那一个的帧树拿到之后才认得出来。
+        List<TargetInfo> targets = new List<TargetInfo>();
+        try { targets = ParseTargets(CallBrowser("Target.getTargets", "{}", 8000)); }
+        catch (Exception ex)
+        {
+            // 枚举不到就别假装「本页没有 iframe」：记一条整体原因（帧清单里没有可逐条列的帧）
+            report.Note("Target.getTargets 失败，跨源 iframe 未遮：" + Snippet(ex.Message));
+        }
+        List<string> visited = new List<string>();
+        for (int round = 0; round < MaskMaxIframeRounds; round++)
+        {
+            List<TargetInfo> batch = new List<TargetInfo>();
+            List<TargetInfo> picked = ShotMask.PickIframeTargets(targets, known);
+            for (int i = 0; i < picked.Count; i++)
+            {
+                if (HasString(visited, picked[i].Id)) continue;
+                batch.Add(picked[i]);
+            }
+            if (batch.Count == 0) break;
+            for (int i = 0; i < batch.Count; i++)
+            {
+                // 每个 iframe 最多 6s(enable) + 5s(帧树) + N×4s(注入)：碰到一堆卡死的 iframe
+                // 时宁可少遮几个并如实报，也不能把 captureScreenshot 的时间啃掉
+                if (RemainingMs() < MaskMinBudgetMs)
+                {
+                    // 没走到的那几个也要进「没遮到」清单：只写一句 note 的话，读者会以为
+                    // 清单是完整的（与上一轮 P1 同类：说了「没遮到的都列出来了」，其实没有）
+                    for (int j = i; j < batch.Count; j++)
+                        report.AddMissing(batch[j].Url, "时间预算不足，这一轮没遮");
+                    report.Note("时间预算不足，剩下的 iframe 没遮（" + (batch.Count - i) + " 个）");
+                    SettleAndLogMask(report);
+                    return;
+                }
+                TargetInfo t = batch[i];
+                visited.Add(t.Id);
+                known.Add(t.Id);
+                List<string> subFrames = new List<string>();
+                MaskIframe(t, subFrames, report);
+                for (int j = 0; j < subFrames.Count; j++)
+                {
+                    if (!HasString(known, subFrames[j])) known.Add(subFrames[j]);
+                }
+                if (_sessionId != baseSession)
+                {
+                    report.Note("连接重建过，剩下的 iframe 这一轮没遮");
+                    SettleAndLogMask(report);
+                    return;
+                }
+            }
+        }
+
+        // 轮数用尽时更深的 OOPIF 既没遮也不在清单里——病态页面也要诚实：逐个补进清单。
+        // 正常收敛（batch 空而 break）时这里一定是空的。
+        List<TargetInfo> leftover = ShotMask.PickIframeTargets(targets, known);
+        for (int i = 0; i < leftover.Count; i++)
+        {
+            if (HasString(visited, leftover[i].Id)) continue;
+            report.AddMissing(leftover[i].Url,
+                "嵌套层数超过 " + MaskMaxIframeRounds + " 轮上限，这一层没遮");
+        }
+        SettleAndLogMask(report);
+    }
+
+    /** 有帧真的盖上了吗（一块都没有就没必要等那一帧） */
+    private static bool ShotMaskReportHasRegions(ShotMaskReport report)
+    {
+        for (int i = 0; i < report.Frames.Count; i++)
+        {
+            if (report.Frames[i].Injected && report.Frames[i].Regions > 0) return true;
+        }
+        return false;
+    }
+
+    /** 等一帧 + 一行日志（「检查了几个帧 / 盖了几个字段 / 哪几个没到」） */
+    private void SettleAndLogMask(ShotMaskReport report)
+    {
+        if (ShotMaskReportHasRegions(report)) Thread.Sleep(MaskSettleMs);
+        Program.Log("CDP 截图遮罩：检查 " + report.FramesChecked + " 帧，盖住 " + report.FieldsCovered
+            + " 个字段（成功注入 " + report.FramesCovered + " 帧）"
+            + (report.Error == null ? "" : "；" + report.Error));
+    }
+
+    /**
+     * 一条注入计划落到实际动作：每个条目一个 document。没有上下文的条目**不跳过**——
+     * 它要进回执的「没遮到」清单（否则「这个帧不存在」与「我没遮上」看起来一样）。
+     */
+    private void InjectPlan(List<MaskPlanItem> plan, string mainFrameId, ShotMaskReport report)
+    {
+        for (int i = 0; i < plan.Count; i++)
+        {
+            MaskPlanItem item = plan[i];
+            MaskFrameOutcome outcome = new MaskFrameOutcome();
+            outcome.Main = mainFrameId != null && mainFrameId.Length > 0
+                && string.Equals(item.FrameId, mainFrameId, StringComparison.Ordinal);
+            outcome.Url = item.Url != null && item.Url.Length > 0 ? item.Url : LabelOfFrame(item.FrameId);
+            if (item.Context == null)
+            {
+                outcome.Error = "没有可用的执行上下文";
+                report.Note((outcome.Main ? "主帧" : "子帧") + "没找到默认上下文");
+            }
+            else
+            {
+                InjectMask(outcome, item.Context, report);
+            }
+            report.Frames.Add(outcome);
+        }
+    }
+
+    /** 没有 url 的帧在回执里也要可辨认（只留前 8 位） */
+    private static string LabelOfFrame(string frameId)
+    {
+        if (frameId == null || frameId.Length == 0) return "(未知帧)";
+        return "(帧 " + (frameId.Length > 8 ? frameId.Substring(0, 8) : frameId) + ")";
+    }
+
+    /**
+     * 一个 OOPIF：attach（或复用）它自己的 session → `Runtime.enable` → 拿**它自己的**
+     * `Page.getFrameTree`（OOPIF 内部的同源嵌套子帧只在这棵树里）→ 按注入计划逐 document 注入。
+     *
+     * 为什么还要帧树（而不是「看到几个默认上下文就注入几次」）：树里带 url 与 parentId，
+     * 回执能说出「是哪一帧没遮到」；origin 过滤也才有依据。帧树拿不到时退回纯上下文计划
+     * （PlanSessionInjections 在 tree 为空时就是「每个默认上下文一份」）。
+     *
+     * `frameIdsOut` 回填这棵树里的帧 id（调用方拿去认领更深的嵌套 OOPIF）。
+     */
+    private void MaskIframe(TargetInfo target, List<string> frameIdsOut, ShotMaskReport report)
+    {
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                string sid = IframeSession(target);
+                List<MaskContext> contexts = new List<MaskContext>();
+                List<string> events = new List<string>();
+                string reply = Exchange(sid, "Runtime.enable", "{}", 6000, events);
+                string enableError = ShotMask.ScriptError(reply);
+                if (enableError != null) throw new Exception(enableError);
+                // 收尾要 disable 的就是这一份名单：**iframe 与页面同一套清理**，
+                // 漏登记就会让这个域一直开着，导航时持续往 socket 报 executionContextCreated。
+                RegisterMaskSession(report, sid);
+                ShotMask.ParseContexts(events, sid, contexts);
+
+                List<MaskFrame> subTree = new List<MaskFrame>();
+                try
+                {
+                    string treeReply = Exchange(sid, "Page.getFrameTree", "{}", 5000, null);
+                    string treeError = ShotMask.ScriptError(treeReply);
+                    if (treeError == null) subTree = ShotMask.ParseFrameTree(treeReply);
+                    else report.Note("iframe 帧树取不到：" + Snippet(treeError));
+                }
+                catch (Exception ex)
+                {
+                    report.Note("iframe 帧树取不到，按上下文逐个注入：" + Snippet(ex.Message));
+                }
+
+                List<MaskPlanItem> plan = ShotMask.PlanSessionInjections(subTree, contexts);
+                if (plan.Count == 0) throw new Exception("iframe 里没有可用的默认上下文");
+                for (int i = 0; i < plan.Count; i++)
+                {
+                    MaskPlanItem item = plan[i];
+                    if (item.FrameId != null && item.FrameId.Length > 0 && !HasString(frameIdsOut, item.FrameId))
+                        frameIdsOut.Add(item.FrameId);
+                }
+                InjectPlan(plan, "", report);
+                return;
+            }
+            catch (Exception ex)
+            {
+                // 缓存的 session 可能已被浏览器收走：忘掉它，重 attach 一次
+                if (attempt == 0 && ShotMask.IsStaleSessionError(ex.Message))
+                {
+                    _iframeSessions.Remove(target.Id);
+                    continue;
+                }
+                MaskFrameOutcome outcome = new MaskFrameOutcome();
+                outcome.Url = target.Url;
+                outcome.Error = Snippet(ex.Message);
+                report.Frames.Add(outcome);
+                report.Note("iframe 未遮：" + Snippet(target.Url) + "（" + outcome.Error + "）");
+                return;
+            }
+        }
+    }
+
+    /** iframe target 的 flatten session（同一连接内复用；退役的 session 由调用方的 stale 重试兜住） */
+    private string IframeSession(TargetInfo target)
+    {
+        string sid;
+        if (_iframeSessions.TryGetValue(target.Id, out sid) && sid != null && sid.Length > 0) return sid;
+        string attached = CallBrowser("Target.attachToTarget",
+            "{\"targetId\":" + Program.JsonQuote(target.Id) + ",\"flatten\":true}", 8000);
+        sid = Program.ExtractString(attached, "sessionId");
+        if (sid == null || sid.Length == 0) throw new Exception("attachToTarget 没有回 sessionId");
+        _iframeSessions[target.Id] = sid;
+        Program.Log("CDP 遮罩挂上 iframe：" + Snippet(target.Url) + " session " + sid);
+        return sid;
+    }
+
+    /** 收尾要 disable 的 session 登记（页面与 iframe 用同一份名单） */
+    private static void RegisterMaskSession(ShotMaskReport report, string sessionId)
+    {
+        if (sessionId == null || sessionId.Length == 0) return;
+        for (int i = 0; i < report.Sessions.Count; i++)
+        {
+            if (string.Equals(report.Sessions[i], sessionId, StringComparison.Ordinal)) return;
+        }
+        report.Sessions.Add(sessionId);
+    }
+
+    private static bool HasString(List<string> list, string value)
+    {
+        if (value == null) return false;
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (string.Equals(list[i], value, StringComparison.Ordinal)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 在一个 session 上 `Runtime.enable` 并把 `executionContextCreated` 收下来。
+     * `sessionOwned` = 这是页面自己的 session（走 CallSession 的重连路径；`sessionId` 忽略）；
+     * 否则 `sessionId` 是某个 OOPIF 的 session（只发、不走重连）。
+     * 回 false = 连 enable 都没成（这一轮就不用继续了）。
+     */
+    private bool CollectMaskContexts(string sessionId, bool sessionOwned, List<MaskContext> into, ShotMaskReport report)
+    {
+        List<string> events = new List<string>();
+        string reply;
+        try
+        {
+            if (sessionOwned) reply = CallSession(true, "Runtime.enable", "{}", 6000, events);
+            else reply = Exchange(sessionId, "Runtime.enable", "{}", 6000, events);
+        }
+        catch (Exception ex)
+        {
+            report.Note("Runtime.enable 失败（" + (sessionOwned ? "主帧" : "iframe") + "）：" + Snippet(ex.Message));
+            return false;
+        }
+        string enableError = ShotMask.ScriptError(reply);
+        if (enableError != null)
+        {
+            report.Note("Runtime.enable 失败（" + (sessionOwned ? "主帧" : "iframe") + "）：" + Snippet(enableError));
+            return false;
+        }
+        ShotMask.ParseContexts(events, sessionOwned ? _sessionId : sessionId, into);
+        RegisterMaskSession(report, sessionOwned ? _sessionId : sessionId);
+        return true;
+    }
+
+    /** 在一个已挑好的上下文里跑注入脚本，把结果记进 outcome */
+    private void InjectMask(MaskFrameOutcome outcome, MaskContext ctx, ShotMaskReport report)
+    {
+        outcome.SessionId = ctx.SessionId;
+        outcome.ContextId = ctx.Id;
+        try
+        {
+            string reply = EvalInContext(ctx.SessionId, ctx.Id, ShotMask.MaskScript, MaskEvalTimeoutMs, null);
+            string scriptError = ShotMask.ScriptError(reply);
+            if (scriptError != null)
+            {
+                outcome.Error = Snippet(scriptError);
+                report.Note((outcome.Main ? "主帧" : "子帧") + "注入失败：" + outcome.Error);
+                return;
+            }
+            outcome.Injected = true;
+            outcome.Regions = ShotMask.RegionsOf(reply);
+        }
+        catch (Exception ex)
+        {
+            outcome.Error = Snippet(ex.Message);
+            report.Note((outcome.Main ? "主帧" : "子帧") + "注入失败：" + outcome.Error);
+        }
+    }
+
+    /** 在指定上下文里跑一段脚本（sessionId 空串 = 页面 session，走正常重连路径） */
+    private string EvalInContext(string sessionId, int contextId, string expression, int timeoutMs, List<string> events)
+    {
+        string paramsJson = ShotMask.EvalParams(contextId, expression);
+        if (sessionId == null || sessionId.Length == 0)
+            return CallSession(true, "Runtime.evaluate", paramsJson, timeoutMs, events);
+        return Exchange(sessionId, "Runtime.evaluate", paramsJson, timeoutMs, events);
+    }
+
+    /**
+     * 撤遮罩：把这一轮插进去的 overlay 删掉（`data-orbita-masked` 标记留着——下一次的线索）。
+     * **尽力而为**：撤不掉只记日志。
+     *
+     * 为什么没走「重连再撤」：求值要带 `contextId`，而上下文 id 是**随 session 一起生灭**的
+     * ——断链重连拿到的是新 id，旧 id 一定报 "Cannot find context"，重连帮不上忙。真正的
+     * 保障在别处：MaskScript 开头先清上一轮遗留的 `[data-orbita-mask]`，所以断链留下的
+     * 残留会在**下一张截图**注入时被清掉，不会越积越多，也不挡点击（pointer-events:none）。
+     */
+    private void ClearShotMask(ShotMaskReport report)
+    {
+        if (report == null) return;
+        int cleared = 0;
+        for (int i = 0; i < report.Frames.Count; i++)
+        {
+            MaskFrameOutcome f = report.Frames[i];
+            if (!f.Injected || f.ContextId <= 0) continue;
+            try
+            {
+                EvalInContext(f.SessionId, f.ContextId, ShotMask.CleanupScript, 3000, null);
+                cleared++;
+            }
+            catch (Exception ex)
+            {
+                Program.Log("CDP 撤遮罩失败（下一次注入会先清旧的）：" + ex.Message);
+            }
+        }
+        if (cleared > 0) Program.Log("CDP 截图遮罩已撤除：" + cleared + " 帧");
+        // 把 Runtime 域关回去。**页面 session 与每个 iframe session 一视同仁**：漏了 iframe
+        // 这一个，它导航时会持续往这条 socket 报 executionContextCreated（验收实测：开着时
+        // 持续报、disable 后为 0）。不 detach：`_iframeSessions` 是缓存，下一张截图还要用它，
+        // detach 反而要重 attach（多一次往返，且会让缓存里留下失效 id）。
+        for (int i = 0; i < report.Sessions.Count; i++)
+        {
+            string sid = report.Sessions[i];
+            if (sid == null || sid.Length == 0) continue;
+            try { Exchange(sid, "Runtime.disable", "{}", 3000, null); }
+            catch (Exception ex)
+            {
+                // 回执不受影响（那张图已经拍完了）；但现场排查要知道哪个域没关回去
+                Program.Log("CDP 遮罩收尾：Runtime.disable 失败（session " + sid
+                    + "），下次截图会重新 enable：" + Snippet(ex.Message));
+            }
+        }
+    }
+
+    /** 回执 / 日志里的一句话摘要：留短、不带换行（resp 是一整读整写的文件） */
+    private static string Snippet(string text)
+    {
+        if (text == null) return "";
+        string v = text.Replace("\r", " ").Replace("\n", " ").Trim();
+        if (v.Length > 120) v = v.Substring(0, 120) + "…";
+        return v;
+    }
+
     private string Shot(string raw, string baseName, string cmdDir)
     {
         int maxWidth = ReadInt(raw, "maxWidth", ShotMaxWidth, 320, 4096);
-        string reply = Call("Page.captureScreenshot", "{\"format\":\"jpeg\",\"quality\":70}", 25000);
+        // 先遮、再拍、后撤：遮罩失败也要把图画出来（见 MaskForShot 的硬规矩）
+        ShotMaskReport mask = new ShotMaskReport();
+        try { MaskForShot(mask); }
+        catch (Exception ex) { mask.Note("遮罩流程中断：" + Snippet(ex.Message)); }
+        string reply;
+        try
+        {
+            reply = Call("Page.captureScreenshot", "{\"format\":\"jpeg\",\"quality\":70}", 25000);
+        }
+        finally
+        {
+            ClearShotMask(mask);
+        }
         string b64 = Program.ExtractJsonString(reply, "data");
         if (b64 == null || b64.Length < 1000)
             return Fail("页面截图失败：回执里没有图像数据（页面可能还在合成中，稍等再试一次）");
@@ -2812,10 +3286,12 @@ internal sealed class CdpSession
         int viewW = (int)ParseLong(EvalString("String(window.innerWidth)", 5000), width);
         int viewH = (int)ParseLong(EvalString("String(window.innerHeight)", 5000), height);
         Program.Log("CDP 截图完成：" + width + "x" + height + "，" + jpeg.Length + " 字节");
-        return new JObj().Bool("ok", true).Str("jpeg", jpgName).Num("width", width).Num("height", height)
+        JObj o = new JObj().Bool("ok", true).Str("jpeg", jpgName).Num("width", width).Num("height", height)
             .Num("nativeWidth", viewW).Num("nativeHeight", viewH)
-            .Str("url", EvalString("location.href", 5000)).Str("title", EvalString("document.title", 5000))
-            .ToString();
+            .Str("url", EvalString("location.href", 5000)).Str("title", EvalString("document.title", 5000));
+        // 遮罩的实话：检查了几帧 / 盖住几个字段 / 哪几个没到（宿主据此给模型一句话）
+        if (mask != null) mask.AppendTo(o);
+        return o.ToString();
     }
 
     // ── cdp-upload ───────────────────────────────────────────────────────────────
@@ -2980,6 +3456,8 @@ internal sealed class TargetInfo
     public string Type = "";
     public string Url = "";
     public string Title = "";
+    /** 只对 `type:"iframe"` 有意义：这个 iframe 挂在哪个帧下面（用来认领「属于本标签页」） */
+    public string ParentFrameId = "";
 }
 
 /** 极简 JSON 对象构造器：只为了不用手数逗号（手拼 `,,` 是 cupprobe 踩过的坑） */

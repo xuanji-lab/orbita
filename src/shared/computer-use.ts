@@ -415,6 +415,92 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  */
 export const COMPUTER_USE_MASK_CACHE_MAX_AGE_MS = 30_000;
 
+// ── 网页截图的遮罩回执（cdp-shot，桥 0.16.0）────────────────────────
+
+/**
+ * 一张**网页**截图（sandbox_screenshot）出图前遮了哪些帧、盖住几个字段、哪几个没到。
+ *
+ * 与 `ComputerUseCaptureInfo` 不是一回事：那份是**像素车道**（整桌面 / 按窗口截图，靠 UIA
+ * 记下的控件矩形涂黑）；网页里的密码框是 DOM，UIA 看不见，只能进页面自己盖一层 overlay。
+ *
+ * 为什么是两组数字 + 一张清单，而不是一个「覆盖到哪一档」的枚举：枚举会被读成
+ * 「所有 iframe 都盖住了」，而事实只是「枚举到的每个 target 都试过」——OOPIF 里再套同源子帧
+ * 时，真正盖住的范围只有桥自己知道，读者只能靠 checked / covered / missing 自己判断。
+ */
+export interface ComputerUseShotMask {
+  /** 实际盖住几个密码字段（每个字段一块 overlay，跨 document 求和） */
+  fieldsCovered: number;
+  /** 检查过几个帧（含没遮到的：检查过但没到的也在 missing 里） */
+  framesChecked: number;
+  /** 注入脚本跑成了几个帧（哪怕那一帧一个字段都没命中） */
+  framesCovered: number;
+  /** 没遮到的帧，逐条 "url — 原因"；全遮住时是空数组。**最多 8 条**（见 missingTotal） */
+  missing: string[];
+  /** 没遮到的帧**总数**；大于 missing.length 就说明清单被截断（正文会说「还有 N 条未列」） */
+  missingTotal: number;
+  /** 整体原因（预算不足 / 枚举失败 / 连接中断…），最多 200 字。全好时没有这个键 */
+  error?: string;
+}
+
+/**
+ * 从 cdp-shot 的回执里取遮罩信息。**老桥（没有这几个字段）回 undefined**：
+ * 那时既不能说「遮了」也不能说「没遮」，两条都是谎话，所以正文里一个字都不添。
+ *
+ * `maskFieldsCovered` 是唯一的门槛字段（它在，其余几个才可信）；缺帧数时按 0、
+ * 缺清单时按空数组——宁可少说，不可编。
+ */
+export function computerUseShotMask(resp: Record<string, unknown>): ComputerUseShotMask | undefined {
+  const fieldsCovered = resp["maskFieldsCovered"];
+  if (typeof fieldsCovered !== "number" || !Number.isFinite(fieldsCovered) || fieldsCovered < 0) return undefined;
+  const count = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+  const rawMissing = resp["maskMissing"];
+  const items = Array.isArray(rawMissing)
+    ? rawMissing.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+    : [];
+  const missing = items.map((item) => item.trim().slice(0, 160)).slice(0, 8);
+  // 总数以桥给的为准；老一点的桥没这个字段时按数组长度兜底——但至少不能小于列出来的条数
+  const stated = count(resp["maskMissingTotal"]);
+  const error = resp["maskError"];
+  return {
+    fieldsCovered: Math.round(fieldsCovered),
+    framesChecked: count(resp["maskFramesChecked"]),
+    framesCovered: count(resp["maskFramesCovered"]),
+    missing,
+    missingTotal: Math.max(stated, missing.length),
+    ...(typeof error === "string" && error.trim() !== "" ? { error: error.slice(0, 200) } : {}),
+  };
+}
+
+/**
+ * 给模型的那**一句话**：检查了几个帧、盖住几个字段；**没到的帧逐条点名**——模型据此才知道
+ * 图里哪一块（可能是明文）不可信。老桥（mask === undefined）回空串。
+ */
+export function computerUseShotMaskNote(mask: ComputerUseShotMask | undefined): string {
+  if (mask === undefined) return "";
+  const frames = `${mask.framesChecked} frame${mask.framesChecked === 1 ? "" : "s"}`;
+  const fields = `${mask.fieldsCovered} password field${mask.fieldsCovered === 1 ? "" : "s"}`;
+  // 一帧都没检查（预算闸 / 枚举失败）时**不许**说「没有密码字段」：那是「检查过且干净」的意思，
+  // 而事实是这张图根本没被检查过。两句话说的不是一件事，模型据此决定要不要信这张图。
+  const base =
+    mask.framesChecked === 0
+      ? " Before the capture it skipped the password-field check; this image has not been checked for password fields."
+      : mask.fieldsCovered === 0 && mask.missing.length === 0
+        ? ` Before the capture it checked ${frames} and found no password field to cover.`
+        : mask.fieldsCovered === 0
+          ? ` Before the capture it checked ${frames} and covered no password field.`
+          : ` Before the capture it checked ${frames} and covered ${fields} with an opaque overlay.`;
+  const hidden = mask.missingTotal - mask.missing.length;
+  const missing =
+    mask.missing.length === 0
+      ? ""
+      : ` Frames it could not reach (everything visible inside them is visible in this image): ${mask.missing.join(
+          "; ",
+        )}${hidden > 0 ? `; and ${hidden} more not listed` : ""}.`;
+  const error = mask.error === undefined ? "" : ` The bridge said: ${mask.error}`;
+  return base + missing + error;
+}
+
 /**
  * 沙箱是否允许出网的**缺省值**（= 允许）。**全栈唯一来源**：
  * `shared/settings.ts` 的 `effectiveAllowNetwork`（读设置时的兜底）、主进程控制器

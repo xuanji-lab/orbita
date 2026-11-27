@@ -27,6 +27,8 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   computerUseBrowserErrors,
   computerUseGuestCommands,
+  computerUseShotMask,
+  computerUseShotMaskNote,
   isComputerUseBrowser,
   safeBrowserSessionId,
   type ComputerUseBrowser,
@@ -542,8 +544,10 @@ export async function applySandboxBrowserRequest(
           ok: true,
           text:
             `Screenshot of the page at ${text(shot.resp["url"])}${text(shot.resp["title"]) === "" ? "" : ` ("${text(shot.resp["title"])}")`}: ` +
-            `the image is ${width}×${height}, the page viewport is ${nativeWidth}×${nativeHeight} CSS pixels. ` +
-            "Prefer sandbox_observe / sandbox_click (DOM level) over reading things off the image; " +
+            `the image is ${width}×${height}, the page viewport is ${nativeWidth}×${nativeHeight} CSS pixels.` +
+            // 遮罩的实话：盖了几块、盖到哪一层；降级时明说跨源 iframe 没遮（老桥没有这几个字段就不添话）
+            computerUseShotMaskNote(computerUseShotMask(shot.resp)) +
+            " Prefer sandbox_observe / sandbox_click (DOM level) over reading things off the image; " +
             "computer_click can also hit the Edge window as a last resort, but it has no idea what is under the pointer.",
           shot: {
             data: Buffer.from(shot.jpeg).toString("base64"),

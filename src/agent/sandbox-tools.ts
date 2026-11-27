@@ -419,7 +419,14 @@ export function createSandboxBrowserTools(
       "(charts, figures, what a page actually looks like) or when the DOM tools cannot answer — for reading text " +
       "sandbox_extract is cheaper and more accurate, and for acting on the page sandbox_observe gives you " +
       "selectors. This is the page viewport, not the sandbox desktop: use computer_screenshot to see the whole " +
-      "Windows desktop.",
+      "Windows desktop. " +
+      "Before the capture it covers every password field it finds with an opaque overlay (main document, " +
+      "same-process frames and, by attaching to them, cross-origin iframes and frames nested inside those), " +
+      "then removes the overlay again. The result text says how many frames it checked, how many fields it " +
+      "covered, and names every frame it could not reach — treat anything visible inside a listed frame as " +
+      "visible in the image. Two gaps stay open: a field that was turned from type=password into " +
+      "text and carries no autocomplete / data attribute is not recognised, and the overlay only hides pixels — " +
+      "sandbox_extract still reads the value from the DOM.",
     parameters: { type: "object", properties: {}, required: [] } as never,
     async execute(_toolCallId, _params, signal) {
       const result = await call({ action: "sandbox-screenshot" }, signal);

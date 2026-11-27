@@ -356,6 +356,116 @@ describe("sandbox_* 回执翻成人话", () => {
     assert.equal(outcome.ok, false);
     assert.match(outcome.ok ? "" : outcome.error, /缺尺寸字段/);
   });
+
+  test("screenshot：桥报了遮罩就添一句人话（几块 / 几帧 / 盖到哪一层）", async () => {
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpShot]: () => ({
+          ok: true,
+          jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+          resp: {
+            ok: true,
+            width: 1000,
+            height: 600,
+            nativeWidth: 1366,
+            nativeHeight: 820,
+            url: "https://bank.example/login",
+            title: "Sign in",
+            maskFieldsCovered: 2,
+            maskFramesChecked: 3,
+            maskFramesCovered: 3,
+            maskMissing: [],
+          },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.match(text, /checked 3 frames/);
+    assert.match(text, /covered 2 password fields/);
+    assert.doesNotMatch(text, /could not reach/);
+    // 原有的换道指引不能被挤掉
+    assert.match(text, /sandbox_observe/);
+  });
+
+  test("screenshot：有没到的帧时逐条点名（不许只给一个「已遮」）", async () => {
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpShot]: () => ({
+          ok: true,
+          jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+          resp: {
+            ok: true,
+            width: 1000,
+            height: 600,
+            nativeWidth: 1366,
+            nativeHeight: 820,
+            url: "https://bank.example/login",
+            title: "Sign in",
+            maskFieldsCovered: 1,
+            maskFramesChecked: 2,
+            maskFramesCovered: 1,
+            maskMissing: ["https://pay.example/ — attachToTarget 没有回 sessionId"],
+            maskError: "iframe 未遮：attachToTarget 没有回 sessionId",
+          },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.match(text, /could not reach/);
+    assert.match(text, /https:\/\/pay\.example\//);
+    assert.match(text, /attachToTarget/);
+  });
+
+  test("screenshot：一帧没检查时明说「没检查过」，不说「没有密码字段」", async () => {
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpShot]: () => ({
+          ok: true,
+          jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+          resp: {
+            ok: true,
+            width: 1000,
+            height: 600,
+            nativeWidth: 1366,
+            nativeHeight: 820,
+            url: "https://bank.example/login",
+            title: "Sign in",
+            maskFieldsCovered: 0,
+            maskFramesChecked: 0,
+            maskFramesCovered: 0,
+            maskMissing: [],
+            maskMissingTotal: 0,
+            maskError: "时间预算不足（剩 3000ms），这张没遮",
+          },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.match(text, /skipped the password-field check/);
+    assert.doesNotMatch(text, /found no password field/);
+  });
+
+  test("screenshot：老桥（没有遮罩字段）不添任何遮罩的话", async () => {
+    const { guest } = fakeGuest({ running: true });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.doesNotMatch(text, /password field/);
+    assert.doesNotMatch(text, /masked/);
+  });
 });
 
 describe("上传 / 下载：宿主侧的文件搬运", () => {
