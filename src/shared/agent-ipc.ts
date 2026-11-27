@@ -562,6 +562,8 @@ export const ipcChannels = {
   boardFrame: "board:frame",
   /** 截宿主窗口里的一块看板（入参 BoardShotRequest，回 BoardShotResponse；只截 event.sender 自己的页面） */
   boardShot: "board:shot",
+  /** 回答里的 ```html-embed 内嵌交互图：包好的文档 → 一次性 iframe 地址（契约在 chat-embed.ts；入参不合规回 null） */
+  chatEmbedFrame: "chat:embed-frame",
   /**
    * 对话里「装上插件」那一行的「安装」（入参 PluginRowInstallRequest，回 PluginRowInstallResult）。
    * 那一行是 agent 的 install_plugin 留下的（带 MCP / 范围是所有工作区；旧会话里还有当时在手动档留下的）：主进程重新校验会话、

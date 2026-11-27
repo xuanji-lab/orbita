@@ -80,6 +80,7 @@ import { DraftSessionBook } from "./plugin/draft-sessions.ts";
 import { scanDrafts } from "./plugin/drafts.ts";
 import { builtinPluginsDir } from "./plugin/builtin.ts";
 import { BoardTemplateStore, PluginBoards, boardPluginsIn } from "./plugin/board-snapshot.ts";
+import { registerChatEmbedIpc } from "./chat-embed/ipc.ts";
 import { registerBoardIpc } from "./plugin/board-ipc.ts";
 import { BOARD_TEMPLATES_DIR } from "../shared/plugin-board.ts";
 import { registerPluginIpc } from "./plugin/ipc.ts";
@@ -1518,6 +1519,8 @@ void app.whenReady().then(async () => {
     templates: boardTemplates,
     frames: panelFrames,
   });
+  // 回答里的 ```html-embed 内嵌交互图：与看板卡共用一次性文档仓库（同一套 CSP 响应头）
+  registerChatEmbedIpc(panelFrames);
   automationScheduler.start();
   setTimeout(() => void automationScheduler.tick().catch(() => undefined), 5_000);
   powerMonitor.on("resume", () => void automationScheduler.tick().catch(() => undefined));

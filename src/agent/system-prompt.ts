@@ -46,6 +46,49 @@ const LONG_TASK_AUTOMATION_GUIDELINE =
   "and check whether the job finished (cancel the automation once it has), then end your turn. " +
   "Tell the user in one sentence what is running, where the log is, and that you will come back to it on your own.";
 
+/**
+ * 回答里的图（2026-11-26 用户：「内嵌交互图可以做一下。提示词优化一下」）。Orbita 的回答把 ```mermaid 画成静态图、
+ * 把 ```html-embed 画成沙箱里的交互图（renderer/features/chat/HtmlEmbedBlock.tsx）；模型不知道就一张也不画
+ * ——改前实测 Kimi / GLM 讲数据流、走算法、做对比 8 道题 0 张图。这一段讲三件事：什么时候画（讲流程 / 架构 /
+ * 逐步演示 / 结构性对比）、mermaid 够用就用 mermaid、闲聊与表格能说清的不画；以及 html-embed 的写法约束，
+ * 每一条都对着沙箱的真实限制：不能联网（CSP default-src 'none'）、颜色走宿主下发的主题变量（深浅主题切换跟着变）、
+ * 宽度随对话列高度随内容（上限 720）、不放常驻动画（离开视口会被暂停，常驻动画只会白耗 GPU）、体积有上限。
+ * 写法里的「片段不写整页 / style→内容→script 最后 / 文字写在回答里、图里只放图 / 逐步演示用 stepper」学自
+ * Claude 内联可视化的设计规范。
+ */
+const INLINE_VISUALS_GUIDELINE = [
+  "<orbita-inline-visuals>",
+  "Your answers render as Markdown, and two kinds of fenced blocks render as pictures instead of code:",
+  "- ```mermaid: a static diagram (flowchart, sequence, state, class, ER, gantt, pie).",
+  "- ```html-embed: an interactive figure, a small HTML/SVG/JS fragment run in a sandbox inside the answer, as wide as the " +
+    "conversation column, its height fitted to its content (at most 720px).",
+  "Draw one on your own, without being asked, when a picture explains better than prose: a process, data flow or " +
+    "architecture where order and connections matter; an algorithm, protocol or lifecycle walked through step by step; " +
+    "two things whose difference is in how they flow or are built (draw them side by side). When the explanation has " +
+    "stages, prefer an html-embed stepper: the whole diagram stays visible (every stage as a box, arrows between them), " +
+    "Previous / Next buttons and a position marker such as 2 / 5 move a highlight from stage to stage, and one short " +
+    "caption under the diagram says what happens in the current stage; not a slideshow of text cards. When a single " +
+    "static picture of boxes and arrows is enough, use mermaid. Do not draw for small talk, plain facts, short answers or " +
+    "lists, or when a table says it (a list of attributes side by side is a table). One figure per answer is the norm, two at " +
+    "most. The explanation stays in your prose; the figure holds only the visual (labels and one short caption per step).",
+  "Writing html-embed:",
+  "- A fragment, not a page: no <!doctype>, <html>, <head> or <body>. A short <style>, then the markup, then one <script> " +
+    "at the end. Under 30 KB.",
+  "- Self-contained: the sandbox blocks all network and file access, so no external scripts, stylesheets, fonts, images " +
+    "or fetch. Inline SVG and data: URIs only.",
+  "- Colours come only from the host theme variables, never hard-coded, so light and dark themes both work: " +
+    "--color-text-primary / -secondary / -tertiary, --color-bg-muted (fills), --color-border-subtle / -default / -strong, " +
+    "--color-accent (only for the current or highlighted element), --color-info, --color-success, --color-warning, " +
+    "--color-danger; fonts --font-family-base and --font-family-mono; sizes --font-size-base / -sm / -xs; " +
+    "radius --radius-md. The host paints the ground behind the figure (--color-bg-panel); leave your outermost element unpainted. Plain <button> " +
+    "elements are already styled.",
+  "- Size follows the container, which is 480 to 900px wide: width 100%, rows that wrap (flex-wrap) rather than shrink, " +
+    "SVG with a viewBox and width=\"100%\", no fixed pixel widths, no 100vh, no position: fixed; keep it under about 600px tall.",
+  "- No continuous animation (no infinite CSS animation, requestAnimationFrame loop or setInterval); a short transition " +
+    "when the step changes is fine. No emoji. Text inside the figure is in the user's language.",
+  "</orbita-inline-visuals>",
+].join("\n");
+
 export interface SystemPromptInput {
   /** pi 基底，已由 adaptSystemPrompt 处理 */
   piBase: string;
@@ -92,6 +135,8 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
       name: "git-attribution",
       text: gitAttributionGuideline(input.gitAttribution, input.attributionLanguage ?? "en"),
     },
+    // 插在 reply-language 之前（那段锁在最末）：前面已有段的字节不动，前缀缓存只从这里断开
+    { name: "inline-visuals", text: INLINE_VISUALS_GUIDELINE },
     { name: "reply-language", text: REPLY_LANGUAGE_GUIDELINE },
   ];
 }

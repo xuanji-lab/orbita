@@ -95,8 +95,18 @@ describe("orbitaSystemSegments —— 段序与空段", () => {
       "expected-seconds",
       "quote",
       "git-attribution",
+      "inline-visuals",
       "reply-language",
     ]);
+  });
+
+  test("inline-visuals：讲 mermaid 与 html-embed 两种围栏、什么时候画与不画、沙箱的写法约束", () => {
+    const text = orbitaSystemSegments(input()).find((segment) => segment.name === "inline-visuals")?.text ?? "";
+    for (const needle of ["```mermaid", "```html-embed", "stepper", "Do not draw", "network", "--color-text-primary", "--color-accent", "No continuous animation", "720px"])
+      assert.ok(text.includes(needle), `应提到「${needle}」`);
+    // 不许让模型写死颜色、不许教它引外链（与沙箱 CSP 的真实限制一致）
+    assert.ok(!/#[0-9a-f]{3,6}\b/i.test(text));
+    assert.ok(!/https?:\/\//.test(text));
   });
 
   test("memoryToolsGuideline 开时 channel-role 之后多一段 memory-tools，关时没有", () => {
@@ -133,6 +143,7 @@ describe("orbitaSystemSegments —— 段序与空段", () => {
       "intent",
       "quote",
       "git-attribution",
+      "inline-visuals",
       "reply-language",
     ]);
   });

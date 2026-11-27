@@ -14,7 +14,7 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { Component, createContext, memo, useMemo, useContext, useState } from "react";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
-import { MdPre } from "./CodeBlock";
+import { FenceHighlightContext, MdPre } from "./CodeBlock";
 import { MermaidPendingContext } from "./MermaidBlock.tsx";
 import { endsInsideFence } from "./mermaid-render.ts";
 import { remarkDemoteBoundaryMath } from "./math-guard";
@@ -96,11 +96,14 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
   /** bubble 变体摊平的标题元素（全量变体传 undefined） */
   disallowedElements?: string[];
   unwrapDisallowed?: boolean;
-  /** 流式尾块且围栏还没闭合：块里的 mermaid 先不画（MermaidBlock） */
+  /** 流式尾块且围栏还没闭合：块里的 mermaid / 内嵌交互图先不画（MermaidBlock / HtmlEmbedBlock） */
   fenceOpen: boolean;
+  /** 本块的代码围栏跑不跑 shiki（流式尾块 false）。经 context 交给 MdPre，不换 components 映射 */
+  highlight: boolean;
 }) {
   return (
     <MermaidPendingContext.Provider value={props.fenceOpen}>
+      <FenceHighlightContext.Provider value={props.highlight}>
       <ReactMarkdown
         urlTransform={chatUrlTransform}
         remarkPlugins={props.remarkPlugins}
@@ -111,6 +114,7 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
       >
         {props.text}
       </ReactMarkdown>
+      </FenceHighlightContext.Provider>
     </MermaidPendingContext.Provider>
   );
 });
@@ -134,31 +138,15 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   const bubble = variant === "bubble";
   const citations = !bubble;
 
-  // 两个 pre 覆写 + 两份 components 映射：**身份稳定**是分块 memo 能命中的前提。
-  // react-markdown 不把自定义 prop 交给 components 映射里的组件，只能在这里闭住
-  // highlight；身份只在这两处各存在一份，不再随渲染新建。
-  const preHighlight = useMemo(
-    () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight />,
-    [],
-  );
-  const prePlain = useMemo(
-    () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight={false} />,
-    [],
-  );
+  // components 映射**身份稳定**是分块 memo 能命中的前提。流式尾块不上色这件事经 FenceHighlightContext
+  // 交给 MdPre，而不是给尾块换一份 `pre` 不同的映射：换映射等于换组件类型，块从尾块变成已完成块的那一帧，
+  // 块里的整棵子树会被 React 拆了重建——内嵌交互图的 iframe 会重载一次、mermaid 会重画一次。
   // 用户气泡里的 `![](路径)` 不画成图（2026-11-23 用户：「为什么会有图出现在 user message 里」）：
   // 用户打进去的是一段文字，模型收到的也只是这段文字、不是这张图——画成图会让人以为 agent 看到了它。
   // 画成一颗「图片 · 文件名」小签，点了在右栏文件面板看
-  const baseComponents = useMemo(
-    () => ({ a: ExternalAnchor, img: bubble ? BubbleImageRef : ChatImage, span: ChipSpan }),
+  const components = useMemo(
+    () => ({ a: ExternalAnchor, img: bubble ? BubbleImageRef : ChatImage, span: ChipSpan, pre: MdPre }),
     [bubble],
-  );
-  const highlightComponents = useMemo(
-    () => ({ ...baseComponents, pre: preHighlight }),
-    [baseComponents, preHighlight],
-  );
-  const plainComponents = useMemo(
-    () => ({ ...baseComponents, pre: prePlain }),
-    [baseComponents, prePlain],
   );
 
   // PDF 引用标记只在 assistant 正文里认：用户气泡里打出来的
@@ -203,10 +191,11 @@ export const MarkdownBlock = memo(function MarkdownBlock({
               text={block}
               remarkPlugins={remarkPlugins}
               rehypePlugins={cheap ? rehypePlugins.streaming : rehypePlugins.settled}
-              components={cheap ? plainComponents : highlightComponents}
+              components={components}
               disallowedElements={bubble ? BUBBLE_BANNED : undefined}
               unwrapDisallowed={bubble}
               fenceOpen={cheap && endsInsideFence(block)}
+              highlight={!cheap}
             />
           );
         })}
