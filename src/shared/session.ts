@@ -20,6 +20,7 @@ import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
 import type { IntentConfirmAnswer } from "./intent-confirm.ts";
+import { parseComputerUseConsent, type ComputerUseConsent } from "./computer-use.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -355,6 +356,15 @@ export interface SessionMeta {
    * 开着实验功能但某条会话关了召回时，回答照常 /ingest 攒历史。
    */
   intentEnabled?: boolean;
+  /**
+   * 电脑使用的会话授权（2026-11-27）：`unset` | `allowed` | `denied`，**缺席 = unset**。
+   *
+   * 「本会话 × 这台沙箱桌面」粒度：用户点一次头，本会话内不再问；拒绝 / 没人回答就一次也
+   * 不执行（fail closed）；撤销 = 改回 `unset`，急停也会复位到 `unset`。
+   * 它与已删除的 PermissionMode / 审批卡无关——不是逐动作审批，也不参与工具批准；
+   * 真正的闸门在主进程（main/computer-use/consent.ts），字段只是持久化的决定。
+   */
+  computerUseConsent?: ComputerUseConsent;
   /**
    * 这条会话自己的自动压缩开关（2026-11-24）：false = 不自动压缩，只认手动 `/compact`——编排入口页
    * 「新开专门的会话」开出来的会话，要的是一条上下文干净、只装这件事的会话，宁可满了提醒换一条，
@@ -768,6 +778,10 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
       : {}),
     // 会话级自动压缩开关：只认布尔，缺席 = 跟随全局
     ...(value["autoCompact"] === true || value["autoCompact"] === false ? { autoCompact: value["autoCompact"] } : {}),
+    // 电脑使用授权：坏值 / 缺席都当 unset——老会话不会因加字段就凭空获得桌面权限
+    ...(parseComputerUseConsent(value["computerUseConsent"]) === "unset"
+      ? {}
+      : { computerUseConsent: parseComputerUseConsent(value["computerUseConsent"]) }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };

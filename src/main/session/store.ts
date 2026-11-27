@@ -27,6 +27,7 @@ import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
+import type { ComputerUseConsent } from "../../shared/computer-use.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
 
@@ -774,6 +775,15 @@ export class SessionStore {
   /** 会话级自动压缩开关：只落 meta，下一轮开轮现读（sessionCompaction 与全局偏好合并） */
   setAutoCompact(id: string, enabled: boolean): Promise<void> {
     return this.update(id, { autoCompact: enabled });
+  }
+
+  /**
+   * 电脑使用的会话授权（2026-11-27）：只落 meta，闸门在下一条电脑工具执行前现读。
+   * 消费者有两处：主进程闸门（回答 / 超时 / 急停之后写）与 renderer 的撤销（写回 unset）。
+   * 两者共用 `update` 的读-改-写链，不会把同一条 meta 上的其它字段冲掉。
+   */
+  setComputerUseConsent(id: string, consent: ComputerUseConsent): Promise<void> {
+    return this.update(id, { computerUseConsent: consent });
   }
 
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */

@@ -155,6 +155,14 @@ describe("parseSessionMeta", () => {
     for (const bad of [undefined, null, "false", 0]) strictEqual("autoCompact" in (parseSessionMeta({ ...valid, autoCompact: bad }) ?? {}), false);
   });
 
+  it("电脑使用授权只认 allowed / denied：缺席 / unset / 坏值都不落键（= 没问过，不会凭空获得桌面权限）", () => {
+    strictEqual(parseSessionMeta({ ...valid, computerUseConsent: "allowed" })?.computerUseConsent, "allowed");
+    strictEqual(parseSessionMeta({ ...valid, computerUseConsent: "denied" })?.computerUseConsent, "denied");
+    for (const bad of [undefined, null, "unset", "yes", 1, true]) {
+      strictEqual("computerUseConsent" in (parseSessionMeta({ ...valid, computerUseConsent: bad }) ?? {}), false);
+    }
+  });
+
   it("标题可以缺——建了还没发消息的会话就是这样", () => {
     strictEqual(parseSessionMeta({ ...valid, title: undefined })?.title, "");
   });

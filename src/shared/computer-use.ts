@@ -82,6 +82,12 @@ export const computerUseChannels = {
    * 不另写一套状态——否则设置页与闸门会各说各的。
    */
   computerUseLeaseStatus: "computer-use:lease-status",
+  /**
+   * renderer 回答主进程挂起的「电脑使用授权」提问（请求-应答，requestId 对号）。
+   * 提问本体走 agent:event 的 `computerUseConsentAsk`——与 intentAsk / 急停同一条
+   * 主进程广播通道（renderer 只有这一条订阅）。
+   */
+  computerUseConsentAnswer: "computer-use:consent-answer",
 } as const;
 
 export type ComputerUseChannel = (typeof computerUseChannels)[keyof typeof computerUseChannels];
@@ -1806,6 +1812,77 @@ export const COMPUTER_USE_DELIVERY_HINTS: Record<ComputerUseDelivery, string> = 
 export const COMPUTER_USE_NO_EVIDENCE_HINT =
   " 这个后端拿不到任何读回（没有控件树，也没有按窗口截图），所以这个动作永远不会被自动确认：" +
   "点完之后用 computer_screenshot 截图确认结果，再决定下一步。";
+
+/**
+ * 电脑使用的**会话授权**（2026-11-27）——「这台沙箱桌面，本会话里 agent 能不能碰」。
+ *
+ * 为什么是会话元数据上的一个三态字段，而不是权限档位 / 审批卡：2026-11-16 用户删掉了
+ * 整套 PermissionMode 与审批卡（理由：不带上下文、卡住长程任务）。授权不是「每个动作
+ * 问一次」，而是「本会话用不用这台桌面」问一次、答一次、随时可撤；工具审批系统不参与。
+ *
+ * - `unset`：还没问过（也含撤销 / 急停之后）——下一次电脑操作会问一次用户；
+ * - `allowed`：用户点了「允许本会话」——本会话内所有电脑操作直接放行；
+ * - `denied`：用户拒绝 / 没人能回答（超时、窗口已关、会话已删）——工具当场失败，
+ *   回一句固定文本给模型（`COMPUTER_USE_CONSENT_DENIED_TEXT`）。
+ *
+ * **授权只能来自用户回答或这条持久记录**：模型没有任何通路把 unset 写成 allowed。
+ * **fail closed**：没人能回答时一律落到 denied，绝不静默放行。
+ */
+export type ComputerUseConsent = "unset" | "allowed" | "denied";
+
+/**
+ * 等用户回答的上限（120s）。超时按 **denied** 落库——这条语义没有例外：
+ * 「让模型先干着，人回来再补票」正是这一刀要消灭的静默放行。
+ */
+export const COMPUTER_USE_CONSENT_TIMEOUT_MS = 120_000;
+
+/**
+ * 拒绝时回给模型的**固定**文本（也是界面上「已告知模型」那一行显示的原文）。
+ * 单一来源：闸门、记录行、测试都从这里取——三处各写一句就会漂成三种说法。
+ */
+export const COMPUTER_USE_CONSENT_DENIED_TEXT = "用户拒绝了电脑操作，本会话不要再请求";
+
+/** 授权状态变化的原因（事件里带上，renderer 据此决定要不要清挂起的提问行） */
+export type ComputerUseConsentSource =
+  | "answered"
+  | "timeout"
+  | "unavailable"
+  | "cancelled"
+  | "revoked"
+  | "emergency-stop";
+
+/**
+ * meta 读回时的归一化：只认三个值，其余（老会话缺席、坏值）一律当 `unset`。
+ * 缺席 = 没问过——老会话不会因为加了字段就凭空获得桌面权限。
+ */
+export function parseComputerUseConsent(raw: unknown): ComputerUseConsent {
+  return raw === "allowed" || raw === "denied" ? raw : "unset";
+}
+
+/**
+ * 主进程 → renderer：某条会话的电脑操作被闸门挡住，等用户点头（挂起状态）。
+ * requestId 是这次提问的号，回答时原样带回；renderer 按它渲染确认行、并按它清掉。
+ */
+export interface ComputerUseConsentAskEvent {
+  type: "computerUseConsentAsk";
+  sessionId: string;
+  requestId: string;
+  /** 触发这次提问的工具动作（renderer 只用它显示「哪类操作要用桌面」） */
+  action: ComputerUseToolRequest["action"];
+  askedAt: number;
+}
+
+/**
+ * 主进程 → renderer：授权状态变了（回答 / 超时 / 撤销 / 急停）。
+ * `requestId` 只在它由一次提问结出来时带着——renderer 按它清挂起的确认行。
+ */
+export interface ComputerUseConsentStateEvent {
+  type: "computerUseConsentState";
+  sessionId: string;
+  state: ComputerUseConsent;
+  source: ComputerUseConsentSource;
+  requestId?: string;
+}
 
 /** computerUseRequest 的回执载荷：主进程组装，agent 进程翻成 pi 工具结果（browserResult 同款） */
 export type ComputerUseToolOutcome =

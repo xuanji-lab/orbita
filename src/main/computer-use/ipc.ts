@@ -49,6 +49,17 @@ export interface ComputerUseIpcHooks {
   backends?: () => readonly ComputerUseBackendChoice[];
 }
 
+/**
+ * 会话授权的回答口（第四层的回答落到这里）。挂起表与落盘都在
+ * `main/computer-use/consent.ts`，IPC 只做形状洗白再转交。
+ *
+ * 回答只有两种：`allowed` / `denied`。传别的（形状不对）一律丢弃并回 false——
+ * 陈旧应答 / 坏载荷绝不能被当成「允许」。
+ */
+export interface ComputerUseConsentIpc {
+  answer: (requestId: string, decision: "allowed" | "denied") => boolean;
+}
+
 export function registerComputerUseIpc(
   controller: ComputerUseIpcController,
   hooks: ComputerUseIpcHooks = {},
@@ -62,6 +73,12 @@ export function registerComputerUseIpc(
    * 不另写一套状态——真源是 dispatch 拿锁用的同一份租约。
    */
   lease?: ComputerUseLease,
+  /**
+   * 会话授权的回答口（optional：旧测试 / 未接线的场景没有它——那时挂起的提问不存在，
+   * 回答什么都是过时的）。返回是否真的结掉了一次挂起：renderer 不需要这个回执，
+   * 状态变化走 `computerUseConsentState` 广播（所有窗口同步）。
+   */
+  consent?: ComputerUseConsentIpc,
 ): void {
   ipcMain.handle(computerUseChannels.computerUseProbe, (): Promise<ComputerUseProbeResult> => controller.probe());
   /**
@@ -103,6 +120,18 @@ export function registerComputerUseIpc(
   ipcMain.handle(
     computerUseChannels.computerUseLeaseStatus,
     (): ComputerUseLeaseStatus => (lease === undefined ? null : desktopLeaseStatus(lease)),
+  );
+  /**
+   * 会话授权的回答（确认行 / 输入框上方状态行）。入口只认两个字符串：别的值当坏载荷丢掉。
+   * 返回 void：不管结没结，界面都听 `computerUseConsentState`（按 requestId 清挂起行）。
+   */
+  ipcMain.handle(
+    computerUseChannels.computerUseConsentAnswer,
+    (_event, requestId: unknown, decision: unknown): void => {
+      if (consent === undefined || typeof requestId !== "string" || requestId === "") return;
+      if (decision !== "allowed" && decision !== "denied") return;
+      consent.answer(requestId, decision);
+    },
   );
 }
 

@@ -53,6 +53,13 @@ export const computerUseApi = {
    */
   leaseStatus: (): Promise<ComputerUseLeaseStatus> =>
     ipcRenderer.invoke(computerUseChannels.computerUseLeaseStatus),
+  /**
+   * 回答主进程挂起的电脑使用授权提问（确认行上的「允许本会话 / 拒绝」）。
+   * 提问本体在 `agent.onEvent` 的 `computerUseConsentAsk`——按 requestId 对号。
+   * 陈旧的请求号在主机侧被丢弃；状态变化一律听 `computerUseConsentState`。
+   */
+  answerConsent: (requestId: string, decision: "allowed" | "denied"): Promise<void> =>
+    ipcRenderer.invoke(computerUseChannels.computerUseConsentAnswer, requestId, decision),
   onStatus: (listener: (status: SandboxStatus) => void): (() => void) => {
     const handler = (_event: unknown, status: SandboxStatus): void => listener(status);
     ipcRenderer.on(computerUseChannels.computerUseStatus, handler);

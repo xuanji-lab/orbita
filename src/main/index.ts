@@ -155,7 +155,9 @@ import {
   computerUseBackendChoices,
   computerUseGuestCommands,
   devBackendsEnabled,
+  parseComputerUseConsent,
 } from "../shared/computer-use.ts";
+import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { IsolationSessionController } from "./computer-use/isolation-session.ts";
@@ -500,6 +502,27 @@ void app.whenReady().then(async () => {
     onLogSeeded: (id, records, logBytes) => statusDigests.seed(id, records, logBytes),
     onRemoved: (id) => void statusDigests.remove(id),
   });
+  /**
+   * 电脑使用的会话授权（2026-11-27）：提问表 + 栅门。位置在 sessions 之后、窗口接线之前——
+   * 栅门读写会话 meta，而主窗口全关时要先把挂起的提问按拒绝结掉（onLastClosed，下面）。
+   * 提问走 `agent:event` 的同一条广播通道（与 intentAsk / 急停一致），回答走
+   * `computer-use:consent-answer`（registerComputerUseIpc 注册）。
+   */
+  const computerUseConsentWaiter = new ComputerUseConsentWaiter({
+    send: (event) => broadcastAgentEvent(event),
+  });
+  const computerUseConsentGate = createComputerUseConsentGate({
+    read: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      return meta === null ? null : parseComputerUseConsent(meta.computerUseConsent);
+    },
+    write: (sessionId, consent) => sessions.setComputerUseConsent(sessionId, consent),
+    ask: (sessionId, action) => computerUseConsentWaiter.ask(sessionId, action),
+    // 没人能回答就不问：窗口全关 / 只剩无界面的自动化时提问只会等到 120s 超时，
+    // 不如当场按拒绝落库（fail closed 的结果一样，代价更小）。
+    canAsk: () => mainWindows.list().length > 0,
+    notify: (event) => broadcastAgentEvent(event),
+  });
   // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
@@ -584,7 +607,12 @@ void app.whenReady().then(async () => {
     appVersion: app.getVersion(),
   });
   registerBrowserIpc(browserSandbox, settings, configDir);
-  mainWindows.onLastClosed(() => browserSandbox.dispose());
+  mainWindows.onLastClosed(() => {
+    // 窗口全关 = 没有人能回答授权提问：挂起的按拒绝结掉（栅门会把 denied 落库），
+    // 不让它们悬到 120s 超时——关窗之后那一次电脑操作本来就不该发生。
+    computerUseConsentWaiter.cancelAll("cancelled");
+    browserSandbox.dispose();
+  });
 
   /*
    * computer use v1（PR1 主进程部分）：Windows 沙箱生命周期 + 手动「看一眼」截图。
@@ -959,10 +987,11 @@ void app.whenReady().then(async () => {
    * Orbita 的停止按钮，这个热键必须真的能注册上——注册失败（被别的应用占用）时
    * 设置页会如实显示「不可用」，不假装保护存在。
    *
-   * 按下后两件事（顺序即语义）：
+   * 按下后三件事（顺序即语义）：
    *   1. 正在跑的会话逐个中止（给 agent 发 abort，与「停止」同一条链）；
-   *   2. 广播给 renderer 显示「已急停」。
-   * （2026-11-16「只留放行」后没有授权可撤：急停的全部语义就是停轮。）
+   *   2. **撕掉电脑使用授权**：还活着的会话 `computerUseConsent` 复位成 unset，挂起的授权
+   *      提问按拒绝结掉（2026-11-27；不是 PermissionMode，只是本会话的桌面许可）；
+   *   3. 广播给 renderer 显示「已急停」。
    * **不关沙箱**：现场留给用户看，关沙箱是设置页里另一个动作。
    *
    * `phases` / `agentHost` 在本行下面才声明——onTrigger 只在按键时执行，那时已初始化
@@ -984,6 +1013,13 @@ void app.whenReady().then(async () => {
         .filter(([, phase]) => phase !== "idle")
         .map(([id]) => id);
       for (const sessionId of runningSessions) agentHost.abortIfRunning(sessionId);
+      // 急停还要**撕授权**（2026-11-27）：还活着的会话 `computerUseConsent` 复位成 unset——
+      // 下一次电脑操作会重新问一次用户；挂起中的提问按拒绝结掉（它们本来就没人答了）。
+      // 不碰其它会话的授权：急停针对的是“现在在跑的那些”。
+      computerUseConsentWaiter.cancelAll("cancelled");
+      for (const sessionId of runningSessions) {
+        void computerUseConsentGate.reset(sessionId, "emergency-stop");
+      }
       broadcastAgentEvent({ type: "computerUseEmergencyStop", at, sessionIds: runningSessions });
     },
   });
@@ -1001,6 +1037,8 @@ void app.whenReady().then(async () => {
     },
     emergencyStop,
     computerUseLease,
+    // 确认行 / 状态行的回答：只有 allowed / denied 两种，由 IPC 入口洗过再进来
+    { answer: (requestId, decision) => computerUseConsentWaiter.answer(requestId, decision === "allowed") },
   );
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
@@ -1302,8 +1340,17 @@ void app.whenReady().then(async () => {
     // 人话给模型——它看不见 UI，不会自己想到「另一个会话占着」。
     // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去。
     if (event.type === "computerUseRequest") {
-      void computerUseDispatch
-        .dispatch(event.sessionId, event.request)
+      // 授权栅门（2026-11-27）：**所有**电脑工具（computer_* 像素/UIA + sandbox_* 浏览器）
+      // 下发前先过会话授权——包括只读截图（它把用户沙箱桌面上的画面交给模型）。
+      // unset → 问一次并挂起；denied → 当场回那句固定文本，不执行；没人能回答按 denied 落库。
+      // 栅门只做裁决，真的拒绝文案在 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT（唯一来源）。
+      void computerUseConsentGate
+        .ensure(event.sessionId, event.request.action)
+        .then((verdict) =>
+          verdict.ok
+            ? computerUseDispatch.dispatch(event.sessionId, event.request)
+            : ({ ok: false, error: verdict.error } as const),
+        )
         .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerComputerUse(event.requestId, {
