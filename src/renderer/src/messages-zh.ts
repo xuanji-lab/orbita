@@ -1195,10 +1195,20 @@ export const zh: Messages = {
     shotNeedsRunning: "沙箱启动后才能看一眼",
     shotNativeSize: "原始尺寸",
     shotAlt: "沙箱桌面截图",
-    /* 输入框底栏的授权芯片（会话级同意书；点击在授权 / 撤销之间切换） */
-    grantChip: "电脑使用",
-    grantChipOn: "本次会话已允许操作沙箱 · 点击撤销（当前轮立即生效）",
-    grantChipOff: "本会话还没有授权操作沙箱 · 点击授予（当前轮立即生效）",
+    /*
+     * 会话级同意书（2026-11-27）：流里问一次（甲），答完后流里留一条记录 + 输入框上方
+     * 一条安静的状态行（乙）。拒绝原文来自 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT——
+     * 与模型收到的那句是同一句。
+     */
+    consentAsk: "允许操作这台沙箱桌面？",
+    consentWhy: "用于截图、点击、输入这类电脑操作。在你回答之前，它拿不到这台桌面。",
+    consentAllow: "允许本会话",
+    consentDeny: "拒绝",
+    consentAllowedRecord: "已允许，本会话内不再询问",
+    consentDeniedRecord: "已拒绝，本会话内不再操作电脑",
+    consentRevoke: "撤销",
+    consentToldModel: (text: string) => `已告知模型：${text}`,
+    consentStatusAllowed: "已允许操作沙箱桌面（本会话）",
     /* 急停热键（设置页「安全」组）与急停提示 */
     emergencyGroup: "安全",
     emergencyHotkey: "急停热键",

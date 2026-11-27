@@ -6,6 +6,7 @@ import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
+import type { ComputerUseConsent } from "@shared/computer-use";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import { delegateOrderFromTranscript, orderForDelivery, type HeldReport } from "./channel-hold.ts";
 import { deliverChannelSubmission } from "./channel-delivery.ts";
@@ -21,6 +22,7 @@ import {
   moveQueued as moveQueuedIn,
   parseCompactCommand,
   removeIntentAsk,
+  removeComputerUseConsentAsk,
   setPendingEcho,
   nextDeliverable,
   prependOlder,
@@ -416,6 +418,18 @@ export interface ChatSession {
   intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
   /** 确认卡的回答（对不上号的陈旧应答由 runtime 丢弃） */
   answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /* ---------- 电脑使用的会话授权（2026-11-27） ---------- */
+  /**
+   * 本会话的授权状态：事件镜像 > 盘上 meta > unset。界面只读它——
+   * allowed / denied 只能由主进程栅门在用户回答后落盘，这里没有“提拔”的回调。
+   */
+  computerUseConsent: ComputerUseConsent;
+  /** 挂起的授权确认（确认行用）；null = 没有 */
+  computerUseConsentAsk: Extract<AgentEvent, { type: "computerUseConsentAsk" }> | null;
+  /** 回答挂起的确认行（允许 / 拒绝）；陈旧请求号由主进程丢弃 */
+  answerComputerUseConsent: (requestId: string, decision: "allowed" | "denied") => void;
+  /** 撤销本会话的授权（写回 unset，下一次电脑操作重新问） */
+  revokeComputerUseConsent: () => void;
   /** 会话级召回开关：null = 没有会话（新任务）；undefined = 没开实验功能 */
   intentEnabled: boolean | null | undefined;
   setIntentEnabled: (next: boolean) => void;
@@ -545,6 +559,8 @@ export interface SessionEngine {
   readonly entryOf: (id: string) => SessionEntry | undefined;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /** 电脑使用授权确认行的回答（requestId 对号；陈旧号由主进程丢弃） */
+  readonly answerComputerUseConsent: (requestId: string, decision: "allowed" | "denied") => void;
   /** 乐观回显：发出即画用户气泡（真回显事件一到即清）。ephemeral */
   readonly setPendingEcho: (id: string, blocks: readonly string[]) => void;
   readonly renameSession: (id: string, title: string) => void;
@@ -1215,6 +1231,19 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [applyStates],
   );
 
+  /**
+   * 电脑使用授权确认行的回答：先摘掉挂起的那一行（回答即画），再送主进程。
+   * 主进程按 requestId 对号；真正的状态（allowed / denied）由它落盘后广播
+   * `computerUseConsentState`——**这里不自己写状态**（渲染层没有授予权）。
+   */
+  const answerComputerUseConsent = useCallback(
+    (requestId: string, decision: "allowed" | "denied") => {
+      applyStates((prev) => removeComputerUseConsentAsk(prev, requestId));
+      void api.computerUse.answerConsent(requestId, decision);
+    },
+    [applyStates],
+  );
+
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
@@ -1329,6 +1358,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     pickedThinkingRef,
     states,
     answerIntentConfirm,
+    answerComputerUseConsent,
     setPendingEcho: setPendingEchoCb,
     statesRef,
     livePhasesReady: livePhases.current.promise,
@@ -2821,6 +2851,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [opened, engine],
   );
 
+  /**
+   * 撤销本会话的电脑使用授权（乙的状态行 / 甲的记录行都用它）：写回 unset，
+   * 下一次电脑操作重新问。**只说「撤销」**：授予只能来自主进程栅门上的用户回答，
+   * 界面上没有“把状态调成 allowed”的回调。
+   */
+  const revokeComputerUseConsent = useCallback(() => {
+    setOpened((prev) => (prev === null ? prev : { ...prev, computerUseConsent: "unset" }));
+    const id = sessionRef.current ?? (opened !== null ? opened.id : null);
+    if (id === null) return;
+    void api.session
+      .setComputerUseConsent(id)
+      .then(() => engine.reloadSessions())
+      .catch(() => undefined);
+  }, [opened, engine]);
+
   const compact = useCallback((): void => {
     engine.setError(null);
     // 压缩要有可续的会话
@@ -3293,6 +3338,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     pendingEcho: entry.pendingEcho,
     intentAsk: entry.intentAsk,
     answerIntentConfirm: engine.answerIntentConfirm,
+    // 授权：【实时镜像 > 盘上 meta】；盘上没有这个字段时就是 unset（还没问过）
+    computerUseConsent: entry.computerUseConsent ?? opened?.computerUseConsent ?? "unset",
+    computerUseConsentAsk: entry.computerUseConsentAsk,
+    answerComputerUseConsent: engine.answerComputerUseConsent,
+    revokeComputerUseConsent,
     intentEnabled: opened === null ? null : opened.intentEnabled,
     setIntentEnabled,
     workspaces: engine.workspaces,

@@ -1362,3 +1362,68 @@ describe("seedUnderLive / applyLivePhases —— 中途起来的窗口接上在�
     assert.equal(applyLivePhases(states, { A: "turn" }).get("A")?.phase, "idle");
   });
 });
+
+describe("电脑使用授权的槽位（2026-11-27）", () => {
+  test("确认行的进与出：ask 事件挂上，带同一 requestId 的状态事件把它清掉", () => {
+    let states = createSessionStates();
+    states = applyAgentEvent(states, {
+      type: "computerUseConsentAsk",
+      sessionId: "s1",
+      requestId: "s1:consent:1",
+      action: "screenshot",
+      askedAt: 1,
+    });
+    assert.equal(states.get("s1")?.computerUseConsentAsk?.requestId, "s1:consent:1");
+    assert.equal(states.get("s1")?.computerUseConsent, null, "问到之前还没有状态镜像");
+
+    states = applyAgentEvent(states, {
+      type: "computerUseConsentState",
+      sessionId: "s1",
+      state: "allowed",
+      source: "answered",
+      requestId: "s1:consent:1",
+    });
+    assert.equal(states.get("s1")?.computerUseConsentAsk, null);
+    assert.equal(states.get("s1")?.computerUseConsent, "allowed");
+  });
+
+  test("陈旧的 requestId 不清别的提问；撤销 / 急停（无 requestId）收掉挂起的确认行", () => {
+    let states = applyAgentEvent(createSessionStates(), {
+      type: "computerUseConsentAsk",
+      sessionId: "s1",
+      requestId: "s1:consent:2",
+      action: "click",
+      askedAt: 1,
+    });
+    // 别的号（上一轮的迟到回答）不动这一行
+    states = applyAgentEvent(states, {
+      type: "computerUseConsentState",
+      sessionId: "s1",
+      state: "denied",
+      source: "timeout",
+      requestId: "s1:consent:1",
+    });
+    assert.equal(states.get("s1")?.computerUseConsentAsk?.requestId, "s1:consent:2");
+    assert.equal(states.get("s1")?.computerUseConsent, "denied");
+    // 撤销：状态回 unset，挂起的那一行一起收掉
+    states = applyAgentEvent(states, {
+      type: "computerUseConsentState",
+      sessionId: "s1",
+      state: "unset",
+      source: "revoked",
+    });
+    assert.equal(states.get("s1")?.computerUseConsentAsk, null);
+    assert.equal(states.get("s1")?.computerUseConsent, "unset");
+  });
+
+  test("事件给还没建槽的会话时就地建槽（renderer 重载后照样开始累积）", () => {
+    const states = applyAgentEvent(createSessionStates(), {
+      type: "computerUseConsentState",
+      sessionId: "fresh",
+      state: "denied",
+      source: "unavailable",
+    });
+    assert.equal(states.get("fresh")?.computerUseConsent, "denied");
+    assert.equal(states.get("fresh")?.computerUseConsentAsk, null);
+  });
+});

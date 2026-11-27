@@ -1275,10 +1275,21 @@ export const en = {
     shotNeedsRunning: "Start the sandbox to take a look",
     shotNativeSize: "Native size",
     shotAlt: "Sandbox desktop screenshot",
-    /* Composer-bar grant chip (session-level consent; click toggles grant / revoke) */
-    grantChip: "Computer use",
-    grantChipOn: "This session may drive the sandbox · click to revoke (takes effect in the current turn)",
-    grantChipOff: "This session is not authorized to drive the sandbox · click to allow (takes effect in the current turn)",
+    /*
+     * Session consent (2026-11-27): one ask in the conversation (row A), then a record in the
+     * flow plus a quiet status line above the composer (row B). The refusal text itself comes
+     * from COMPUTER_USE_CONSENT_DENIED_TEXT (shared) — same sentence the model receives.
+     */
+    consentAsk: "Allow the agent to control the sandbox desktop?",
+    consentWhy:
+      "Needed by computer actions such as screenshots, clicks and typing. Until you answer, the agent has no desktop access.",
+    consentAllow: "Allow for this session",
+    consentDeny: "Deny",
+    consentAllowedRecord: "Allowed for this session — no further prompts",
+    consentDeniedRecord: "Denied — no computer actions this session",
+    consentRevoke: "Revoke",
+    consentToldModel: (text: string) => `Told the model: ${text}`,
+    consentStatusAllowed: "Sandbox desktop: allowed for this session",
     /* Emergency stop hotkey (Settings › Security group) and the stop notice */
     emergencyGroup: "Safety",
     emergencyHotkey: "Emergency stop hotkey",
