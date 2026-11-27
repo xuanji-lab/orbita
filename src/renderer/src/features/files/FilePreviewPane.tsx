@@ -90,6 +90,8 @@ export function FilePreviewPane(props: {
     onRemove: (id: string) => void;
     onJump: (item: PdfAnnotation) => void;
     onOpen: () => void;
+    onHandAll: () => void;
+    onHand: (item: PdfAnnotation) => void;
   } | null;
   /**
    * 论文工作台：把编辑器的把手 / 脏状态交给 FilesPanel（编译前保存、标签圆点都靠它）。

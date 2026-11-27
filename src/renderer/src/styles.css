@@ -3982,18 +3982,38 @@ html[data-pointer-drag] iframe {
 /* 抽屉：默认一行；展开后列表自己有上限，不把文件内容挤没 */
 /* ---------- PDF 批注栏（与 tex 大纲同一套形态：工具条开合、右侧竖栏） ---------- */
 /* 工具条上的开关键：有批注时带一个小圆点计数，不占正文 */
-.pdf-annot-badge {
+/* 计数角标：与右栏未读角标（.rail-badge）同一套语法——角在图标右上，宽度随位数长，
+ * 超过 99 收成「99+」。颜色取中性：批注条数不是「要你处理」的未读提醒，不该点 accent。 */
+/* 角标的定位基准是**钮**（24px），不是那枚 14px 的图标：贴着图标的角会压掉图形本身的
+ * 一角（实测右 6px / 上 6px 被盖住）。钮的右上角有留白，角标落在那儿才像「贴在键上」。 */
+.pdf-annot-toggle {
+  position: relative;
+}
+.pdf-annot-toggle-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: var(--space-0-5);
+}
+.pdf-annot-badge {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 14px;
   height: 14px;
   padding: 0 var(--space-0-5);
   border-radius: var(--radius-pill);
+  /* 一圈「工具栏底色」把角标与图标分开：不加这圈时两者在浅底上糊成一团 */
+  box-shadow: 0 0 0 2px var(--color-bg-panel);
   background: var(--color-bg-muted);
   color: var(--color-text-secondary);
+  font-family: var(--font-family-business);
   font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 .pdf-annot-rail {
   display: flex;
@@ -4025,8 +4045,10 @@ html[data-pointer-drag] iframe {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
+/* 头部右侧两颗键：交给智能体（有批注时才出现）+ 收起。margin-left:auto 交给第一颗，
+ * 这样「一条都没有」时收起键仍钉在行尾 */
+.pdf-annot-rail-hand,
 .pdf-annot-rail-close {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4034,6 +4056,12 @@ html[data-pointer-drag] iframe {
   height: 20px;
   border-radius: var(--radius-md);
   color: var(--color-text-tertiary);
+}
+.pdf-annot-rail-hand {
+  margin-left: auto;
+}
+.pdf-annot-rail-hand + .pdf-annot-rail-close {
+  margin-left: var(--space-0-5);
 }
 .pdf-annot-rail-list {
   flex: 1 1 auto;
@@ -4081,8 +4109,13 @@ html[data-pointer-drag] iframe {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-.pdf-annot-card-del {
+.pdf-annot-card-acts {
   flex: 0 0 auto;
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+}
+.pdf-annot-card-act {
   display: inline-flex;
   align-items: center;
   justify-content: center;

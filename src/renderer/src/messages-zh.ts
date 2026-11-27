@@ -3252,6 +3252,14 @@ export const zh: Messages = {
     page: (n) => `第 ${n} 页`,
     toggleTip: "批注（在 PDF 右侧，与源码的大纲同一套交互）",
     closeTip: "收起批注",
+    /** 交给智能体：全部 / 单条（放进输入框的引用，发不发由你决定） */
+    handAll: "把全部批注交给智能体",
+    handOne: "把这条批注交给智能体",
+    handText: (page, quote, comment) => `PDF 批注 · ${page} · 「${quote}」 → ${comment}`,
+    handAllText: (n, pdfPath) =>
+      `PDF 批注（共 ${n} 条）${pdfPath === "" ? "" : ` · ${pdfPath}`}——请按这些意见改稿：`,
+    handLine: (n, page, quote, comment) => `${n}. ${page} · 「${quote}」 → ${comment}`,
+    handRest: (n) => `……还有 ${n} 条（见 PDF 栏的批注）`,
   },
 
   /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */

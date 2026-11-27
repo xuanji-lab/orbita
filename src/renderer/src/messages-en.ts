@@ -3470,6 +3470,16 @@ export const en = {
     page: (n: number) => `Page ${n}`,
     toggleTip: "Comments (they sit beside the PDF, like the outline beside the source)",
     closeTip: "Close comments",
+    /** 交给智能体：全部 / 单条（放进输入框的引用，发不发由你决定） */
+    handAll: "Hand all comments to the agent",
+    handOne: "Hand this comment to the agent",
+    handText: (page: string, quote: string, comment: string) =>
+      `PDF comment · ${page} · 「${quote}」 → ${comment}`,
+    handAllText: (n: number, pdfPath: string) =>
+      `PDF comments (${n})${pdfPath === "" ? "" : ` · ${pdfPath}`} — please address them in the manuscript:`,
+    handLine: (n: number, page: string, quote: string, comment: string) =>
+      `${n}. ${page} · 「${quote}」 → ${comment}`,
+    handRest: (n: number) => `… ${n} more (see the comments rail in the PDF pane)`,
   },
 
   /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */

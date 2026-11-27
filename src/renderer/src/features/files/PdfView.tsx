@@ -168,6 +168,10 @@ export function PdfView(props: {
     onJump: (item: PdfAnnotation) => void;
     /** 拉开竖栏时调一次：写盘的另一方（agent / 另一扇窗）没有事件通知这一侧 */
     onOpen: () => void;
+    /** 把全部批注交给智能体（放进输入框的引用，发不发由用户决定） */
+    onHandAll: () => void;
+    /** 只把这一条交给智能体 */
+    onHand: (item: PdfAnnotation) => void;
   } | null;
   /** 搜索高亮的色调：red = 改前（删除）、green = 改后（新增）；缺省 accent */
   highlightTone?: "red" | "green";
@@ -649,22 +653,33 @@ export function PdfView(props: {
         {/* 批注：与 tex 的大纲同一个形态——按钮开、按钮关，列表是右侧一条竖栏。
             有批注时按钮上带条数；一条都没有也留着（先看空态说明，再决定写不写） */}
         {props.pdfAnnotations != null && (
-          <div className="pdf-tool-group pdf-annot-toggle">
+          <div className="pdf-tool-group">
             <button
               type="button"
-              className="quiet-control pdf-tool"
+              className="quiet-control pdf-tool pdf-annot-toggle"
               aria-expanded={annotationsOpen}
-              title={t.pdfAnnotations.toggleTip}
+              title={
+                props.pdfAnnotations.items.length === 0
+                  ? t.pdfAnnotations.toggleTip
+                  : `${t.pdfAnnotations.toggleTip} · ${t.pdfAnnotations.count(props.pdfAnnotations.items.length)}`
+              }
               aria-label={t.pdfAnnotations.toggleTip}
               onClick={() => {
                 if (!annotationsOpen) props.pdfAnnotations?.onOpen();
                 setAnnotationsOpen((open) => !open);
               }}
             >
-              <Icon name="message-square" size={14} />
-              {props.pdfAnnotations.items.length > 0 && (
-                <span className="pdf-annot-badge">{props.pdfAnnotations.items.length}</span>
-              )}
+              {/* 角标而不是「图标后面跟个数字」：工具条按钮是方形图标位，数字写在外面
+                  会把键挤宽、两三位数还会跟相邻按钮贴住；角标形状与右栏未读角标同一套
+                  （.rail-badge 的语法），宽度随位数长、99 以上收成「99+」 */}
+              <span className="pdf-annot-toggle-icon">
+                <Icon name="message-square" size={14} />
+                {props.pdfAnnotations.items.length > 0 && (
+                  <span className="pdf-annot-badge" aria-hidden="true">
+                    {props.pdfAnnotations.items.length > 99 ? "99+" : props.pdfAnnotations.items.length}
+                  </span>
+                )}
+              </span>
             </button>
           </div>
         )}
@@ -749,6 +764,8 @@ export function PdfView(props: {
             onJump={props.pdfAnnotations.onJump}
             onRemove={props.pdfAnnotations.onRemove}
             onClose={() => setAnnotationsOpen(false)}
+            onHandAll={props.pdfAnnotations.onHandAll}
+            onHand={props.pdfAnnotations.onHand}
           />
         )}
       </div>

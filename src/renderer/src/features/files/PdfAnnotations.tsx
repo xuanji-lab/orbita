@@ -39,6 +39,10 @@ export function PdfAnnotationRail(props: {
   onJump: (item: PdfAnnotation) => void;
   onRemove: (id: string) => void;
   onClose: () => void;
+  /** 把全部批注交给智能体（放进输入框的引用，发不发由用户决定） */
+  onHandAll: () => void;
+  /** 只把这一条交给智能体 */
+  onHand: (item: PdfAnnotation) => void;
 }) {
   const t = useT();
   return (
@@ -47,6 +51,17 @@ export function PdfAnnotationRail(props: {
         <Icon name="message-square" size={13} className="pdf-annot-rail-icon" />
         <span className="pdf-annot-rail-title">{t.pdfAnnotations.title}</span>
         <span className="pdf-annot-rail-count mono">{t.pdfAnnotations.countShort(props.items.length)}</span>
+        {props.items.length > 0 && (
+          <button
+            type="button"
+            className="quiet-control pdf-annot-rail-hand"
+            title={t.pdfAnnotations.handAll}
+            aria-label={t.pdfAnnotations.handAll}
+            onClick={props.onHandAll}
+          >
+            <Icon name="bot" size={13} />
+          </button>
+        )}
         <button
           type="button"
           className="quiet-control pdf-annot-rail-close"
@@ -73,15 +88,26 @@ export function PdfAnnotationRail(props: {
               </span>
               <span className="pdf-annot-card-meta mono">{t.pdfAnnotations.page(item.page)}</span>
             </button>
-            <button
-              type="button"
-              className="quiet-control pdf-annot-card-del"
-              title={t.pdfAnnotations.deleteTip}
-              aria-label={t.pdfAnnotations.deleteTip}
-              onClick={() => props.onRemove(item.id)}
-            >
-              <Icon name="x" size={12} />
-            </button>
+            <span className="pdf-annot-card-acts">
+              <button
+                type="button"
+                className="quiet-control pdf-annot-card-act"
+                title={t.pdfAnnotations.handOne}
+                aria-label={t.pdfAnnotations.handOne}
+                onClick={() => props.onHand(item)}
+              >
+                <Icon name="bot" size={12} />
+              </button>
+              <button
+                type="button"
+                className="quiet-control pdf-annot-card-act"
+                title={t.pdfAnnotations.deleteTip}
+                aria-label={t.pdfAnnotations.deleteTip}
+                onClick={() => props.onRemove(item.id)}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </span>
           </div>
         ))}
       </div>

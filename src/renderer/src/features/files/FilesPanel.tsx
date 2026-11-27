@@ -442,6 +442,46 @@ export function FilesPanel(props: {
     },
     [writeAnnotations],
   );
+  /**
+   * 把批注交给智能体：走与「问题交给智能体」同一条通道——**放进输入框的引用**，
+   * 发不发由用户决定（不直接发送）。引用带 PDF 的路径，模型能顺着去读那一页原文。
+   *
+   * 全部一次给：按页码排，超过 40 条只列前 40 条并写明还剩多少（引用块在输入卡里
+   * 是给人看的，太长会把输入卡顶掉）。
+   */
+  const annotationPdfPath = latex.project?.pdf?.path ?? null;
+  const handAnnotation = useCallback(
+    (annotation: PdfAnnotation) => {
+      session.addQuote({
+        text: t.pdfAnnotations.handText(t.pdfAnnotations.page(annotation.page), annotation.quote, annotation.comment),
+        messageId: `pdf-annot:${annotation.id}`,
+        role: "assistant",
+        ...(annotationPdfPath === null ? {} : { filePath: annotationPdfPath }),
+      });
+      document.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+    },
+    [session, t, annotationPdfPath],
+  );
+  const handAllAnnotations = useCallback(() => {
+    if (pdfAnnotations.length === 0) return;
+    const LIMIT = 40;
+    const shown = pdfAnnotations.slice(0, LIMIT);
+    const lines = shown.map((item, index) =>
+      t.pdfAnnotations.handLine(index + 1, t.pdfAnnotations.page(item.page), item.quote, item.comment),
+    );
+    const rest = pdfAnnotations.length - shown.length;
+    session.addQuote({
+      text: [
+        t.pdfAnnotations.handAllText(pdfAnnotations.length, annotationPdfPath === null ? "" : annotationPdfPath),
+        ...lines,
+        ...(rest > 0 ? [t.pdfAnnotations.handRest(rest)] : []),
+      ].join("\n"),
+      messageId: `pdf-annot:all:${pdfAnnotations.length}`,
+      role: "assistant",
+      ...(annotationPdfPath === null ? {} : { filePath: annotationPdfPath }),
+    });
+    document.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+  }, [pdfAnnotations, session, t, annotationPdfPath]);
   const annotationsApiFor = useCallback(
     (onJump: (item: PdfAnnotation) => void) => ({
       items: pdfAnnotations,
@@ -449,8 +489,10 @@ export function FilesPanel(props: {
       onRemove: removeAnnotation,
       onJump,
       onOpen: reloadAnnotations,
+      onHandAll: handAllAnnotations,
+      onHand: handAnnotation,
     }),
-    [pdfAnnotations, addAnnotation, removeAnnotation, reloadAnnotations],
+    [pdfAnnotations, addAnnotation, removeAnnotation, reloadAnnotations, handAllAnnotations, handAnnotation],
   );
   /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
   const citeState = useCiteLibrary(latexContext, latex.project);
