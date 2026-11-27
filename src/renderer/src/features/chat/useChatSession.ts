@@ -434,6 +434,11 @@ export interface ChatSession {
    * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
    */
   startTaskWithDraft: (workspace: Workspace | null, text: string) => void;
+  /**
+   * 开一条新任务并把这一句直接发出去（设置页「让 agent 修」用）。
+   * 返回 false = 没能开（docx 有未落盘的改动 / 没选模型 / 没有工作目录），原因已进错误条。
+   */
+  startTaskAndSend: (workspace: Workspace | null, text: string) => Promise<boolean>;
   answerApproval: (requestId: string, answer: PermissionAnswer) => void;
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
@@ -2015,7 +2020,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       workspace: string | null,
       resume: { piSessionFile: string } | null,
       images?: readonly PromptImage[],
-      extras?: { files?: readonly ComposerFileRef[]; carryoverId?: string; mode?: PermissionMode },
+      extras?: { files?: readonly ComposerFileRef[]; carryoverId?: string; mode?: PermissionMode; thinking?: ThinkingLevel },
     ): Promise<void> => {
       if (model === null) {
         engine.setError(engine.modelMissingText());
@@ -2048,7 +2053,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
           modelId: model.modelId,
           // 遗留事项开工压过档（见 startCarryoverTask）：本轮按压过的发，setMode 要到下一次渲染才生效
           mode: extras?.mode ?? mode,
-          thinkingLevel,
+          // 新任务「开一条并把这句话发出去」时档位现算（startTaskAndSend），
+          // 不走闭包里的旧值——reset 之后 state 还没重渲染
+          thinkingLevel: extras?.thinking ?? thinkingLevel,
         });
         // 新本子的首轮：submit 的开机确认（等 created → 建 meta）返回后侧栏才看得见它
         if (resume === null) engine.refreshSessions();
@@ -2538,6 +2545,64 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
       });
     },
     [reset, writeDraft, key],
+  );
+
+  /**
+   * 开一条新任务，把这一句**直接发出去**（设置页「让 agent 修 LaTeX 环境」用）。
+   *
+   * 为什么不能「newTask() 之后等 400ms 再 api.agent.submit」：新任务的会话 id 是
+   * 首条消息提交时现造的（send 里的 crypto.randomUUID），reset 之后 sessionId 恒为
+   * null——旧写法要么什么也不发，要么（机器快的那一半）把消息发进**还没被 reset 掉的
+   * 上一条会话**。这里走 submitTurn 同一条路：现造 id、乐观置 turn、带本轮模型与档位。
+   *
+   * 思考档按「新任务」的规则现算（手选 > 型号默认），不沿用刚离开那条会话的档。
+   * 返回 false = 没能开（docx 有未落盘的改动 / 没选模型 / 没有工作目录），原因已进错误条。
+   */
+  const startTaskAndSend = useCallback(
+    async (workspace: Workspace | null, text: string): Promise<boolean> => {
+      const outcome = await flushAllDocxForLeave();
+      if (!outcome.ok) return false;
+      if (model === null) {
+        engine.setError(engine.modelMissingText());
+        return false;
+      }
+      const target = workspace === null ? engine.defaultCwd : workspace.path;
+      if (target === "") {
+        engine.setError(engine.messagesRef.current.session.noWorkspaceFolder);
+        return false;
+      }
+      reset();
+      setCwd(workspace === null ? null : workspace.path);
+      setWorkspaceId(workspace === null ? null : workspace.id);
+      const supported = modelThinkingLevels(
+        model.modelId,
+        catalog,
+        null,
+        modelPreferenceById(usable, model.providerId),
+        declaredThinkingLevels(usable, model.providerId, model.modelId),
+      );
+      const level = resolveThinkingLevel({
+        modelId: model.modelId,
+        supported,
+        picked: pickedThinkingRef.current,
+      });
+      await submitTurn(crypto.randomUUID(), text, target, workspace === null ? null : workspace.id, null, [], {
+        mode,
+        thinking: level,
+      });
+      return true;
+    },
+    [
+      flushAllDocxForLeave,
+      model,
+      engine,
+      reset,
+      catalog,
+      usable,
+      pickedThinkingRef,
+      submitTurn,
+      mode,
+    ],
   );
 
 
@@ -3552,6 +3617,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     newTask,
     newTaskIn,
     startTaskWithDraft,
+    startTaskAndSend,
     answerApproval: engine.answerApproval,
   };
 }

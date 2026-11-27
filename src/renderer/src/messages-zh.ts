@@ -3199,6 +3199,69 @@ export const zh: Messages = {
     cleanFailed: (message) => `清理失败：${message}`,
   },
 
+  /* ---------- 设置 › LaTeX 论文（preflight 自查） ---------- */
+  latexSettings: {
+    title: "LaTeX 论文",
+    intro: (platform) =>
+      `编译、PDF 预览、源码↔PDF 定位、引文核验、导出 Word。开启前已自动验过一遍这台机器（${platform}）。保存即编译是项目级开关，在项目的 ⋮ 菜单里按项目开。`,
+    platformWindows: "Windows",
+    checks: "启用检查",
+    latexmk: "latexmk 编译器",
+    synctex: "synctex（源码↔PDF 定位）",
+    chktex: "chktex（行内检查）",
+    pandoc: "pandoc ≥ 3.10.2（导出 Word）",
+    probing: "探测中…",
+    notFound: "未找到",
+    synctexMissing: "这台电脑上没有找到 synctex 命令（TeX 发行版可能缺组件）",
+    chktexMissing: "未安装（行内检查可选）",
+    pandocMissing: "未安装",
+    pandocTooOld: (version, min) => `${version} 太旧——导出 Word 需要 ${min} 或更新`,
+    pandocReady: (version, path) => `${version} · ${path}`,
+    repair: (id) => `让智能体修好 ${id}`,
+    repairPrompt: (id) =>
+      `帮我检查并修好 LaTeX 环境的 ${id}。先探测再修；要安装任何东西（例如 MacTeX / MiKTeX）之前先问我，写文件只写我确认的目录。`,
+    repairing: "正在开任务…",
+    repairFailed: "没能在时限内开好会话，消息没有发出去——再点一次扳手键。",
+    config: "配置",
+    latexmkPath: "latexmk 路径",
+    latexmkNotFound: "未找到（可显式指定）",
+    locate: "指定位置…",
+    cnTemplate:
+      "学校模板还不能导入——先用 ctexart；引擎在编译条的配方菜单里选 xelatex（或 latexmk · xelatex）。",
+    promptTitle: "交给智能体修复时用的系统提示词（只读，可按项目覆盖）",
+    promptMac:
+      "你在帮用户修好 LaTeX 环境（macOS）。先跑平台检查清单：latexmk / synctex / chktex / pandoc。缺 synctex 且 TinyTeX 是旧年度版时，不用 tlmgr 硬装（跨版本会拒），改为引导安装 MacTeX；安装之前先问。所有写入限用户确认的目录。",
+    promptWin:
+      "你在帮用户修好 LaTeX 环境（Windows）。先跑平台检查清单：latexmk / synctex / chktex / pandoc。缺组件时优先 MiKTeX / TeX Live 的用户态安装；安装之前先问。所有写入限用户确认的目录。",
+  },
+  /* ---------- PDF 选区批注（论文工作台：浮条 + 问题抽屉里的一组） ---------- */
+  pdfAnnotations: {
+    write: "写意见",
+    quote: "引用到对话",
+    placeholder: "写一句意见（选中文字与页码会一起存）",
+    save: "保存批注",
+    title: "批注",
+    count: (n) => `${n} 条批注`,
+    /** 组头里的短计数（左边已经写着「批注」，不再重复那个词） */
+    countShort: (n) => `${n} 条`,
+    /** 一条都没有时，收起态那一行写什么（不要写「0 条批注」） */
+    none: "暂无",
+    empty: "在 PDF 上选中一段文字，就能写意见或引用到对话。",
+    locateTip: "跳到这一页并高亮这段原文",
+    deleteTip: "删除这条批注",
+    page: (n) => `第 ${n} 页`,
+    toggleTip: "批注（在 PDF 右侧，与源码的大纲同一套交互）",
+    closeTip: "收起批注",
+    /** 交给智能体：全部 / 单条（放进输入框的引用，发不发由你决定） */
+    handAll: "把全部批注交给智能体",
+    handOne: "把这条批注交给智能体",
+    handText: (page, quote, comment) => `PDF 批注 · ${page} · 「${quote}」 → ${comment}`,
+    handAllText: (n, pdfPath) =>
+      `PDF 批注（共 ${n} 条）${pdfPath === "" ? "" : ` · ${pdfPath}`}——请按这些意见改稿：`,
+    handLine: (n, page, quote, comment) => `${n}. ${page} · 「${quote}」 → ${comment}`,
+    handRest: (n) => `……还有 ${n} 条（见 PDF 栏的批注）`,
+  },
+
   /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */
   cite: {
     // 抽屉的定位列已经写着文件名，消息里不再重复

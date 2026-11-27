@@ -399,11 +399,36 @@ export interface LatexProbeRequest {
 export interface LatexEnvCheckItem {
   id: "synctex" | "chktex" | "pandoc";
   ok: boolean;
-  /** 找到的路径 / 版本，或缺失时的一句话说明 */
-  detail: string;
+  /**
+   * 找到的可执行文件绝对路径；null = 没找到。
+   * **不在这里拼人话**：这句话要按界面语言说，主进程不知道用户选的是哪种语言，
+   * 旧版把中文 / 英文说明都塞进 `detail`，结果中文界面里冒出一整段英文。
+   */
+  path: string | null;
+  /** pandoc 才有：解析出的版本文本（"3.9.0"）；解析不出 / 没装 = null */
+  version?: string | null;
+  /** pandoc 才有：可用所需的最低版本（"3.10.2"） */
+  minVersion?: string;
 }
 export interface LatexEnvCheckResult {
   items: LatexEnvCheckItem[];
+}
+
+/** PDF 选区批注（论文工作台）：选中文字 + 页码 + 页内坐标 + 意见。
+ * 存在项目目录 .orbita/annotations.json（原子写）；锚点用 quote + 页内坐标定位，
+ * SyncTeX 反查是可选增强（本机 TinyTeX 缺 synctex 时降级为 quote + 页码）。 */
+export interface PdfAnnotation {
+  id: string;
+  quote: string;
+  page: number;
+  /** 选区在页面上的归一化矩形（0–1，相对页宽页高）；多行时多段 */
+  rects: Array<{ x: number; y: number; w: number; h: number }>;
+  comment: string;
+  createdAt: number;
+}
+export interface PdfAnnotationStore {
+  version: 1;
+  annotations: PdfAnnotation[];
 }
 
 /**
@@ -546,6 +571,11 @@ export const latexChannels = {
   probe: "latex:probe",
   /** 设置页 LaTeX 面板的环境自检（synctex / chktex / pandoc 聚合，latexmk 走 latex:probe） */
   envCheck: "latex:env-check",
+  /** PDF 批注的读与写（项目目录 .orbita/annotations.json，原子写） */
+  annotationsGet: "latex:annotations-get",
+  annotationsPut: "latex:annotations-put",
+  /** 改动裁决：把当前项目 PDF 备份到 .orbita/pdf-backups/（改前对照用） */
+  pdfBackup: "latex:pdf-backup",
   /** 当前文件所属的 LaTeX 项目（找不到就是 found:false） */
   project: "latex:project",
   /** 编一次；结局是 LatexRunOutcome（并发被拒也走 ok:false） */

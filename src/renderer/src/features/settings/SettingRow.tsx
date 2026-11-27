@@ -34,7 +34,8 @@ export function SettingGroup(props: { label: string; children: React.ReactNode }
  * 它们既不属于左列（名字与状态）也不属于右列（控件）。
  */
 export function SettingRow(props: {
-  name: string;
+  /** 行名。字符串为主；需要带状态图标时传节点（图标 + 文字同桌的 `.set-row-name`） */
+  name: React.ReactNode;
   info?: React.ReactNode;
   note?: React.ReactNode;
   below?: React.ReactNode;

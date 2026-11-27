@@ -1848,27 +1848,15 @@ export function App() {
                 }}
                 onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
-                onRepairLatex={(item) => {
-                  // LaTeX 面板的「让 agent 装/修」：新建任务并把修复指令发给 agent。
+                onRepairLatex={async (item) => {
+                  // LaTeX 面板的「让 agent 装/修」：开一条新任务，把修复指令直接发出去。
+                  // **不再**「newTask 后等 400ms 再 submit」：新任务的会话 id 在首条消息提交时
+                  // 才现造，reset 之后 sessionId 恒为 null——旧写法要么不发，要么把消息发进
+                  // 还没 reset 掉的上一条会话（2026-11-27 Windows 实测确认）。
                   setOverlay(null);
                   setSidebarCollapsed(false);
-                  session.newTask();
-                  window.setTimeout(() => {
-                    const id = session.sessionId ?? session.opened?.id ?? null;
-                    const model = session.model;
-                    if (id === null || model === null) return;
-                    void api.agent.submit({
-                      sessionId: id,
-                      cwd: session.cwd ?? "",
-                      workspaceId: session.workspaceId,
-                      resume: null,
-                      providerId: model.providerId,
-                      modelId: model.modelId,
-                      mode: session.mode,
-                      thinkingLevel: session.thinkingLevel,
-                      text: `帮我检查并修好 LaTeX 环境的 ${item}。先探测再修；要装任何东西（例如 MacTeX）之前先问我，写文件只写我确认的目录。`,
-                    });
-                  }, 400);
+                  const ok = await session.startTaskAndSend(null, t.latexSettings.repairPrompt(item));
+                  return { ok };
                 }}
               />
             ) : (
