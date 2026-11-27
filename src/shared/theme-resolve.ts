@@ -9,8 +9,7 @@ import type { ThemePreference } from "./settings.ts";
  *
  * `system` 的深色落点是 **black**（玄 Onyx，2026-09-03 用户指定、2026-09-30 换血后沿用），
  * 浅色落 `light`；
- * 其余各档（light / graphite / black / copybook / typescript）原样透传——纸面两档只有明，
- * 与系统深浅无关。
+ * 其余各档（light / graphite / black）原样透传，与系统深浅无关。
  */
 export function resolveTheme(
   preference: ThemePreference,

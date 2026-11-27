@@ -53,6 +53,16 @@ export interface FileChangeView {
   removed: number;
 }
 
+/**
+ * 一份音 / 视频产物（脚本生成的 mp3 / mp4 等）：绝对路径 + 时长（秒；agent 读容器头量得到才有，量不到缺席）。
+ * 轮尾扫描把本轮窗口内落盘的媒体文件**全部**报上来（含分段、试音样本），卡片只显示回答里点了名的
+ * （renderer 的 named-outputs.ts）。不参与撤销。
+ */
+export interface MediaArtifact {
+  path: string;
+  duration?: number;
+}
+
 export interface FileTurnView {
   role: "file-turn";
   id: string;
@@ -69,6 +79,8 @@ export interface FileTurnView {
    * 按钮。缺席 = 没折叠过（旧记录没有这个字段，照常解析）。
    */
   webArtifactsBatch?: number;
+  /** 音视频产物候选（见 MediaArtifact）；缺席 = 本轮没有 */
+  mediaArtifacts?: readonly MediaArtifact[];
 }
 
 /** agent 进程报上来的轮内改动：正文内联，主进程负责写 blob。 */
@@ -105,6 +117,11 @@ export interface FileTurnRecord {
    * 的轮也落记录（卡片要出那一行计数）。
    */
   webArtifactsBatch?: number;
+  /**
+   * 音视频产物候选：本轮脚本窗口内落盘的 mp3 / mp4 等（全部，卡片再按回答点名过滤）。不参与撤销。
+   * 缺席 = 本轮没有（旧记录没有这个字段，照常解析）。只有它、没有 changes 的轮也落记录。
+   */
+  mediaArtifacts?: readonly MediaArtifact[];
 }
 
 /** 回退记录（role: "revert"）。readLog 按它折叠生效列表。 */
@@ -152,6 +169,21 @@ function parseWebArtifacts(raw: unknown): readonly string[] | undefined {
   return paths;
 }
 
+/** mediaArtifacts 的逐项校验：在场必须是 { path: 非空字符串, duration?: 有限正数 } 的数组；返回 undefined = 坏值 */
+export function parseMediaArtifacts(raw: unknown): MediaArtifact[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const items: MediaArtifact[] = [];
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) return undefined;
+    const value = item as Record<string, unknown>;
+    if (typeof value["path"] !== "string" || value["path"] === "") return undefined;
+    const duration = value["duration"];
+    if (duration !== undefined && (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0)) return undefined;
+    items.push(duration === undefined ? { path: value["path"] } : { path: value["path"], duration });
+  }
+  return items;
+}
+
 /** webArtifactsBatch 的逐字段校验：可选；在场必须是 ≥ 1 的整数（折叠计数不会是 0）。 */
 function parseWebArtifactsBatch(raw: unknown): number | undefined {
   if (raw === undefined) return undefined;
@@ -188,6 +220,8 @@ export function isFileTurnRecord(raw: unknown): raw is FileTurnRecord {
   if ("webArtifactsBatch" in value && parseWebArtifactsBatch(value["webArtifactsBatch"]) === undefined) {
     return false;
   }
+  // mediaArtifacts 同一张纪律：在场就必须逐项合法
+  if ("mediaArtifacts" in value && parseMediaArtifacts(value["mediaArtifacts"]) === undefined) return false;
   return true;
 }
 
@@ -320,4 +354,38 @@ export interface UndoPlan {
   /** 该轮之后（未回退的）轮次也改过的同一文件——撤销会连它们的改动一起退掉 */
   laterTouched: readonly string[];
   unrecoverable: readonly string[];
+}
+
+// ————————————————————————————————————————————————
+// 产物摘要（编排面板协作图的「交回」边）
+// ————————————————————————————————————————————————
+
+/**
+ * 一条会话的产物摘要：文件账里记过的路径（changes 与旁路 webArtifacts 都算，同一路径只算一次）数与扩展名。
+ * 协作图上「活 → 主智能体」那条边写「N 个文件 · .md .png」——只从真实的文件账来，没有就是 0，不猜。
+ * exts 按出现次数从多到少，同数按字母；没有扩展名的文件记成 ""（界面上不列）。
+ */
+export interface ArtifactSummary {
+  files: number;
+  exts: string[];
+}
+
+export function summarizeArtifacts(turns: readonly Pick<FileTurnRecord, "changes" | "webArtifacts">[]): ArtifactSummary {
+  const paths = new Set<string>();
+  for (const turn of turns) {
+    for (const change of turn.changes) paths.add(change.path);
+    for (const path of turn.webArtifacts ?? []) paths.add(path);
+  }
+  const counts = new Map<string, number>();
+  for (const path of paths) {
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const dot = name.lastIndexOf(".");
+    const ext = dot > 0 ? name.slice(dot).toLowerCase() : "";
+    counts.set(ext, (counts.get(ext) ?? 0) + 1);
+  }
+  const exts = [...counts.entries()]
+    .filter(([ext]) => ext !== "")
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([ext]) => ext);
+  return { files: paths.size, exts };
 }

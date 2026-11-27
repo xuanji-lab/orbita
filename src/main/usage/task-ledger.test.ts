@@ -47,7 +47,6 @@ function meta(id: string, createdAt: number, extra: Partial<SessionMeta> = {}): 
     recentQueries: [],
     providerId: "p",
     modelId: "m",
-    mode: "plan",
     thinkingLevel: "high",
     createdAt,
     updatedAt: createdAt,
@@ -240,77 +239,30 @@ describe("TaskLedger", () => {
   });
 });
 
-describe("收尾确认的做完的事（价格图的主会话任务）", () => {
-  const tokens = { input: 10, output: 1, cacheRead: 100, cacheWrite: 0 };
-  const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  const wrapup = {
-    id: "w1",
-    at: DAY2,
-    throughTurn: 2,
-    items: [
-      { title: "修好登录", turns: [1, 2] as [number, number], providerId: "p", modelId: "glm-5.3", level: "max" as const, tokens, recordedCost: 0.3, unpricedTokens: zero },
-      // 自己加的、没有轮次：没有归属，不进图
-      { title: "自己加的", turns: null, providerId: null, modelId: null, level: null, tokens: zero, recordedCost: 0, unpricedTokens: zero },
-    ],
-  };
-
-  test("增量：recordWrapup 记一件、同一个收尾记录只记一次；不动按天的 token；重读盘还在", async () => {
-    const file = join(dir, "usage-tasks.json");
-    const ledger = new TaskLedger(file, { timeZone: TZ });
-    await ledger.load();
-    await ledger.backfill(source(logs, metas));
-    const before = JSON.stringify(ledger.tasks());
-    await ledger.recordWrapup("a", wrapup);
-    await ledger.recordWrapup("a", wrapup);
-    assert.equal(ledger.doneTasks().length, 1);
-    assert.equal(JSON.stringify(ledger.tasks()), before);
-    const again = new TaskLedger(file, { timeZone: TZ });
-    await again.load();
-    assert.deepEqual(again.doneTasks(), ledger.doneTasks());
-  });
-
-  test("回填：从各会话 meta.wrapups 补上，与增量记出同一份", async () => {
-    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
-    const ledger = new TaskLedger(join(dir, "x.json"), { timeZone: TZ });
-    await ledger.load();
-    await ledger.backfill(source(logs, withWrapup));
-    assert.deepEqual(ledger.doneTasks(), [
-      {
-        sessionId: "a",
-        wrapupId: "w1",
-        providerId: "p",
-        modelId: "glm-5.3",
-        level: "max",
-        totals: { tokens, recordedCost: 0.3, unpricedTokens: zero },
-      },
-    ]);
-  });
-
-  test("价格图任务全集：没确认过的主会话不在里面；子会话整条一件", async () => {
+describe("价格图任务全集：只有子会话交回的任务（旧版收尾确认的记账已删）", () => {
+  test("主会话不在里面；子会话整条一件；meta 里残留的 wrapups 不影响账本", async () => {
     const ledger = new TaskLedger(join(dir, "y.json"), { timeZone: TZ });
     await ledger.load();
     await ledger.backfill(source(logs, metas));
     assert.deepEqual(ledger.chartTasks(new Set()), []);
-    await ledger.recordWrapup("a", wrapup);
-    const tasks = ledger.chartTasks(new Set(["b"]));
-    assert.deepEqual(tasks.map((t) => [t.modelId, t.level, t.totals.recordedCost]), [
-      ["glm-5.3", "max", 0.3],
-      ["glm-5.3", "max", 1],
-    ]);
+    const legacy = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [{ id: "w1", at: DAY2, throughTurn: 2, items: [] }] } : m));
+    const filled = new TaskLedger(join(dir, "y2.json"), { timeZone: TZ });
+    await filled.load();
+    await filled.backfill(source(logs, legacy));
+    const tasks = filled.chartTasks(new Set(["b"]));
+    assert.deepEqual(tasks.map((t) => [t.modelId, t.level, t.totals.recordedCost]), [["glm-5.3", "max", 1]]);
   });
 
-  test("旧版本（2）迁移而不重扫：任务与意图召回原样留下，done 从 meta.wrapups 补上、不读会话正文", async () => {
-    // 先用当前版本回填出一本，再改写成 2 版的形状（没有 done）落盘
+  test("旧版本（3，带 done / donePending）迁移而不重扫：done 丢掉，任务与意图召回原样留下，落盘升到 4", async () => {
     const file = join(dir, "old.json");
     const seed = new TaskLedger(file, { timeZone: TZ });
     await seed.load();
     await seed.backfill(source(logs, metas));
-    const v3 = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-    const { done: _done, ...rest } = v3;
-    await writeFile(file, JSON.stringify({ ...rest, version: 2 }));
+    const current = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    const done = [{ s: "a", w: "w1", p: "p", m: "glm-5.3", l: "max", t: [10, 1, 100, 0, 0.3, 0, 0, 0, 0] }];
+    await writeFile(file, JSON.stringify({ ...current, version: 3, done, donePending: true }));
 
-    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
-    const src = source(logs, withWrapup);
+    const src = source(logs, metas);
     let logReads = 0;
     const counting: TaskBackfillSource = {
       ...src,
@@ -324,36 +276,34 @@ describe("收尾确认的做完的事（价格图的主会话任务）", () => {
     assert.equal(await ledger.backfill(counting), null, "已回填过：不整本重扫");
     assert.equal(logReads, 0);
     assert.deepEqual(ledger.tasks(), seed.tasks());
-    assert.equal(ledger.doneTasks().length, 1);
+    assert.deepEqual(Object.fromEntries(ledger.intentByDay()), Object.fromEntries(seed.intentByDay()));
+    assert.deepEqual(ledger.chartTasks(new Set(["b"])), seed.chartTasks(new Set(["b"])));
+    // 迁移后记一条，落盘里不再有 done / donePending
+    await ledger.recordIntent({ id: "i-new", timestamp: DAY1, tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
     const disk = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-    assert.equal(disk["version"], 3);
+    assert.equal(disk["version"], 4);
+    assert.equal("done" in disk, false);
     assert.equal("donePending" in disk, false);
   });
 
-  test("迁移后、补 done 之前就落了盘：donePending 跟着落盘，下次启动接着补", async () => {
-    const file = join(dir, "old.json");
+  test("旧版本（2）也能逐级升上来", async () => {
+    const file = join(dir, "v2.json");
     await writeFile(file, JSON.stringify({ version: 2, backfilled: true, untrustedSessions: 0, tasks: [], open: {}, intent: {} }));
-    const first = new TaskLedger(file, { timeZone: TZ });
-    await first.load();
-    await first.recordIntent({ id: "i1", timestamp: DAY1, tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } });
-    assert.equal((JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>)["donePending"], true);
-    const second = new TaskLedger(file, { timeZone: TZ });
-    await second.load();
-    await second.backfill(source(logs, metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m))));
-    assert.equal(second.doneTasks().length, 1);
+    const ledger = new TaskLedger(file, { timeZone: TZ });
+    await ledger.load();
+    assert.equal(await ledger.backfill(source(logs, metas)), null);
   });
 
   test("重建入口（F-9）：删掉账本文件再启动，回填出与原来逐字段相同的一本", async () => {
-    const withWrapup = metas.map((m) => (m.id === "a" ? { ...m, wrapups: [wrapup] } : m));
     const file = join(dir, "usage-tasks.json");
     const first = new TaskLedger(file, { timeZone: TZ });
     await first.load();
-    await first.backfill(source(logs, withWrapup));
+    await first.backfill(source(logs, metas));
     const before = await readFile(file, "utf8");
     await rm(file);
     const rebuilt = new TaskLedger(file, { timeZone: TZ });
     await rebuilt.load();
-    assert.notEqual(await rebuilt.backfill(source(logs, withWrapup)), null);
+    assert.notEqual(await rebuilt.backfill(source(logs, metas)), null);
     assert.equal(await readFile(file, "utf8"), before);
   });
 });

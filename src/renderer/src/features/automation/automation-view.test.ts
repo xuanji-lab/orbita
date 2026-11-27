@@ -11,12 +11,12 @@ import {
   describeSchedule,
   endFormFrom,
   endFromForm,
+  firstLineOfWake,
   formFromSchedule,
   formatTokens,
   formatWhen,
   groupAutomations,
-  modeRowFailureText,
-  modeRowView,
+  joinWakeText,
   modelOptionValue,
   noteOf,
   parseModelOption,
@@ -30,6 +30,7 @@ import {
   sortAutomations,
   subtitleOf,
   visibleRuns,
+  wakeAutomationId,
 } from "./automation-view.ts";
 
 const T = en.automation;
@@ -45,7 +46,6 @@ function auto(patch: Partial<Automation> & { id: string }): Automation {
     prompt: "p",
     schedule: { kind: "interval", unit: "minute", every: 15 },
     target: { kind: "new_session", workspaceId: "ws1" },
-    mode: "plan",
     status: "active",
     createdBy: { kind: "user" },
     nextRunAt: NOW + 15 * MIN,
@@ -66,6 +66,38 @@ const run = (patch: Partial<AutomationRun> & { id: string }): AutomationRun => (
   durationMs: 1,
   tokens: null,
   ...patch,
+});
+
+describe("对话里的唤醒卡", () => {
+  test("分块回显拼回抬头与指令，非文本块不进正文", () => {
+    const text = joinWakeText([
+      { type: "text", text: "[定时任务「巡检」第 1/2 次 · 11-24 08:30]" },
+      { type: "image" },
+      { type: "text", text: "先看结果\n再汇报" },
+    ]);
+    assert.equal(text, "[定时任务「巡检」第 1/2 次 · 11-24 08:30]\n\n先看结果\n再汇报");
+    assert.equal(firstLineOfWake("\n  先看结果  \n再汇报"), "先看结果");
+    assert.equal(firstLineOfWake("\n\n"), "");
+  });
+
+  const bound = (id: string, prompt = "看结果") =>
+    auto({ id, title: "巡检", prompt, target: { kind: "this_session", sessionId: "S", workspaceId: null } });
+
+  test("看自动化只定位到本会话的同标题任务", () => {
+    const list = [
+      bound("match"),
+      auto({ id: "other-kind", title: "巡检", prompt: "看结果" }),
+      auto({ id: "other-session", title: "巡检", prompt: "看结果", target: { kind: "this_session", sessionId: "S2", workspaceId: null } }),
+    ];
+    assert.equal(wakeAutomationId(list, { sessionId: "S", title: "巡检", body: "看结果" }), "match");
+    assert.equal(wakeAutomationId(list, { sessionId: "S", title: "不存在", body: "看结果" }), undefined);
+  });
+
+  test("同名同会话：指令全文能消歧；仍有歧义就不猜", () => {
+    const list = [bound("a", "甲"), bound("b", "乙")];
+    assert.equal(wakeAutomationId(list, { sessionId: "S", title: "巡检", body: "乙" }), "b");
+    assert.equal(wakeAutomationId([bound("a"), bound("b")], { sessionId: "S", title: "巡检", body: "看结果" }), undefined);
+  });
 });
 
 describe("rowStateOf / sortAutomations / runningCount", () => {
@@ -178,18 +210,16 @@ describe("时间与调度的人话", () => {
     assert.equal(countLabel(auto({ id: "a" }), Z), "累计 0 次");
   });
 
-  test("noteOf：失败态给原因；最近一次失败给提示；绑 manual 档的会话提醒会卡在审批；正常无", () => {
-    assert.deepEqual(noteOf(auto({ id: "a", status: "failed", failureReason: "403" }), T, null), {
+  test("noteOf：失败态给原因；最近一次失败给提示；正常无（绑会话的不再提醒会卡在审批：没有审批了）", () => {
+    assert.deepEqual(noteOf(auto({ id: "a", status: "failed", failureReason: "403" }), T), {
       text: "Stopped after repeated failures: 403",
       tone: "danger",
     });
     const failedLast = auto({ id: "a", runs: [run({ id: "r", status: "error", error: "boom" })] });
-    assert.equal(noteOf(failedLast, T, null)?.text, "Last run failed: boom");
+    assert.equal(noteOf(failedLast, T)?.text, "Last run failed: boom");
     const bound = auto({ id: "a", target: { kind: "this_session", sessionId: "S", workspaceId: null } });
-    assert.equal(noteOf(bound, T, { mode: "manual" })?.tone, "warn");
-    assert.equal(noteOf(bound, T, { mode: "skip" }), null);
-    assert.equal(noteOf(auto({ id: "a", target: { kind: "new_session", workspaceId: null } }), T, { mode: "manual" }), null);
-    assert.equal(noteOf(auto({ id: "a" }), T, null), null);
+    assert.equal(noteOf(bound, T), null);
+    assert.equal(noteOf(auto({ id: "a" }), T), null);
   });
 });
 
@@ -320,45 +350,5 @@ describe("详情页按钮 / 立即运行 / 指令折叠", () => {
     assert.equal(promptIsLong("x".repeat(141)), true);
     assert.equal(promptIsLong("1\n2\n3\n4"), false);
     assert.equal(promptIsLong("1\n2\n3\n4\n5"), true);
-  });
-});
-
-describe("modeRowView（对话里「改权限」那一行画哪一种：看此刻的自动化，不看落盘时的样子）", () => {
-  const pending = { state: "pending", requestId: "r1" } as const;
-  const applied = { state: "applied", requestId: "r2" } as const;
-
-  test("此刻是 skip → 已放行（不论这一行怎么来的）；点「允许」之后同理", () => {
-    assert.equal(modeRowView(pending, { mode: "skip" }), "allowed");
-    assert.equal(modeRowView(applied, { mode: "skip" }), "allowed");
-  });
-
-  test("此刻是 plan：没点过的待确认 → 待确认；点过「保持只读 / 改回只读」的 → 保持只读；落盘时已放行、后来被改回的 → 保持只读", () => {
-    assert.equal(modeRowView(pending, { mode: "plan" }), "pending");
-    assert.equal(modeRowView(pending, { mode: "plan", modeDeclined: ["别的请求"] }), "pending", "只让点过的那一行变灰");
-    assert.equal(modeRowView(pending, { mode: "plan", modeDeclined: ["别的请求", "r1"] }), "kept");
-    assert.equal(modeRowView(applied, { mode: "plan" }), "kept");
-  });
-
-  test("自动化已不存在 → gone；列表还没读到（null）→ 按落盘时的样子画，不闪成「已不存在」", () => {
-    assert.equal(modeRowView(pending, undefined), "gone");
-    assert.equal(modeRowView(pending, null), "pending");
-    assert.equal(modeRowView(applied, null), "allowed");
-  });
-});
-
-describe("modeRowFailureText 与文案", () => {
-  test("主进程的每个稳定代码都有一句中英文人话，不漏", () => {
-    for (const messages of [T.modeRow, Z.modeRow]) {
-      for (const reason of ["noSession", "notFound", "notApplicable", "finished"] as const) {
-        assert.notEqual(modeRowFailureText(messages, { ok: false, reason, detail: "x" }), "", reason);
-      }
-    }
-  });
-
-  test("文案带上标题；待确认行的说明点出会话是哪一档", () => {
-    assert.match(Z.modeRow.pendingTitle("每日一篇"), /每日一篇/);
-    assert.match(Z.modeRow.allowedTitle("每日一篇"), /放行/);
-    assert.match(Z.modeRow.note("手动"), /手动/);
-    assert.match(T.modeRow.note("Manual"), /Manual/);
   });
 });

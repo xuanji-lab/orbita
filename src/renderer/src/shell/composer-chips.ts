@@ -3,14 +3,14 @@
  * 的视觉包装。
  *
  * 方案 D（选型报告 §3-D，2026-10-06）：保留 textarea，token 就是普通文本，
- * 镜像层（原 copybook 修正液的镜像，现全主题常驻）把 token 区间画成 chip。
+ * 镜像层把 token 区间画成 chip。
  * chip 只是视觉，**存储、草稿、发送、撤销全是同一份字符串**——这里不做任何
  * 文本改写，只算区间。
  *
  * 2026-10-30 起 chip 画成胶囊（图标 + 名字 + ×，前缀不显示）：textarea 的字透明、
  * 全部的字由镜像层画，token 原文在两层里照样占位（排版逐像素一致，光标与选区
  * 对得上），胶囊盖在原文自己的格子上。于是原文里 chip 中间的位置在屏幕上不存在了——
- * 光标与选区的端点要吸到 chip 的边上（snapSelection），× 删整颗（chipRemovalRange）。
+ * 光标与选区的端点要吸到 chip 的边上（snapSelection）。胶囊没有 ×（2026-11-23 用户：「我们可以用 delete 键，为什么要用 x」），删整颗走退格 / Delete。
  *
  * **token 识别复用发送端的 `findInvocationTokens`**（src/shared/invocation.ts）：
  * 发送时会组装指令块的边界（`/` 前是行首或空白、target 到下一个空白）就是 chip
@@ -21,7 +21,6 @@
 import { findInvocationTokens } from "../../../shared/invocation.ts";
 import { FEATURE_ICON } from "./feature-icons.ts";
 import type { IconName } from "./Icon.tsx";
-import type { WhiteoutSegment } from "./whiteout-segments.ts";
 
 /** token 种类：skill 读文件，mcp 用工具，plugin 是整个插件（与 InvocationKind 同一集合） */
 export type ChipKind = "skill" | "mcp" | "plugin";
@@ -40,8 +39,7 @@ export interface ChipSpan {
   target: string;
 }
 
-/** 超过这个长度不再解析 chip（与 WHITEOUT_MAX_LENGTH 同一理由：每次按键重扫，
- * 粘一大段日志的代价是实打实的卡顿，换来的只是装饰） */
+/** 超过这个长度不再解析 chip：每次按键重扫一大段日志的代价是实打实的卡顿。 */
 export const CHIPS_MAX_LENGTH = 20_000;
 
 /** 扫出原文里全部 chip 区间（就是 findInvocationTokens 的区间，换成 chip 的形状） */
@@ -70,6 +68,12 @@ export function chipRangeAfter(text: string, caret: number): ChipSpan | null {
   return parseChips(text).find((chip) => chip.start === caret) ?? null;
 }
 
+/** 只要区间的胶囊——吸附不关心种类（技能 / MCP / 粘贴 / 图 / 任务的区间都能喂） */
+export interface ChipRange {
+  start: number;
+  end: number;
+}
+
 /**
  * 光标 / 选区（textarea 的 selectionStart / selectionEnd 口径）。
  */
@@ -79,7 +83,7 @@ export interface TextSelection {
 }
 
 /** chip 「严格包含」这个位置（两端不算——停在 chip 头 / 尾是合法的光标位） */
-function chipAround(chips: readonly ChipSpan[], position: number): ChipSpan | undefined {
+function chipAround<T extends ChipRange>(chips: readonly T[], position: number): T | undefined {
   return chips.find((chip) => chip.start < position && position < chip.end);
 }
 
@@ -96,7 +100,7 @@ function chipAround(chips: readonly ChipSpan[], position: number): ChipSpan | un
  * 不在 chip 中间的端点原样返回；没有 chip 时原样返回。
  */
 export function snapSelection(
-  chips: readonly ChipSpan[],
+  chips: readonly ChipRange[],
   next: TextSelection,
   prev: TextSelection | null,
 ): TextSelection {
@@ -129,26 +133,9 @@ export function snapSelection(
   return start <= end ? { start, end } : { start: end, end: end };
 }
 
-/** 「空白」的口径：空格、制表、全角空格（token 的边界允许的那几种，换行除外） */
-function isInlineSpace(char: string | undefined): boolean {
-  return char === " " || char === "\t" || char === "\u3000";
-}
-
-/**
- * 点胶囊的 × 删掉的区间：整颗 token，连带它后面的一个空格（插入 token 时自带的那个）；
- * 后面没有空格（句末 / 换行前）就带走前面的一个——删完不留双空格，也不留行尾空格。
- * 退格整删（chipRangeBefore）只删 token 本身：光标就在 token 尾，多吃一个空格反而意外。
- */
-export function chipRemovalRange(text: string, chip: { start: number; end: number }): TextSelection {
-  if (isInlineSpace(text[chip.end])) return { start: chip.start, end: chip.end + 1 };
-  if (chip.start > 0 && isInlineSpace(text[chip.start - 1])) return { start: chip.start - 1, end: chip.end };
-  return { start: chip.start, end: chip.end };
-}
-
-/** 镜像层的渲染分段：修正液、chip 与粘贴展开段三层区间叠在同一份文本上 */
+/** 镜像层的渲染分段：chip 与粘贴展开段叠在同一份文本上 */
 export interface MirrorSegment {
   text: string;
-  whiteout: boolean;
   chip: boolean;
   /** chip 的类别（skill / mcp）——按类别上色用（2026-10 用户裁决：skill 绿、
    *  MCP 蓝）。粘贴 token 的 chip是中性的，不带这个字段，落回默认配方 */
@@ -159,21 +146,18 @@ export interface MirrorSegment {
 
 /**
  * 把文本切成镜像层的段：先切出 chip（**整颗，不跨段切**——胶囊盖在整颗 token 的格子上，
- * 切成两截就成了两颗胶囊），chip 之外的空隙再按粘贴展开段、修正液依次切。
+ * 切成两截就成了两颗胶囊），chip 之外的空隙再按粘贴展开段切。
  *
- * **chip 优先于两层**：小学作业主题里 token 本来是英文段（会垫修正液），chip 自己的
- * 胶囊已经盖住竖格线，再垫一层白底只会把 chip 画没；展开段里手打了 token 的形状时
- * 同理——chip 是更强的视觉，展开段在它两边让路。chip 之间交叠时先来的留下（parseChips
- * 给的本来不交叠）。非 copybook 主题传 `[{ text, whiteout: false }]` 进来（只切 chip 与段）。
+ * **chip 优先**：展开段里手打了 token 的形状时，chip 是更强的视觉，展开段在它两边让路。
+ * chip 之间交叠时先来的留下（parseChips 给的本来不交叠）。
  */
 export function mirrorSegments(
-  segments: readonly WhiteoutSegment[],
+  text: string,
   /** 画成胶囊的区间（skill / mcp 的 token 与收起的粘贴 token）；kind 缺省 =
    *  中性胶囊（粘贴 token）——上色量入，区间与边界仍是发送端的事 */
   chips: readonly { start: number; end: number; kind?: ChipKind | null }[],
   pasteRuns: readonly { start: number; end: number }[] = [],
 ): MirrorSegment[] {
-  const text = segments.map((segment) => segment.text).join("");
   const atoms: { start: number; end: number; kind: ChipKind | null }[] = [];
   for (const chip of [...chips].sort((a, b) => a.start - b.start)) {
     const start = Math.max(chip.start, 0);
@@ -184,20 +168,11 @@ export function mirrorSegments(
   }
   const runs = [...pasteRuns].sort((a, b) => a.start - b.start);
   const out: MirrorSegment[] = [];
-  /** 修正液分段落在 [from, to) 里的部分（不是 chip、不是展开段的普通字） */
+  /** [from, to) 里的普通文本（不是 chip、不是展开段） */
   const pushPlain = (from: number, to: number): void => {
-    let offset = 0;
-    for (const segment of segments) {
-      const segStart = offset;
-      const segEnd = offset + segment.text.length;
-      offset = segEnd;
-      const start = Math.max(from, segStart);
-      const end = Math.min(to, segEnd);
-      if (end <= start) continue;
-      out.push({ text: text.slice(start, end), whiteout: segment.whiteout, chip: false, pasteRun: false });
-    }
+    out.push({ text: text.slice(from, to), chip: false, pasteRun: false });
   };
-  /** chip 之间的空隙：展开段铺底，其余落回修正液分段 */
+  /** chip 之间的空隙：展开段铺底，其余原样画字 */
   const pushGap = (from: number, to: number): void => {
     let cursor = from;
     for (const run of runs) {
@@ -205,7 +180,7 @@ export function mirrorSegments(
       const end = Math.min(run.end, to);
       if (end <= start) continue;
       if (start > cursor) pushPlain(cursor, start);
-      out.push({ text: text.slice(start, end), whiteout: false, chip: false, pasteRun: true });
+      out.push({ text: text.slice(start, end), chip: false, pasteRun: true });
       cursor = end;
     }
     if (cursor < to) pushPlain(cursor, to);
@@ -215,7 +190,6 @@ export function mirrorSegments(
     if (atom.start > cursor) pushGap(cursor, atom.start);
     out.push({
       text: text.slice(atom.start, atom.end),
-      whiteout: false,
       chip: true,
       ...(atom.kind !== null ? { chipKind: atom.kind } : {}),
       pasteRun: false,

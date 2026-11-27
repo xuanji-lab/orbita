@@ -12,19 +12,19 @@
  *    iframe、img、script 任意 file://，或者把自己跳到根外——Electron 默认给 file:// 页面这些特权
  *    （GrantFileProtocolExtraPrivileges 熔丝），#365 实测四种方式都读得到根外。所以受管浏览器的
  *    partition 上，每一个 file:// 请求（主框架、子框架、子资源）都要 realpath 后落在**这个 tab 的
- *    放行根**里——放行根是把它打开的那道入口闸认的那几个根；从没经入口闸打开过本地网页的 tab
- *    （以及弹窗、未知来源）一律不放。
+ *    放行根**里——放行根只是当前网页真实路径所在的目录，不是整条会话的范围；从没经入口闸打开过
+ *    本地网页的 tab（以及弹窗、未知来源）一律不放。
  *
  * 用户地址栏不收本地路径（address.ts 的 resolveAddressOrSearch）：「你的」tab 只能经文件面板的
  * 「在内置浏览器打开」（files/ipc.ts，文件面板白名单）或轮尾卡打开本地网页。
  */
 import { realpath as fsRealpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Session } from "electron";
 import { isWebPageFile } from "../../shared/files.ts";
 import type { LocalPageRefusal } from "../../shared/browser.ts";
-import { realpathInside } from "../path-boundary.ts";
+import { isInside, realpathInside } from "../path-boundary.ts";
 
 /** 形如本地路径的输入：绝对路径（POSIX / Windows 盘符 / UNC 与设备路径 `\\…`）或 file:// 地址 */
 export function looksLikeLocalPath(input: string): boolean {
@@ -41,6 +41,14 @@ export function looksLikeLocalPath(input: string): boolean {
 export type LocalFileResult =
   | { ok: true; path: string }
   | { ok: false; reason: LocalPageRefusal; error: string };
+
+/**
+ * 给已经过入口闸的网页真实路径算出页面根。入口仍按整条会话范围判定，页面自己只能读所在目录
+ * （含子目录）；所有打开路径都必须用 resolved.path，而不是用户输入的原始路径，防止软链接换根。
+ */
+export function localPageRoots(realPage: string): readonly string[] {
+  return [dirname(realPage)];
+}
 
 /**
  * 输入 → 可以加载的本地文件真实路径。roots 是本会话能用的目录（不必存在——不在的跳过）。
@@ -119,14 +127,25 @@ function uncHostOf(root: string): string | null {
 }
 
 /**
+ * path 是否落进 root 下的点开头文件 / 目录。root 本身可以叫 `.config`：页面若就在这个条目里，
+ * 相对路径不含它，资源照常；但页面目录里的 `.env`、`.git/config` 与 `..cache/x` 都默认拒绝。
+ */
+function hasDotEntry(root: string, path: string): boolean {
+  if (!isInside(root, path)) return false;
+  return relative(resolve(root), resolve(path)).split(sep).some((part) => part.startsWith("."));
+}
+
+/**
  * 页面闸的判定：一个 file:// 请求（主框架跳转、iframe、fetch、脚本、图片……）放不放行——
- * realpath 之后必须落在 roots 之一里。roots 为空（tab 从没经入口闸打开过本地网页）、
- * 不是 file://、地址坏了、文件不存在，一律不放。realpath 可注入，测试用。
+ * realpath 之后必须落在 roots 之一里，且请求路径与真实路径都不能穿过点开头条目。pagePath 是唯一
+ * 例外：它对应的顶层文档已过入口闸，哪怕文件名本身点开头也仍能打开。roots 为空（tab 从没经入口闸
+ * 打开过本地网页）、不是 file://、地址坏了、文件不存在，一律不放。realpath 可注入，测试用。
  */
 export async function localRequestAllowed(
   url: string,
   roots: readonly string[],
   realpath: (path: string) => Promise<string> = fsRealpath,
+  pagePath?: string,
 ): Promise<boolean> {
   if (roots.length === 0) return false;
   let parsed: URL;
@@ -146,7 +165,24 @@ export async function localRequestAllowed(
   } catch {
     return false;
   }
-  return (await realpathInside(path, roots, realpath)) !== null;
+  const requestedPage = pagePath !== undefined && resolve(path) === resolve(pagePath);
+  // 请求路径先挡一次：即使某个点名目后来是指向普通文件的链接，也不把它当成网页资源。
+  if (!requestedPage && roots.some((root) => hasDotEntry(root, path))) return false;
+  const real = await realpathInside(path, roots, realpath);
+  if (real === null) return false;
+  const realPage = pagePath !== undefined && resolve(real) === resolve(pagePath);
+  // 真身也挡一次：普通名字的软链接不能借道读同目录的 .env / .git。root 可能是软链接，按真身比。
+  if (realPage) return true;
+  for (const root of roots) {
+    let realRoot: string;
+    try {
+      realRoot = await realpath(root);
+    } catch {
+      continue;
+    }
+    if (hasDotEntry(realRoot, real)) return false;
+  }
+  return true;
 }
 
 /**
@@ -158,9 +194,10 @@ export async function localRequestAllowed(
 export function guardLocalFileRequests(
   partition: Session,
   rootsOf: (webContentsId: number | undefined) => readonly string[],
+  pageOf: (webContentsId: number | undefined) => string | undefined = () => undefined,
 ): void {
   partition.webRequest.onBeforeRequest({ urls: ["file://*/*"] }, (details, callback) => {
-    void localRequestAllowed(details.url, rootsOf(details.webContentsId)).then(
+    void localRequestAllowed(details.url, rootsOf(details.webContentsId), fsRealpath, pageOf(details.webContentsId)).then(
       (allowed) => callback({ cancel: !allowed }),
       () => callback({ cancel: true }),
     );

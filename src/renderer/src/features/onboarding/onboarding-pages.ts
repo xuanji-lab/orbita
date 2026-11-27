@@ -9,7 +9,7 @@
  * 坐标取自拍图时 DOM 元素的真实外框（拍图脚本顺手量出来的），不是目测。
  *
  * 贯穿全程一个案例：一个研究课题，从接模型、读论文、交文件夹，到派子会话、做插件、
- * 每天自动跑、一周看板、收尾——截图都出自同一个课题，前后接得上。
+ * 每天自动跑、一周看板、专注——截图都出自同一个课题，前后接得上。
  */
 
 import { SHOT_BOXES } from "./shot-boxes.ts";
@@ -21,7 +21,6 @@ export const SHOT_IDS = [
   "general",
   "migration",
   "composer",
-  "permission",
   "working",
   "rewind",
   "plan",
@@ -53,8 +52,6 @@ export const SHOT_IDS = [
   "automation-edit",
   "board-week",
   "focus",
-  "closing",
-  "carryovers",
 ] as const;
 export type ShotId = (typeof SHOT_IDS)[number];
 
@@ -217,7 +214,6 @@ const composer = {
   card: box("composer", "card"),
   clip: box("composer", "clip", 0.003),
   ws: box("composer", "ws", 0.003),
-  perm: box("composer", "perm", 0.003),
   model: box("composer", "model", 0.003),
   think: box("composer", "think", 0.003),
 };
@@ -263,13 +259,8 @@ export const GUIDE: readonly GuideChapter[] = [
         focus: composer.card,
         // 1–3 只在放大镜里（底栏小字原图里看不清）；原图上只留框住整张输入卡的 4，一页一套编号
         pins: [pin(4, composer.card, "tl")],
-        loupe: loupe(composerLoupe, { x: 0.2, y: 0.62 }, 2, [[1, composer.clip], [2, composer.ws], [3, composer.perm]]),
+        loupe: loupe(composerLoupe, { x: 0.2, y: 0.62 }, 2, [[1, composer.clip], [2, composer.ws], [3, union(composer.model, composer.think)]]),
         say: true,
-      }),
-      step("permission", "permission", {
-        focus: union(box("permission", "menu"), box("permission", "perm")),
-        pins: [pin(1, box("permission", "menu"), "tr")],
-        loupe: loupe(padded(union(box("permission", "menu"), box("permission", "perm")), 0.02), { x: 0.5, y: 0.38 }, 2.2),
       }),
       step("watch", "working", {
         focus: box("working", "block"),
@@ -452,15 +443,12 @@ export const GUIDE: readonly GuideChapter[] = [
       step("week", "board-week", { focus: box("board-week", "card"), pins: [pin(1, box("board-week", "card"), "tl")] }),
     ],
   },
-  // 第 13 章原型第 4 页「交给自动化消化」（让自动化把「以后再做」消化掉）是虚线待定：等实测结论再加，先不做
   {
     id: "focus",
     part: "tools",
     pages: [
       opener("focus"),
       step("focus", "focus", { focus: box("focus", "picker"), pins: [pin(1, box("focus", "key", 0.004), "b")] }),
-      step("wrap", "closing", { focus: box("closing", "card"), pins: [pin(1, box("closing", "tick", 0.004), "b")] }),
-      step("later", "carryovers", { focus: part(box("carryovers", "list", 0), { h: 0.55 }), pins: [pin(1, box("carryovers", "list", 0), "tr")] }),
     ],
   },
   { id: "faq", part: "appendix", pages: [faq("perms"), faq("data"), faq("twice"), faq("language"), faq("background"), faq("update")] },

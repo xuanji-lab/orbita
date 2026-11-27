@@ -30,7 +30,6 @@ const baseMeta = {
   recentQueries: [],
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan" as const,
   thinkingLevel: "medium" as const,
   stats: null,
   createdAt: 1,

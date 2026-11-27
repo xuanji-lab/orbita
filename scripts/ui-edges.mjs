@@ -145,6 +145,23 @@ const CHECKS = [
     skipNoTrailing: true,
   },
   {
+    name: "编排侧栏·智能体行：「多久没动了」钉在右血线（悬停动作键叠在右上角，静止不占位）",
+    row: ".agent-row-main",
+    leading: ".agent-avatar",
+    trailing: ".agent-time",
+    // .agent-row-main 的右内边距 var(--space-2)、左内边距 var(--space-1)（头像落在会话行图标槽那条线上）
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
+    name: "编排侧栏·智能体行：等你的小圆点钉在右血线",
+    row: ".agent-row-main",
+    leading: ".agent-avatar",
+    trailing: ".agent-dot",
+    rightPad: 8,
+    skipNoTrailing: true,
+  },
+  {
     name: "左栏·会话行：「多久没动了」钉在右血线（悬停层的键叠在同一格里，静止不占位）",
     row: ".task-row",
     leading: ".option-row span",
@@ -226,7 +243,7 @@ const column = await evaluate(`(() => {
   if (transcript === null || composer === null) return null;
   const box = transcript.getBoundingClientRect();
   // 方向 N（2026-11-07）：消息列左侧有一条索引边栏（padding-left: --gutter），「外线」是它的内容盒边缘，
-  // 不是列的 border box——输入卡与正文都坐在内容盒里。纸面两档没有边栏，padding 为 0，口径不变
+  // 不是列的 border box——输入卡与正文都坐在内容盒里。padding 由当前列宽决定，量法不变
   const style = getComputedStyle(transcript);
   const t = { left: box.left + parseFloat(style.paddingLeft), right: box.right - parseFloat(style.paddingRight) };
   const c = composer.getBoundingClientRect();

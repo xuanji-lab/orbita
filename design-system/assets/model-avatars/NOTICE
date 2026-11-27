@@ -4,7 +4,7 @@ of their respective owners and are used here only to identify each model. Orbita
 in them. If you own one of these images and want it removed or replaced, open an issue.
 
 Rules for this directory: design-system/readme.md, "Iconography" (model avatars).
-Each entry: file — models it is used for — source — what was changed. Retrieved 2026-10-24/25.
+Each entry: file — models it is used for — source — what was changed. Retrieved 2026-10-24/25, 2026-11-23.
 
 kimi-k3.1.png — kimi-k3.1-pro, k3.1-pro (+ highspeed)
   Source: Moonshot AI, Kimi K3.1 launch blog header artwork (kimi.com blog).
@@ -22,6 +22,12 @@ claude-fable.svg / claude-opus.svg / claude-sonnet.svg / claude-haiku.svg — cl
 glm-5.3.png — glm-5.3
   Source: Zhipu AI WeChat Official Account post cover, "GLM-5.3".
   Changes: cropped to the numeric triangle.
+
+glm-5.4.png — glm-5.4
+  Source: Zhipu AI WeChat Official Account post cover,
+  "GLM-5.4：瞄向泛Coding，首个Loop Transformer带来的惊喜" (mp.weixin.qq.com/s/3mEIThoGiM6LhBAjUQAATw).
+  Changes: cropped to the three loops right of the title (the ascending tail left out); levels
+  adjusted (black 30, white 225) so the thin lines stay readable at 16 px.
 
 glm-5.3-flash.png — glm-5.3-flash
   Source: Zhipu AI WeChat Official Account post cover, "GLM-5.3-Flash".

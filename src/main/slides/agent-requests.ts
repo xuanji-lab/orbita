@@ -12,7 +12,7 @@ import { writeBytesAtomic } from "../atomic-write.ts";
 import { realpathInside } from "../path-boundary.ts";
 import type { ExportedDeck } from "./export.ts";
 
-const WRITABLE: ReadonlySet<FileRoot["kind"]> = new Set(["session", "workspace", "attached"]);
+const WRITABLE: ReadonlySet<FileRoot["kind"]> = new Set(["session", "workspace", "attached", "subsession"]);
 
 export interface SlidesAgentDeps {
   roots: readonly FileRoot[];

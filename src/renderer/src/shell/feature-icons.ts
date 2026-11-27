@@ -9,15 +9,15 @@
  * `feature-icons.test.ts` 会拦下渲染层里新出现的字面量（撞通用义的少数名字有放行档，见该测试）。
  *
  * 键名跟功能走，不跟右栏条目的 id 走：task=这条任务（右栏 id 是 context）、
- * carryovers=以后再做。加新功能先在这里登记一行，再在表面里引用。
+ * 加新功能先在这里登记一行，再在表面里引用。
  */
 import type { IconName } from "./Icon.tsx";
 
 export const FEATURE_ICON = {
   /** 这条任务：右栏面板、面板里的「进度」页签、聊天里的计划卡 */
   task: "clipboard-list",
-  /** 以后再做（遗留事项）：侧栏子视图、收尾扫描卡、收工卡 */
-  carryovers: "hourglass",
+  /** 状态卡：对话区右上角收起时那颗钮与卡头（2026-11-23 用户：与「这条任务」、会话胶囊撞了） */
+  status: "gauge",
   /** 记忆库：右栏入口、「用到 N 条记忆」chip、审查面板的记忆页签与空态 */
   memory: "notebook-text",
   /** 自动化：面板标题与空态、聊天里建自动化的卡与唤醒行、周看板的排定运行 */
@@ -38,8 +38,12 @@ export const FEATURE_ICON = {
   terminal: "square-terminal",
   /** 内置浏览器（globe 同时是「网页/全局」的通用图标，通用处不走表） */
   browser: "globe",
-  /** 子会话：面板头与空态、会话行的子会话角标、行状态、迁移视图 */
-  subsessions: "git-fork",
+  /** 子会话：右栏入口、面板头与空态、会话行的子会话角标、行状态、迁移视图、对话流里的派出 / 交回卡与子会话视图顶行（2026-11-22 由 git-fork 换成 bot：用户「子会话的 icon 都是机器人」） */
+  subsessions: "bot",
+  /** 会话引用：从左栏拖进输入框的会话胶囊、气泡里的同一颗（2026-11-23 用户：与「这条任务」、状态卡撞了；选单个气泡，与辅助对话同一个） */
+  taskRef: "message-square",
+  /** 编排：右栏「编排」面板（树状图 / 星系图 / 协作图）的入口与面板头 */
+  orchestra: "git-fork",
   /** 意图：面板头与空态、输入框旁的意图开关、召回卡 */
   intent: "waypoints",
   /** 已归档（archive 同时是「归档状态」的通用图标） */
@@ -50,4 +54,6 @@ export const FEATURE_ICON = {
   settings: "settings",
   /** 通知（右栏铃铛与通知卡空态） */
   bell: "bell",
+  /** 不打岔：状态卡上的开关与收起小钮上的标记（子会话回报先攒着、不自己开轮） */
+  holdReports: "bell-off",
 } as const satisfies Record<string, IconName>;

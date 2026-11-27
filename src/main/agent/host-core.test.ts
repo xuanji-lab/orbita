@@ -62,7 +62,6 @@ const TURN_FIELDS = {
   cwd: "C:/work",
   provider: { id: "zai", api: "openai-completions", baseUrl: "", apiKey: "k", models: [{ id: "m" }] },
   modelId: "m",
-  mode: "manual" as const,
   thinkingLevel: "medium" as const,
   piSessionDir: "C:/pi-sessions",
   attachmentsDir: "C:/sessions/test.attachments",
@@ -419,7 +418,7 @@ describe("answerReadTask —— 读 task 请求的发送侧（B-1）", () => {
   test("成功回执带 card 与 text；失败回执只带 error；进程没了就静默（不 ensure）", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
-    // 没开机时静默：不为一条回执拉起整个 runtime（answerPermission 同款理由）
+    // 没开机时静默：不为一条回执拉起整个 runtime（answerIntentConfirm 同款理由）
     ctx.host.answerReadTask("r0", { ok: false, error: "gone" });
     assert.equal(ctx.forks(), 0);
     assert.equal(ctx.child(), undefined);
@@ -499,7 +498,7 @@ describe("answerModelCosts —— 派发参考的回执", () => {
 });
 
 describe("answerAutomation —— 自动化工具请求的回执", () => {
-  test("成功回执逐字段带上卡、列表与「改权限」那一行（漏了行，工具结果里就没有那一行）；失败只带 error", async (t) => {
+  test("成功回执逐字段带上卡与列表；失败只带 error", async (t) => {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const ctx = await freshHost();
     const pending = firstSubmit(ctx.host, "s1");
@@ -517,11 +516,10 @@ describe("answerAutomation —— 自动化工具请求的回执", () => {
       nextRunAt: 1,
       runCount: 0,
     };
-    const modeRow = { state: "pending" as const, requestId: "r1", automationId: "au1", title: "每日一篇", sessionMode: "manual" as const };
-    ctx.host.answerAutomation("q1", { ok: true, text: "NOT changed", automation: card, modeRow });
+    ctx.host.answerAutomation("q1", { ok: true, text: "created", automation: card });
     ctx.host.answerAutomation("q2", { ok: true, text: "list", automations: [card] });
     ctx.host.answerAutomation("q3", { ok: false, error: "No such automation" });
-    assert.deepEqual(ctx.child().posted.at(-3), { type: "automationResult", requestId: "q1", ok: true, text: "NOT changed", automation: card, modeRow });
+    assert.deepEqual(ctx.child().posted.at(-3), { type: "automationResult", requestId: "q1", ok: true, text: "created", automation: card });
     assert.deepEqual(ctx.child().posted.at(-2), { type: "automationResult", requestId: "q2", ok: true, text: "list", automations: [card] });
     assert.deepEqual(ctx.child().posted.at(-1), { type: "automationResult", requestId: "q3", ok: false, error: "No such automation" });
   });
@@ -677,40 +675,6 @@ describe("mcpReload —— 回执共享在飞的一份（PR #163 验收：单槽
     const { host, child } = await runningHost();
     const pending = host.mcpReload();
     await assert.rejects(Promise.all([pending, Promise.resolve().then(() => child().exitWith(1))]), /exited/);
-  });
-});
-
-describe("choreComplete（收尾清单按反馈改写）", () => {
-  test("不是会话里的一轮：命令不带 sessionId、不碰任何会话；回执只结发起方，不广播（没有 thinking / model 事件可被输入卡对齐）", async () => {
-    const child = new FakeChild();
-    const events: AgentEvent[] = [];
-    const host = new AgentHostCore(() => child, (event) => events.push(event));
-    const pending = host.choreComplete(TURN_FIELDS.provider, "flash", "sys", "prompt");
-    child.emit({ type: "ready" });
-    await flush();
-    const commands = child.posted.filter((command) => command.type !== "listBuiltins");
-    assert.equal(commands.length, 1);
-    assert.equal(commands[0]?.type, "choreComplete");
-    assert.equal("sessionId" in (commands[0] ?? {}), false);
-    const command = commands[0] as Extract<AgentCommand, { type: "choreComplete" }>;
-    child.emit({ type: "choreCompleted", requestId: command.requestId, text: "```json\n{}\n```" });
-    assert.equal(await pending, "```json\n{}\n```");
-    assert.equal(events.length, 0);
-  });
-
-  test("失败回执 reject 带原因；进程退出 reject", async () => {
-    const child = new FakeChild();
-    const host = new AgentHostCore(() => child, () => undefined);
-    const failed = host.choreComplete(TURN_FIELDS.provider, "m", "s", "p");
-    child.emit({ type: "ready" });
-    await flush();
-    const command = child.posted.find((c) => c.type === "choreComplete") as Extract<AgentCommand, { type: "choreComplete" }>;
-    child.emit({ type: "choreCompleted", requestId: command.requestId, text: null, error: "401" });
-    await assert.rejects(failed, /401/);
-    const late = host.choreComplete(TURN_FIELDS.provider, "m", "s", "p");
-    await flush();
-    child.exitWith(1);
-    await assert.rejects(late, /exited/);
   });
 });
 

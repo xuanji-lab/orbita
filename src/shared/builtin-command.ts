@@ -71,18 +71,3 @@ export function readCommandCard(details: unknown): CommandCardData | null {
   return { kind, path, title, ...(typeof subtitle === "string" ? { subtitle } : {}) };
 }
 
-/**
- * 完成卡点击后右栏该开什么。
- *
- * 优先用工具自己给的 `openPanel`（它知道产物在哪、要不要抢面板）；导出卡即使没给也
- * 退回「按文件面板打开 card.path」——导出产物（docx / pdf / pptx / md / png）都是面板
- * 能预览的类型，卡点不动等于让用户自己去文件树里找（2026-11-22 的「导出闭环」）。
- * 卡本身坏了（缺 path）就返回 null，不猜路径。
- */
-export function cardOpenHint(details: unknown): OpenPanelHint | null {
-  const explicit = readOpenPanel(details);
-  if (explicit !== null) return explicit;
-  const card = readCommandCard(details);
-  if (card === null || card.kind !== "export") return null;
-  return { kind: "files", path: card.path };
-}

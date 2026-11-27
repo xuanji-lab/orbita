@@ -9,8 +9,6 @@ import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   parseSessionUnread,
   transcriptToMarkdown,
-  type CarryoverStatus,
-  type SessionCompletion,
   type SessionMoveResult,
   type SessionOlderPage,
 } from "../../shared/session.ts";
@@ -24,19 +22,20 @@ import {
   type ModelAssignRunResult,
 } from "../../shared/model-assign.ts";
 import type { AgentHost } from "../agent/host.ts";
-import type { CarryoverStore } from "./carryover-store.ts";
 import { executeRevert, executeUndo, fileTurnsIn, planRevert, planUndo, revertFromTurn } from "./revert.ts";
 import type { RevertFileOutcome } from "../../shared/revert.ts";
+import { artifactSummaries } from "./artifact-summary.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { SessionRecord } from "../../shared/session.ts";
 import type { ProviderStore } from "../provider/store.ts";
-import type { SessionStore } from "./store.ts";
+import { isSessionId, type SessionStore } from "./store.ts";
+import type { StatusDigestStore } from "./status-digest.ts";
+import type { StatusDigestState } from "../../shared/status-digest.ts";
 
 export function registerSessionIpc(
   store: SessionStore,
   onSessionRemoved: ((id: string) => void) | undefined,
   agentHost: AgentHost,
-  carryovers: CarryoverStore,
   /** 给导入的会话分配模型：执行前校验目标 provider / 模型仍存在（model-assign.ts） */
   providers: ProviderStore,
   /**
@@ -46,6 +45,8 @@ export function registerSessionIpc(
   openArtifactInBrowser: (sessionId: string, path: string) => Promise<ArtifactOpenResult>,
   /** 迁移会话（session/move.ts 的 moveSessions，index.ts 绑好工作区表与 phase 表） */
   moveSessions: (ids: readonly string[], workspaceId: string | null) => Promise<SessionMoveResult>,
+  /** 状态卡摘要（status-digest.ts）：session:status-digests 的数据面 */
+  statusDigests: StatusDigestStore,
   /**
    * 会话回退成功后的钩子（index.ts 注入：意图系统作废 + 记忆系统停用 / 截段；undefined = 不启用）。
    * turnIds = 被撤回轮次的 user 记录 id；fromTurn = 回退点那条用户消息的轮号（按用户消息计、
@@ -67,6 +68,11 @@ export function registerSessionIpc(
     (_event, id: string, before: string, limit: number): Promise<SessionOlderPage> =>
       store.loadOlder(id, before, limit),
   );
+  // 状态卡摘要：一批会话 id（主会话 + 子会话）一次取回；id 在入口洗过白名单
+  ipcMain.handle(ipcChannels.sessionStatusDigests, (_event, ids: unknown): Promise<Record<string, StatusDigestState | null>> => {
+    const clean = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string" && isSessionId(id)) : [];
+    return statusDigests.digests(clean);
+  });
 
   // —— 给导入的会话分配模型（设置 › 服务商，契约在 shared/model-assign.ts） ——
   ipcMain.handle(ipcChannels.modelAssignGroups, async (): Promise<ModelAssignGroups> =>
@@ -127,24 +133,18 @@ export function registerSessionIpc(
   ipcMain.handle(ipcChannels.sessionStar, (_event, id: string, starred: boolean) =>
     store.setStarred(id, starred),
   );
-  ipcMain.handle(
-    ipcChannels.sessionSetCompletion,
-    (_event, id: string, completion: SessionCompletion) => store.setCompletion(id, completion),
-  );
   // 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效
   ipcMain.handle(
     ipcChannels.sessionSetIntentEnabled,
     (_event, id: string, enabled: boolean) => store.setIntentEnabled(id, enabled),
   );
+  ipcMain.handle(ipcChannels.sessionSetAutoCompact, (_event, id: string, enabled: unknown) =>
+    // 载荷在入口就洗：只认布尔，坏形状拒绝（不裸存进 meta）
+    typeof enabled === "boolean" ? store.setAutoCompact(id, enabled) : Promise.reject(new Error("autoCompact 只认布尔")),
+  );
   ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
     // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
     store.setUnread(id, parseSessionUnread(unread)),
-  );
-  // —— 遗留事项（收尾仪式）三通道。store 铸 id/status/时间戳，renderer 不猜 ——
-  ipcMain.handle(ipcChannels.carryoverList, () => carryovers.list());
-  ipcMain.handle(
-    ipcChannels.carryoverSetStatus,
-    (_event, id: string, status: CarryoverStatus) => carryovers.setStatus(id, status),
   );
   ipcMain.handle(ipcChannels.sessionArchive, (_event, id: string, archived: boolean) =>
     store.setArchived(id, archived),
@@ -260,6 +260,8 @@ export function registerSessionIpc(
   );
   // 第二个出口是「打开文件所在位置」而不是「默认浏览器」（用户 2026-10-01 裁决）：
   // 默认浏览器与内置浏览器是同一件事的两个版本，定位文件才是另一种需要（拷走、拖进别的应用）
+  // 编排面板协作图：一批会话的产物摘要（只读文件账，不碰文件本身）
+  ipcMain.handle(ipcChannels.sessionArtifactSummary, (_event, ids: unknown) => artifactSummaries(store, ids));
   ipcMain.handle(ipcChannels.sessionRevealArtifact, async (_event, id: string, path: string) => {
     await knownArtifact(id, path);
     shell.showItemInFolder(path);

@@ -4,7 +4,6 @@
  * 范围刻意只有主题一项。设置面从极少的 tab 起步、但 UI 第一天就落（guideline §六）；
  * 字段等有真实消费者再加，不提前占位。
  */
-import { PERMISSION_MODES, type PermissionMode } from "./permission.ts";
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
@@ -20,37 +19,20 @@ import { isDocxTemplateMode, type DocxTemplateMode } from "./docx-export.ts";
  * **"black"**（玄 Onyx，纯灰、外壳亮堂）。**档位 id 沿用旧名不动**——它们是 settings/IPC
  * 契约，换的只是显示名（`themes` 在 messages-*.ts）。第三档 "dark"（Warm 微暖）
  * 2026-09-27 退役，存量设置迁移到 graphite（`parseTheme`）。
- *
- * "copybook"（小学作业）与 "typescript"（打字稿）是璇玑载体谱「稿纸」一档的中文与英文
- * 两版（wafo 2026-09-25 要求载入）：绿格作业本 + 红笔，与打字稿 + 红色页边线。**只有明**，
- * system 不落这两档，都是手动档。copybook 载入当天由 "manuscript"（稿纸）改名：那个年代
- * 小学生写字用的是绿格作业本，不是稿纸。旧 id 的兼容见 `parseTheme`。
  */
-export const THEME_PREFERENCES = ["system", "light", "graphite", "black", "copybook", "typescript"] as const;
+export const THEME_PREFERENCES = ["system", "light", "graphite", "black"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
-/** 界面语言。缺席 = "en"（语言设置落地之前，双语主题一直是英文界面） */
+/** 界面语言。缺席 = "en"（语言设置落地之前的默认） */
 export const LANGUAGES = ["en", "zh"] as const;
 export type Language = (typeof LANGUAGES)[number];
 
 /**
- * 主题自带的语言。**稿纸一档是单语的**：小学作业的绿格按汉字画、打字稿的横线按英文打字机
- * 画，换一门文字格子就对不上（wafo 2026-09-25 当初不加语言开关的理由，正是这种组合）；
- * 其余各档（system 与它落到的 light / black，以及 graphite）中英都成立，跟 `language` 走。
- * null = 这个主题不定语言。
+ * 实际生效的语言：跟设置走。**渲染层（文案表、`<html lang>`）与主进程
+ * （commit / PR 署名）都走这一条**——两边各判一次的话，界面是中文、署名是英文。
  */
-export function themeLanguage(theme: ThemePreference): Language | null {
-  if (theme === "copybook") return "zh";
-  if (theme === "typescript") return "en";
-  return null;
-}
-
-/**
- * 实际生效的语言：单语主题说了算，双语主题听设置。**渲染层（文案表、`<html lang>`）
- * 与主进程（commit / PR 署名）都走这一条**——两边各判一次的话，界面是中文、署名是英文。
- */
-export function effectiveLanguage(theme: ThemePreference, language: Language | undefined): Language {
-  return themeLanguage(theme) ?? language ?? "en";
+export function effectiveLanguage(language: Language | undefined): Language {
+  return language ?? "en";
 }
 
 /**
@@ -90,13 +72,11 @@ export const COMPACTION_DEFAULT: CompactionSetting = { reservePercent: 20, enabl
 export const COMPACTION_PERCENT = { min: 5, max: 50 } as const;
 
 /**
- * 上次使用的权限档与模型（A-0 复验 bug A：重启后 composer 忘了上次的选择）。
- * 会话各自的档/模型记在各条 meta 与内存 Map（按会话记账，cd0ee98）；这里是
- * **启动恢复点**：新会话槽的初始值。切换时逐键写回（改档只写 mode）。
- * 缺席 = 应用默认（DEFAULT_PERMISSION_MODE、第一个可用模型）。
+ * 上次使用的模型（A-0 复验 bug A：重启后 composer 忘了上次的选择）。
+ * 会话各自的模型记在各条 meta 与内存 Map；这里是新会话槽的启动恢复点。
+ * 缺席 = 第一个可用模型。旧版本在这里存过的权限档（mode）不再读。
  */
 export interface LastUsedIntent {
-  mode?: PermissionMode;
   providerId?: string;
   modelId?: string;
   // 思考档**不在这里**（wafo 2026-09-23）：彻底重启才落回模型的默认档，没重启就
@@ -105,7 +85,7 @@ export interface LastUsedIntent {
 }
 
 /**
- * 给家务活用的模型（起名、收尾扫描、迁移的随手一句检查……）。这些是一次次的
+ * 给家务活用的模型（起名、迁移的随手一句检查……）。这些是一次次的
  * 小调用，用不着主力模型——指一个小而快的，来得更快也更便宜，后面还会让它
  * 承担更多家务。两个 id 必须成对：光有 modelId 无法定位到哪家的密钥。
  */
@@ -115,16 +95,31 @@ export interface ModelPair {
 }
 
 /**
+ * `lastUsed` 里的两个 id 都在才算一个模型（它逐字段可选，存半截的定位不到哪家的密钥）。
+ * 「生成形象」主进程兑底时拿它当会话栏的模型：面板没带型号，主进程读得到的只有这一对。
+ */
+export function lastUsedPair(settings: Pick<AppSettings, "lastUsed">): ModelPair | undefined {
+  const last = settings.lastUsed;
+  return last?.providerId !== undefined && last.modelId !== undefined ? { providerId: last.providerId, modelId: last.modelId } : undefined;
+}
+
+/**
+ * 「生成形象」用哪个模型（星系设计面板 › 形象一节的模型菜单）。三种取法：
+ * - **缺席 = 跟会话栏**：用输入框此刻的模型（主进程兑底时读 `lastUsed`）。默认值不是子会话模型——
+ *   2026-11-25 用户在会话栏换了两次模型，出图两次都是子会话默认的那一家（「我一开始以为是用 session 栏的模型」）；
+ * - `"sub_session"` = 走子会话默认模型那条链路（`subSessionModel`；它被关 / 被删 / 没设时退回会话栏）；
+ * - 一对 { providerId, modelId } = 面板里挑定的型号（有人会特地换一个更会画的模型来出图）。
+ * 思考档不在这里（同 lastUsed）：跟型号的默认档走；落的是子会话默认模型时沿 `subSessionThinking`。
+ */
+export type AvatarModelChoice = ModelPair | "sub_session";
+
+/**
  * 实验功能的档位 id（2026-10-12 起逐项开关）。**唯一来源在这里**：设置键
  * `experimentalFeatures` 按它记账，renderer 的 `experimental-features.ts` 清单与
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
  * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
  */
-export const EXPERIMENTAL_FEATURE_IDS = [
-  "paper-themes",
-  "pdf-citations",
-  "intent-system",
-] as const;
+export const EXPERIMENTAL_FEATURE_IDS = ["intent-system"] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
 /**
@@ -178,14 +173,21 @@ export interface UsagePetPref {
   hidden?: true;
 }
 
-/** 过程显示的两种形态，见 AppSettings.processView */
-export type ProcessView = "turn" | "steps";
+/** 过程显示的三档，见 AppSettings.processView */
+export type ProcessView = "chapters" | "flat" | "steps";
+
+/** processView 的读时兼容：新三档原样；旧 "turn" 按旧 processLayout 映射到前两档；旧 "steps" 原样；只有旧 processLayout（缺 processView）也按它认 */
+export function parseProcessView(view: unknown, legacyLayout: unknown): ProcessView | undefined {
+  if (view === "chapters" || view === "flat" || view === "steps") return view;
+  if (view === "turn") return legacyLayout === "flat" ? "flat" : "chapters";
+  if (view === undefined && legacyLayout === "flat") return "flat";
+  return undefined;
+}
 
 export interface AppSettings {
   theme: ThemePreference;
   /**
-   * 界面语言偏好。**只在双语主题下生效**（见 `effectiveLanguage`）：选了小学作业 / 打字稿时
-   * 这个值留着不动，切回双语主题就恢复。缺席 = "en"。
+   * 界面语言偏好。缺席 = "en"。
    */
   language?: Language;
   /**
@@ -230,6 +232,36 @@ export interface AppSettings {
   latexProblemsHeight?: number;
   /** `.pptx` 大纲页列表的宽度（px）：140–360，缺席 = 184。容器 <420 时布局转上下，不生效。 */
   pptxPagesWidth?: number;
+  /**
+   * 星系的相机俯角（度，设置 › 外观 › 星系倾角）：单智能体首页、编排 New Task 页、右栏星系图、设计面板的轨道预览同一个值
+   * （2026-11-24 用户：「可以多给我几种倾斜角度的星系吗，我来选一个舒服的，或者我们也可以直接 provide 这个 option」）。
+   * 只认 GALAXY_TILT 区间内、步长整数倍的值，别的丢掉；缺席 = GALAXY_TILT.default
+   */
+  galaxyTilt?: number;
+  /**
+   * 星系的方位角（度，0–359 整数，转台：绕竖直的 z 轴转）：星系空白处左右拖动 / 左右方向键改，四处星系同一个值。
+   * 全局存、不按工作区存：它与倾角是同一个「从哪个方向看星系」，用户要的是四处一致（2026-11-24）。缺席 = 0
+   */
+  galaxyAzimuth?: number;
+  /** 左右拖动旋转星系（转台）：缺席 = 开；关掉后左右拖动与左右方向键不改方位角，只能上下改倾角 */
+  galaxyTurntable?: boolean;
+  /**
+   * 离电时省电（设置 › 外观）：缺席 = 开。开着时用电池就进省电档——星系停转、碎石带隐藏、眼睛不跟指针；插上电恢复。
+   * （2026-11-24 用户：「能离电就默认关掉吗？」）
+   */
+  galaxyBatterySaver?: boolean;
+  /** 「已切到省电」那条轻提示出过了（只提示一次） */
+  galaxyBatteryNoticeSeen?: boolean;
+  /**
+   * 星系缩放（倍，GALAXY_ZOOM 区间，两位小数）：星系上滚轮 / 双指缩放，与倾角、方位一起全局存。缺席 = 1。
+   * 平移（以指针为中心缩放带出来的）不存：它按像素算，换一块画布就没意义；重开回到主星居中
+   */
+  galaxyZoom?: number;
+  /**
+   * 碎石密度（设置 › 外观）：星系碎石带里普通会话画多少——全部 / 一半 / 十分之一 / 不显示。显示越多越耗电
+   * （2026-11-24 用户：「session 太多了，有太多粒子要计算……这个可能得是可以调的」）。缺席 = 一半
+   */
+  galaxyDustDensity?: GalaxyDustDensity;
   drawer: DrawerSettings;
   /**
    * 自动压缩偏好（A-1）。缺席 = COMPACTION_DEFAULT（主进程装配开轮命令时兜底）。
@@ -245,18 +277,23 @@ export interface AppSettings {
    */
   collapsePastedText?: boolean;
   /**
+   * 回答里本地图的默认尺寸（2026-11-23）：右键一张图选「大图 / 小图」，选的这一次记下来，之后新出现的图按它画。
+   * **缺席 = "large"**。已经画在屏幕上的图不跟着变（每张图挂载时读一次），免得右键一张、整页的图一起跳。
+   */
+  chatImageSize?: "large" | "small";
+  /**
    * 后台会话跑完时响一声提示音（客舱呼唤铃）。**缺席 = 响**：这个提醒的价值就在于
    * 人不在跟前时也能知道，默认关等于没做。只管声音——侧栏未读底色与辅助对话旁的
    * 卡片不受它影响（静音的人同样需要知道任务完了）。只认布尔，同 gitAttribution。
    */
   completionSound?: boolean;
   /**
-   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30）。**缺席 = "turn"**：
-   * - "turn"：一轮一行——干活时一块定高的现场块（走表 + 当前这一步），落定收成一行结论，
-   *   展开成按旁白切开的几段（features/chat/turn-process.ts）；
-   * - "steps"：逐步铺开——每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条
-   *   Worked（肖志芬的原设计，groupTurns）。
-   * 其余值丢掉。
+   * 聊天里 agent 的思考与工具调用怎么显示（2026-10-30 两档，2026-11-22 扩成三档）。**缺席 = "chapters"**：
+   * - "chapters"「按块」：一轮一行——干活时一块现场（走表 + 当前这一步，点开实时往下长），落定收成一行结论，
+   *   展开后按旁白切成几段（features/chat/turn-process.ts）；
+   * - "flat"「铺开」：同样一轮一行，展开后旁白一行、每一步一行平铺；
+   * - "steps"「逐步铺开」：每次思考 / 工具调用各一行，活跃轮全铺开、落定按旁白收成几条 Worked（肖志芬的原设计，groupTurns）。
+   * 旧设置读时兼容（parseSettings）：旧 "turn" 配旧 processLayout（缺席 / "chapters" → "chapters"，"flat" → "flat"），旧 "steps" 原样。其余值丢掉。
    */
   processView?: ProcessView;
   /**
@@ -286,13 +323,13 @@ export interface AppSettings {
   gitAttribution?: boolean;
   /**
    * 「先给我看计划」（2026-10-30）：agent 第一次写下一张新计划后先停下，等你点头再动手。
-   * **缺席 = 关**：默认不拦，只有 plan 档（计划就是它的产出）与 agent 带了具体问题（confirm）才停。
+   * **缺席 = 关**：默认不拦，只有用户开了「先给我看计划」或 agent 带了具体问题（confirm）才停。
    * 只认布尔，同 gitAttribution 的纪律。改动下一轮对话即生效（主进程每轮现读）。
    */
   planFirst?: boolean;
   /**
-   * 家务活模型：给任务起名、收尾扫描、迁移的「跳过随手一句」检查这类小活的专用模型。
-   * **缺席 = 各自退回会话当时的模型**（起名 / 扫描）或置灰不可用（随手一句检查，
+   * 家务活模型：给任务起名、迁移的「跳过随手一句」检查这类小活的专用模型。
+   * **缺席 = 各自退回会话当时的模型**（起名）或置灰不可用（随手一句检查，
    * 状态行提醒去选）。主进程在发命令前把它解成带密钥的 provider 载荷；指的
    * provider 被删了不拦那件家务，退回会话模型。
    *
@@ -305,6 +342,8 @@ export interface AppSettings {
    * 这里 > 同父。形状同 choreModel（两 id 成对：光有 modelId 定位不到哪家的密钥）。
    */
   subSessionModel?: ModelPair;
+  /** 「生成形象」用哪个模型（取法见 AvatarModelChoice）。**缺席 = 跟会话栏**。 */
+  avatarModel?: AvatarModelChoice;
   /**
    * 子会话的思考档。**绑定 subSessionModel**（wafo 2026-09-23）：档位因模型而异，
    * 脱离模型单独存一档，派到不支持它的模型上就是一个假选项。所以：
@@ -321,7 +360,7 @@ export interface AppSettings {
    * 存对子不存 modelId：光有 modelId 定位不到哪家的密钥（同 choreModel 的理由）。
    */
   starredModels?: ModelPair[];
-  /** 上次使用的权限档与模型；缺席 = 应用默认。 */
+  /** 上次使用的模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
   /**
    * 意图系统（实验功能 intent-system）的设置子对象。**只在实验开关打开时生效**；
@@ -396,6 +435,29 @@ export interface AppSettings {
    */
   boardDays?: BoardDays;
   /**
+   * 侧栏顶部「单智能体 / 编排」切换停在哪一侧（2026-11-23 用户定：运行时仍一套内核，产品上两种形态有入口可切）。
+   * 缺席 = 单智能体（升级后行为与此前完全一致）；只认 "agent" / "orchestrate"，别的值丢掉。
+   */
+  appMode?: AppMode;
+  /**
+   * 编排右栏「编排」面板停在哪种视图（2026-11-24）：树状图 / 星系图 / 协作图，同一份数据三种看法。
+   * 缺席 = 树状图（窄右栏也看得清）；只认三个值。
+   */
+  orchestraView?: OrchestraView;
+  /**
+   * 每个工作区主智能体的「常驻对话」指针（2026-11-24 用户：入口页发送时可选「继续和主智能体聊」，进的是这个工作区
+   * 主智能体那条持久化的会话）。键 = 工作区 id，值 = 会话 id；首次选「常驻对话」发出时建，之后每次都进同一条。
+   * **放设置里、不写会话 meta**：它是工作区的属性，不是那条会话的；指向的会话被删 / 归档 / 移出工作区时由读的一方
+   * 当作没有、重建一条并提示（不在这里清）。按工作区键合并写入（SettingsStore.write），记一个不抹掉别的。
+   * 顶替：旧内核没有常驻主智能体，先拿一条普通会话（照常自动压缩）当它；迁 pi-durable 后由内核的常驻 agent 接管。
+   */
+  orchestraMain?: Readonly<Record<string, string>>;
+  /**
+   * 入口页「发到哪」的上次选择，按工作区记（同 orchestraMain 按键合并写入）：new = 新开专门的会话，
+   * main = 继续和主智能体的常驻对话聊。缺席 = new（见 ORCHESTRA_ENTRY_DEFAULT）。
+   */
+  orchestraEntry?: Readonly<Record<string, OrchestraEntry>>;
+  /**
    * 左栏会话列表的「时间范围」筛选（用户 2026-11-07：「会话生命周期如果可以有一个用最近一天、
    * 最近三天、最近五天、最近七天来筛选要显示的会话就好了」）：只列最后活动（updatedAt）落在
    * 最近 N 天内的会话。**缺席 = 不限**（打开后行为与此前完全一致）；只认 1 / 3 / 5 / 7，其余丢掉。
@@ -406,25 +468,18 @@ export interface AppSettings {
    * 实验功能的逐项开关（2026-10-12 用户裁决：每个 feature 自己的 switch，不再设总开关）。
    * **缺省全部关闭**：缺席的键 = 这一项关着；开过的项写 true、关掉写 false
    * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
-   * 不动数据——已存的主题照常应用、已星标 / 已完成的会话与遗留事项原样在盘上，
+   * 不动数据——已存的主题照常应用、已星标的会话原样在盘上，
    * 开了就回来。
-   *
-   * 各项的语义：
-   * - `paper-themes`：主题选择卡是否列出纸面两档（`selectableThemes`）；
-   * - `pdf-citations`：PDF 引用——模型引 PDF 原文前先过 cite_pdf 核验，核验过的
-   *   才发 [^cXXX] 编号，点编号在文件面板里跳到原文并高亮；关着时编号退回
-   *   纯文本、PDF 不进预览（agent 侧不注册 cite_pdf）。
-   *
-   * 旧键迁移（`parseSettings` 读这一层做，任何一次写入都把旧键从盘上带走）：
-   * - 旧总开关 `experimental: true` 等价于 paper-themes 开（当年还挂着会话生命周期，已转正）。
    *
    * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
    * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
    * `composer-blackhole` / `composer-tetris` 与更早的 `composerBlackhole` 不在表里，
-   * 解析时直接丢，下一次写入从盘上带走。
+   * 解析时直接丢，下一次写入从盘上带走。2026-11-24 删除的 `paper-themes` 与旧总开关
+   * `experimental` 也同样忽略，不影响其它仍在表的实验项。
    *
-   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻）：盘上残留的 `session-lifecycle`
-   * 不在表里，解析时丢掉，开着关着都不再有任何效果。
+   * 转正的项同理（2026-10-24 会话生命周期转正，入口常驻；2026-11-22 PDF 引用转正，
+   * cite_pdf 常注册、PDF 预览与引用编号常开）：盘上残留的 `session-lifecycle` /
+   * `pdf-citations` 不在表里，解析时丢掉，开着关着都不再有任何效果。
    */
   experimentalFeatures?: Partial<Record<ExperimentalFeatureId, boolean>>;
 }
@@ -452,6 +507,63 @@ export interface ProvidersPageSettings {
 export const BOARD_DAYS_CHOICES = [3, 5, 7] as const;
 export type BoardDays = (typeof BOARD_DAYS_CHOICES)[number];
 export const BOARD_DAYS_DEFAULT: BoardDays = 5;
+
+/** 应用形态：单智能体（工作区 → 会话树）/ 编排（工作区 = 一座星系，只和它的主智能体沟通）。缺席 = 单智能体 */
+export const APP_MODES = ["agent", "orchestrate"] as const;
+export type AppMode = (typeof APP_MODES)[number];
+export const APP_MODE_DEFAULT: AppMode = "agent";
+
+export function isAppMode(value: unknown): value is AppMode {
+  return (APP_MODES as readonly unknown[]).includes(value);
+}
+
+/** 编排面板的三种视图：树状图（层级）/ 星系图（每颗行星一个智能体）/ 协作图（有向、允许成环的交接图） */
+export const ORCHESTRA_VIEWS = ["tree", "galaxy", "graph"] as const;
+export type OrchestraView = (typeof ORCHESTRA_VIEWS)[number];
+export const ORCHESTRA_VIEW_DEFAULT: OrchestraView = "tree";
+
+export function isOrchestraView(value: unknown): value is OrchestraView {
+  return (ORCHESTRA_VIEWS as readonly unknown[]).includes(value);
+}
+
+/**
+ * 入口页发送的两种去处：new = 新开一条专门处理这件事的会话（不自动压缩，上下文干净）；
+ * main = 接着和主智能体的常驻对话聊（持久化，照常自动压缩）。
+ */
+export const ORCHESTRA_ENTRIES = ["new", "main"] as const;
+export type OrchestraEntry = (typeof ORCHESTRA_ENTRIES)[number];
+/**
+ * 默认 new：入口页原来每发一句就开一条新会话（Claude Projects 的「New session in X」也是这样），
+ * 第一次看到二选一的人不选就和以前一样；不会把一件新事悄悄塞进一条已经很长的对话里。
+ */
+export const ORCHESTRA_ENTRY_DEFAULT: OrchestraEntry = "new";
+
+export function isOrchestraEntry(value: unknown): value is OrchestraEntry {
+  return (ORCHESTRA_ENTRIES as readonly unknown[]).includes(value);
+}
+
+/** 只留「非空字符串键 → 合法值」的项；一项都不剩就当没有（不落键） */
+function parseKeyed<V>(value: unknown, valid: (item: unknown) => item is V): Record<string, V> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const out: Record<string, V> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key !== "" && valid(item)) out[key] = item;
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+function isSessionId(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
+}
+
+/**
+ * 一条会话这一轮实际用的压缩偏好：全局设置打底，会话自己关了自动压缩（meta.autoCompact === false，
+ * 入口页「新开专门的会话」）就只认手动 `/compact`。阈值百分比照全局（手动压缩不看它，自动开回来时沿用）。
+ */
+export function sessionCompaction(global: CompactionSetting | undefined, autoCompact: boolean | undefined): CompactionSetting {
+  const base = global ?? COMPACTION_DEFAULT;
+  return autoCompact === false ? { ...base, enabled: false } : base;
+}
 
 /** 左栏时间范围筛选的可选天数（缺席 = 不限） */
 export const SIDEBAR_AGE_CHOICES = [1, 3, 5, 7] as const;
@@ -482,7 +594,7 @@ export const isDocPaper = (value: unknown): value is DocPaper =>
 export type SettingsPatch = Partial<
   Omit<
     AppSettings,
-    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays" | "latexProblemsHeight"
+    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays" | "latexProblemsHeight" | "avatarModel"
   >
 > & {
   /** `null` = 清除，退回「不限」（同 choreModel：undefined 在补丁里是「没改」，选不回默认） */
@@ -501,6 +613,8 @@ export type SettingsPatch = Partial<
   subSessionModel?: ModelPair | null;
   /** 清除后退回所选子会话模型的默认档；subSessionModel 被清除时它随之失效（见 AppSettings） */
   subSessionThinking?: ThinkingLevel | null;
+  /** 同 choreModel 的 null 语义：清除后退回「跟会话栏」（undefined 在补丁里是「这个键没改」，选不回默认） */
+  avatarModel?: AvatarModelChoice | null;
 };
 
 /** 抽屉宽度的合法区间（与渲染层拖拽钳制同一对数字）。 */
@@ -565,27 +679,14 @@ function isThemePreference(value: unknown): value is ThemePreference {
 }
 
 /**
- * "manuscript" 是 copybook 改名前的 id（同一档）：settings.json 里存着旧值的落回这一档，
- * 不退回 system。下次写设置时磁盘上就是新 id 了。"dark"（Warm）2026-09-27 退役，
- * 存量值落到 graphite——同为「不近黑的暗档」，继任关系最直。
+ * 退役主题的读时迁移：`dark`（Warm）落到同为「不近黑暗档」的 graphite；
+ * 2026-11-24 删除的纸面两档与它们的旧别名没有直接继任，跟其他坏值一样回
+ * `DEFAULT_SETTINGS.theme`（system），继续跟随用户的系统深浅，不强行改成浅色。
  */
 function parseTheme(value: unknown): ThemePreference {
   if (isThemePreference(value)) return value;
-  if (value === "manuscript") return "copybook";
   if (value === "dark") return "graphite";
   return DEFAULT_SETTINGS.theme;
-}
-
-/**
- * 主题选择卡的可选档位。实验功能 `paper-themes` 关闭时纸面两档（copybook /
- * typescript）不出现（逐项开关 2026-10-12 之前的总开关 `experimental` 同此语义）。
- * **只藏入口不动数据**：已存的主题照常应用、已星标 / 已完成的会话与遗留事项
- * 原样在盘上，开关打开入口就回来。开源首发的默认门面（2026-10 用户裁决：
- * 不成熟的功能在公开快照里默认不出现）。
- */
-export function selectableThemes(paperThemes: boolean): readonly ThemePreference[] {
-  if (paperThemes) return THEME_PREFERENCES;
-  return THEME_PREFERENCES.filter((theme) => theme !== "copybook" && theme !== "typescript");
 }
 
 /** 设置 › 插件这一页的界面记忆（AppSettings.pluginsPage）；每个键缺席都是默认值 */
@@ -632,6 +733,64 @@ function parseProvidersPage(raw: unknown, legacyCardSize: unknown): ProvidersPag
 }
 
 /**
+ * 星系倾角的区间与默认（度）：10° 几乎贴着盘面看，60° 接近俯视；默认 40° 是编排页改成可调之前在常用窗口下实际画出来的俯角
+ * （New Task 页 39–41°，屏幕安全布局按画框抬过的值）
+ */
+export const GALAXY_TILT = { min: 10, max: 60, step: 1, default: 40 } as const;
+
+/** 存盘的倾角：区间内的整数度（拖动时是无极的，松手按 1° 存——与设置页滑块同一个精度） */
+export function isGalaxyTilt(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= GALAXY_TILT.min && value <= GALAXY_TILT.max;
+}
+
+export function galaxyTiltOf(settings: Pick<AppSettings, "galaxyTilt">): number {
+  return settings.galaxyTilt ?? GALAXY_TILT.default;
+}
+
+/** 方位角：0–359 的整数度；默认 0 = 原来的朝向（近日点在画面右侧） */
+export const GALAXY_AZIMUTH_DEFAULT = 0;
+
+export function isGalaxyAzimuth(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < 360;
+}
+
+export function galaxyAzimuthOf(settings: Pick<AppSettings, "galaxyAzimuth">): number {
+  return settings.galaxyAzimuth ?? GALAXY_AZIMUTH_DEFAULT;
+}
+
+export type GalaxyDustDensity = "all" | "half" | "tenth" | "none";
+export const GALAXY_DUST_DENSITIES: readonly GalaxyDustDensity[] = ["all", "half", "tenth", "none"];
+export const GALAXY_DUST_DEFAULT: GalaxyDustDensity = "half";
+/** 每档实际画出的比例 */
+export const GALAXY_DUST_KEEP: Readonly<Record<GalaxyDustDensity, number>> = { all: 1, half: 0.5, tenth: 0.1, none: 0 };
+
+export function isGalaxyDustDensity(value: unknown): value is GalaxyDustDensity {
+  return typeof value === "string" && (GALAXY_DUST_DENSITIES as readonly string[]).includes(value);
+}
+
+export function galaxyDustDensityOf(settings: Pick<AppSettings, "galaxyDustDensity">): GalaxyDustDensity {
+  return settings.galaxyDustDensity ?? GALAXY_DUST_DEFAULT;
+}
+
+export const GALAXY_ZOOM = { min: 0.5, max: 3, default: 1 } as const;
+
+export function isGalaxyZoom(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= GALAXY_ZOOM.min && value <= GALAXY_ZOOM.max && Math.abs(Math.round(value * 100) - value * 100) < 1e-6;
+}
+
+export function galaxyZoomOf(settings: Pick<AppSettings, "galaxyZoom">): number {
+  return settings.galaxyZoom ?? GALAXY_ZOOM.default;
+}
+
+export function galaxyBatterySaverOf(settings: Pick<AppSettings, "galaxyBatterySaver">): boolean {
+  return settings.galaxyBatterySaver ?? true;
+}
+
+export function galaxyTurntableOf(settings: Pick<AppSettings, "galaxyTurntable">): boolean {
+  return settings.galaxyTurntable ?? true;
+}
+
+/**
  * 从磁盘上的任意 JSON 解出设置。
  *
  * **只认识的字段留下，别的一律丢掉**，坏值退回默认。理由是这个文件在用户目录里、
@@ -651,10 +810,20 @@ export function parseSettings(raw: unknown): AppSettings {
     paperChatWidth?: unknown;
     latexProblemsHeight?: unknown;
     pptxPagesWidth?: unknown;
+    galaxyTilt?: unknown;
+    galaxyAzimuth?: unknown;
+    galaxyTurntable?: unknown;
+    galaxyBatterySaver?: unknown;
+    galaxyBatteryNoticeSeen?: unknown;
+    galaxyZoom?: unknown;
+    galaxyDustDensity?: unknown;
     compaction?: unknown;
     collapsePastedText?: unknown;
+    chatImageSize?: unknown;
     completionSound?: unknown;
     processView?: unknown;
+    /** 只读：旧版「一轮一行」展开后的排法，并进 processView（不再写） */
+    processLayout?: unknown;
     automationKeepAwake?: unknown;
     onboardingSeen?: unknown;
     docPaper?: unknown;
@@ -665,6 +834,7 @@ export function parseSettings(raw: unknown): AppSettings {
     titleModel?: unknown;
     subSessionModel?: unknown;
     subSessionThinking?: unknown;
+    avatarModel?: unknown;
     lastUsed?: unknown;
     browserDownloadDir?: unknown;
     latexmkPath?: unknown;
@@ -677,6 +847,10 @@ export function parseSettings(raw: unknown): AppSettings {
     providersPage?: unknown;
     pluginsPage?: unknown;
     boardDays?: unknown;
+    appMode?: unknown;
+    orchestraView?: unknown;
+    orchestraMain?: unknown;
+    orchestraEntry?: unknown;
     sidebarAgeDays?: unknown;
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
@@ -684,8 +858,6 @@ export function parseSettings(raw: unknown): AppSettings {
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
     vector?: unknown;
-    /** 旧总开关（逐项开关之前）：true 等价于 paper-themes 开 */
-    experimental?: unknown;
   };
   const theme = parseTheme(record.theme);
   const width = record.rightPanelWidth;
@@ -696,6 +868,8 @@ export function parseSettings(raw: unknown): AppSettings {
   const problemsHeight = record.latexProblemsHeight;
   const pptxPages = record.pptxPagesWidth;
   const compaction = parseCompaction(record.compaction);
+  const orchestraMain = parseKeyed(record.orchestraMain, isSessionId);
+  const orchestraEntry = parseKeyed(record.orchestraEntry, isOrchestraEntry);
   // 旧键 titleModel 只在读这一层兼容：解析产物永远是 choreModel，任何一次写入
   // （parseSettings 白名单重建整个对象）都会把旧键从盘上带走
   const choreModel = parseModelPair(record.choreModel) ?? parseModelPair(record.titleModel);
@@ -706,10 +880,11 @@ export function parseSettings(raw: unknown): AppSettings {
       ? record.subSessionThinking
       : undefined;
   const lastUsed = parseLastUsed(record.lastUsed);
+  const avatarModel = parseAvatarModel(record.avatarModel);
   const starredModels = parseStarredModels(record.starredModels);
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
-  const experimentalFeatures = parseExperimentalFeatures(record);
+  const experimentalFeatures = parseExperimentalFeatures(record.experimentalFeatures);
   const intent = parseIntentSettings(record.intent);
   const vector = parseVectorSettings(record.vector);
   const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
@@ -758,6 +933,13 @@ export function parseSettings(raw: unknown): AppSettings {
     pptxPages <= PPTX_PAGES_WIDTH.max
       ? { pptxPagesWidth: Math.round(pptxPages) }
       : {}),
+    ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
+    ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
+    ...(typeof record.galaxyTurntable === "boolean" ? { galaxyTurntable: record.galaxyTurntable } : {}),
+    ...(typeof record.galaxyBatterySaver === "boolean" ? { galaxyBatterySaver: record.galaxyBatterySaver } : {}),
+    ...(record.galaxyBatteryNoticeSeen === true ? { galaxyBatteryNoticeSeen: true } : {}),
+    ...(isGalaxyZoom(record.galaxyZoom) ? { galaxyZoom: record.galaxyZoom } : {}),
+    ...(isGalaxyDustDensity(record.galaxyDustDensity) ? { galaxyDustDensity: record.galaxyDustDensity } : {}),
     drawer: parseDrawer(record.drawer),
     ...(starredModels === undefined ? {} : { starredModels }),
     ...(usagePet === undefined ? {} : { usagePet }),
@@ -773,9 +955,11 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(typeof record.collapsePastedText === "boolean"
       ? { collapsePastedText: record.collapsePastedText }
       : {}),
-    ...(record.processView === "turn" || record.processView === "steps"
-      ? { processView: record.processView }
-      : {}),
+    // 只认两个值，别的丢掉（缺席 = 大图）
+    ...(record.chatImageSize === "large" || record.chatImageSize === "small" ? { chatImageSize: record.chatImageSize } : {}),
+    ...(parseProcessView(record.processView, record.processLayout) === undefined
+      ? {}
+      : { processView: parseProcessView(record.processView, record.processLayout) }),
     // 同上：非布尔丢掉，缺席 = 响
     ...(typeof record.completionSound === "boolean"
       ? { completionSound: record.completionSound }
@@ -790,11 +974,18 @@ export function parseSettings(raw: unknown): AppSettings {
     ...(choreModel === undefined ? {} : { choreModel }),
     ...(subSessionModel === undefined ? {} : { subSessionModel }),
     ...(subSessionThinking === undefined ? {} : { subSessionThinking }),
+    ...(avatarModel === undefined ? {} : { avatarModel }),
     ...(lastUsed === undefined ? {} : { lastUsed }),
     ...(providersPage === undefined ? {} : { providersPage }),
     ...(pluginsPage === undefined ? {} : { pluginsPage }),
     // 只认 3 / 5 / 7：别的数当作没选过（缺席 = 5）
     ...(isBoardDays(record.boardDays) ? { boardDays: record.boardDays } : {}),
+    // 只认两种形态：别的值当作没选过（缺席 = 单智能体）
+    ...(isAppMode(record.appMode) ? { appMode: record.appMode } : {}),
+    // 只认三种视图：别的值当作没选过（缺席 = 树状图）
+    ...(isOrchestraView(record.orchestraView) ? { orchestraView: record.orchestraView } : {}),
+    ...(orchestraMain === undefined ? {} : { orchestraMain }),
+    ...(orchestraEntry === undefined ? {} : { orchestraEntry }),
     // 只认 1 / 3 / 5 / 7：别的值（含补丁里的 null）当作「不限」，不落键
     ...(isSidebarAgeDays(record.sidebarAgeDays) ? { sidebarAgeDays: record.sidebarAgeDays } : {}),
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
@@ -856,22 +1047,13 @@ function parseVectorSettings(raw: unknown): Partial<MemoryVectorSettings> | unde
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function parseExperimentalFeatures(record: {
-  experimentalFeatures?: unknown;
-  experimental?: unknown;
-}): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
+function parseExperimentalFeatures(raw: unknown): Partial<Record<ExperimentalFeatureId, boolean>> | undefined {
   const out: Partial<Record<ExperimentalFeatureId, boolean>> = {};
-  const raw = record.experimentalFeatures;
   if (typeof raw === "object" && raw !== null) {
     for (const id of EXPERIMENTAL_FEATURE_IDS) {
       const value = (raw as Record<string, unknown>)[id];
       if (typeof value === "boolean") out[id] = value;
     }
-  }
-  // 旧总开关：true = 当年挂在它后面的 paper-themes 照常开（另一项会话生命周期已转正）。
-  // 新键里已显式给值的项以新键为准（??=）
-  if (record.experimental === true) {
-    out["paper-themes"] ??= true;
   }
   return Object.keys(out).length === 0 ? undefined : out;
 }
@@ -892,6 +1074,11 @@ function parseModelPair(raw: unknown): ModelPair | undefined {
   if (typeof record.providerId !== "string" || record.providerId === "") return undefined;
   if (typeof record.modelId !== "string" || record.modelId === "") return undefined;
   return { providerId: record.providerId, modelId: record.modelId };
+}
+
+/** 「生成形象」的取法：`"sub_session"` 这一档单独认，其余走成对校验；别的值当作没选过（回到跟会话栏） */
+function parseAvatarModel(raw: unknown): AvatarModelChoice | undefined {
+  return raw === "sub_session" ? "sub_session" : parseModelPair(raw);
 }
 
 /** 星云偏好：日期键格式不对就丢、hidden 只认 true；两样都没有 = 不落键 */
@@ -931,16 +1118,13 @@ function parseStarredModels(raw: unknown): ModelPair[] | undefined {
 }
 
 /**
- * lastUsed 逐字段校验：mode 必须在三档里，id 必须是非空字符串。
- * 整段缺席或三个键全无效 = 用户从没动过它（返回 undefined，不落盘）。
+ * lastUsed 逐字段校验：id 必须是非空字符串。
+ * 整段缺席或两个键全无效 = 用户从没动过它（返回 undefined，不落盘）。
  */
 function parseLastUsed(raw: unknown): LastUsedIntent | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const record = raw as { mode?: unknown; providerId?: unknown; modelId?: unknown };
+  const record = raw as { providerId?: unknown; modelId?: unknown };
   const out: LastUsedIntent = {};
-  if ((PERMISSION_MODES as readonly unknown[]).includes(record.mode)) {
-    out.mode = record.mode as PermissionMode;
-  }
   if (typeof record.providerId === "string" && record.providerId !== "") {
     out.providerId = record.providerId;
   }

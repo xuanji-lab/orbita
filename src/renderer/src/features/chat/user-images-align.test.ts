@@ -2,9 +2,8 @@
  * 用户消息里图片附件的左右对齐跟着主题的用户消息版式走。
  *
  * 仓里没有 renderer 组件测试设施（没有 jsdom），按源码文本钉住两处结构：
- * 子午线版式（除 copybook / typescript 外的主题）把用户消息改成左对齐纸签，
- * 图片若把对齐写在 UserImages 的内联 style 里，主题块覆盖不到——2026-11-12 用户报
- * 「图片还在居右，换了新的 chatview 应该居左」就是这么来的。
+ * 对齐写在 CSS 类里（不写内联 style）才能随主题块改。2026-11-22 撤掉子午线版式后用户消息回到右侧，
+ * 这里钉住：没有左对齐的主题块、没有对话列竖线与 gutter、时间不在 agent 一侧。
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -31,14 +30,27 @@ test("UserImages 的对齐交给 CSS 类，不写在内联 style 里", () => {
   assert.doesNotMatch(component, /justifyContent:/);
 });
 
-test("基础样式靠右（copybook / typescript 仍是右侧气泡）", () => {
+test("基础样式靠右，与用户气泡一致", () => {
   assert.match(styles, /\n\.user-images \{[^}]*justify-content: flex-end;/);
 });
 
-test("子午线版式的用户消息块里，图片与纸签一起靠左、不限气泡宽", () => {
-  const start = styles.indexOf("/* 用户消息：左对齐的整块纸签");
-  assert.ok(start >= 0, "找不到子午线版式的用户消息块");
-  const block = styles.slice(start, styles.indexOf(".user-turn .memrow-list", start));
-  assert.match(block, /\.user-images \{\n\s*justify-content: flex-start;\n\s*\}|\.user-images \{[^}]*justify-content: flex-start;/);
-  assert.match(block, /\.user-images \{\n\s*max-width: none;/);
+test("所有主题的用户消息（含图片附件）都在右侧：不再有把它改成左对齐纸签的主题块（2026-11-22 撤掉子午线）", () => {
+  assert.doesNotMatch(styles, /用户消息：左对齐的整块纸签/);
+  assert.doesNotMatch(styles, /\.user-images \{[^}]*justify-content: flex-start;/);
+  assert.match(styles, /\n\.user-turn \{[^}]*align-items: flex-end;/);
+});
+
+test("对话列没有子午线竖线与线上的圆点 / 刻度，也没有 gutter 缩进", () => {
+  assert.doesNotMatch(styles, /\.chat-col::before/);
+  assert.doesNotMatch(styles, /\.chat-col > \[data-kind="user"\]::before/);
+  assert.doesNotMatch(styles, /\.chat-col,\s*\.chat-foot-col,\s*\.chat-float-col \{[^}]*padding-left: var\(--gutter\)/);
+});
+
+test("用户气泡最宽 80%，时间在气泡下一行右下角（.user-msg-time 在动作行里，没有被绝对定位进边栏）", () => {
+  assert.match(styles, /\n\.user-bubble \{[^}]*max-width: min\(var\(--bubble-max-width\), 80%\)/);
+  assert.doesNotMatch(styles, /\.user-turn \.user-msg-time,\s*\.chat-col \.turn-start-time/);
+});
+
+test("agent 这边不再显示时间：对话流里没有 turn-start-time", () => {
+  assert.doesNotMatch(chatView, /className="turn-start-time"/);
 });

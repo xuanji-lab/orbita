@@ -216,7 +216,7 @@ export function AutomationPanel(props: {
           key={detailTarget.id}
           automation={detailTarget}
           now={now}
-          boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
+          boundSession={bound === undefined ? null : { title: bound.title }}
           knownSessionIds={knownSessionIds}
           act={(action) => state.act(detailTarget.id, action)}
           onEdit={() => setView({ kind: "edit", id: detailTarget.id, seed: null, from: "detail" })}
@@ -325,7 +325,7 @@ export function AutomationPanel(props: {
                   automation={automation}
                   now={now}
                   sparkMax={sparkMax}
-                  boundSession={bound === undefined ? null : { mode: bound.mode, title: bound.title }}
+                  boundSession={bound === undefined ? null : { title: bound.title }}
                   onOpen={() => setView({ kind: "detail", id: automation.id })}
                   onAct={(action) => void act(automation, action)}
                 />

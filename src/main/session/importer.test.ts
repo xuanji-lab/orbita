@@ -309,7 +309,7 @@ describe("真实样本快照（testdata 的 3 份本机 Proma pi 真源）", () 
     const m1 = byTitle.get("查PhD答辩要求文件");
     assert.ok(m1 !== undefined);
     assert.equal(m1.titleSource, "user");
-    assert.equal(m1.mode, "plan");
+    assert.equal(m1.mode, undefined);
     assert.equal(m1.workspaceId, null);
     // 同扫描测试：tmp root 对不上真实 ~/.proma-dev 前缀，cwd 保留 header 原值
     assert.equal(

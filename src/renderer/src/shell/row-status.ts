@@ -39,7 +39,7 @@ export function rowStatusIcon(
   },
   t: Messages,
 ): RowStatus | null {
-  // 子会话在跑：git-fork（与 Sub-sessions 面板入口同一个图标）。颜色跟状态饼的
+  // 子会话在跑：机器人（FEATURE_ICON.subsessions，与子会话面板入口同一个图标）。颜色跟状态饼的
   // running 同一个 token（--color-info）——一条事实一种颜色，暗色主题的 accent
   // 是黄，不拿它说「在跑」
   if (state.subRunning)

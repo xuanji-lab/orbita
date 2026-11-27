@@ -101,40 +101,6 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "h": 0.0311
     }
   },
-  "carryovers": {
-    "more": {
-      "x": 0.9708,
-      "y": 0.34,
-      "w": 0.0194,
-      "h": 0.0311
-    },
-    "list": {
-      "x": 0.0083,
-      "y": 0.0578,
-      "w": 0.2,
-      "h": 0.9289
-    }
-  },
-  "closing": {
-    "card": {
-      "x": 0.2378,
-      "y": 0.3439,
-      "w": 0.6944,
-      "h": 0.5117
-    },
-    "tick": {
-      "x": 0.7333,
-      "y": 0.0122,
-      "w": 0.0194,
-      "h": 0.0311
-    },
-    "confirm": {
-      "x": 0.7922,
-      "y": 0.8011,
-      "w": 0.1255,
-      "h": 0.0356
-    }
-  },
   "composer": {
     "clip": {
       "x": 0.2469,
@@ -509,20 +475,6 @@ export const SHOT_BOXES: Readonly<Record<string, Readonly<Record<string, Box>>>>
       "y": 0.3473,
       "w": 0.0714,
       "h": 0.0117
-    }
-  },
-  "permission": {
-    "menu": {
-      "x": 0.3594,
-      "y": 0.8122,
-      "w": 0.0778,
-      "h": 0.1178
-    },
-    "perm": {
-      "x": 0.3594,
-      "y": 0.9367,
-      "w": 0.0583,
-      "h": 0.0267
     }
   },
   "plan": {

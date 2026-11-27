@@ -58,3 +58,19 @@ export function goalNoticeText(t: Messages, ledger: GoalLedger, toolCallIds: rea
   }
   return null;
 }
+
+/**
+ * 每一次「改了目标」的 update_goal 调用 → 过程展开时那一步写的话（「改了目标：「旧」改成「新」——为什么」的对象部分）。
+ * 第一次定目标不算改。过程行不再在下面单独露一行「目标改了」（2026-11-22：右上角有状态卡，对话流里只留过程行），
+ * 改目标收进它那一步，落定态那一句话里带一个「改了目标」。
+ */
+export function goalChangesByCall(t: Messages, ledger: GoalLedger, toolCallIds: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const wanted = new Set(toolCallIds);
+  for (const entry of ledger.entries) {
+    if (entry.kind !== "goal" || entry.from === null || !wanted.has(entry.id)) continue;
+    const [from, to] = snippetPair(entry.from, entry.to, NOTICE_TEXT_MAX);
+    out.set(entry.id, t.goalText.changeObject(from, to, entry.why ?? ""));
+  }
+  return out;
+}

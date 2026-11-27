@@ -28,6 +28,7 @@ import {
   type DocFile,
   type DocKind,
   type DocListEntry,
+  type DocListing,
   type DocWriteRequest,
   type DocWriteResult,
 } from "../../shared/doc.ts";
@@ -39,8 +40,11 @@ import { writeTextAtomic } from "../atomic-write.ts";
 import { errorCode, isNotFound } from "../fs-errors.ts";
 import { isInside, realpathInside } from "../path-boundary.ts";
 
-/** 能放文档的根：附件副本根只读，不放 */
-const WRITABLE_KINDS: ReadonlySet<FileRoot["kind"]> = new Set(["session", "workspace", "attached"]);
+/**
+ * 能放文档的根：附件副本根只读，不放。子会话的工作台（subsession）算：子会话交回的 .md / .txt
+ * 在文档面板里打开、改（2026-11-23 用户：子会话交回的文件要能预览）
+ */
+const WRITABLE_KINDS: ReadonlySet<FileRoot["kind"]> = new Set(["session", "workspace", "attached", "subsession"]);
 
 export function normalizeNewlines(text: string): string {
   return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
@@ -197,10 +201,18 @@ async function kindOfFile(path: string): Promise<DocKind> {
   }
 }
 
-/** 工作区根下的 .md，最近改的在前，最多 DOC_LIST_LIMIT 个 */
-export async function listDocs(roots: readonly FileRoot[]): Promise<DocListEntry[]> {
+/** 判类型一批读几份文件头：并发读，凑够 limit 份就停，不为列表读遍整个工作区 */
+const KIND_BATCH = 32;
+
+/**
+ * 工作区根下的文档 / 演示文稿，最近改的在前。**先按类筛、再取前 limit 份**：
+ * 以前是「混着取前 200 份、再在界面上按类过滤」，工作区里 .md 一多，演示文稿全被挤出名额（600 份 md + 30 份演示文稿时
+ * 列表里一份演示文稿都没有）。判类型要读 .md 的文件头，所以按批读、读到 limit+1 份同类就停（多出的那一份只用来回答 `more`）。
+ */
+export async function listDocs(roots: readonly FileRoot[], options: ListDocsOptions = {}): Promise<DocListing> {
   const root = roots.find((candidate) => candidate.kind === "workspace" && candidate.exists);
-  if (root === undefined) return [];
+  if (root === undefined) return { root: null, entries: [], more: false, rememberedExists: false };
+  const limit = Math.max(0, options.limit ?? DOC_LIST_LIMIT);
   const found: { path: string; modifiedAt: number }[] = [];
   let budget = LIST_DIR_BUDGET;
   const queue: { dir: string; depth: number }[] = [{ dir: root.path, depth: 0 }];
@@ -228,18 +240,53 @@ export async function listDocs(roots: readonly FileRoot[]): Promise<DocListEntry
     }
   }
   found.sort((a, b) => b.modifiedAt - a.modifiedAt);
-  const top = found.slice(0, DOC_LIST_LIMIT);
-  return Promise.all(
-    top.map(
-      async (file): Promise<DocListEntry> => ({
+  const entries: DocListEntry[] = [];
+  let more = false;
+  for (let start = 0; start < found.length && !more; start += KIND_BATCH) {
+    const batch = found.slice(start, start + KIND_BATCH);
+    const kinds = await Promise.all(batch.map((file) => kindOfFile(file.path)));
+    for (const [index, file] of batch.entries()) {
+      const kind = kinds[index] as DocKind;
+      if (options.kind !== undefined && kind !== options.kind) continue;
+      if (entries.length >= limit) {
+        more = true;
+        break;
+      }
+      entries.push({
         path: file.path,
         name: basename(file.path),
         relative: relative(root.path, file.path),
-        kind: await kindOfFile(file.path),
+        kind,
         modifiedAt: file.modifiedAt,
-      }),
-    ),
-  );
+      });
+    }
+  }
+  return { root: await realRoot(root.path), entries, more, rememberedExists: await stillThere(roots, options) };
+}
+
+export interface ListDocsOptions {
+  kind?: DocKind | undefined;
+  limit?: number | undefined;
+  remembered?: string | undefined;
+}
+
+async function realRoot(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+/** 面板记着的那份还在不在：过白名单、是文件、类型对得上 */
+async function stillThere(roots: readonly FileRoot[], options: ListDocsOptions): Promise<boolean> {
+  if (options.remembered === undefined) return false;
+  try {
+    const real = await resolveDocPath(roots, options.remembered);
+    return options.kind === undefined || (await kindOfFile(real)) === options.kind;
+  } catch {
+    return false;
+  }
 }
 
 /**

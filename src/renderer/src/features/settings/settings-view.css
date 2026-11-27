@@ -17,7 +17,7 @@
 }
 
 /* ===== General 页的行与分组（SettingsView.tsx 的 SettingGroup / SettingRow）=====
- * 列宽 720px（纸面两档仍用它；其余主题见文件末尾的「两栏设置」），不跟聊天页的 --content-max-width
+ * 列宽 720px；两栏布局见文件末尾，内容列不跟聊天页的 --content-max-width
  * （2026-11-07 起 900，此前 1000px）：设置行是「名字 ↔ 控件」两端对齐，列再宽两端就隔得太远，
  * 眼睛要横跨半个屏幕才对得上一行。 */
 .set-page {
@@ -155,9 +155,16 @@
 /* ===== Theme 预览卡（ThemeCard.tsx） ===== */
 
 .theme-grid {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, 100px);
   gap: var(--space-3);
-  flex-wrap: wrap;
+}
+
+/* 四档主题在窄控件列里排 2×2，够宽才排 4×1：不用 flex 挤出 3+1 的残行。 */
+@container setpage (min-width: 620px) {
+  .theme-grid {
+    grid-template-columns: repeat(4, 100px);
+  }
 }
 
 .theme-card {
@@ -181,7 +188,7 @@
   overflow: hidden;
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-border-default);
-  /* 静止态就是卡片的默认阴影，hover 才抬一级——同 SessionCard 的纪律 */
+  /* 静止态就是卡片的默认阴影，hover 才抬一级 */
   box-shadow: var(--shadow-card);
   transition:
     box-shadow var(--duration-instant) var(--ease-standard),
@@ -842,7 +849,7 @@ a.exp-pr:hover {
  * 版式「两栏设置」（登记）：节名在左栏（右对齐，与本节第一行的行名同一条基线），行在右栏，
  * 行内一律顶对齐；节与节之间留 32 的空，行与行之间不再画线。它是现有设置行（.set-row）的
  * 同一套行，只是节名从行的上方挪进了左边的索引边栏——和对话里放时间、首页里放组名是同一种语法。
- * 只对非纸面主题生效；设置面的宽度不再借内容列的 --content-max-width（原 1000，现 900；一行里「名字 ↔ 控件」
+ * 所有主题共用两栏设置；设置面的宽度不再借内容列的 --content-max-width（原 1000，现 900；一行里「名字 ↔ 控件」
  * 隔得太远），固定为 节名栏 120 + 间距 24 + 行栏 640。
  *
  * 节名字号：样张里是 base / 500 / 次级墨，这里取 base / 600 / 正墨。2026-10-24 用户的原话是
@@ -854,7 +861,7 @@ a.exp-pr:hover {
 .set-page {
   container: setpage / inline-size;
 }
-:root:not([data-theme="copybook"], [data-theme="typescript"]) {
+:root {
   .set-page {
     width: min(100%, calc(120px + var(--space-6) + 640px));
     gap: var(--space-8);
@@ -872,6 +879,10 @@ a.exp-pr:hover {
     font-size: var(--font-size-base);
     font-weight: var(--weight-semibold);
     text-align: right;
+    /* 节名折行只在空格处折（「ElevenLabs 语音合成」折成两行整词，不剩一个「成」字在第二行）；
+       一整段放不下时才任意处折，不溢出 */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
   .set-page > .set-group > :not(.section-label) {
     grid-column: 2;
@@ -885,7 +896,7 @@ a.exp-pr:hover {
   }
 }
 @container setpage (max-width: 620px) {
-  :root:not([data-theme="copybook"], [data-theme="typescript"]) {
+  :root {
     .set-page > .set-group {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -977,4 +988,24 @@ a.exp-pr:hover {
 .pandoc-status-note > span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* 外观 › 星系倾角：滑块 + 读数；下面一小块同一个星系组件的预览，拖滑块时跟着变 */
+.set-galaxy-tilt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 220px;
+}
+.set-galaxy-tilt-value {
+  flex: 0 0 auto;
+  min-width: 3ch;
+  text-align: right;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.set-galaxy-preview {
+  grid-column: 1 / -1;
+  height: 240px;
 }

@@ -25,7 +25,7 @@ export const RAIL_X = "var(--content-hem)";
  * 框色走 `--expanded-frame-border`（styles.css 按主题定义，2026-10-12 第二次返工）：
  * 虚线本身比同宽实线淡一截（一半长度是空的），用户要的是「一眼看出这是个框」。
  * - 深色（黛 / 玄）：border-strong（.16 白）够了；
- * - 浅色三档（浅色 / 小学作业 / 打字稿）：border-strong（#d7d7cf）在白底上几乎看不见，
+ * - 浅色：border-strong（#d7d7cf）在白底上几乎看不见，
  *   改用 text-tertiary 混 60% 透明——比边框档深、比正文浅，仍是「辅助线」的分量。
  * 圆角取 --radius-md：设计系统「矩形停在 radius-md，pill 只给真圆」。
  */

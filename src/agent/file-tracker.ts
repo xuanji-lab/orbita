@@ -102,21 +102,23 @@ interface PathEntry {
 export class TurnFileTracker {
   private readonly cwd: string;
   private readonly read: PathReader;
+  /** 每次放行 write / edit 时报一下解析后的绝对路径（旁路网页扫描据此认出「别的会话写的」） */
+  private readonly onWrite: ((path: string) => void) | undefined;
   /** toolCallId → 改动路径（execution_end 按调用对回路） */
   private readonly callPaths = new Map<string, string>();
   private readonly paths = new Map<string, PathEntry>();
   /** 在途的 after 读盘（execution_end 触发，不 await 事件流）：finalize 先等它们落定 */
   private readonly inflightReads = new Set<Promise<void>>();
 
-  constructor(cwd: string, read: PathReader = diskReader) {
+  constructor(cwd: string, read: PathReader = diskReader, onWrite?: (path: string) => void) {
     this.cwd = cwd;
     this.read = read;
+    this.onWrite = onWrite;
   }
 
   /**
    * 闸门放行后记一笔：write / edit 的路径首次出现时读 before。**必须在放行后**——
-   * plan 档直接拒的调用不会执行，记了就是假账；ask 档等用户点了允许再记，
-   * 读到的才是「这一批动手前」的内容。
+   * 闸门拒掉的调用（受保护路径）不会执行，记了就是假账。
    */
   async noteAllowed(toolCallId: string, toolName: string, input: unknown): Promise<void> {
     if (!TRACKED_WRITE_TOOLS.has(toolName)) return;
@@ -124,6 +126,7 @@ export class TurnFileTracker {
     if (typeof target !== "string" || target === "") return;
     const path = resolveToolPath(target, this.cwd);
     this.callPaths.set(toolCallId, path);
+    this.onWrite?.(path);
     if (this.paths.has(path)) return; // 本轮已记过 before——最早的才是还原目标
     this.paths.set(path, { before: toSnapshot(await this.read(path)), after: null });
   }
