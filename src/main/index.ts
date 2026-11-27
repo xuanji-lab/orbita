@@ -153,12 +153,14 @@ import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
   computerUseBackendChoices,
+  computerUseBlockedReason,
   computerUseGuestCommands,
   devBackendsEnabled,
   parseComputerUseConsent,
+  type ComputerUseTurnOrigin,
 } from "../shared/computer-use.ts";
 import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
-import { isMainSession } from "../shared/session.ts";
+
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { IsolationSessionController } from "./computer-use/isolation-session.ts";
@@ -509,17 +511,28 @@ void app.whenReady().then(async () => {
    * 提问走 `agent:event` 的同一条广播通道（与 intentAsk / 急停一致），回答走
    * `computer-use:consent-answer`（registerComputerUseIpc 注册）。
    */
+  /**
+   * 每条会话**当前这一轮**是谁发起的（2026-11-27 验收后）。值只由开轮处写（registerAgentIpc 的
+   * submitTurn / interrupt），闸门只读——发起者是主进程本来就知道的事实，不需要另开一条 IPC。
+   * 缺席按 `user` 算：用户手点的轮是默认路径，自动化会在开轮时显式写 `automation`。
+   */
+  const computerUseTurnOrigins = new Map<string, ComputerUseTurnOrigin>();
   const computerUseConsentWaiter = new ComputerUseConsentWaiter({
     send: (event) => broadcastAgentEvent(event),
     // 本轮结束 / 会话删除：把确认行从界面上撤下（不是拒绝，没有写 meta）
     notifyCancelled: (event) => broadcastAgentEvent(event),
   });
   const computerUseConsentGate = createComputerUseConsentGate({
-    // 一次读盘拿两件事：授权值 + 是不是主会话（子会话 / 自动化不可用电脑使用）
+    // 一次读盘拿齐「授权值 + 用户能不能看到并回答」：后者由 shared 的唯一判据
+    // computerUseBlockedReason(会话身份, 这一轮的发起者) 算。发起者由开轮处记在
+    // computerUseTurnOrigins（见 registerAgentIpc 的 setTurnOrigin）。
     read: async (sessionId) => {
       const meta = await sessions.readMeta(sessionId);
       if (meta === null) return null;
-      return { consent: parseComputerUseConsent(meta.computerUseConsent), mainSession: isMainSession(meta) };
+      return {
+        consent: parseComputerUseConsent(meta.computerUseConsent),
+        blockedReason: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
+      };
     },
     // write 回「真的落下了没」：`update` 对已删会话静默 no-op，不能把它当成功
     write: (sessionId, consent) => sessions.setComputerUseConsent(sessionId, consent),
@@ -996,8 +1009,9 @@ void app.whenReady().then(async () => {
    *
    * 按下后三件事（顺序即语义）：
    *   1. 正在跑的会话逐个中止（给 agent 发 abort，与「停止」同一条链）；
-   *   2. **撕掉电脑使用授权**：还活着的会话 `computerUseConsent` 复位成 unset，挂起的授权
-   *      提问按拒绝结掉（2026-11-27；不是 PermissionMode，只是本会话的桌面许可）；
+   *   2. **撕掉电脑使用授权**：所有非 unset 的会话 `computerUseConsent` 复位成 unset；
+   *      挂起中的授权提问按 **cancelled** 结掉（不写盘——用户没有表态，不是拒绝）。
+   *      （不是 PermissionMode，只是本会话的桌面许可）
    *   3. 广播给 renderer 显示「已急停」。
    * **不关沙箱**：现场留给用户看，关沙箱是设置页里另一个动作。
    *
@@ -1767,6 +1781,7 @@ void app.whenReady().then(async () => {
       browserSandbox.closeSessionTab(id);
       // 正在等授权的提问也跟着作废（按 cancelled 结，不写 meta——会话都没了）
       computerUseConsentWaiter.cancel(id);
+      computerUseTurnOrigins.delete(id);
       // 沙箱资源：它是持有者就让出来，还在排队就把位置撤掉（否则队列名额白白被占了）；
       // 桌面键与这个会话的浏览器键一起放。硬上限标记也一并忘掉。
       computerUseLease.releaseSession(id);
@@ -1982,6 +1997,9 @@ void app.whenReady().then(async () => {
      * 真的下发（2026-11-27 验收 P1）。这里与会话删除同一条语义：按 cancelled 结掉。
      */
     (sessionId) => computerUseConsentWaiter.cancel(sessionId),
+    // 这一轮是谁发起的（闸门据此判「用户此刻能不能回答」）：自动化开轮时写 automation，
+    // 其余（renderer 手点 submit / interrupt / compact）写 user。
+    (sessionId, origin) => computerUseTurnOrigins.set(sessionId, origin),
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
@@ -2009,7 +2027,9 @@ void app.whenReady().then(async () => {
         providers: await providers.list(),
       });
     },
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 幕后 / 编排投递的轮次：会话身份（backstage / parentId）已经把它们挡在闸门外，
+    // 这里仍标 channel——发起者是机器，不写成 user（免得以后判据变严时漏挡）
+    submitTurn: (input) => agentIpc.submitTurn(input, "channel"),
     abort: (sessionId) => agentHost.abort(sessionId),
     runScript: execPluginScript,
     loadImage: loadSurface,
@@ -2023,7 +2043,9 @@ void app.whenReady().then(async () => {
     channels,
     providers,
     settings,
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 幕后 / 编排投递的轮次：会话身份（backstage / parentId）已经把它们挡在闸门外，
+    // 这里仍标 channel——发起者是机器，不写成 user（免得以后判据变严时漏挡）
+    submitTurn: (input) => agentIpc.submitTurn(input, "channel"),
     steer: (sessionId, text, delivery) => agentHost.steer(sessionId, text, delivery),
     abort: (sessionId) => agentHost.abort(sessionId),
     cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
@@ -2067,7 +2089,8 @@ void app.whenReady().then(async () => {
     providers,
     settings,
     workspaces,
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 自动化发起的轮次（含 this_session 投回用户会话）：电脑使用闸门据此不弹看不见的授权
+    submitTurn: (input) => agentIpc.submitTurn(input, "automation"),
   };
   const automationScheduler = new AutomationScheduler({
     store: automationStore,

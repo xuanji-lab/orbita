@@ -14,10 +14,14 @@ import {
   COMPUTER_USE_CONSENT_DENIED_TEXT,
   COMPUTER_USE_CONSENT_STOPPED_TEXT,
   COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
+  COMPUTER_USE_UNATTENDED_TEXT,
+  computerUseBlockedReason,
   type ComputerUseConsent,
   type ComputerUseConsentAskCancelledEvent,
   type ComputerUseConsentAskEvent,
   type ComputerUseConsentStateEvent,
+  type ComputerUseSessionShape,
+  type ComputerUseTurnOrigin,
 } from "../../shared/computer-use.ts";
 import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./consent.ts";
 
@@ -127,12 +131,16 @@ test("提问表：cancelAll（agent 进程退出）按 cancelled 结掉，不写
   assert.equal(waiter.size, 0);
 });
 
-/** 一个最小的会话 meta 假实现：值 + 是否存在 + 写记录 */
+/**
+ * 一个最小的会话假实现：授权值 + 是否存在 + 写记录。
+ * 会话身份与「这一轮是谁发起的」走**真判据** computerUseBlockedReason——闸门测试要覆盖的
+ * 正是「自动化把一轮投回用户会话」这条入口，假一份 blockedReason 就测不到它。
+ */
 function fakeSession(
   initial: ComputerUseConsent | null,
-  options: { mainSession?: boolean } = {},
+  options: { session?: ComputerUseSessionShape; origin?: ComputerUseTurnOrigin } = {},
 ): {
-  read: () => Promise<{ consent: ComputerUseConsent; mainSession: boolean } | null>;
+  read: () => Promise<{ consent: ComputerUseConsent; blockedReason: string | null } | null>;
   write: (next: ComputerUseConsent) => Promise<boolean>;
   state: () => ComputerUseConsent | null;
   writes: ComputerUseConsent[];
@@ -141,10 +149,14 @@ function fakeSession(
   let value = initial;
   let alive = initial !== null;
   const writes: ComputerUseConsent[] = [];
-  const mainSession = options.mainSession !== false;
+  const session = options.session ?? {};
+  const origin = options.origin ?? "user";
   return {
     // 忠实复刻 store.update：meta 不在就是「没写」，不抛错
-    read: async () => (alive && value !== null ? { consent: value, mainSession } : null),
+    read: async () =>
+      alive && value !== null
+        ? { consent: value, blockedReason: computerUseBlockedReason(session, origin) }
+        : null,
     write: async (next) => {
       if (!alive) return false;
       value = next;
@@ -165,7 +177,8 @@ function makeGate(options: {
   canAsk?: boolean;
   writeFails?: boolean;
   silentWrite?: boolean;
-  mainSession?: boolean;
+  session?: ComputerUseSessionShape;
+  origin?: ComputerUseTurnOrigin;
   timeoutMs?: number;
 }): {
   gate: ReturnType<typeof createComputerUseConsentGate>;
@@ -174,7 +187,7 @@ function makeGate(options: {
   asked: string[];
   waiter: ComputerUseConsentWaiter;
 } {
-  const store = fakeSession(options.initial, { mainSession: options.mainSession });
+  const store = fakeSession(options.initial, { session: options.session, origin: options.origin });
   const { events, send } = collectAsk();
   const states: ComputerUseConsentStateEvent[] = [];
   const asked: string[] = [];
@@ -326,7 +339,7 @@ test("闸门：允许了但写盘静默没落下（会话在挂起期间被删�
 });
 
 test("闸门：子会话 / 自动化会话立刻拒绝（主会话专用），不提问、不读它的授权", async () => {
-  const { gate, asked, store } = makeGate({ initial: "allowed", mainSession: false });
+  const { gate, asked, store } = makeGate({ initial: "allowed", session: { parentId: "p" } });
   assert.deepEqual(await gate.ensure("child", "screenshot"), {
     ok: false,
     error: COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
@@ -335,6 +348,48 @@ test("闸门：子会话 / 自动化会话立刻拒绝（主会话专用），�
   assert.deepEqual(store.writes, [], "也不写它的 meta");
 });
 
+/**
+ * 2026-11-27 验收（复验）要求的两条：自动化把一轮投回**用户的会话**时不能弹提问；
+ * 反过来，promoted 的自动化会话是用户看得见的普通会话，用户手点的轮次照常问。
+ */
+test("闸门：自动化发起 + 主会话 → 即时拒绝、0 次提问、0 次写盘（this_session 那条入口）", async () => {
+  const { gate, store, asked, states } = makeGate({ initial: "unset", origin: "automation" });
+  assert.deepEqual(await gate.ensure("s1", "click"), { ok: false, error: COMPUTER_USE_UNATTENDED_TEXT });
+  assert.deepEqual(asked, [], "用户不在看：问也问不到，直接说清楚");
+  assert.deepEqual(store.writes, [], "更不能借 120s 超时把 denied 写进用户的会话");
+  assert.deepEqual(states, [], "没有状态广播");
+});
+
+test("闸门：promoted 自动化会话 + 用户发起 → 按普通会话走提问（会话身份不再把它误判成子会话）", async () => {
+  const { gate, store, asked } = makeGate({
+    initial: "unset",
+    session: { automationId: "au1", promoted: true },
+    origin: "user",
+    decision: "allowed",
+  });
+  assert.deepEqual(await gate.ensure("s1", "screenshot"), { ok: true });
+  assert.deepEqual(asked, ["screenshot"], "用户看得见这条会话，所以真的问了一次");
+  assert.deepEqual(store.writes, ["allowed"]);
+});
+
+/** 同一对判据在闸门 × 下发上的结果（promoted 的自动化会话里，用户手点 → 放行；自动化发起 → 不执行） */
+test("闸门 × 下发：promoted 自动化 + 用户发起会执行；同一会话换成自动化发起就不执行", async () => {
+  const viaUser = await runWithFakeBroker({
+    initial: "unset",
+    session: { automationId: "au1", promoted: true },
+    origin: "user",
+    decision: "allowed",
+  });
+  assert.deepEqual(viaUser.ran, ["s1:screenshot"]);
+
+  const viaAutomation = await runWithFakeBroker({
+    initial: "allowed",
+    session: { automationId: "au1", promoted: true },
+    origin: "automation",
+  });
+  assert.deepEqual(viaAutomation.ran, [], "自动化那一轮不碰桌面，哪怕本会话早前被允许过");
+  assert.equal(viaAutomation.verdictError, COMPUTER_USE_UNATTENDED_TEXT);
+});
 test("状态迁移：unset → allowed → denied → unset，每一步的落库值与广播都对", async () => {
   const store = fakeSession("unset");
   const states: ComputerUseConsentStateEvent[] = [];
@@ -383,7 +438,8 @@ async function runWithFakeBroker(options: {
   initial: ComputerUseConsent | null;
   decision?: "allowed" | "denied" | "timeout";
   canAsk?: boolean;
-  mainSession?: boolean;
+  session?: ComputerUseSessionShape;
+  origin?: ComputerUseTurnOrigin;
   timeoutMs?: number;
 }): Promise<{ ran: string[]; verdictError: string | null }> {
   const ran: string[] = [];
@@ -413,7 +469,7 @@ test("闸门 × 下发：allowed 执行；denied 不执行；超时也不执行�
   const answered = await runWithFakeBroker({ initial: "unset", decision: "allowed" });
   assert.deepEqual(answered.ran, ["s1:screenshot"], "用户点头之后这一条才真的下发");
 
-  const child = await runWithFakeBroker({ initial: "allowed", mainSession: false });
+  const child = await runWithFakeBroker({ initial: "allowed", session: { parentId: "p" } });
   assert.deepEqual(child.ran, [], "子会话永远不下发");
   assert.equal(child.verdictError, COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
 });

@@ -43,7 +43,6 @@ import {
   COMPUTER_USE_CONSENT_DENIED_TEXT,
   COMPUTER_USE_CONSENT_STOPPED_TEXT,
   COMPUTER_USE_CONSENT_TIMEOUT_MS,
-  COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
   type ComputerUseConsent,
   type ComputerUseConsentAskCancelledEvent,
   type ComputerUseConsentAskEvent,
@@ -210,8 +209,13 @@ export type ConsentVerdict = { ok: true } | { ok: false; error: string };
 /** 读会话时闸门要的两件事（一次读盘拿齐，避免「读两次、中间被删」的缝） */
 export interface ComputerUseConsentFacts {
   consent: ComputerUseConsent;
-  /** 主会话？子会话 / 自动化 / 幕后会话一律不可用电脑使用（见 shared 的裁决注释） */
-  mainSession: boolean;
+  /**
+   * 这一条会话、这一轮，用户能不能看到并回答那个提问：null = 能；否则就是回给模型的拒绝文本。
+   * 由 `shared/computer-use.ts` 的 `computerUseBlockedReason(会话身份, 这一轮的发起者)` 算出来——
+   * **只此一处判据**（子会话 / 幕后 / 未 promoted 的自动化会话 → 主会话专用；
+   * 自动化发起的轮次 → 不弹提问）。闸门只负责当场拒。
+   */
+  blockedReason: string | null;
 }
 
 export interface ComputerUseConsentGateDeps {
@@ -285,9 +289,9 @@ export function createComputerUseConsentGate(deps: ComputerUseConsentGateDeps): 
     const facts = await deps.read(sessionId).catch(() => null);
     // 会话不存在：没有 meta 可记，也没有人可以被问。fail closed。
     if (facts === null) return { ok: false, error: COMPUTER_USE_CONSENT_DENIED_TEXT };
-    // 子会话 / 自动化 / 幕后会话：授权确认行用户看不到，等下去只会超时变 denied。
-    // **先于授权状态判**：哪怕它的 meta 上留着 allowed，也不是它该用的东西。
-    if (!facts.mainSession) return { ok: false, error: COMPUTER_USE_MAIN_SESSION_ONLY_TEXT };
+    // 用户看不到 / 这一轮不是他发起的：确认行问了也没人答，等下去只会超时变 denied。
+    // **先于授权状态判**：哪怕它的 meta 上留着 allowed，也不该在看不见的轮次里动桌面。
+    if (facts.blockedReason !== null) return { ok: false, error: facts.blockedReason };
     if (facts.consent === "allowed") return { ok: true };
     if (facts.consent === "denied") return { ok: false, error: COMPUTER_USE_CONSENT_DENIED_TEXT };
     // unset：先确认有人能回答，再提问。窗口已关 / 无人看守时不弹一个没人看的卡，

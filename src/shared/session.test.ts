@@ -12,7 +12,6 @@ import {
   recentQueriesFromRecords,
   RECENT_QUERIES_MAX,
   rootSessions,
-  isMainSession,
   SESSION_TITLE_MAX,
   sortSessions,
   transcriptToMarkdown,
@@ -375,19 +374,6 @@ describe("sortSessions", () => {
     const input = [at("a", 1), at("b", 2)];
     sortSessions(input);
     deepStrictEqual(input.map((s) => s.id), ["a", "b"]);
-  });
-});
-
-describe("isMainSession —— 电脑使用只允许主会话（2026-11-27 裁决）", () => {
-  const base: SessionMeta = { ...valid };
-
-  it("普通会话是主会话；子会话 / 自动化 / 幕后会话都不是（promoted 也不算）", () => {
-    strictEqual(isMainSession(base), true);
-    strictEqual(isMainSession({ ...base, parentId: "p" }), false);
-    strictEqual(isMainSession({ ...base, automationId: "au1" }), false);
-    const promoted: SessionMeta = { ...base, automationId: "au1", promoted: true };
-    strictEqual(isMainSession(promoted), false);
-    strictEqual(isMainSession({ ...base, backstage: "avatar" }), false);
   });
 });
 

@@ -1867,6 +1867,58 @@ export const COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE =
   "**Main session only**: a delegated sub-session or an automation run cannot use computer use (its consent " +
   "prompt would be invisible to the user) — hand this step back to the main conversation instead.";
 
+/**
+ * 这一轮是谁发起的（2026-11-27 验收后）。主进程在开轮那一刻记下，闸门只看一个值：
+ * 只有 `user`（用户在输入框里手点发出去的）才可能弹授权。
+ *
+ * - `user`：renderer 的 `agent:submit` / `agent:interrupt`
+ * - `automation`：自动化调度（含 `this_session` 把一轮投回用户的会话——那一轮用户很可能不在电脑前）
+ * - `channel`：编排线投递（子会话 / 派活），子会话在会话身份那一层已经挡住了
+ */
+export type ComputerUseTurnOrigin = "user" | "automation" | "channel";
+
+/** 判「用户此刻能不能看到并回答」时，闸门需要的会话身份字段（结构类型，不拉 SessionMeta 进来） */
+export interface ComputerUseSessionShape {
+  parentId?: string;
+  automationId?: string;
+  backstage?: "avatar";
+  promoted?: boolean;
+}
+
+/**
+ * 自动化发起的轮次里，电脑使用不弹授权（用户不在看，问不到就是 120s 超时→永久 denied）。
+ * 与“子会话”那句不同：这条会话本身是用户的，只是这一轮不是他发起的。
+ */
+export const COMPUTER_USE_UNATTENDED_TEXT =
+  "这一轮不是你手动发起的（自动化 / 定时任务），电脑使用不会为它弹授权。要操作沙箱桌面，请在主会话里手动发起。";
+
+/**
+ * 电脑使用的**唯一判据**：这一条会话、这一轮，用户能不能看到并回答那个授权提问。
+ * null = 能，可以提问；否则就是回给模型的那句拒绝文本（当场拒，不白等 120s）。
+ *
+ * 两件事一起判，**不拆成两套口径**：
+ *   1. **会话身份**：子会话（parentId）/ 幕后会话（backstage）/ 自动化新开的会话（automationId，
+ *      除非用户点了「转成普通会话」→ promoted，那条会话从左栅进、用户看得见）；
+ *   2. **这一轮是谁发起的**：`this_session` 自动化会把一轮投回**用户的会话**——会话身份完全正常，
+ *      但那一轮用户根本不在看，问一个看不见的问题就是重演「未经同意的拒绝」。
+ *
+ * 为什么不用「该会话此刻有没有可见视图」做判据：那要 renderer 把「我在看谁」上报给主进程，
+ * 是另一条 IPC；而本轮要堵的是「自动化把拒绝写进用户会话」这个入口，发起者是主进程本来就知道的
+ * 事实。两者不混用：这里只看上面两件。
+ */
+export function computerUseBlockedReason(
+  session: ComputerUseSessionShape,
+  origin: ComputerUseTurnOrigin,
+): string | null {
+  const userFacing =
+    session.parentId === undefined &&
+    session.backstage === undefined &&
+    (session.automationId === undefined || session.promoted === true);
+  if (!userFacing) return COMPUTER_USE_MAIN_SESSION_ONLY_TEXT;
+  if (origin !== "user") return COMPUTER_USE_UNATTENDED_TEXT;
+  return null;
+}
+
 /** 授权状态变化的原因（事件里带上，renderer 据此决定要不要清挂起的提问行） */
 export type ComputerUseConsentSource =
   | "answered"

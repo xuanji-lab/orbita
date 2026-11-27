@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SubmitAgentInput } from "../../shared/agent-ipc.ts";
+import type { ComputerUseTurnOrigin } from "../../shared/computer-use.ts";
 import { parseAutomationHeader, type Automation } from "../../shared/automation.ts";
 import type { ProviderDto } from "../../shared/provider.ts";
 import type { SessionMeta } from "../../shared/session.ts";
@@ -157,8 +158,10 @@ afterEach(async () => {
 
 const workspace: Workspace = { id: "ws1", name: "orbita", path: "/repo/orbita", createdAt: 1, attachedDirs: [] };
 
-function deps(overrides: { submitTurn?: (input: SubmitAgentInput) => Promise<void>; settings?: AppSettings; workspaces?: Workspace[] } = {}) {
+function deps(overrides: { submitTurn?: (input: SubmitAgentInput, origin?: ComputerUseTurnOrigin) => Promise<void>; settings?: AppSettings; workspaces?: Workspace[] } = {}) {
   const submitted: SubmitAgentInput[] = [];
+  /** 每轮提交带的发起者：自动化开出来的轮必须标 automation（闸门据此不弹看不见的授权） */
+  const origins: Array<ComputerUseTurnOrigin | undefined> = [];
   const launchDeps: LaunchDeps = {
     sessions,
     providers: { list: async () => [provider("zai", ["glm-5.3"])] },
@@ -166,11 +169,12 @@ function deps(overrides: { submitTurn?: (input: SubmitAgentInput) => Promise<voi
     workspaces: { list: async () => overrides.workspaces ?? [workspace], defaultPath: () => "/orbita/Home" },
     submitTurn:
       overrides.submitTurn ??
-      (async (input) => {
+      (async (input, origin) => {
         submitted.push(input);
+        origins.push(origin);
       }),
   };
-  return { launchDeps, submitted };
+  return { launchDeps, submitted, origins };
 }
 
 describe("launchAutomationRun（new_session）", () => {
@@ -178,11 +182,12 @@ describe("launchAutomationRun（new_session）", () => {
     makeAutomation({ id: "au1", title: "开源 CLI 速览", maxRuns: 12, ...patch, target: { kind: "new_session", workspaceId: "ws1" } });
 
   test("先建带 automationId / automationRun 的会话 meta，再开轮：cwd = 工作区路径、模型按设置解析、不带权限档", async () => {
-    const { launchDeps, submitted } = deps();
+    const { launchDeps, submitted, origins } = deps();
     await launchAutomationRun(launchDeps, { automation: automation({ lastResult: "上周说了 A" }), sessionId: "11111111-1111-1111-1111-111111111111", number: 3, at: AT, trigger: "manual" });
     const meta = await sessions.readMeta("11111111-1111-1111-1111-111111111111");
     assert.ok(meta);
     assert.equal(meta.automationId, "au1");
+    assert.deepEqual(origins, ["automation"], "自动化新开的轮也是 automation 发起");
     assert.deepEqual(meta.automationRun, { title: "开源 CLI 速览", number: 3, at: AT, trigger: "manual" });
     assert.equal(meta.title, "开源 CLI 速览 · 10-31 01:45");
     assert.equal(meta.titleSource, "user");
@@ -272,7 +277,7 @@ describe("deliverAutomationRun（this_session）", () => {
 
   test("用会话自己 meta 里的 piSessionFile / 模型 / 档位 / 思考 / cwd resume 一轮，文本是抬头 + 指令（不附上次结果）", async () => {
     await sessions.ensureSession(sessionMeta());
-    const { launchDeps, submitted } = deps();
+    const { launchDeps, submitted, origins } = deps();
     await deliverAutomationRun(launchDeps, { automation: bound({ prompt: "看日志", lastResult: "不该出现" }), number: 3, at: AT });
     assert.equal(submitted.length, 1);
     const input = submitted[0];
@@ -285,6 +290,9 @@ describe("deliverAutomationRun（this_session）", () => {
     assert.equal(input !== undefined && "mode" in input, false, "没有权限档：按放行跑");
     assert.equal(input?.thinkingLevel, "high");
     assert.equal(input?.text, "[定时任务「等 vLLM」第 3/12 次 · 10-31 01:45]\n\n看日志");
+    // this_session 把一轮投回**用户的会话**：会话身份是主会话，但这一轮是自动化发起的——
+    // 发起者必须传下去，否则电脑使用闸门会为它弹一个用户看不见的授权（120s 后写 denied）
+    assert.deepEqual(origins, ["automation"]);
   });
 
   test("会话被删：SessionGoneError；没有 pi 本子（续不了）：普通错误；都不开轮", async () => {

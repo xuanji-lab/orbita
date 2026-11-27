@@ -1864,8 +1864,9 @@ export type AgentEvent =
    * 急停（`Control+Alt+Shift+Escape`）：主进程广播，不是 agent 进程发的（`skillsChanged`
    * 同款：主进程借同一条广播通道）。
    *
-   * 语义 = 停轮 + **撤销电脑使用授权**（2026-11-27 起：还活着的会话 `computerUseConsent`
-   * 复位成 `unset`，下一次电脑操作会重新问一次用户；挂起中的提问按拒绝结掉）。
+   * 语义 = 停轮 + **撤销电脑使用授权**（2026-11-27 起：所有非 unset 的会话 `computerUseConsent`
+   * 复位成 `unset`，下一次电脑操作会重新问一次用户；挂起中的提问按 **cancelled** 结掉——
+   * 不写盘，用户没有表态，那不是拒绝）。
    * **沙箱不关**——现场留着给用户看。
    */
   | ({ type: "computerUseEmergencyStop" } & EmergencyStopBroadcast)

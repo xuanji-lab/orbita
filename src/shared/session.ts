@@ -801,20 +801,6 @@ export function sortSessions(sessions: readonly SessionMeta[]): SessionMeta[] {
   });
 }
 
-/**
- * 电脑使用只有在**主会话**里可用（2026-11-27 验收 P3 裁决）：电脑使用的授权确认行画在
- * 它自己那条会话的视图里，而被派出去的子会话 / 自动化跑出来的会话用户看不到那行——
- * 等下去只会 120s 超时并把会话永久写成 denied。闸门在 main/computer-use/consent.ts
- * 用这个谓词立刻拒掉，不白等。
- *
- * 定义：既不是子会话（无 parentId）、也不是自动化新开的会话（无 automationId）、也不是
- * 幕后会话（无 backstage）。与 rootSessions 的差别：promoted 的自动化会话**仍然不行**——
- * 它是用户从自动化面板看过来的普通会话，但提问照样可能发生在用户没看它的时候；电脑操作
- * 的授权只认「用户此刻就在和它对话的主会话」。
- */
-export function isMainSession(meta: Pick<SessionMeta, "parentId" | "automationId" | "backstage">): boolean {
-  return meta.parentId === undefined && meta.automationId === undefined && meta.backstage === undefined;
-}
 
 /**
  * 根会话：没有母会话、也不是自动化跑出来（且没被「转成普通会话」）的那些。
