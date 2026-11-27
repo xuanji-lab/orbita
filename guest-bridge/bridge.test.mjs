@@ -139,7 +139,7 @@ test(
       const infoPath = path.join(outDir, "bridge.json");
       assert.ok(await waitForFile(infoPath), `桥应在超时前写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-      assert.equal(info.version, "0.15.0");
+      assert.equal(info.version, "0.15.1");
       assert.ok(Number.isInteger(info.pid) && info.pid > 0, "bridge.json 应带 pid");
       // 0.8.0 起通告 TCP 通道（宿主优先走它）：端口由系统分配、令牌 32 位十六进制
       assert.ok(Number.isInteger(info.port) && info.port > 0, "bridge.json 应带 TCP 端口");
@@ -148,6 +148,8 @@ test(
       // 0.8.2：防火墙放行结果（宿主要能据此说清「连不上是因为沙箱防火墙没放行」）
       assert.equal(typeof info.fwAllowed, "boolean", "bridge.json 应带布尔 fwAllowed");
       assert.equal(typeof info.fwStateOff, "boolean", "bridge.json 应带布尔 fwStateOff（是否关掉了沙箱防火墙）");
+      // 不带 --loopback 就是原来的沙箱行为（另一台一次性 VM）：网关明明写 false，.wsb 那条路才允许关防火墙
+      assert.equal(info.loopback, false, "不带 --loopback 时 bridge.json 应明确写 loopback:false");
       assert.ok(fs.existsSync(cmdDir), "cmd 目录应由桥创建");
 
       // ---- ping 命令（宿主就绪探针）----
@@ -204,6 +206,69 @@ test(
       // 启动行必须报出枚举周期与计量阈值：父会话读实验日志时，靠这一行确认跑的是哪一档
       assert.match(bridgeLog, /对齐枚举周期：每 16 轮/, `启动行应报出枚举周期。桥日志：\n${bridgeLog}`);
       assert.match(bridgeLog, /耗时日志阈值 500ms/, "启动行应报出计量阈值");
+    } finally {
+      bridge.kill();
+      await new Promise((r) => bridge.once("exit", r));
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
+  },
+);
+
+// ── 回环模式（0.15.1）：L2b（isolation-session）专用，**绝不碰宿主防火墙** ─────────
+//
+// 真机的理由：L2b 后端跑在**用户自己这台 Windows 上的另一个登录会话**里——同一个内核、
+// 同一套防火墙。桥默认的启动会 `netsh advfirewall set allprofiles state off` + 加一条
+// `profile=any` 的入站端口规则（那是给 Windows Sandbox 的一次性 VM 准备的）。在那条后端上
+// 跑一次电脑使用，用户的整机防火墙就没了——这是本项目的红线。
+// 带 `--loopback` 之后：一次 netsh 都不跑、只绑 127.0.0.1、bridge.json 的 ipv4 只通告 127.0.0.1。
+//
+// ⚠ 这个用例同时带 `--no-firewall`（红线 2）：就算以后有人把 --loopback 的防火墙分支写漏了，
+//   测试也不会真的去跑 netsh 改这台机器的系统设置。
+
+test(
+  "回环模式：不碰防火墙、只绑 127.0.0.1、bridge.json 的 ipv4 恰好是 [127.0.0.1]",
+  { skip: !isWindows && "仅在 Windows 上运行", timeout: 120_000 },
+  async () => {
+    assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "orbita-bridge-loopback-test-"));
+    // --no-firewall：宿主上绝不真跑 netsh；--loopback：被测的行为本身
+    const bridge = spawn(exePath, ["--out-dir", outDir, "--no-firewall", "--loopback"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let bridgeLog = "";
+    bridge.stdout.on("data", (d) => (bridgeLog += d));
+    bridge.stderr.on("data", (d) => (bridgeLog += d));
+
+    try {
+      const infoPath = path.join(outDir, "bridge.json");
+      assert.ok(await waitForFile(infoPath), `桥应写出 bridge.json。桥日志：\n${bridgeLog}`);
+      const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+
+      // ---- 通告：只给回环地址，声明没碰过防火墙 ----
+      assert.deepEqual(info.ipv4, ["127.0.0.1"], "回环模式的 ipv4 必须恰好是 [127.0.0.1]（不许通告局域网地址）");
+      assert.ok(Number.isInteger(info.port) && info.port > 0, "回环模式仍要通告 TCP 端口（宿主走 TCP 才快）");
+      assert.match(info.token, /^[0-9a-f]{32}$/, "令牌机制不变");
+      // 语义：fwAllowed=true 指的是「TCP 可用、无需入站放行」（127.0.0.0/8 不经过防火墙筛选），
+      // fwStateOff=false 指的是「一次 netsh 都没跑、没有关过防火墙」，loopback=true 标出这是回环模式。
+      assert.equal(info.fwAllowed, true, "回环模式：无需放行即可连（不是「放行成功了」）");
+      assert.equal(info.fwStateOff, false, "回环模式：绝不允许把防火墙关掉（fwStateOff 必须 false）");
+      assert.equal(info.loopback, true, "回环模式应在 bridge.json 里标出来（回退到文件协议时能说清为什么）");
+
+      // ---- 日志：说清楚没碰防火墙，且监听地址是回环 ----
+      assert.match(bridgeLog, /回环模式：不触碰防火墙/, `启动日志应明说回环模式不碰防火墙。桥日志：\n${bridgeLog}`);
+      assert.match(bridgeLog, /TCP 通道已监听：127\.0\.0\.1:\d+/, "监听地址应是 127.0.0.1");
+      assert.doesNotMatch(bridgeLog, /TCP 通道已监听：0\.0\.0\.0:/, "回环模式不得监听 0.0.0.0");
+
+      // ---- 回环上真的能连：握手 + 一条 ping（证明通告的地址不是摆设）----
+      const client = await openTcpClient(info.port);
+      client.send(JSON.stringify({ t: "hello", token: info.token }));
+      assert.deepEqual(await client.next(), { t: "hello-ok" }, "回环地址应用正确令牌握手成功");
+      client.send(JSON.stringify({ id: 1, command: "ping", fields: {} }));
+      const pong = await client.next();
+      assert.equal(pong.id, 1);
+      assert.deepEqual(pong.resp, { ok: true });
+      client.close();
     } finally {
       bridge.kill();
       await new Promise((r) => bridge.once("exit", r));

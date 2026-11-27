@@ -120,21 +120,37 @@ internal static class TcpChannel
      */
     internal static bool Start()
     {
-        // **关防火墙必须在开始监听之前**：那个「是否允许…」的框是 Windows 在程序第一次开始监听
-        // 入站时弹的；等它弹出来之后再关防火墙不会把框收回去，框会留在桌面上抢焦点。
-        PrepareFirewallBeforeListen();
+        if (LoopbackOnly)
+        {
+            // 回环模式：**一次 netsh 都不跑**。127.0.0.0/8 的流量本来就不经过 Windows 防火墙的
+            // 入站筛选，所以「不需要放行」——fwAllowed 在这里的意思是「TCP 可用、无需放行」，
+            // fwStateOff 恒 false（我们没关过、也不该关用户的防火墙）。
+            Log("回环模式：不触碰防火墙（netsh 一次都不跑：既不禁用，也不加端口规则）；只绑 127.0.0.1");
+            _fwAllowed = true;
+            _fwStateOff = false;
+        }
+        else
+        {
+            // **关防火墙必须在开始监听之前**：那个「是否允许…」的框是 Windows 在程序第一次开始监听
+            // 入站时弹的；等它弹出来之后再关防火墙不会把框收回去，框会留在桌面上抢焦点。
+            PrepareFirewallBeforeListen();
+        }
         try
         {
             _token = NewToken();
-            TcpListener listener = new TcpListener(IPAddress.Any, 0);
+            IPAddress bindAddress = LoopbackOnly ? IPAddress.Loopback : IPAddress.Any;
+            TcpListener listener = new TcpListener(bindAddress, 0);
             listener.Start(ListenBacklog);
             _listener = listener;
             _port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            // 端口知道了才建端口规则（belt-and-braces：防火墙通常已经被上一步关掉）。
-            // 顺序：关防火墙 → 监听 → 端口规则 → 写 bridge.json（宿主看见通告时入站已放开）。
-            AddPortRuleAfterListen();
-            // 万一某些机器上仍然弹了那个框：监听后起一条 ~2s 的短任务把它收掉（只做一次）
-            ArmFirewallPromptSweep();
+            if (!LoopbackOnly)
+            {
+                // 端口知道了才建端口规则（belt-and-braces：防火墙通常已经被上一步关掉）。
+                // 顺序：关防火墙 → 监听 → 端口规则 → 写 bridge.json（宿主看见通告时入站已放开）。
+                AddPortRuleAfterListen();
+                // 万一某些机器上仍然弹了那个框：监听后起一条 ~2s 的短任务把它收掉（只做一次）
+                ArmFirewallPromptSweep();
+            }
             Thread accept = new Thread(AcceptLoop);
             accept.IsBackground = true;
             accept.Name = "orbita-tcp-accept";
@@ -145,8 +161,8 @@ internal static class TcpChannel
             beat.IsBackground = true;
             beat.Name = "orbita-tcp-heartbeat";
             beat.Start();
-            Log("TCP 通道已监听：0.0.0.0:" + _port + "，backlog " + ListenBacklog
-                + "，本机 IPv4：" + JoinIPv4(LocalIPv4()));
+            Log("TCP 通道已监听：" + bindAddress + ":" + _port + "，backlog " + ListenBacklog
+                + "，通告地址：" + JoinIPv4(AdvertisedIPv4()));
             return true;
         }
         catch (Exception ex)
@@ -207,6 +223,30 @@ internal static class TcpChannel
         }
         normal.AddRange(apipa);
         return normal;
+    }
+
+    /**
+     * 通告给宿主的地址表（bridge.json 的 ipv4）。
+     *
+     * 回环模式**只通告 127.0.0.1**：桥只绑在那里，通告局域网地址只会让宿主去连一个没人
+     * 监听的地址（白等一轮 1.5s 超时才回退文件协议）。LocalIPv4() 的语义（枚举非回环
+     * IPv4，给诊断日志与 selftest 用）一个字都不改。
+     */
+    internal static List<string> AdvertisedIPv4()
+    {
+        if (LoopbackOnly)
+        {
+            List<string> only = new List<string>();
+            only.Add(IPAddress.Loopback.ToString());
+            return only;
+        }
+        return LocalIPv4();
+    }
+
+    /** bridge.json 里的 loopback 字段片段（纯函数，自测直接验它） */
+    internal static string LoopbackField(bool loopback)
+    {
+        return ",\"loopback\":" + (loopback ? "true" : "false");
     }
 
     /** JSON 数组字面量（bridge.json 的 ipv4 字段） */
@@ -312,6 +352,20 @@ internal static class TcpChannel
     private static bool _fwStateOff = false;
     /** 自测开关：宿主上**绝不**真跑 netsh、绝不碰桌面窗口 */
     private static bool _fwSkip = false;
+
+    /**
+     * 回环模式（`--loopback`）：只绑 `IPAddress.Loopback`，**一次 netsh 都不跑**（既不关防火墙，
+     * 也不加 profile=any 的端口规则，连弹框兜底也不装）。
+     *
+     * 为什么需要它（L2b / isolation-session 后端）：那条路跑的是**用户自己这台 Windows 上
+     * 的另一个登录会话**——同一个内核、同一套防火墙。在这里关防火墙、加一条任意 profile 的
+     * 入站规则，就是改用户整机的系统设置（本项目的红线）。而宿主与会话共享同一个回环
+     * （不需要穿透任何网络策略、也不需要入站放行），直连 127.0.0.1 就够。
+     *
+     * Windows Sandbox 后端（.wsb，另一台一次性 VM）**永不带**这个参数：那边 0.0.0.0 +
+     * guest 内放行才是对的（宿主在 VM 外面，走不了 guest 的回环）。
+     */
+    internal static bool LoopbackOnly = false;
     /** 诊断路径只打一次 */
     private static bool _fwDiagnosticsLogged = false;
     /** 弹框兜底只做一次（判据是「别等、别重试超过一次」） */
@@ -1064,6 +1118,11 @@ internal static class TcpChannel
                 FirewallStateField(true));
             Program.CheckString(failures, ref cases, "fwStateOff 字段片段（false）", ",\"fwStateOff\":false",
                 FirewallStateField(false));
+            // ---- 回环模式（--loopback）：通告字段与「不碰防火墙」的语义 ----
+            Program.CheckString(failures, ref cases, "loopback 字段片段（true）", ",\"loopback\":true",
+                LoopbackField(true));
+            Program.CheckString(failures, ref cases, "loopback 字段片段（false）", ",\"loopback\":false",
+                LoopbackField(false));
             // ---- 弹框识别（0.8.4）：只验匹配条件，宿主上不枚举窗口 ----
             Program.CheckTrue(failures, ref cases, "弹框：中文标题命中（Windows 安全中心）",
                 IsFirewallPrompt("#32770", "Windows 安全中心", ""));

@@ -130,7 +130,12 @@ internal static class Program
     //   事件时回 partial，并把已插入的按下键/按钮按相反顺序补发 UP（不留卡住的修饰键）；
     //   插入数为 0 或 Win32 报错仍是 refused。回执多 delivery / evidence / inserted /
     //   requested / released 几个字段，老宿主不读也不会坏。
-    private const string Version = "0.15.0";
+    // 0.15.1（回环）：多了启动参数 `--loopback`——只绑 127.0.0.1、**一次 netsh 都不跑**
+    //   （不关防火墙、不加 profile=any 的入站规则、不装弹框兜底），bridge.json 的 ipv4 只通告
+    //   127.0.0.1，并多一个 loopback 字段。为什么：L2b 后端（isolation-session）跑在**用户自己
+    //   这台 Windows 的另一个登录会话**里，同一套防火墙——在那里关防火墙就是改用户整机设置
+    //   （红线）。.wsb（Windows Sandbox）那条路**不带**它，行为与 0.15.0 逐字一致。
+    private const string Version = "0.15.1";
     private const string CmdDirName = "cmd";          // out 下的命令目录
     internal const string ReqSuffix = ".req.json";    // 宿主写：命令请求
     internal const string RespSuffix = ".resp.json";  // 桥写：执行结果
@@ -529,6 +534,18 @@ internal static class Program
                 InputHook.Disabled = true;
                 continue;
             }
+            // L2b（isolation-session）专用：只绑回环、**一次 netsh 都不跑**。
+            // 那条后端跑在**用户自己这台 Windows 的另一个登录会话**里——同一个内核、同一套
+            // 防火墙；在那里关防火墙 / 加 profile=any 的入站规则就是改用户整机的系统设置
+            // （红线）。宿主与会话共享回环（真机实测宿主直连会话里的端口全通），直连
+            // 127.0.0.1 就够。
+            // Windows Sandbox 后端（.wsb 的 LogonCommand）**永不带**它：那边宿主在 VM 外面，
+            // 必须 0.0.0.0 + guest 内放行。输入让路不受它影响（钩子钩的只是那个会话的桌面）。
+            if (flag == "--loopback")
+            {
+                TcpChannel.LoopbackOnly = true;
+                continue;
+            }
             // 测试缝（只有 --selftest-worker 起子桥时带）：认 worker-* 命令，并把一条 worker
             // 命令的放弃线缩到 2.5s（自测不能等 40 秒）。生产（.wsb 的 LogonCommand）永不带它。
             if (flag == "--test-hooks")
@@ -596,14 +613,17 @@ internal static class Program
             .Append(",\"pid\":").Append(System.Diagnostics.Process.GetCurrentProcess().Id)
             // 防火墙放行结果：false 时宿主要能说清「连不上是因为沙箱防火墙没放行」，
             // 而不是继续盲猜网络。fwStateOff = 是否干脆把沙箱防火墙关掉了（兜底那条路）。
-            // 老宿主不认识这两个字段，忽略即可。
+            // 回环模式（loopback:true）里一条 netsh 都没跑：fwAllowed=true 的意思是「TCP 可用、
+            // 无需入站放行」（127.0.0.0/8 本来就不经过防火墙入站筛选），fwStateOff 恒 false。
+            // 老宿主不认识这几个字段，忽略即可。
             .Append(TcpChannel.FirewallField(TcpChannel.FirewallAllowed))
-            .Append(TcpChannel.FirewallStateField(TcpChannel.FirewallDisabled));
+            .Append(TcpChannel.FirewallStateField(TcpChannel.FirewallDisabled))
+            .Append(TcpChannel.LoopbackField(TcpChannel.LoopbackOnly));
         if (TcpChannel.Port > 0 && TcpChannel.Token.Length > 0)
         {
             json.Append(",\"port\":").Append(TcpChannel.Port)
                 .Append(",\"token\":").Append(JsonQuote(TcpChannel.Token))
-                .Append(",\"ipv4\":").Append(TcpChannel.IPv4Json(TcpChannel.LocalIPv4()));
+                .Append(",\"ipv4\":").Append(TcpChannel.IPv4Json(TcpChannel.AdvertisedIPv4()));
         }
         json.Append("}");
         AtomicWrite(Path.Combine(_outDir, "bridge.json"), Encoding.UTF8.GetBytes(json.ToString()));

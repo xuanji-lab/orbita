@@ -248,11 +248,15 @@ async function makeHarness(options: { withBridgeJson?: boolean } = {}): Promise<
 }
 
 describe("IsolationSessionController", () => {
-  it("launcher 是零引号 token、带 out 目录预建（MXC 的 cmd /c 会剥首尾引号）", () => {
+  it("launcher 是零引号 token、带 out 目录预建（MXC 的 cmd /c 会剥首尾引号），并强制 --loopback", () => {
     const cmd = renderLauncherCmd();
     assert.match(cmd, /mkdir "%~dp0out"/);
     assert.match(cmd, /cd \/d "%~dp0"/);
     assert.match(cmd, /"%~dp0bridge\.exe" --out-dir "%~dp0out"/);
+    // --loopback 是安全约束（不是调优）：这条后端与宿主同一个内核、同一套防火墙，
+    // 桥的默认启动会关防火墙 + 开一个 profile=any 的入站端口（那是给一次性 VM 准备的）。
+    // 删掉它的后果是「用户开一次电脑使用，整机防火墙被关」——这行断言就是钉子。
+    assert.match(cmd, / --loopback /, "launcher 必须带 --loopback（L2b 不许碰宿主防火墙）");
     // 整条命令里不能出现「两个以上引号对」的形态之外的东西：MXC 只看到文件名，不看内容
     assert.equal(cmd.includes("&&"), false);
   });

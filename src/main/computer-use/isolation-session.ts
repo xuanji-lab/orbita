@@ -26,9 +26,15 @@
  * 一个 .cmd 文件只有一个引号 token（`start-bridge.cmd`，零引号，相对 cwd），内容里的引号由
  * cmd 自己按行解释，不受那条规则影响。真机三条命令的对照结果写在 f5 探针里。
  *
- * **端口**：不需要分配。桥自己绑 `IPAddress.Any:0`（系统分配），把 port / token / ipv4 写进
+ * **端口**：不需要分配。桥自己绑 `127.0.0.1:0`（系统分配），把 port / token / ipv4 写进
  * `out/bridge.json`；宿主照老路径读。两个会话并发实测拿到 13505 / 3582，天然不撞。这也是
  * 「每会话一个租约」在传输层的对应物：会话之间不共享任何端口。
+ *
+ * **桥必须带 `--loopback`**（0.15.1）：这条后端是**用户自己这台 Windows 上的另一个登录会话**
+ * ——同一个内核、同一套防火墙。桥默认会在启动时关掉防火墙、加一条 `profile=any` 的入站
+ * 端口规则（那是给 Windows Sandbox 的另一台 VM 准备的）；在这里跑就是在改用户整机的系统设置，
+ * 是本项目的红线。带上 `--loopback` 后：一次 netsh 都不跑、只绑 `127.0.0.1`、bridge.json 的
+ * ipv4 只通告 `127.0.0.1`。宿主与会话共享同一个回环，不需要任何入站放行。
  *
  * **没有真实输入设备**：会话是 RDP 形态（`SM_REMOTESESSION=1`），`SendInput` 返回 3 / err=0
  * 但光标永远停在 (0,0)。所以像素输入四命令（click / type / key / scroll）在这里**一律不下发**，
@@ -177,13 +183,21 @@ function deferredOf(resp: Record<string, unknown>): { yielded?: boolean; waitedM
  * `mkdir out` 必须在前：`1> out\bridge.log` 在目录不存在时会直接失败，而桥还没来得及
  * 自己建它（失败现场是「什么都没有」，极难归因——真机踩过一次）。
  * `cd /d "%~dp0"` 让相对路径与 cwd 约定一致；`%~dp0` 自带结尾反斜杠。
+ *
+ * **`--loopback` 是安全约束，不是调优**：这个会话与宿主是同一个内核、同一套防火墙，
+ * 桥的默认启动会关掉防火墙并对局域网开一个端口（那是给 Windows Sandbox 的一次性 VM 准备的，
+ * 见 guest-bridge/TcpChannel.cs）。宿主与会话共享回环，所以只绑 127.0.0.1 就够。
+ *
+ * 失败模式（认了，不是隐患）：万一回环连不通（被系统的安全策略拦住 / 以后换了跨内核的后端），
+ * 宿主侧的 bridge-client 会自己退回**映射目录的文件协议**（每条命令 3–7 秒）——变慢，不会坏，
+ * 而且这里绝不会去碰用户的防火墙。所以不要为了「快一点」把这一行改回去。
  */
 export function renderLauncherCmd(): string {
   return [
     "@echo off",
     'mkdir "%~dp0out" 2>nul',
     'cd /d "%~dp0"',
-    `"%~dp0${STAGED_EXE}" --out-dir "%~dp0${OUT_DIR_NAME}" 1>"%~dp0${OUT_DIR_NAME}\\bridge.log" 2>&1`,
+    `"%~dp0${STAGED_EXE}" --out-dir "%~dp0${OUT_DIR_NAME}" --loopback 1>"%~dp0${OUT_DIR_NAME}\\bridge.log" 2>&1`,
     "",
   ].join("\r\n");
 }
