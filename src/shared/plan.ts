@@ -3,8 +3,8 @@
  * 「这条任务 › 进度」（renderer 的 task-progress.ts）用同一份规矩判「这是不是一张合法的计划」。
  *
  * 两边都要判：工具在执行时校验、坏了就拒（错误回灌给模型）；面板要在工具执行**之前**就认出
- * 这张计划——pi 的并行批次先让每个调用过审批闸门、全部过完才统一执行，手动档下 update_plan
- * 会和同批等你批准的工具一起挂着，面板若只认执行完的，就一直显示上一张计划。
+ * 这张计划——一批工具调用先逐个过闸门、全部过完才统一执行，update_plan 会和同批的慢工具一起等着，
+ * 面板若只认执行完的，就一直显示上一张计划。
  *
  * 纯模块：不 import electron / React，可被 node --test 直接加载。
  */
@@ -25,38 +25,28 @@ export interface PlanItem {
   waitingFor?: string;
 }
 
-/** 顺手看到、这次不做的事（update_plan 的 later）：只写新的，系统按文字去重 */
-export interface PlanLater {
-  text: string;
-  /** 一句理由（为什么这次不做）；可缺 */
-  why?: string;
-}
-
 /**
- * 一次 update_plan 的完整入参（v4：在 items 之外多了三个可选字段）。
+ * 一次 update_plan 的完整入参（items 之外两个可选字段）。
  * - why：结构变了（加 / 删 / 拆 / 合 / 改说法 / 调顺序）时的一句理由，只打勾时不写；
- * - later：以后再做，追加语义（旧的不会因为这次没重发就消失）；
  * - confirm：模型拿不准、要用户先回答的 1–3 个具体问题；非空 = 这一轮写完计划就停下等回答。
  */
 export interface PlanCall {
   items: PlanItem[];
   why: string | null;
-  later: PlanLater[];
   confirm: string[];
 }
 
-/** later 每次最多收几条、confirm 最多几个问题（超出的丢掉，不拒——可选字段写多了不值得让模型重调） */
-export const PLAN_MAX_LATER = 5;
+/** confirm 最多几个问题（超出的丢掉，不拒——可选字段写多了不值得让模型重调） */
 export const PLAN_MAX_CONFIRM = 3;
-/** why / later / confirm 里单条文字的上限（字符），超长截断 */
+/** why / confirm 里单条文字的上限（字符），超长截断 */
 export const PLAN_NOTE_MAX_CHARS = 200;
 /** waitingFor 是步骤旁边的一枚小签，不是一段话：超长截断 */
 export const PLAN_WAITING_MAX_CHARS = 40;
 
 /**
  * update_plan 的结果 details（随转录落盘，只给界面、不进模型上下文）。
- * awaiting = 这一次调用让这一轮先停下、等用户在聊天框里回答（plan 档写完计划 / 带了 confirm 问题 /
- * 「先给我看计划」）；问题由 agent 在正文里问，界面没有确认按钮，awaiting 只用来画「等你」的状态。
+ * awaiting = 这一次调用让这一轮先停下、等用户在聊天框里回答（带了 confirm 问题 / 「先给我看计划」；
+ * 旧会话里还有当时 plan 档写完计划停下的）；问题由 agent 在正文里问，界面没有确认按钮，awaiting 只用来画「等你」的状态。
  */
 export interface PlanToolDetails {
   plan: PlanItem[];
@@ -112,7 +102,7 @@ export function parsePlan(params: unknown): PlanItem[] {
 
 /**
  * 入参 → 一次完整的 update_plan 调用。items 的校验同 parsePlan（坏了抛错）；
- * why / later / confirm 是可选字段，**写坏了丢掉、不拒**：类型不对、空白、超出条数一律静默收敛——
+ * why / confirm 是可选字段，**写坏了丢掉、不拒**：类型不对、空白、超出条数一律静默收敛——
  * 弱模型对可选字段的格式最容易写歪，为它整调用重来是更大的浪费。
  */
 export function parsePlanCall(params: unknown): PlanCall {
@@ -140,12 +130,13 @@ export function parsePlanCall(params: unknown): PlanCall {
 }
 
 /**
- * 三个可选字段单独解析：面板对「已落盘的旧入参」宽松读 items 时，why / later / confirm 也要读——
+ * 两个可选字段单独解析：面板对「已落盘的旧入参」宽松读 items 时，why / confirm 也要读——
  * 它们从不抛错，所以不论 items 是否过得了严格校验都能取。
+ * 旧记录入参里的 `later`（「以后再做」，已删）读时直接忽略，不报错。
  */
-export function parsePlanNotes(params: unknown): Pick<PlanCall, "why" | "later" | "confirm"> {
+export function parsePlanNotes(params: unknown): Pick<PlanCall, "why" | "confirm"> {
   const record = (params ?? {}) as Record<string, unknown>;
-  return { why: cleanNote(record["why"]), later: parseLater(record["later"]), confirm: parseConfirm(record["confirm"]) };
+  return { why: cleanNote(record["why"]), confirm: parseConfirm(record["confirm"]) };
 }
 
 /** 一句说明：只认非空字符串，去空白、折叠换行、超长截断 */
@@ -154,21 +145,6 @@ function cleanNote(value: unknown): string | null {
   const text = value.replace(/\s+/g, " ").trim();
   if (text === "") return null;
   return text.length > PLAN_NOTE_MAX_CHARS ? `${text.slice(0, PLAN_NOTE_MAX_CHARS - 1)}…` : text;
-}
-
-function parseLater(raw: unknown): PlanLater[] {
-  if (!Array.isArray(raw)) return [];
-  const out: PlanLater[] = [];
-  for (const entry of raw) {
-    // 容忍模型直接写字符串
-    const record = typeof entry === "string" ? { text: entry } : ((entry ?? {}) as Record<string, unknown>);
-    const text = cleanNote(record["text"]);
-    if (text === null || out.some((item) => item.text === text)) continue;
-    const why = cleanNote(record["why"]);
-    out.push(why === null ? { text } : { text, why });
-    if (out.length >= PLAN_MAX_LATER) break;
-  }
-  return out;
 }
 
 function parseConfirm(raw: unknown): string[] {

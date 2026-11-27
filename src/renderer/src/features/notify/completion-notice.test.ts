@@ -17,7 +17,7 @@ import {
 
 const slot = (phase: PhaseSlot["phase"], queued = 0): PhaseSlot => ({ phase, queued: Array(queued).fill(null) });
 const map = (entries: Record<string, PhaseSlot>) => new Map(Object.entries(entries));
-const run = (phase: RunSlot["phase"], approvals = 0): RunSlot => ({ phase, approvals });
+const run = (phase: RunSlot["phase"], planAwaiting = false): RunSlot => ({ phase, planAwaiting });
 
 describe("settledSessions", () => {
   it("turn → idle 且队列空算跑完", () => {
@@ -78,12 +78,11 @@ describe("sessionRunState（状态饼与铃铛清单的单一真源）", () => {
     strictEqual(sessionRunState({ slot: idle, children: [run("turn")], unread: null }), "running");
   });
 
-  it("自己或子会话挂着审批 → waiting（2/3 橙），压过 running", () => {
-    strictEqual(sessionRunState({ slot: run("turn", 1), children: [], unread: null }), "waiting");
-    // 审批挂着时 phase 还是 turn：橙必须压过蓝，否则永远不亮
-    strictEqual(sessionRunState({ slot: idle, children: [run("turn", 1)], unread: null }), "waiting");
-    // 母会话自己空闲、孩子在等审批：亮在母会话那一行
-    strictEqual(sessionRunState({ slot: idle, children: [run("idle", 1)], unread: null }), "waiting");
+  it("自己或子会话写完计划停下等你 → waiting（2/3 橙），压过 running", () => {
+    strictEqual(sessionRunState({ slot: run("turn", true), children: [], unread: null }), "waiting");
+    strictEqual(sessionRunState({ slot: idle, children: [run("turn", true)], unread: null }), "waiting");
+    // 母会话自己空闲、孩子在等：亮在母会话那一行
+    strictEqual(sessionRunState({ slot: idle, children: [run("idle", true)], unread: null }), "waiting");
   });
 
   it("meta 带未读 → done（3/3 绿）；带 failed → failed（3/3 红）", () => {
@@ -144,11 +143,11 @@ describe("aggregateRunStates（工作区折叠时组头的汇总）", () => {
 
 describe("runStateOf（侧栏 / 首页卡 / 工作区文件共用）", () => {
   const meta = (id: string, parentId?: string) => ({ id, parentId, title: id }) as unknown as import("@shared/session").SessionMeta;
-  it("子会话在等审批 = 母会话在等你", () => {
+  it("子会话写完计划停下等你 = 母会话在等你", () => {
     const source = {
       sessions: [meta("p"), meta("c", "p")],
       phaseOf: (id: string) => (id === "c" ? ("turn" as const) : ("idle" as const)),
-      approvalsOf: (id: string) => (id === "c" ? [{}] : []),
+      planAwaitingOf: (id: string) => id === "c",
     };
     strictEqual(runStateOf(source, meta("p")), "waiting");
   });
@@ -157,18 +156,18 @@ describe("runStateOf（侧栏 / 首页卡 / 工作区文件共用）", () => {
 describe("sessionRunState 的「计划等确认」来源", () => {
   it("停在计划确认上（没有审批、不在跑）= 等你，不是跑完的绿饼", () => {
     strictEqual(
-      sessionRunState({ slot: { phase: "idle", approvals: 0, planAwaiting: true }, children: [], unread: { at: 1, failed: false } }),
+      sessionRunState({ slot: { phase: "idle", planAwaiting: true }, children: [], unread: { at: 1, failed: false } }),
       "waiting",
     );
   });
   it("子会话停在计划确认上，算母会话等你（入口在母）", () => {
     strictEqual(
-      sessionRunState({ slot: { phase: "idle", approvals: 0 }, children: [{ phase: "idle", approvals: 0, planAwaiting: true }], unread: null }),
+      sessionRunState({ slot: { phase: "idle" }, children: [{ phase: "idle", planAwaiting: true }], unread: null }),
       "waiting",
     );
   });
   it("不带这个来源 = 旧行为", () => {
-    strictEqual(sessionRunState({ slot: { phase: "idle", approvals: 0 }, children: [], unread: { at: 1, failed: false } }), "done");
+    strictEqual(sessionRunState({ slot: { phase: "idle" }, children: [], unread: { at: 1, failed: false } }), "done");
   });
 });
 

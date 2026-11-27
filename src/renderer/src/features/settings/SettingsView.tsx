@@ -22,7 +22,8 @@ import type {
   BrowserImportSummary,
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
-import type { DoubaoVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import type { DoubaoVoiceConfig, ElevenlabsVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import { playSpeech } from "../voice/speech-playback.ts";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
@@ -35,10 +36,11 @@ import { SettingGroup, SettingRow } from "./SettingRow";
 import { WordExportSettings } from "./WordExportSettings";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
 import { UpdateCard } from "./UpdateCard";
+import { useChatStatusFlag } from "../context/chat-status-flag.ts";
 import { ProvidersView } from "./ProvidersView";
 import { ThemePicker } from "./ThemeCard";
 import { EXPERIMENTAL_FEATURES, pullRequestUrl, type ExperimentalFeature } from "../../experimental-features.ts";
-import { ModelPickerMenu, useBuiltinCatalog, usableProviders } from "./model-menu";
+import { inheritedRow, ModelPickerMenu, type InheritedFallback, useBuiltinCatalog, usableProviders } from "./model-menu";
 import {
   COMPACTION_DEFAULT,
   DEFAULT_INTENT_BASE_URL,
@@ -54,7 +56,20 @@ import { intentChannelUnavailable } from "@shared/intent-lab";
 import { THINKING_LEVELS } from "@shared/thinking";
 import { panelUsageRows, type PanelUsageSnapshot } from "@shared/panel-usage";
 import { COMMIT_TRAILER, prAttributionLine } from "@shared/attribution";
-import { effectiveLanguage, LANGUAGES, themeLanguage, type Language, type ModelPair } from "@shared/settings";
+import { effectiveLanguage, galaxyBatterySaverOf, GALAXY_DUST_DENSITIES, galaxyDustDensityOf, type GalaxyDustDensity, GALAXY_TILT, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, LANGUAGES, type Language, type ModelPair } from "@shared/settings";
+import { HomeGalaxy } from "../chat/HomeGalaxy.tsx";
+import type { GalaxySpec } from "../chat/galaxy.ts";
+
+/** 星系倾角的小预览：一颗主星、三颗行星、三十来颗碎石（演示形状，不是哪个工作区的真数据） */
+const TILT_PREVIEW_SPEC: GalaxySpec = {
+  starMass: 620,
+  sessions: 36,
+  planets: [
+    { id: "p1", mass: 4, composition: "rock", orbitRadius: 19, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 200 },
+    { id: "p2", mass: 6, composition: "gas", orbitRadius: 31, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 320 },
+    { id: "p3", mass: 3, composition: "ice", orbitRadius: 43, inclinationDeg: 0, nodeDeg: 0, phaseDeg: 70 },
+  ],
+};
 
 /** 语言芯片上写各自的自称（English / 中文）：找自己语言的人认的是自称，这两个词不翻译 */
 const LANGUAGE_NAMES: Record<Language, string> = { en: "English", zh: "中文" };
@@ -229,22 +244,6 @@ function withInheritedFirst(
   return [inheritedRow(fallback), ...items];
 }
 
-/** 同上，只要那一行——模型卡片把它当 `leading` 传进去（卡片自己拿着过滤后的行） */
-function inheritedRow(fallback: InheritedFallback): MenuItem {
-  return {
-    id: fallback.id,
-    label: fallback.label,
-    /*
-     * 说明放哪儿分两档：模型卡片里放主行下面当副行（两行行）——卡片里其余行
-     * 都是两行行，而且右端 hint 会把那一行拉得很长、说明还被截断（2026-10-02
-     * 用户实测）；思考档菜单都是单行行，说明留在右端 hint。
-     */
-    ...(fallback.hintBelow === true ? { subLabel: fallback.hint } : { hint: fallback.hint }),
-    checked: fallback.inherited,
-    onSelect: fallback.onSelect,
-  };
-}
-
 /** 设置里选的模型指向了被关的服务商：旁边一行提示（不静默改选，运行时按既有兜底退回） */
 function ClosedProviderNote(props: { title: string; body: string }) {
   return (
@@ -257,7 +256,6 @@ function ClosedProviderNote(props: { title: string; body: string }) {
   );
 }
 
-type InheritedFallback = { id: string; label: string; hint: string; inherited: boolean; onSelect: () => void; hintBelow?: boolean };
 
 function General(props: {
   settings: AppSettings;
@@ -306,7 +304,7 @@ function General(props: {
   // 完成提示音：缺席 = 响（这个提醒的价值在人不在跟前时也成立；只管声音，卡片与未读不受它影响）
   const completionSound = props.settings.completionSound ?? true;
   // 过程显示：缺席 = 一轮一行（2026-10-30）
-  const processView = props.settings.processView ?? "turn";
+  const processView = props.settings.processView ?? "chapters";
 
   const catalog = useBuiltinCatalog();
   const usable = usableProviders(props.providers);
@@ -380,35 +378,71 @@ function General(props: {
           })),
         );
 
-  // 单语主题定死的语言（null = 双语主题，听设置）；芯片亮的是实际生效的那一门
-  const lockedLanguage = themeLanguage(props.settings.theme);
-  const shownLanguage = effectiveLanguage(props.settings.theme, props.settings.language);
+  const shownLanguage = effectiveLanguage(props.settings.language);
 
   return (
     <div className="set-page">
       <SettingGroup label={t.settings.appearance}>
         <SettingRow name={t.settings.theme}>
-          <ThemePicker
-            value={props.settings.theme}
-            paperThemes={props.settings.experimentalFeatures?.["paper-themes"] === true}
-            onChange={props.onChange}
-          />
+          <ThemePicker value={props.settings.theme} onChange={props.onChange} />
         </SettingRow>
         <SettingRow name={t.settings.language} info={t.settings.languageInfo}>
-          {/* 单语主题下两个芯片都置灰、亮的是主题定的那门语言，旁边说清为什么——
-              设置里存的值不动，切回双语主题就恢复 */}
           <Segmented
             label={t.settings.language}
             value={shownLanguage}
             options={LANGUAGES.map((language) => ({ value: language, label: LANGUAGE_NAMES[language] }))}
-            disabled={lockedLanguage !== null}
             onChange={(language) => props.onChange({ language })}
           />
-          {lockedLanguage !== null && (
-            <span className="set-row-hint">
-              {lockedLanguage === "zh" ? t.settings.languageLockedZh : t.settings.languageLockedEn}
-            </span>
-          )}
+        </SettingRow>
+        <ChatStatusToggle />
+        <SettingRow
+          name={t.settings.galaxyTilt}
+          info={t.settings.galaxyTiltInfo}
+          below={
+            // 小预览：同一个星系组件、同一个俯角（App 发下来的设置值），拖滑块时跟着变
+            <div className="set-galaxy-preview">
+              <HomeGalaxy spec={TILT_PREVIEW_SPEC} label={t.settings.galaxyTiltPreview} surface={null} />
+            </div>
+          }
+        >
+          <span className="set-galaxy-tilt">
+            <input
+              type="range"
+              className="gd-range"
+              min={GALAXY_TILT.min}
+              max={GALAXY_TILT.max}
+              step={GALAXY_TILT.step}
+              value={galaxyTiltOf(props.settings)}
+              aria-label={t.settings.galaxyTilt}
+              onChange={(event) => props.onChange({ galaxyTilt: Number(event.target.value) })}
+            />
+            <span className="set-galaxy-tilt-value">{t.settings.galaxyTiltValue(galaxyTiltOf(props.settings))}</span>
+          </span>
+        </SettingRow>
+        {/* 碎石密度：碎石带里普通会话画多少（在跑 / 等你 / 最近的会话永远画）；计数照旧按全部会话 */}
+        <SettingRow name={t.settings.galaxyDust} info={t.settings.galaxyDustInfo}>
+          <Segmented<GalaxyDustDensity>
+            label={t.settings.galaxyDust}
+            value={galaxyDustDensityOf(props.settings)}
+            options={GALAXY_DUST_DENSITIES.map((value) => ({ value, label: t.settings.galaxyDustOptions[value] }))}
+            onChange={(galaxyDustDensity) => props.onChange({ galaxyDustDensity })}
+          />
+        </SettingRow>
+        {/* 离电时省电：用电池时星系停转、碎石带隐藏、眼睛不跟；缺席 = 开 */}
+        <SettingRow name={t.settings.galaxyBatterySaver} info={t.settings.galaxyBatterySaverInfo}>
+          <Switch
+            label={t.settings.galaxyBatterySaver}
+            checked={galaxyBatterySaverOf(props.settings)}
+            onChange={(next) => props.onChange({ galaxyBatterySaver: next })}
+          />
+        </SettingRow>
+        {/* 转台：星系空白处左右拖动绕竖直轴转（方位角）。关掉后左右拖动与左右方向键不改方位角，只剩上下改倾角 */}
+        <SettingRow name={t.settings.galaxyTurntable} info={t.settings.galaxyTurntableInfo(galaxyAzimuthOf(props.settings))}>
+          <Switch
+            label={t.settings.galaxyTurntable}
+            checked={galaxyTurntableOf(props.settings)}
+            onChange={(next) => props.onChange({ galaxyTurntable: next })}
+          />
         </SettingRow>
       </SettingGroup>
       {/* 原来的 Context / Git / Sessions 各只有一两行，三个分组标题比内容还显眼；
@@ -556,7 +590,8 @@ function General(props: {
             label={t.settings.processViewAria}
             value={processView}
             options={[
-              { value: "turn" as const, label: t.settings.processViewTurn },
+              { value: "chapters" as const, label: t.settings.processViewChapters },
+              { value: "flat" as const, label: t.settings.processViewFlat },
               { value: "steps" as const, label: t.settings.processViewSteps },
             ]}
             onChange={(next) => props.onChange({ processView: next })}
@@ -610,8 +645,8 @@ function ExperimentalSettings(props: {
   onChange: (patch: SettingsPatch) => void;
 }) {
   const t = useT();
-  // 单语主题定死的语言：与通用页语言行同一条解析规则（shared 的 effectiveLanguage）
-  const language = effectiveLanguage(props.settings.theme, props.settings.language);
+  // 与通用页语言行同一条解析规则（shared 的 effectiveLanguage）
+  const language = effectiveLanguage(props.settings.language);
   /** 展开哪一张卡的日志（一次至多一张）：默认都收着，只看最近一条 */
   const [openId, setOpenId] = useState<ExperimentalFeatureId | null>(null);
   // 意图系统（实验）：开关打开才出现设置区（地址 / 渠道 / 连接状态 / 新任务默认）
@@ -954,6 +989,7 @@ function VoiceSettings() {
       <DictationEngineGroup />
       <DoubaoVoiceGroup />
       <StepfunVoiceGroup />
+      <ElevenlabsVoiceGroup />
     </div>
   );
 }
@@ -1243,6 +1279,138 @@ function StepfunVoiceGroup() {
         <span className="set-inline">
           <PanelButton onClick={test} disabled={busy || config === null}>
             {t.voice.test}
+          </PanelButton>
+          <PanelButton onClick={save} disabled={busy || !dirty}>
+            {t.voice.save}
+          </PanelButton>
+        </span>
+      </SettingRow>
+    </SettingGroup>
+  );
+}
+
+/**
+ * ElevenLabs 语音合成（通话里「它说」的那一半）：API Key、音色 ID、模型三样。规矩同阶跃组——
+ * key 只进不出，输入框永远空、占位写已存掩码，留空保存 = 保留；「试听」用草稿合成一句短话并
+ * 播出来，不落盘，key 没填拿已存的。
+ */
+function ElevenlabsVoiceGroup() {
+  const t = useT();
+  const [config, setConfig] = useState<ElevenlabsVoiceConfig | null>(null);
+  const [key, setKey] = useState("");
+  const [voiceId, setVoiceId] = useState("");
+  const [modelId, setModelId] = useState("");
+  const [status, setStatus] = useState<VoiceStatus>({ kind: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.voice
+      .elevenlabsGet()
+      .then((loaded) => {
+        if (cancelled) return;
+        setConfig(loaded);
+        setVoiceId(loaded.voiceId);
+        setModelId(loaded.modelId);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const draft = { voiceId, modelId, ...(key.trim() === "" ? {} : { apiKey: key }) };
+  const dirty = config !== null && (key.trim() !== "" || voiceId !== config.voiceId || modelId !== config.modelId);
+  const busy = status.kind === "busy";
+  const edit = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    if (status.kind !== "busy") setStatus({ kind: "idle" });
+  };
+
+  const preview = () => {
+    setStatus({ kind: "busy", what: "test" });
+    void api.voice
+      .elevenlabsTest(draft)
+      .then(async (result) => {
+        if (!result.ok) {
+          setStatus({ kind: "failed", failure: result });
+          return;
+        }
+        await playSpeech(result.audio).done;
+        setStatus({ kind: "tested" });
+      })
+      .catch(() => setStatus({ kind: "failed", failure: { reason: "network" } }));
+  };
+  const save = () => {
+    setStatus({ kind: "busy", what: "save" });
+    void api.voice
+      .elevenlabsSave(draft)
+      .then((saved) => {
+        setConfig(saved);
+        setVoiceId(saved.voiceId);
+        setModelId(saved.modelId);
+        setKey("");
+        setStatus({ kind: "saved" });
+      })
+      .catch(() => setStatus({ kind: "save-failed" }));
+  };
+
+  const note =
+    status.kind === "busy" ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {status.what === "test" ? t.voice.previewing : t.voice.saving}
+      </span>
+    ) : status.kind === "tested" || status.kind === "saved" ? (
+      <span role="status" className="set-row-note">
+        <Icon name="check" size={12} /> {status.kind === "tested" ? t.voice.previewOk : t.voice.saved}
+      </span>
+    ) : status.kind === "failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.speechFailures[status.failure.reason]}
+        {status.failure.detail !== undefined && <code className="voice-failure-detail"> {status.failure.detail}</code>}
+      </span>
+    ) : status.kind === "save-failed" ? (
+      <span role="alert" className="set-row-error">
+        {t.voice.saveFailed}
+      </span>
+    ) : undefined;
+
+  return (
+    <SettingGroup label={t.voice.elevenlabsGroup}>
+      <SettingRow name={t.voice.elevenlabsApiKey} info={t.voice.elevenlabsApiKeyInfo}>
+        <input
+          className="text-field voice-field"
+          type="password"
+          aria-label={t.voice.elevenlabsApiKey}
+          autoComplete="off"
+          placeholder={
+            config !== null && config.apiKeyMasked !== null ? t.voice.tokenSaved(config.apiKeyMasked) : t.voice.keyPaste
+          }
+          value={key}
+          onChange={(event) => edit(setKey)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.elevenlabsVoiceId} info={t.voice.elevenlabsVoiceIdInfo}>
+        <input
+          className="text-field voice-field"
+          aria-label={t.voice.elevenlabsVoiceId}
+          spellCheck={false}
+          value={voiceId}
+          onChange={(event) => edit(setVoiceId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.elevenlabsModelId} info={t.voice.elevenlabsModelIdInfo}>
+        <input
+          className="text-field voice-field"
+          aria-label={t.voice.elevenlabsModelId}
+          spellCheck={false}
+          value={modelId}
+          onChange={(event) => edit(setModelId)(event.target.value)}
+        />
+      </SettingRow>
+      <SettingRow name={t.voice.connection} note={note}>
+        <span className="set-inline">
+          <PanelButton onClick={preview} disabled={busy || config === null}>
+            {t.voice.preview}
           </PanelButton>
           <PanelButton onClick={save} disabled={busy || !dirty}>
             {t.voice.save}
@@ -1808,6 +1976,17 @@ function DataDirectoryRow() {
           <Icon name="folder" size={14} /> {t.settings.reveal}
         </PanelButton>
       </span>
+    </SettingRow>
+  );
+}
+
+/** 「状态」卡的原型开关（关 = 改前，#522 现状）：存在 localStorage，不进设置文件 */
+function ChatStatusToggle() {
+  const t = useT();
+  const [on, setOn] = useChatStatusFlag();
+  return (
+    <SettingRow name={t.chatStatus.toggleName} info={t.chatStatus.toggleInfo}>
+      <Switch label={t.chatStatus.toggleName} checked={on} onChange={setOn} />
     </SettingRow>
   );
 }

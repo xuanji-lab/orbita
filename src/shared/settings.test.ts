@@ -1,10 +1,12 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
+import { GALAXY_TILT, galaxyBatterySaverOf, galaxyZoomOf, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf,
+  APP_MODE_DEFAULT,
+  ORCHESTRA_VIEW_DEFAULT,
+  ORCHESTRA_ENTRY_DEFAULT,
+  sessionCompaction,
   BOARD_DAYS_DEFAULT,
   effectiveLanguage,
-  selectableThemes,
-  themeLanguage,
   clampRightPanelWidth,
   COMPACTION_DEFAULT,
   COMPACTION_PERCENT,
@@ -38,8 +40,10 @@ describe("parseSettings", () => {
     deepStrictEqual(parseSettings({ theme: null }), DEFAULT_SETTINGS);
   });
 
-  it("改名前的旧 id manuscript 落回 copybook，不退回 system", () => {
-    deepStrictEqual(parseSettings({ theme: "manuscript" }), { theme: "copybook", drawer: DEFAULT_SETTINGS.drawer });
+  it("删除的纸面主题及改名前 id 都回落 system，继续跟随系统深浅", () => {
+    for (const theme of ["copybook", "typescript", "manuscript"]) {
+      deepStrictEqual(parseSettings({ theme }), DEFAULT_SETTINGS);
+    }
   });
 
   it("退役档 dark（Warm）迁移到 graphite——同为「不近黑的暗档」的继任", () => {
@@ -309,6 +313,19 @@ describe("parseSettings 的 automationKeepAwake", () => {
   });
 });
 
+describe("parseSettings 的 chatImageSize", () => {
+  it("large / small 原样保留，缺席不落键（= 大图）", () => {
+    deepStrictEqual(parseSettings({ chatImageSize: "large" }).chatImageSize, "large");
+    deepStrictEqual(parseSettings({ chatImageSize: "small" }).chatImageSize, "small");
+    deepStrictEqual("chatImageSize" in parseSettings({ theme: "graphite" }), false);
+  });
+
+  it("别的值丢掉", () => {
+    deepStrictEqual(parseSettings({ chatImageSize: "huge" }).chatImageSize, undefined);
+    deepStrictEqual(parseSettings({ chatImageSize: 1 }).chatImageSize, undefined);
+  });
+});
+
 describe("parseSettings 的 collapsePastedText", () => {
   it("缺席 = 折叠（不落键，同 gitAttribution 的纪律）", () => {
     deepStrictEqual(parseSettings({ theme: "graphite" }), {
@@ -433,9 +450,9 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
     deepStrictEqual(
       parseSettings({
         theme: "system",
-        lastUsed: { mode: "skip", providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
+        lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
       }).lastUsed,
-      { mode: "skip", providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
+      { providerId: "zhipu-coding", modelId: "glm-5.3-flash" },
     );
   });
 
@@ -446,11 +463,11 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
     );
     deepStrictEqual(
       parseSettings({ theme: "system", lastUsed: { mode: "skip", thinkingLevel: "xhigh" } }).lastUsed,
-      { mode: "skip" },
+      undefined,
     );
   });
 
-  it("坏 mode 丢 mode 留 id；键全无效 = 整段不落盘", () => {
+  it("旧版本存的 mode 不再读（只留 id）；键全无效 = 整段不落盘", () => {
     deepStrictEqual(
       parseSettings({
         theme: "system",
@@ -467,19 +484,9 @@ describe("parseSettings 的 lastUsed（A-0 复验 bug A：重启忘了上次选�
 });
 
 describe("界面语言", () => {
-  it("单语主题说了算：小学作业恒中文、打字稿恒英文，不管设置", () => {
-    deepStrictEqual(effectiveLanguage("copybook", "en"), "zh");
-    deepStrictEqual(effectiveLanguage("typescript", "zh"), "en");
-    deepStrictEqual(themeLanguage("copybook"), "zh");
-    deepStrictEqual(themeLanguage("typescript"), "en");
-  });
-
-  it("双语主题听设置；没设过是英文（语言设置之前的行为）", () => {
-    for (const theme of ["system", "light", "graphite", "black"] as const) {
-      deepStrictEqual(themeLanguage(theme), null);
-      deepStrictEqual(effectiveLanguage(theme, "zh"), "zh");
-      deepStrictEqual(effectiveLanguage(theme, undefined), "en");
-    }
+  it("所有主题都听语言设置；没设过是英文（语言设置之前的行为）", () => {
+    deepStrictEqual(effectiveLanguage("zh"), "zh");
+    deepStrictEqual(effectiveLanguage(undefined), "en");
   });
 
   it("磁盘上的 language：认识的留下，坏值丢掉当没选过", () => {
@@ -634,6 +641,52 @@ describe("parseSettings 的 boardDays（周看板一屏几天）", () => {
   });
 });
 
+describe("parseSettings 的 appMode（侧栏单智能体 / 编排）", () => {
+  it("只认 agent / orchestrate；缺席与坏值不落键（读侧缺席 = 单智能体）", () => {
+    for (const mode of ["agent", "orchestrate"]) deepStrictEqual(parseSettings({ appMode: mode }).appMode, mode);
+    for (const bad of ["Orchestrate", "", null, 1, ["agent"], "multi"]) deepStrictEqual("appMode" in parseSettings({ appMode: bad }), false);
+    deepStrictEqual("appMode" in parseSettings({}), false);
+    deepStrictEqual(APP_MODE_DEFAULT, "agent");
+  });
+});
+
+describe("parseSettings 的编排面板视图", () => {
+  it("orchestraView 只认 tree / galaxy / graph；缺席与坏值不落键（读侧缺席 = 树状图）", () => {
+    for (const view of ["tree", "galaxy", "graph"]) deepStrictEqual(parseSettings({ orchestraView: view }).orchestraView, view);
+    for (const bad of ["Tree", "", null, 2, ["graph"], "dag"]) deepStrictEqual("orchestraView" in parseSettings({ orchestraView: bad }), false);
+    deepStrictEqual(ORCHESTRA_VIEW_DEFAULT, "tree");
+  });
+});
+
+describe("parseSettings 的常驻对话指针与入口选择（按工作区记）", () => {
+  it("orchestraMain 只留「非空键 → 非空字符串」；一项不剩就不落键", () => {
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", ws2: "s2" } }).orchestraMain, { ws1: "s1", ws2: "s2" });
+    deepStrictEqual(parseSettings({ orchestraMain: { ws1: "s1", ws2: "", ws3: 3, "": "x" } }).orchestraMain, { ws1: "s1" });
+    for (const bad of [null, "s1", ["s1"], {}, { ws: null }]) deepStrictEqual("orchestraMain" in parseSettings({ orchestraMain: bad }), false);
+  });
+
+  it("orchestraEntry 只认 new / main；默认 new（入口页原来的行为：每句开一条新会话）", () => {
+    deepStrictEqual(parseSettings({ orchestraEntry: { ws1: "main", ws2: "new", ws3: "both" } }).orchestraEntry, { ws1: "main", ws2: "new" });
+    deepStrictEqual("orchestraEntry" in parseSettings({ orchestraEntry: { ws1: "Main" } }), false);
+    deepStrictEqual(ORCHESTRA_ENTRY_DEFAULT, "new");
+  });
+});
+
+describe("sessionCompaction（会话级自动压缩开关 × 全局偏好）", () => {
+  it("会话关了自动压缩：只关 enabled，阈值照全局；没关 / 缺席：原样是全局", () => {
+    const global = { reservePercent: 30, enabled: true };
+    deepStrictEqual(sessionCompaction(global, false), { reservePercent: 30, enabled: false });
+    deepStrictEqual(sessionCompaction(global, undefined), global);
+    deepStrictEqual(sessionCompaction(global, true), global);
+  });
+
+  it("全局缺席退 COMPACTION_DEFAULT；全局关了，会话打开也不会越过全局", () => {
+    deepStrictEqual(sessionCompaction(undefined, undefined), COMPACTION_DEFAULT);
+    deepStrictEqual(sessionCompaction(undefined, false), { ...COMPACTION_DEFAULT, enabled: false });
+    deepStrictEqual(sessionCompaction({ reservePercent: 20, enabled: false }, true).enabled, false);
+  });
+});
+
 describe("parseSettings 的 sidebarAgeDays（左栏时间范围）", () => {
   it("只认 1 / 3 / 5 / 7；缺席、旧数据、坏值与 null 都不落键（读侧缺席 = 不限）", () => {
     for (const days of [1, 3, 5, 7]) deepStrictEqual(parseSettings({ sidebarAgeDays: days }).sidebarAgeDays, days);
@@ -657,11 +710,21 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     deepStrictEqual("experimentalFeatures" in parseSettings({ experimentalFeatures: {} }), false);
   });
 
-  it("逐项只认布尔；不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
+  it("逐项只认布尔；已删除与不在 EXPERIMENTAL_FEATURE_IDS 里的 id 直接丢", () => {
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": false } })
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "intent-system": false } })
         .experimentalFeatures,
-      { "paper-themes": true, "pdf-citations": false },
+      { "intent-system": false },
+    );
+    // 转正的项（PDF 引用，2026-11-22）：盘上残留的旧键解析时丢掉、不报错
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "paper-themes": true, "pdf-citations": true } })
+        .experimentalFeatures,
+      undefined,
+    );
+    deepStrictEqual(
+      parseSettings({ experimentalFeatures: { "pdf-citations": true } }).experimentalFeatures,
+      undefined,
     );
     deepStrictEqual(
       parseSettings({ experimentalFeatures: { "made-up": true } }).experimentalFeatures,
@@ -673,33 +736,28 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
     );
   });
 
-  it("旧总开关 experimental: true = paper-themes 开（会话生命周期已转正，不再有开关）", () => {
-    deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, {
-      "paper-themes": true,
-    });
+  it("纸面开关与旧总开关都忽略；其它实验项不受牵连", () => {
+    deepStrictEqual(parseSettings({ experimental: true }).experimentalFeatures, undefined);
+    deepStrictEqual(
+      parseSettings({
+        experimental: true,
+        experimentalFeatures: { "paper-themes": true, "intent-system": false },
+      }).experimentalFeatures,
+      { "intent-system": false },
+    );
   });
 
   it("转正的 session-lifecycle：盘上残留的键开着关着都丢掉，不产生任何效果", () => {
     deepStrictEqual(parseSettings({ experimentalFeatures: { "session-lifecycle": true } }).experimentalFeatures, undefined);
     deepStrictEqual(
-      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "paper-themes": true } }).experimentalFeatures,
-      { "paper-themes": true },
+      parseSettings({ experimentalFeatures: { "session-lifecycle": false, "intent-system": true } }).experimentalFeatures,
+      { "intent-system": true },
     );
   });
 
   it("旧总开关 false / 非布尔：不产生任何逐项键", () => {
     deepStrictEqual(parseSettings({ experimental: false }).experimentalFeatures, undefined);
     deepStrictEqual(parseSettings({ experimental: "yes" }).experimentalFeatures, undefined);
-  });
-
-  it("新键里已显式给值的项以新键为准，旧键只补缺席的项", () => {
-    deepStrictEqual(
-      parseSettings({
-        experimental: true,
-        experimentalFeatures: { "paper-themes": false },
-      }).experimentalFeatures,
-      { "paper-themes": false },
-    );
   });
 
   it("下架的输入框黑洞 / 俄罗斯方块：盘上残留的新旧键都丢掉，不报错", () => {
@@ -711,21 +769,6 @@ describe("parseSettings 的 experimentalFeatures（逐项开关）", () => {
       { "intent-system": true },
     );
     deepStrictEqual(parseSettings({ composerBlackhole: true }).experimentalFeatures, undefined);
-  });
-});
-
-describe("selectableThemes（主题选择卡的可选档位）", () => {
-  it("paper-themes 开：全六档都可选", () => {
-    deepStrictEqual(selectableThemes(true), THEME_PREFERENCES);
-  });
-
-  it("paper-themes 关：纸面两档（copybook / typescript）不出现", () => {
-    deepStrictEqual(selectableThemes(false), ["system", "light", "graphite", "black"]);
-  });
-
-  it("过滤只动选择卡：已存的 copybook 仍被 parseTheme 认（照常应用，只是不再可选）", () => {
-    deepStrictEqual(parseSettings({ theme: "copybook" }).theme, "copybook");
-    ok(selectableThemes(false).includes(parseSettings({ theme: "copybook" }).theme) === false);
   });
 });
 
@@ -845,5 +888,67 @@ describe("parseSettings 的论文工作台拆分尺寸", () => {
         pptxPagesWidth: 200,
       },
     );
+  });
+});
+
+describe("parseSettings 的 processView（三档：按块 / 铺开 / 逐步铺开；旧值读时兼容）", () => {
+  it("新三档原样", () => {
+    for (const view of ["chapters", "flat", "steps"] as const) deepStrictEqual(parseSettings({ processView: view }).processView, view);
+  });
+  it("旧 turn 配旧 processLayout：缺席 / chapters → chapters，flat → flat", () => {
+    deepStrictEqual(parseSettings({ processView: "turn" }).processView, "chapters");
+    deepStrictEqual(parseSettings({ processView: "turn", processLayout: "chapters" }).processView, "chapters");
+    deepStrictEqual(parseSettings({ processView: "turn", processLayout: "flat" }).processView, "flat");
+  });
+  it("旧 steps 原样（不管 processLayout）；只有旧 processLayout flat 也认；坏值丢掉；缺席不写", () => {
+    deepStrictEqual(parseSettings({ processView: "steps", processLayout: "flat" }).processView, "steps");
+    deepStrictEqual(parseSettings({ processLayout: "flat" }).processView, "flat");
+    deepStrictEqual(parseSettings({ processLayout: "chapters" }).processView, undefined);
+    deepStrictEqual(parseSettings({ processView: "wat" }).processView, undefined);
+    deepStrictEqual(parseSettings({}).processView, undefined);
+  });
+  it("processLayout 不再写回：解析结果里没有这个字段", () => {
+    ok(!("processLayout" in parseSettings({ processView: "turn", processLayout: "flat" })));
+  });
+});
+
+describe("parseSettings 的 galaxyTilt（设置 › 外观 › 星系倾角）", () => {
+  it("缺席 = 默认 40°；区间 10–60、步长 5 的整数才留下，别的丢掉", () => {
+    deepStrictEqual(parseSettings({}).galaxyTilt, undefined);
+    deepStrictEqual(galaxyTiltOf(parseSettings({})), GALAXY_TILT.default);
+    deepStrictEqual(GALAXY_TILT.default, 40);
+    // 1° 精度（拖动是无极的，松手按整数度存）
+    for (const ok of [10, 12, 15, 37, 40, 60]) deepStrictEqual(parseSettings({ galaxyTilt: ok }).galaxyTilt, ok);
+    for (const bad of [5, 9, 65, "40", null, Number.NaN, 40.5]) deepStrictEqual(parseSettings({ galaxyTilt: bad }).galaxyTilt, undefined, String(bad));
+    deepStrictEqual(galaxyTiltOf(parseSettings({ galaxyTilt: 25 })), 25);
+  });
+});
+
+describe("parseSettings 的 galaxyAzimuth / galaxyTurntable（星系转台）", () => {
+  it("方位角只认 0–359 的整数；缺席 = 0；转台开关只认布尔，缺席 = 开", () => {
+    deepStrictEqual(galaxyAzimuthOf(parseSettings({})), 0);
+    for (const ok of [0, 1, 120, 359]) deepStrictEqual(parseSettings({ galaxyAzimuth: ok }).galaxyAzimuth, ok);
+    for (const bad of [-1, 360, 12.5, "90", null]) deepStrictEqual(parseSettings({ galaxyAzimuth: bad }).galaxyAzimuth, undefined, String(bad));
+    deepStrictEqual(galaxyTurntableOf(parseSettings({})), true);
+    deepStrictEqual(galaxyTurntableOf(parseSettings({ galaxyTurntable: false })), false);
+    deepStrictEqual(parseSettings({ galaxyTurntable: "no" }).galaxyTurntable, undefined);
+  });
+});
+
+describe("parseSettings 的 galaxyZoom（星系缩放）", () => {
+  it("只认 0.5–3 之间、两位小数的数；缺席 = 1", () => {
+    deepStrictEqual(galaxyZoomOf(parseSettings({})), 1);
+    for (const ok of [0.5, 0.57, 1, 1.25, 2.4, 3]) deepStrictEqual(parseSettings({ galaxyZoom: ok }).galaxyZoom, ok);
+    for (const bad of [0.49, 3.01, 1.234, "1.2", null, Number.NaN, Number.POSITIVE_INFINITY]) deepStrictEqual(parseSettings({ galaxyZoom: bad }).galaxyZoom, undefined, String(bad));
+  });
+});
+
+describe("parseSettings 的 galaxyBatterySaver / galaxyBatteryNoticeSeen（离电省电）", () => {
+  it("开关缺席 = 开，只认布尔；提示只记「出过了」", () => {
+    deepStrictEqual(galaxyBatterySaverOf(parseSettings({})), true);
+    deepStrictEqual(galaxyBatterySaverOf(parseSettings({ galaxyBatterySaver: false })), false);
+    deepStrictEqual(parseSettings({ galaxyBatterySaver: "no" }).galaxyBatterySaver, undefined);
+    deepStrictEqual(parseSettings({ galaxyBatteryNoticeSeen: true }).galaxyBatteryNoticeSeen, true);
+    deepStrictEqual(parseSettings({ galaxyBatteryNoticeSeen: "yes" }).galaxyBatteryNoticeSeen, undefined);
   });
 });

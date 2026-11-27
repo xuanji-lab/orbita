@@ -75,7 +75,7 @@ describe("parsePlanCall（v4：why / later / confirm 三个可选字段）", () 
   const items = [{ text: "a", status: "in_progress" }];
 
   test("缺席 = 空：why null、later / confirm 空数组，items 校验不变", () => {
-    assert.deepEqual(parsePlanCall({ items }), { items, why: null, later: [], confirm: [] });
+    assert.deepEqual(parsePlanCall({ items }), { items, why: null, confirm: [] });
   });
 
   test("why 去空白、折叠换行、超长截断；非字符串丢掉", () => {
@@ -87,15 +87,9 @@ describe("parsePlanCall（v4：why / later / confirm 三个可选字段）", () 
     assert.ok(long?.endsWith("…"));
   });
 
-  test("later：字符串与对象都收，按文字去重，最多 5 条，坏条目跳过", () => {
-    const later = parsePlanCall({
-      items,
-      later: ["日期解析不一致", { text: "日期解析不一致", why: "重复" }, { text: "加 CI", why: "这次不动" }, 7, { why: "没有文字" }, null],
-    }).later;
-    assert.deepEqual(later, [{ text: "日期解析不一致" }, { text: "加 CI", why: "这次不动" }]);
-    const many = parsePlanCall({ items, later: Array.from({ length: 9 }, (_, i) => `事${i}`) }).later;
-    assert.equal(many.length, 5);
-    assert.deepEqual(parsePlanCall({ items, later: "不是数组" }).later, []);
+  test("旧记录入参里的 later（「以后再做」已删）读时忽略，不报错、不出现在结果里", () => {
+    const call = parsePlanCall({ items, later: ["日期解析不一致", { text: "加 CI", why: "这次不动" }, 7] });
+    assert.deepEqual(call, { items, why: null, confirm: [] });
   });
 
   test("confirm：最多 3 个问题，空白与重复丢掉；写坏了不拒整次调用", () => {

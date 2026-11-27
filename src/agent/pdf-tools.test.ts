@@ -475,21 +475,20 @@ describe("read_pdf", () => {
 });
 
 /**
- * cite_pdf 的账（实验功能「PDF 引用」）：只在实验开关开着时注册；跨行引文核验通过、
+ * cite_pdf 的账：与 read_pdf 同台常驻注册；跨行引文核验通过、
  * 编号与 details 一一对应；编造的引文不发编号、附最近处；扫描件直说不能引。
  * 匹配算法本身的边界在 shared/pdf-quote.test.ts，这里只验工具这一层的接线。
  */
 describe("cite_pdf", () => {
   const cite = async (path: string, quotes: unknown) => {
-    const citeTool = createPdfTools(dir, { pdfCitations: true }).find((t) => t.name === "cite_pdf")!;
+    const citeTool = createPdfTools(dir).find((t) => t.name === "cite_pdf")!;
     const result = await citeTool.execute("call-c", { path, quotes }, undefined, undefined, undefined as never);
     const text = result.content[0]!.type === "text" ? result.content[0]!.text : "";
     return { text, citations: citationsOfDetails(result.details) };
   };
 
-  test("实验开关关着不注册，开着才有", () => {
-    assert.deepEqual(createPdfTools(dir).map((t) => t.name), ["read_pdf"]);
-    assert.deepEqual(createPdfTools(dir, { pdfCitations: true }).map((t) => t.name), ["read_pdf", "cite_pdf"]);
+  test("两个工具常驻注册（PDF 引用已转正，不再有实验开关）", () => {
+    assert.deepEqual(createPdfTools(dir).map((t) => t.name), ["read_pdf", "cite_pdf"]);
   });
 
   test("跨行引文核验通过：编号写进正文提示，details 记 PDF 原文与页码", async () => {
@@ -506,6 +505,9 @@ describe("cite_pdf", () => {
     // 结果文本明说只写行内标记、不补脚注定义 / 来源列表（模型模仿 miyo 的 Sources 会让标记点不开 PDF）
     assert.ok(text.includes("inline only — do not add footnote definitions"), text);
     assert.ok(text.includes(`[^${c?.id}]: …`), text);
+    // 也明说不重编号成数字、不和笔记检索（miyo）的 [^n] 合并编号
+    assert.ok(text.includes("Do not renumber them (no [^1], [^2])"), text);
+    assert.ok(text.includes("numbering of notes cited from a search tool"), text);
   });
 
   test("编造的引文不发编号，回最近处；其余照常核验", async () => {
@@ -542,7 +544,7 @@ describe("cite_pdf", () => {
  * 触发词是「模型愿不愿意主动调」的命根：read_pdf 要说「用它代替 read」，cite_pdf 要说「讲解依赖原文时用、给可点引用」。
  */
 describe("PDF 工具的描述", () => {
-  const tools = createPdfTools(tmpdir(), { pdfCitations: true });
+  const tools = createPdfTools(tmpdir());
   const byName = (name: string): ToolDefinition => tools.find((t) => t.name === name)!;
 
   test("read_pdf：保留「代替 read」「图表索引 → image_pages」的触发词，并指路 reading 技能", () => {
@@ -559,12 +561,17 @@ describe("PDF 工具的描述", () => {
     assert.match(description, /\[\^c4k2\]/);
     assert.match(description, /never cite from memory/);
     assert.match(description, /`reading` skill/);
+    // 第一段就写明：PDF 标记原样写，不重编号、不补定义、不与其他来源的 [^n] 合并
+    assert.match(description, /not footnotes: write them verbatim/);
+    assert.match(description, /never renumber them \(\[\^1\]\)/);
+    assert.match(description, /never add a \[\^…\]: definition or a sources list/);
+    assert.match(description, /never merge them with another source's \[\^n\] numbering/);
   });
 
-  test("两个工具描述合计 ≤1,200 字符，描述 + 参数 schema ≤3,000（瘦身前 1,396 / 3,518）", () => {
+  test("两个工具描述合计 ≤1,300 字符，描述 + 参数 schema ≤3,000（瘦身前 1,396 / 3,518；引用标记规则加了约 200 字符，上限从 1,200 放到 1,300）", () => {
     const description = tools.reduce((sum, tool) => sum + tool.description.length, 0);
     const withSchema = tools.reduce((sum, tool) => sum + tool.description.length + JSON.stringify(tool.parameters).length, 0);
-    assert.equal(description <= 1200, true, `PDF 工具描述合计 ${description} 字符，超了——细则写进 reading 技能`);
+    assert.equal(description <= 1300, true, `PDF 工具描述合计 ${description} 字符，超了——细则写进 reading 技能`);
     assert.equal(withSchema <= 3000, true, `PDF 工具描述 + schema 合计 ${withSchema} 字符，超了`);
   });
 });

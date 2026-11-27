@@ -502,18 +502,6 @@
   place-items: center;
 }
 
-.focus-frow .focus-frow-icon[data-tone="doc"] {
-  color: var(--color-filetype-doc);
-}
-
-.focus-frow .focus-frow-icon[data-tone="slides"] {
-  color: var(--color-filetype-slides);
-}
-
-.focus-frow .focus-frow-icon[data-tone="sheet"] {
-  color: var(--color-filetype-sheet);
-}
-
 .focus-frow .focus-frow-name {
   min-width: 0;
   white-space: nowrap;

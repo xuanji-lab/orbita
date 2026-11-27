@@ -25,7 +25,6 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   cwd: "/repo/x",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,
@@ -341,5 +340,47 @@ describe("cited 根：被 cite_pdf 核验过的 PDF 原地打开（根是文件�
     const roots = await rootsOf(S1);
     assert.equal(roots.find((root) => root.kind === "cited")?.exists, false);
     await assert.rejects(ask(roots, cited, cited), /不存在/);
+  });
+});
+
+describe("subsession 根：子会话工作台只进白名单（2026-11-23：子会话交回的文件预览打不开）", () => {
+  const CHILD = "22222222-2222-3333-4444-555555555555";
+  const GRANDCHILD = "33333333-2222-3333-4444-555555555555";
+  const STRANGER = "44444444-2222-3333-4444-555555555555";
+
+  beforeEach(async () => {
+    await workspaces.ensureHome();
+    await sessions.ensureSession(meta());
+    await sessions.ensureSession(meta({ id: CHILD, parentId: S1 }));
+    await sessions.ensureSession(meta({ id: GRANDCHILD, parentId: CHILD }));
+    await sessions.ensureSession(meta({ id: STRANGER }));
+    for (const id of [CHILD, GRANDCHILD, STRANGER]) {
+      await mkdir(join(sessions.workbenchPath(id), "out"), { recursive: true });
+      await writeFile(join(sessions.workbenchPath(id), "out", "report.txt"), id);
+    }
+  });
+
+  test("子会话与孙会话的工作台各出一个 subsession 根，排在最后；别的会话的不出", async () => {
+    const roots = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });
+    const subs = roots.filter((root) => root.kind === "subsession").map((root) => root.path);
+    assert.deepEqual(subs.sort(), [sessions.workbenchPath(CHILD), sessions.workbenchPath(GRANDCHILD)].sort());
+    assert.equal(roots.at(-1)?.kind, "subsession");
+  });
+
+  test("子会话交回的文件读得到；别的会话工作台里的读不到", async () => {
+    const roots = await resolveFileRoots(workspaces, sessions, { sessionId: S1, workspaceId: null });
+    const own = join(sessions.workbenchPath(CHILD), "out", "report.txt");
+    const path = await whitelistedPath(roots, { sessionId: S1, workspaceId: null, root: sessions.workbenchPath(CHILD), dir: own });
+    assert.equal(path, await realpath(own));
+    const other = join(sessions.workbenchPath(STRANGER), "out", "report.txt");
+    await assert.rejects(whitelistedPath(roots, { sessionId: S1, workspaceId: null, root: sessions.workbenchPath(STRANGER), dir: other }));
+  });
+
+  test("子会话自己看文件面板：没有父会话的工作台（只往下，不往上）", async () => {
+    const roots = await resolveFileRoots(workspaces, sessions, { sessionId: CHILD, workspaceId: null });
+    assert.deepEqual(
+      roots.filter((root) => root.kind === "subsession").map((root) => root.path),
+      [sessions.workbenchPath(GRANDCHILD)],
+    );
   });
 });

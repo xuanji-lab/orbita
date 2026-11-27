@@ -137,3 +137,25 @@ export function headStringField(head: string, key: string): string | undefined {
   const end = head.indexOf('"', from);
   return end === -1 ? undefined : head.slice(from, end);
 }
+
+/**
+ * 把内存里的 Buffer 按换行字节逐行切开，每行解码成字符串交给 onLine——readFile 整份
+ * 读回的日志用它逐行过，替代「整份 toString 再 split("\n")」：不产生整份大字符串，也不
+ * 产生装着全部行的数组，行字符串随切随弃（194 MB 会话实测 split 段 107ms / 同步段 289ms）。
+ *
+ * 字节级切行与先解码再切**逐行等价**：UTF-8 里 0x0A 只编码换行符本身（多字节字符的
+ * 续字节都在 0x80–0xBF），切在任何 \n 字节上都不会把字符切成两半。
+ *
+ * 空段（连续换行、文件以换行结尾时的末尾段）不交出——split 会多给空串，但调用方对
+ * 空行的处理都是跳过（trim 后为空），两种切法产出相同。
+ */
+export function forEachBufferLine(buffer: Buffer, onLine: (line: string) => void): void {
+  let start = 0;
+  while (start < buffer.length) {
+    const nl = buffer.indexOf(NEWLINE, start);
+    const end = nl === -1 ? buffer.length : nl;
+    if (end > start) onLine(buffer.toString("utf8", start, end));
+    if (nl === -1) return;
+    start = nl + 1;
+  }
+}

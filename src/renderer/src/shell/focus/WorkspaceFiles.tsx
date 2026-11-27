@@ -7,7 +7,7 @@ import { StatusPie } from "../StatusPie";
 import { useT } from "../../locale";
 import { relativeTime } from "../relative-time";
 import { useFileTree } from "../../features/files/useFileTree";
-import { fileIcon, fileIconTone } from "../../features/files/tree-view";
+import { FileTypeIcon } from "../FileTypeIcon";
 import { rootSessions, type SessionMeta } from "@shared/session";
 import type { Workspace } from "@shared/workspace";
 import type { FileEntry } from "@shared/files";
@@ -425,8 +425,8 @@ function FileRow(props: {
       }}
     >
       <span className="focus-frow-tw" />
-      <span className="focus-frow-icon" data-tone={fileIconTone(props.name, "file") ?? undefined}>
-        <Icon name={fileIcon(props.name, "file")} size={14} strokeWidth={1.8} />
+      <span className="focus-frow-icon">
+        <FileTypeIcon name={props.name} size={16} />
       </span>
       <span className="focus-frow-name">{props.name}</span>
       <span className="focus-frow-tail">

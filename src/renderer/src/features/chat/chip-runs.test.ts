@@ -131,3 +131,37 @@ describe("rehypeBubbleChips —— hast 树上的替换", () => {
     });
   });
 });
+
+describe("splitChipRuns —— 任务引用小签", () => {
+  it("[任务 xxxxxxxx] 与 [图 N] 同句各自切出，顺序照原文", () => {
+    deepStrictEqual(splitChipRuns("看 [图 1] 与 [任务 1b4f3bdbaaaa] 吧", true), [
+      { kind: "text", text: "看 " },
+      { kind: "imageRef", n: 1, text: "[图 1]" },
+      { kind: "text", text: " 与 " },
+      { kind: "taskRef", text: "[任务 1b4f3bdbaaaa]" },
+      { kind: "text", text: " 吧" },
+    ]);
+  });
+});
+
+describe("splitChipRuns —— 图 N 小签", () => {
+  it("正文里的 [图 N] 切成 imageRef，前后文字照旧", () => {
+    deepStrictEqual(splitChipRuns("比较 [图 1] 和 [图 2] 吧", true), [
+      { kind: "text", text: "比较 " },
+      { kind: "imageRef", n: 1, text: "[图 1]" },
+      { kind: "text", text: " 和 " },
+      { kind: "imageRef", n: 2, text: "[图 2]" },
+      { kind: "text", text: " 吧" },
+    ]);
+  });
+  it("与技能 token 同句也各自切出", () => {
+    const runs = splitChipRuns("/skill:foo 看 [图 1]", true);
+    deepStrictEqual(
+      runs.map((run) => run.kind),
+      ["chip", "text", "imageRef"],
+    );
+  });
+  it("没有小签的文本一字不变", () => {
+    deepStrictEqual(splitChipRuns("普通一句", true), [{ kind: "text", text: "普通一句" }]);
+  });
+});

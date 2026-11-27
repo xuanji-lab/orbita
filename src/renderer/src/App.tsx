@@ -5,11 +5,18 @@ import { ExperimentalFeaturesContext } from "./experimental.ts";
 import { api } from "./api";
 import type { ProviderDto } from "@shared/provider";
 import { DEFAULT_SETTINGS, effectiveLanguage, type AppSettings, type DocPaper, type ModelPair, type SettingsPatch } from "@shared/settings";
-import { childSessions, rootSessions, type Carryover } from "@shared/session";
+import { childSessions, rootSessions } from "@shared/session";
 import type { ChimeReason } from "@shared/notify";
 import { useChatSession, useSessionView } from "./features/chat/useChatSession";
-import { effectiveIntentSettings } from "@shared/settings";
+import { effectiveIntentSettings, galaxyAzimuthOf, galaxyTiltOf, galaxyTurntableOf, galaxyZoomOf, galaxyDustDensityOf, GALAXY_DUST_KEEP, galaxyBatterySaverOf } from "@shared/settings";
+import { dustKeepUnderPower, powerNoticeDue, powerSaveOf } from "./features/chat/power-save.ts";
+import { setGazeSuspended } from "./features/galaxy-designer/gaze-runtime.ts";
 import { IntentPanel } from "./features/intent/IntentPanel.tsx";
+import { ChatStatus } from "./features/context/ChatStatus";
+import { useChatStatusFlag } from "./features/context/chat-status-flag.ts";
+import { GalaxyDesigner } from "./features/galaxy-designer/GalaxyDesigner.tsx";
+import { reloadAfterSubAgentChange, usePlanetFiles } from "./features/galaxy-designer/useGalaxyDesign.ts";
+import { designerClick, designerFollow, keepDesignerAcrossSessions } from "./features/galaxy-designer/design.ts";
 import { ContextPanel, type TaskPanelTab } from "./features/context/ContextPanel.tsx";
 import { EMPTY_ENTRY } from "./features/chat/session-states.ts";
 import { ChatView } from "./features/chat/ChatView";
@@ -33,37 +40,45 @@ import { Sidebar, type Overlay } from "./shell/Sidebar";
 import { COLLAPSE_BREAKPOINT } from "./shell/window-tools.ts";
 import { Toolbar, ToolbarPanelSlotContext } from "./shell/Toolbar";
 import { SessionCapsule } from "./shell/SessionCapsule";
+import { WorkspaceCapsule } from "./shell/WorkspaceCapsule";
+import { OrchestraPanel } from "./features/chat/OrchestraPanel.tsx";
+import { headerStatusOf } from "./features/chat/agent-status.ts";
+import { latestWorkspaceId, scopeRecent, scopeSummary, stateIndexOf } from "./features/chat/galaxy-data.ts";
+import { GalaxyActionsContext, type DesignerFocus, type GalaxyActions } from "./features/chat/galaxy-actions.ts";
+import { GalaxyTiltContext, GalaxyTiltSetterContext, GalaxyViewContext } from "./features/chat/galaxy-tilt.ts";
 import { useFocusShell } from "./features/focus/use-focus-shell.tsx";
 import { docPanelLayout } from "./features/doc-panel/doc-panel-width.ts";
-import { docScope, getLast } from "./features/doc-panel/view-memory.ts";
 import { DocPaperContext, effectivePaper } from "./features/doc-panel/doc-paper.ts";
 import { RightRail, type RailEntry, type RightPanelKind } from "./shell/RightRail";
 import {
-  CLOSED_ENTRY,
   composeEntry,
   forgetMissing,
   hasEntry,
   hasSubLayer,
   mergeLoaded,
   panelFromHome,
+  pathOf,
+  panelForMode,
   parseMemoryFile,
-  parsePath,
   recallEntry,
   rememberEntry,
   resolveSubSessionsSub,
+  subOf,
   taskTabOf,
   toMemoryFile,
   type PanelEntry,
   type PanelMemory,
   type PanelPath,
+  withPanelRoot,
 } from "./shell/right-panel-memory.ts";
 import { dropDraft, putDraft, shouldOpenDraft, draftOf, type PluginDraftTarget, type PluginDrafts } from "./features/plugins/plugin-draft.ts";
 import type { PluginOpenRequest } from "./features/plugins/PluginsView.tsx";
 import { RightPanelSlot } from "./shell/RightPanel";
-import { railSubviewLit, toggleRailSubview, type RailSubviewState } from "./shell/rail-subview.ts";
+import { archivedEntryLit, toggleArchivedEntry, type RailSubviewState } from "./shell/rail-subview.ts";
 import { FEATURE_ICON } from "./shell/feature-icons.ts";
 import { type TokenPickerControl, type TokenPickResult } from "./shell/panel-token.ts";
 import { PastedTextCollapseContext } from "./shell/attachment-chips";
+import { ChatImageSizeContext } from "./features/chat/chat-file-scope.ts";
 import { ProcessViewContext } from "./features/chat/process-view-context";
 import { isDrawerToggleShortcut } from "./shell/drawer-shortcut.ts";
 import { isUnclaimedEscape } from "./shell/escape-key.ts";
@@ -102,10 +117,11 @@ import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
 import { useAutoOpenPanel } from "./features/chat/auto-open-panel.ts";
-import { onOpenPanelRequest, requestOpenPanel } from "./shell/open-panel.ts";
+import { liveFileOpen, onOpenPanelRequest, onOpenPluginBoardRequest, onOpenProgressRequest, requestOpenPanel } from "./shell/open-panel.ts";
 import type { ExcerptJump } from "./features/review/ExcerptsTab";
 import type { ExcerptJumpRequest } from "./features/chat/ChatView";
-import { BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT } from "@shared/settings";
+import { APP_MODE_DEFAULT, ORCHESTRA_ENTRY_DEFAULT, ORCHESTRA_VIEW_DEFAULT, BOARD_DAYS_DEFAULT, RIGHT_PANEL_WIDTH_DEFAULT, SIDEBAR_WIDTH_DEFAULT, type OrchestraEntry } from "@shared/settings";
+import { mainSessionOf } from "./features/chat/orchestra-data.ts";
 import { Drawer, type DockedTab } from "./shell/Drawer";
 import { NEW_TASK_TAB, dockTab } from "./shell/drawer-state";
 import { isWindowInactive } from "./shell/window-activity.ts";
@@ -140,12 +156,9 @@ import type { PanelUsageKey } from "@shared/panel-usage";
  * unbounded）。右抽屉（right-drawer-X）**是 pane 的子元素**——与会话列同一张卡，
  * 中间只有一根竖线（2026-09-12 裁决：不要间隔，一条竖线）。转帧式窗口的窗口键
  * 在自绘标题栏（Titlebar）上；抽屉开关住在右图标条顶部，底部是应用入口
- * （Archived / Carryovers / Settings，wafo 2026-09-22 裁决，覆盖同日之前的
+ * （Archived / Settings，wafo 2026-09-22 裁决，覆盖同日之前的
  * 「底部只放会话动作」——复制按钮已并入会话行的「导出」）。
  */
-/** 右栏「文档」入口发出的打开请求的 token 起点（与 focus.fileOpen 的自增 token 分开，避免撞号被当成已消费） */
-const DOC_OPEN_TOKEN_BASE = 1_000_000;
-
 export function App() {
   usePlatform();
   const [providers, setProviders] = useState<ProviderDto[]>([]);
@@ -154,6 +167,7 @@ export function App() {
   const [providersError, setProvidersError] = useState<string | null>(null);
   /** 中卡盖着哪个面（聊天 / 设置）——与右侧面板是**两个独立状态**，不是一个枚举 */
   const [overlay, setOverlay] = useState<Overlay>(null);
+  const [chatStatusOn] = useChatStatusFlag();
   /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
   const [rightPanel, setRightPanelRaw] = useState<RightPanelKind | null>(null);
   /**
@@ -176,12 +190,15 @@ export function App() {
     [rightPanel],
   );
 
+  /** 星系设计面板（原型）在设计哪个工作区：DIY 键定它，主槽换工作区时跟过去（design.ts 的 designerFollow） */
+  const [galaxyTarget, setGalaxyTarget] = useState<string | null>(null);
+  // 设计面板要停在哪颗天体（星系上点了主星 / 行星）：nonce 每点一次 +1
+  const [designerFocus, setDesignerFocus] = useState<DesignerFocus | null>(null);
   /**
-   * Archived / Carryovers 两个子视图的开关（入口在右栏底部，2026-09-22 裁决）。
-   * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。两者互斥：点一个退另一个。
+   * Archived 子视图的开关（入口在右栏底部，2026-09-22 裁决）。
+   * 状态跟着入口住在 App，Sidebar 受控渲染子视图本体。
    */
   const [showArchived, setShowArchived] = useState(false);
-  const [showCarryovers, setShowCarryovers] = useState(false);
   /** 窄窗（<960px）：并排分屏守不住 chat ≥480px 的底线，面板转右侧锚定覆盖层 */
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 959px)").matches);
   useEffect(() => {
@@ -200,10 +217,19 @@ export function App() {
     // 语言同理（main.tsx 首帧的 <html lang> 也是按它写的）：不对齐的话选了中文的人先看一帧英文
     ...(api.initialLanguage === null ? {} : { language: api.initialLanguage }),
   });
-  // 界面语言：单语主题说了算，双语主题听语言设置（shared 的 effectiveLanguage）
+  // 界面语言跟设置走（shared 的 effectiveLanguage）
   const resolvedTheme = useTheme(settings.theme, settings.language);
-  const locale = effectiveLanguage(resolvedTheme, settings.language);
+  const locale = effectiveLanguage(settings.language);
   const t = messagesOf(locale);
+  /** 侧栏停在哪一形态（settings.appMode；缺席 = 单智能体）：运行时仍是同一套内核，这里只决定侧栏与新任务页长什么样 */
+  const appMode = settings.appMode ?? APP_MODE_DEFAULT;
+  const orchestrate = appMode === "orchestrate";
+  /**
+   * 进入编排（切过去，或启动时设置里就是编排）后先落在一座具体的星系上：编排没有「不属于任何工作区」的首页。
+   * 只在列表读完后落一次；眼下已经在看某条会话 / 盖着设置页 / 首页已选了工作区就不动，不把人从手上的事里带走。
+   * 退出编排再进来重新落一次。
+   */
+  const landedRef = useRef(false);
   const refresh = useCallback(async () => {
     try {
       setProviders(await api.provider.list());
@@ -232,12 +258,63 @@ export function App() {
   const changeSettings = useCallback((patch: SettingsPatch) => {
     void api.settings.set(patch).then(setSettings);
   }, []);
+  /** 星系空白处拖动 / 方向键改的俯角：写同一个设置字段（设置 › 外观 › 星系倾角），重启后还在 */
+  const setGalaxyTilt = useCallback(
+    (view: { tilt?: number; azimuth?: number; zoom?: number }) =>
+      changeSettings({
+        ...(view.tilt === undefined ? {} : { galaxyTilt: view.tilt }),
+        ...(view.azimuth === undefined ? {} : { galaxyAzimuth: view.azimuth }),
+        ...(view.zoom === undefined ? {} : { galaxyZoom: view.zoom }),
+      }),
+    [changeSettings],
+  );
+  const galaxyAzimuth = galaxyAzimuthOf(settings);
+  const galaxyTurntable = galaxyTurntableOf(settings);
+  const galaxyZoom = galaxyZoomOf(settings);
+  // 离电省电档（power-save.ts）：主进程的电源状态（power:state / power:changed）× 设置 › 外观「离电时省电」
+  const [onBattery, setOnBattery] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void api.power.state().then((state) => {
+      if (live) setOnBattery(state.onBattery);
+    });
+    const off = api.power.onChange((state) => setOnBattery(state.onBattery));
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  const powerSave = powerSaveOf({ onBattery, enabled: galaxyBatterySaverOf(settings) });
+  useEffect(() => setGazeSuspended(powerSave), [powerSave]);
+  // 第一次进省电档时轻提示一次（记进设置，之后不再出）；六秒后自己收起
+  const [powerNotice, setPowerNotice] = useState(false);
+  useEffect(() => {
+    if (!settingsLoaded || !powerNoticeDue(powerSave, settings.galaxyBatteryNoticeSeen === true)) return;
+    setPowerNotice(true);
+    changeSettings({ galaxyBatteryNoticeSeen: true });
+    const timer = window.setTimeout(() => setPowerNotice(false), 6000);
+    return () => window.clearTimeout(timer);
+  }, [powerSave, settingsLoaded, settings.galaxyBatteryNoticeSeen, changeSettings]);
+  const galaxyDustKeep = dustKeepUnderPower(GALAXY_DUST_KEEP[galaxyDustDensityOf(settings)], powerSave);
+  const galaxyView = useMemo(
+    () => ({ azimuth: galaxyAzimuth, turntable: galaxyTurntable, zoom: galaxyZoom, dustKeep: galaxyDustKeep, powerSave }),
+    [galaxyAzimuth, galaxyTurntable, galaxyZoom, galaxyDustKeep, powerSave],
+  );
 
-  /** 文档面板的纸面：设置里的值按当前主题折算（纸面主题下回落 quiet 并锁住切换） */
+  /** 回答里本地图的默认尺寸（右键一张图选的那次记下来，之后新图按它画；见 ChatImageSizeContext） */
+  const chatImageSize = useMemo(
+    () => ({
+      size: settings.chatImageSize ?? ("large" as const),
+      setSize: (next: "large" | "small") => changeSettings({ chatImageSize: next }),
+    }),
+    [settings.chatImageSize, changeSettings],
+  );
+
+  /** 文档 / 演示文稿面板的纸面：只用设置里的纸样，与应用主题无关 */
   const docPaper = useMemo(() => {
-    const { paper, locked } = effectivePaper(settings.docPaper, resolvedTheme);
-    return { paper, locked, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
-  }, [settings.docPaper, resolvedTheme, changeSettings]);
+    const paper = effectivePaper(settings.docPaper);
+    return { paper, setPaper: (next: DocPaper) => changeSettings({ docPaper: next }) };
+  }, [settings.docPaper, changeSettings]);
 
   /**
    * 星标是个**开关**：在库里就取消、不在就加到最后（新星的排在末尾，
@@ -263,9 +340,21 @@ export function App() {
     [changeSettings],
   );
 
+  /** 通话缺配置时「去语音设置」的去处：设置面的语音页 */
+  const openVoiceTab = useCallback(() => {
+    setSettingsTab("voice");
+    setOverlay("settings");
+  }, []);
+
   /** 模型卡片底部「配置模型」的去处：设置面的服务商页（不是通用页） */
   const openProvidersTab = useCallback(() => {
     setSettingsTab("providers");
+    setOverlay("settings");
+  }, []);
+
+  /** 离电省电提示里「在设置里改」的去处：设置面的通用页（外观那一组） */
+  const openSettingsAppearance = useCallback(() => {
+    setSettingsTab("general");
     setOverlay("settings");
   }, []);
 
@@ -341,7 +430,6 @@ export function App() {
   const leaveFocusSurfaces = useCallback((): void => {
     setOverlay(null);
     setShowArchived(false);
-    setShowCarryovers(false);
   }, []);
   /**
    * 响了一声就记一笔（`<userData>/chime-log.jsonl`，理由见 shared/notify.ts）：标题取此刻
@@ -358,10 +446,6 @@ export function App() {
   };
   const expandSidebar = useCallback((): void => setSidebarCollapsed(false), []);
   const openFilesPanel = useCallback((): void => setRightPanel("files"), []);
-  // 记忆里恢复出来的旧「文档」面板（合并之前存的）：并入文件面板
-  useEffect(() => {
-    if (rightPanel === "docs") setRightPanel("files");
-  }, [rightPanel]);
   const focus = useFocusShell({
     t,
     workspaces: session.workspaces,
@@ -380,15 +464,16 @@ export function App() {
   /** `<FilesPanel>` 那两行的别名：保持 B1 之前的原文，#281 要在它旁边插 `focusDone` */
   const focusFilesView = focus.filesView;
   /**
-   * 文件面板的「打开这个文件」请求：两个来源——左栏专注视图的双击（focus.fileOpen，token 自增）和右栏「文档」入口
-   * （railDocOpen，token 从 DOC_OPEN_TOKEN_BASE 起，两边不撞号）。谁最后来用谁
+   * 文件面板的「打开这个文件」请求：来自左栏专注视图的双击、内置命令、双链跳转（focus.fileOpen，token 自增）。
+   * 面板一离开 files 就作废当时那一条（liveFileOpen 的注释讲为什么）：不然 agent 打开过一份文件之后，
+   * 每次再点开文件面板都会把它重新打开。
    */
-  const [railDocOpen, setRailDocOpen] = useState<{ path: string; token: number } | null>(null);
-  const fileOpenRequest = railDocOpen ?? focus.fileOpen;
-  // 左栏专注视图又发了新的打开请求：它比右栏入口那条新，让位
+  const [dismissedFileOpen, setDismissedFileOpen] = useState<number | null>(null);
+  const focusFileOpen = focus.fileOpen;
   useEffect(() => {
-    if (focus.fileOpen !== null) setRailDocOpen(null);
-  }, [focus.fileOpen]);
+    if (rightPanel !== "files" && focusFileOpen !== null) setDismissedFileOpen(focusFileOpen.token);
+  }, [rightPanel, focusFileOpen]);
+  const fileOpenRequest = liveFileOpen(focusFileOpen, dismissedFileOpen);
 
   // ── 内置命令让右栏打开某个文件（聊天里的完成卡点击 / agent 新建·打开时自动开）──
   // 请求总线见 shell/open-panel.ts；slides 面板收到路径直接打开，文档走文件面板
@@ -419,37 +504,42 @@ export function App() {
    */
   const newTaskNonceRef = useRef(0);
   const [newTaskSignal, setNewTaskSignal] = useState(0);
+  // 星系设计稿的真源是各工作区的 planet/（与插件 planet-forge 同一份）：工作区列表一变就读一遍
+  usePlanetFiles(session.workspaces);
+  useEffect(() => {
+    if (!orchestrate) {
+      landedRef.current = false;
+      return;
+    }
+    if (landedRef.current || session.loads.workspaces.kind !== "ready" || session.loads.sessions.kind !== "ready") return;
+    landedRef.current = true;
+    if (overlay !== null || session.sessionId !== null || session.opened !== null || session.workspaceId !== null) return;
+    const target = latestWorkspaceId(session.sessions, session.workspaces);
+    const workspace = session.workspaces.find((item) => item.id === target);
+    if (workspace !== undefined) session.newTaskIn(workspace);
+  }, [orchestrate, overlay, session]);
+  // 切回单智能体时「编排」面板没有内容可画（它只属于编排形态）：收起右栏，不留一块空白框
+  useEffect(() => {
+    const allowed = panelForMode(rightPanel, orchestrate);
+    if (allowed !== rightPanel) setRightPanel(allowed);
+  }, [rightPanel, orchestrate]);
   const startNewTaskFromTools = (): void => {
     setOverlay(null);
     setSidebarCollapsed(false);
     newTaskNonceRef.current += 1;
     setNewTaskSignal(newTaskNonceRef.current);
-    session.newTask();
+    // 编排：新任务落在眼下这座星系（看着哪个工作区的会话就是哪个）；没有就退回「不属于任何工作区」
+    const here = orchestrate
+      ? session.workspaces.find((item) => item.id === (session.sessions.find((meta) => meta.id === (session.sessionId ?? session.opened?.id ?? ""))?.workspaceId ?? session.workspaceId))
+      : undefined;
+    if (here !== undefined) session.newTaskIn(here);
+    else session.newTask();
   };
   /**
-   * 遗留事项带上下文开工（转成任务）：侧栏遗留面板的「带上下文继续」与右栏「这条任务 ›
-   * 留到以后」的「转成任务」共用这一条路（2026-10-30 之前它是侧栏里的一段内联回调）。
-   * 开工即回对话：退出遗留面板与整页盖层、展开侧栏；新会话落在来源会话的组里（cwd / 归属
-   * 跟随它，见 useChatSession.startCarryoverTask），那一组得展开——工作区组在新会话打开时由
-   * Sidebar 自己展开（「打开的会话落在收着的组里就展开」那条 effect），TASKS 组靠新任务信号。
-   */
-  const startCarryoverTask = (item: Carryover): void => {
-    setShowCarryovers(false);
-    setOverlay(null);
-    setSidebarCollapsed(false);
-    const source = session.sessions.find((meta) => meta.id === item.sourceSessionId);
-    if (source?.workspaceId == null) {
-      newTaskNonceRef.current += 1;
-      setNewTaskSignal(newTaskNonceRef.current);
-    }
-    session.startCarryoverTask(item);
-  };
-  /**
-   * 带着会话目标开新会话（右栏进度「目标」上的动作）：与转成任务同一条路——开工即回对话、侧栏展开、
-   * 新会话落在来源会话的组里。
+   * 带着会话目标开新会话（右栏进度「目标」上的动作）：开工即回对话、侧栏展开、
+   * 新会话落在来源会话的组里（cwd / 归属跟随来源会话，见 useChatSession.startGoalTask）。
    */
   const startGoalTask = (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null): void => {
-    setShowCarryovers(false);
     setOverlay(null);
     setSidebarCollapsed(false);
     const source = session.sessions.find((meta) => meta.id === sourceSessionId);
@@ -649,7 +739,7 @@ export function App() {
     overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";
 
-  // 通道清单：右栏入口的「在等你」角标（waiting + approval）从这里算。父子会话面板
+  // 通道清单：右栏入口的「在等你」角标（只数 waiting：子会话在问你）从这里算。父子会话面板
   // 已删（2026-10-12 用户裁决）：它总是自己弹出，且把两边对话抽到第三个又长又啰嗦
   // 的地方——沟通回到两边对话流，Sub-sessions 面板变收件箱，不再有任何自动弹出。
   const channelSummaries = useChannelSummaries(channelParentId);
@@ -663,6 +753,10 @@ export function App() {
   const capsuleShortId = mainOpenId === "" ? null : mainOpenId.slice(0, 6);
   const capsuleParentId = mainOpenMeta?.parentId;
 
+  /** 编排：眼下这座星系（看着哪条会话就是它所在的工作区；New Task 页就是选中的工作区）——右栏编排面板跟它走 */
+  const orchestraWsId =
+    mainOpenId === "" && session.opened === null ? session.workspaceId : (mainOpenMeta?.workspaceId ?? session.workspaceId);
+
   /** 主槽里的弹出宿主（完成提醒卡 / 铃铛清单 portal 进去）；state 而非 ref：挂上后要触发一次渲染 */
   const [popHost, setPopHost] = useState<HTMLDivElement | null>(null);
 
@@ -674,10 +768,10 @@ export function App() {
    */
   const subSessionChildren = channelParentId === null ? [] : childSessions(session.sessions, channelParentId);
   const hasSubSessions = subSessionChildren.length > 0;
-  /** 「在等你」的子会话数（question + 待审批）：右栏入口的角标，为 0 不显示 */
+  /** 「在等你」的子会话数（question）：右栏入口的角标，为 0 不显示 */
   const waitingOnYou = subSessionChildren.filter((meta) => {
     const status = subSessionStatusOf(meta.id, channelSummaries.get(meta.id)?.status, engine);
-    return status === "waiting" || status === "approval";
+    return status === "waiting";
   }).length;
 
   /**
@@ -756,7 +850,7 @@ export function App() {
     if (rightPanel !== "review") setMemoryFocus(null);
   }, [rightPanel]);
   /**
-   * PDF 引用的一次性跳转请求（实验功能「PDF 引用」：正文里的引用编号被点）：同
+   * PDF 引用的一次性跳转请求（正文里的引用编号被点）：同
    * reviewFocus 的 token 机制——同一条引用连点两次也会重新定位。开文件面板，由它找
    * PDF 所在的根、打开预览、滚到原文并高亮。
    */
@@ -817,13 +911,19 @@ export function App() {
   /** 右栏此刻属于哪条会话（null = 首页 / 还没有会话，不写记忆）与第几次恢复；面板内容的 key 用 */
   const [railCtx, setRailCtx] = useState<{ owner: string | null; epoch: number }>(() => ({ owner: mainOpenId === "" ? null : mainOpenId, epoch: 0 }));
   /** 当前面板自己报上来的「停在哪一层」；panel 与 rightPanel 不一致的那份是过期的，下面的 effect 会清掉 */
-  const [railPath, setRailPath] = useState<PanelPath>(CLOSED_ENTRY);
+  const [railPath, setRailPath] = useState<PanelPath>({ panel: null });
+  /**
+   * 交给面板的路径：railPath 的 panel 与 rightPanel 不一致 = 刚换面板、面板还没报——这一拍直接取记忆里该面板
+   * 自己的 sub，面板挂载时就能从上次的位置起（不等 effect 把 railPath 换过去再重挂）
+   */
+  const livePath: PanelPath =
+    railPath.panel === rightPanel ? railPath : pathOf(recallEntry(panelMemoryRef.current, railCtx.owner), rightPanel);
   /**
    * 一次性：恢复成这个面板，而不是会话自己的记忆。`sessionId` 为 null = 下一条**还没记过面板的新会话**拿到 id 时
    * （「和智能体一起做一个」用）；给了 id = 只在切到**那一条**会话时（「正在做」的「回到对话」用：它早就有自己的面板记忆）。
    * 只带这一次，之后切会话照会话记忆。
    */
-  const carryPanelRef = useRef<{ panel: RightPanelKind; sessionId: string | null } | null>(null);
+  const carryPanelRef = useRef<{ panel: "plugins"; sessionId: string | null } | null>(null);
 
   // 主槽不再是「有子会话的根会话」→ 入口消失，面板若开着就关（不止是不显示入口，
   // 面板本身也不该继续挂着一条够不到数据的内容）。在按会话恢复面板之后跑：恢复出
@@ -846,7 +946,7 @@ export function App() {
     setSubSessionsNav(openSubSession(childId));
     setRightPanel("subsessions");
   }, []);
-  /** 头部「N sub-sessions」芯片：强制回列表层（不是「resume 到上次的位置」） */
+  /** 头部「N sub-sessions」与交回提示的「在面板里看」：强制回列表层（待讨论组在最上面） */
   const openSubSessionsList = useCallback(() => {
     setSubSessionsNav(SUB_SESSIONS_LIST);
     setRightPanel("subsessions");
@@ -989,7 +1089,7 @@ export function App() {
     // 打扰人——它们收在右栏自动化面板里，跑完的结果看那一条自动化的运行记录
     const settled = settledSessions(prev, engine.states).filter((id) => {
       const meta = session.sessions.find((candidate) => candidate.id === id);
-      return meta === undefined || (meta.parentId === undefined && (meta.automationId === undefined || meta.promoted === true));
+      return meta === undefined || (meta.parentId === undefined && meta.backstage === undefined && (meta.automationId === undefined || meta.promoted === true));
     });
     if (settled.length === 0 && heldNoticesRef.current.size === 0) return;
     // 子树还在跑的先压着，整棵停下那拍再提醒（母会话每被子会话叫醒一次就响一声的根因，
@@ -1097,12 +1197,10 @@ export function App() {
       const state = sessionRunState({
         slot: {
           phase: session.phaseOf(meta.id),
-          approvals: session.approvalsOf(meta.id).length,
           planAwaiting: session.planAwaitingOf(meta.id),
         },
         children: childSessions(session.sessions, meta.id).map((child) => ({
           phase: session.phaseOf(child.id),
-          approvals: session.approvalsOf(child.id).length,
           planAwaiting: session.planAwaitingOf(child.id),
         })),
         unread: meta.unread ?? null,
@@ -1120,8 +1218,8 @@ export function App() {
       });
     }
     return orderNoticeEntries(rows);
-    // phaseOf / approvalsOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
-  }, [session.sessions, session.workspaces, session.phaseOf, session.approvalsOf, session.planAwaitingOf, engine.states]);
+    // phaseOf 引用稳定（useCallback([])），槽变化靠 engine.states 进依赖
+  }, [session.sessions, session.workspaces, session.phaseOf, session.planAwaitingOf, engine.states]);
   /** 铃铛清单点行：主槽打开它；有未读的话顺手清（watchedKey 那一拍也会清，
    *  但它若已在主槽就没有那一拍了，这里兑底） */
   const openFromNotice = useCallback(
@@ -1134,36 +1232,46 @@ export function App() {
   );
 
   /** 右侧三个图标共用**一个面板位**（2026-09-12 裁决）：同一时刻至多展开一个，
-   *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。 */
-  const handlePanel = useCallback((next: RightPanelKind | null) => {
-    // 「文档」入口 = 在文件面板里打开最近的文档（没有就新建一份）：文档与文件合并成一个面板，不再有第二个
-    if (next === "docs") {
-      setRightPanel("files");
-      void openRecentDocument();
-      return;
-    }
-    setRightPanel(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.workspaceId, session.sessionId, session.opened?.id]);
-  /** 右栏「文档」入口：上次在这个工作区打开的文档 → 否则最近改的 .md → 否则新建一份空文档，在文件面板里打开 */
-  async function openRecentDocument(): Promise<void> {
-    const sessionId = session.sessionId ?? session.opened?.id ?? null;
-    const workspaceId = session.workspaceId;
-    try {
-      const docs = (await api.docs.list({ sessionId, workspaceId })).filter((entry) => entry.kind === "doc");
-      const last = getLast(docScope(workspaceId, "doc"));
-      const target =
-        docs.find((entry) => entry.path === last)?.path ?? docs[0]?.path ?? (await api.docs.create({ sessionId, workspaceId, kind: "doc" })).path;
-      setRailDocOpen((prev) => ({ path: target, token: Math.max(prev?.token ?? 0, DOC_OPEN_TOKEN_BASE) + 1 }));
-    } catch {
-      // 列 / 建都失败（工作区目录不在）：文件面板自己会显示根的状态，这里不另报错
-    }
-  }
+   *  "drawer" 即辅助对话——三个菜单在同一个壳里只是三种内容。
+   *  「文档」「演示文稿」各是一个面板（同一套挑选 / 新建画面，见 DocsPanel）：点一下只是把它亮起来，不替用户开文件、不新建文件。 */
+  const handlePanel = useCallback((next: RightPanelKind | null) => setRightPanel(next), []);
+  /** 侧栏工作区行的画笔键：开 / 收星系设计面板，或换成另一个工作区（规则在 design.ts，带测试） */
+  const toggleGalaxyDesigner = useCallback(
+    (workspaceId: string) => {
+      const next = designerClick({ panel: rightPanel, target: galaxyTarget }, workspaceId);
+      // 画笔键开面板：不带星系上次点的那颗（落在面板自己记着的那一页）
+      setDesignerFocus(null);
+      setGalaxyTarget(next.target);
+      setRightPanel(next.panel);
+    },
+    [rightPanel, galaxyTarget],
+  );
+  // 主槽换了工作区：设计面板开着就跟过去（只看工作区变没变，不看面板何时打开——点 DIY 不会把目标拉回当前工作区）
+  const designerStateRef = useRef({ panel: rightPanel, target: galaxyTarget });
+  designerStateRef.current = { panel: rightPanel, target: galaxyTarget };
+  useEffect(() => {
+    const next = designerFollow(designerStateRef.current, session.workspaceId);
+    if (next.target !== designerStateRef.current.target) setGalaxyTarget(next.target);
+    if (next.panel !== designerStateRef.current.panel) setRightPanel(next.panel);
+  }, [session.workspaceId]);
+  // 换到别的页面（设置、插件、归档……整页盖住主槽）：星系设计面板收起，回来时不再挂着上一个工作区的设计
+  useEffect(() => {
+    if (overlay !== null && designerStateRef.current.panel === "galaxy") setRightPanel(null);
+  }, [overlay]);
   /** 召回终态卡的「在右栏看图谱」（2026-10-14 终态卡重写）：直达右栏意图面板。引用稳定（TranscriptColumn 是 memo） */
   const openIntentPanel = useCallback(() => handlePanel("intent"), [handlePanel]);
   /** 输入框旁上下文环菜单的「查看上下文」：直达右栏上下文面板 */
   // 「这条任务」面板的页签：右侧图标条开它时保持上次的页签；输入框旁的用量环开它时直接落在「上下文」
   const [taskTab, setTaskTab] = useState<TaskPanelTab>("progress");
+  // 对话里开头那张计划卡的「在进度里看」：切到「这条任务 › 进度」
+  useEffect(
+    () =>
+      onOpenProgressRequest(() => {
+        setRightPanel("context");
+        setTaskTab("progress");
+      }),
+    [],
+  );
   const openContextPanel = useCallback(() => {
     setTaskTab("context");
     handlePanel("context");
@@ -1171,7 +1279,7 @@ export function App() {
 
   // ── 面板打开次数（shared/panel-usage.ts，本机的统计）──────
   // 只记用户自己打开的：右栏换成别的面板（不管从哪个入口：图标条、「更多」、对话里的
-  // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 遗留 / 归档
+  // 链接、快捷键、「/ + 空格」），「这条任务」开着时切到上下文页签，记忆库 / 归档
   // 打开，铃铛与内置浏览器在各自的入口记。按会话恢复的面板不记（panelRestoredRef）。
   // 只在本机、不上传；失败就算了——这是一份看个大概的统计，不值得打扰用户
   const countPanel = useCallback((key: PanelUsageKey) => {
@@ -1314,20 +1422,15 @@ export function App() {
   const mainMeta = mainSessionId === null ? undefined : session.sessions.find((meta) => meta.id === mainSessionId);
 
   /**
-   * 右栏底部的应用入口（wafo 2026-09-22：设置、遗留、归档全拸到右栏底部 stack，
+   * 右栏底部的应用入口（wafo 2026-09-22：设置、归档拸到右栏底部 stack，
    * 首页常驻——它们是应用入口不是会话动作）。点亮判定与互斥规则沿用侧栏
    * 底部行时代的行为：子视图互斥，设置盖着时谁也不亮。
    *
-   * 遗留事项入口**常驻**，0 条也在（wafo 2026-09-25）：以前 0 条不渲染，导入的会话
-   * 没走过收尾、一条遗留都没有，这个入口就整个不见了——用户不知道有这个功能，
-   * 也没法确认「现在确实没有遗留」。点进去是面板自己的空态。
-   *
    * 点亮判定与点击落点在 `rail-subview.ts`（纯函数，带测试）：没亮 = 打开该子视图
-   * 并**退出设置**——设置页里点这两个入口以前只是在底下翻转开关，界面不动。
+   * 并**退出设置**——设置页里点入口以前只是在底下翻转开关，界面不动。
    */
   // 子会话不参与归档（子会话 PR4c 2.3：session.ts 的契约），角标按根会话数
   const archivedCount = rootSessions(session.sessions).filter((m) => m.archived).length;
-  const openCarryoverCount = session.carryovers.filter((item) => item.status === "open").length;
   const experimentalFeatures = settings.experimentalFeatures ?? {};
   // 「正在做」的插件草稿：agent 的 preview_plugin 扫过一个还没安装的文件夹时，按会话记下它的路径；
   // 正看着该会话就同时把右栏切到插件页（右栏版见 PluginDraftView）。这份只记在 renderer 内存里、只管「agent 预览时自动切右栏」；
@@ -1343,6 +1446,7 @@ export function App() {
         if (event.type !== "pluginDraft") return;
         setPluginDrafts((drafts) => putDraft(drafts, event.sessionId, event.path));
         if (shouldOpenDraft({ eventSessionId: event.sessionId, viewedSessionId: draftContext.current })) {
+          setOpenedDraft(null); // 新预览优先于早先点开、后来切走的那份
           setRightPanel("plugins");
         }
       }),
@@ -1379,6 +1483,29 @@ export function App() {
       }),
     [],
   );
+  /**
+   * 子智能体档案变了（聊天里的 create_sub_agent / update_sub_agent，或面板里的新建 / 改 / 删）：重读那座星系。
+   * 新建或从聊天里要求改形象的还要把右栏「星系设计」弹出来停在这颗行星上：新建让用户定轨道与质量，改形象让用户挑候选。
+   * 聊天里来的只在正看着那条会话时弹（别的会话里做的不抢右栏）；面板里建的面板本来就开着，落到新行星那一页。
+   * 只在编排形态弹——单智能体形态没有星系设计入口。
+   */
+  const subAgentViewRef = useRef({ sessionId: mainSessionId, orchestrate });
+  subAgentViewRef.current = { sessionId: mainSessionId, orchestrate };
+  useEffect(
+    () =>
+      api.agent.onEvent((event) => {
+        if (event.type !== "subAgentsChanged") return;
+        void reloadAfterSubAgentChange(event.workspaceId).then(() => {
+          if ((event.action !== "created" && event.action !== "avatar") || !subAgentViewRef.current.orchestrate) return;
+          if (event.source === "chat" && event.sessionId !== subAgentViewRef.current.sessionId) return;
+          setOverlay(null);
+          setGalaxyTarget(event.workspaceId);
+          setDesignerFocus((prev) => ({ kind: "planet", id: event.subAgentId, nonce: (prev?.nonce ?? 0) + 1 }));
+          setRightPanel("galaxy");
+        });
+      }),
+    [],
+  );
   const leavePluginDraft = useCallback(() => {
     setOpenedDraft(null);
     if (mainSessionId !== null) setPluginDrafts((drafts) => dropDraft(drafts, mainSessionId));
@@ -1408,6 +1535,16 @@ export function App() {
     },
     [session, mainSessionId],
   );
+  // 对话里看板结果的「展开」：已装的插件进右栏插件页的看板视图，草稿进草稿的长页
+  const sessionWorkspaceId = session.workspaceId;
+  useEffect(
+    () =>
+      onOpenPluginBoardRequest((request) => {
+        if (request.draftPath !== null) openPluginDraft({ path: request.draftPath, workspaceId: sessionWorkspaceId });
+        else openPlugin(request.plugin, true);
+      }),
+    [openPlugin, openPluginDraft, sessionWorkspaceId],
+  );
   const sessionDraft = draftOf(pluginDrafts, mainSessionId);
   const shownDraft: PluginDraftTarget | null =
     openedDraft ?? (sessionDraft === null ? null : { path: sessionDraft, workspaceId: session.workspaceId });
@@ -1420,9 +1557,6 @@ export function App() {
     if (overlay === "board") countPanel("board");
     if (overlay === "settings") countPanel("settings");
   }, [overlay, countPanel]);
-  useEffect(() => {
-    if (showCarryovers) countPanel("carryovers");
-  }, [showCarryovers, countPanel]);
   useEffect(() => {
     if (showArchived) countPanel("archived");
   }, [showArchived, countPanel]);
@@ -1439,12 +1573,11 @@ export function App() {
   sessionsRef.current = session.sessions;
   /** 面板换了：上一个面板报的第二层作废（面板自己挂上后会报新的） */
   useEffect(() => {
-    setRailPath((current) => (current.panel === rightPanel ? current : (parsePath({ panel: rightPanel }) ?? CLOSED_ENTRY)));
+    setRailPath((current) => (current.panel === rightPanel ? current : pathOf(recallEntry(panelMemoryRef.current, railCtx.owner), rightPanel)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- owner 只在切会话时变，那一拍由下面「按会话恢复」整批设好
   }, [rightPanel]);
-  /** 点开的草稿属于插件面板：面板换走就放下（同其余面板「换走回到根」） */
-  useEffect(() => {
-    if (rightPanel !== "plugins") setOpenedDraft(null);
-  }, [rightPanel]);
+  // 点开的草稿是插件面板的第二层：换到别的面板**不放下**它（放下就等于「关了」，切回来只剩列表）；
+  // 关草稿走 leavePluginDraft，由写穿把记忆里 subs.plugins.draft 清掉。切会话时按那条会话的记忆重设（见下）
   // 切主槽会话：恢复目标会话记着的路径（没记过 = 关着）。面板、页签、第二层、子会话面板的层、
   // 草稿在同一批里设好；epoch +1 让面板内容重挂。一次性信号（审查定位、记忆页签、「/ + 空格」选取态）
   // 都属于离开的那条会话，不带过去——否则重挂后会拿着旧会话的路径去定位
@@ -1456,25 +1589,27 @@ export function App() {
     let recalled: PanelEntry = recallEntry(panelMemoryRef.current, target);
     const carry = carryPanelRef.current;
     if (carry !== null && target !== null && (carry.sessionId === null ? !hasEntry(panelMemoryRef.current, target) : carry.sessionId === target)) {
-      const bare = parsePath({ panel: carry.panel }) ?? CLOSED_ENTRY;
-      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      recalled = withPanelRoot(recalled, carry.panel);
       carryPanelRef.current = null;
     }
     // 从首页发第一句：开着的是文档 / 演示文稿面板就留着（panelFromHome）
     const keepFromHome = panelFromHome(panelMemoryRef.current, previous, target, rightPanel);
     if (keepFromHome !== null) {
-      const bare = parsePath({ panel: keepFromHome }) ?? CLOSED_ENTRY;
-      recalled = recalled.taskTab === undefined ? bare : { ...bare, taskTab: recalled.taskTab };
+      recalled = withPanelRoot(recalled, keepFromHome);
     }
     const nextTab = taskTabOf(recalled);
+    // 星系设计是工作区级的面板、不进会话记忆：开着时目标会话没记过别的面板，就留着它（跟到新工作区由下面的效果做）
+    const nextPanel = keepDesignerAcrossSessions(rightPanel, recalled.panel);
     // 恢复出来的面板不是用户打开的：面板打开次数不记它（见下方 countPanel 的效果）
-    if (recalled.panel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
+    if (nextPanel !== rightPanel || nextTab !== taskTab) panelRestoredRef.current = true;
     const children = new Set(target === null ? [] : childSessions(sessionsRef.current, target).map((meta) => meta.id));
-    const nav = recalled.panel === "subsessions" ? resolveSubSessionsSub(recalled.sub, children) : undefined;
-    setRightPanel(recalled.panel);
+    // 子会话层 / 草稿是各自面板的第二层：不论恢复出来开着哪个面板，都按记忆接回（切到别的面板不算关）
+    const nav = resolveSubSessionsSub(subOf(recalled, "subsessions"), children);
+    // 面板取 nextPanel：星系设计是工作区级，目标会话没记过别的面板时留着它
+    setRightPanel(nextPanel);
     setTaskTab(nextTab);
-    setRailPath(parsePath(recalled) ?? CLOSED_ENTRY);
-    setOpenedDraft(recalled.panel === "plugins" ? (recalled.sub?.draft ?? null) : null);
+    setRailPath(pathOf(recalled));
+    setOpenedDraft(subOf(recalled, "plugins")?.draft ?? null);
     setSubSessionsNav(nav === undefined ? SUB_SESSIONS_LIST : openSubSession(nav.sessionId));
     setReviewFocus(null);
     setMemoryFocus(null);
@@ -1501,7 +1636,7 @@ export function App() {
   const openedSubSessionId = subSessionsNav.kind === "session" ? subSessionsNav.sessionId : null;
   useEffect(() => {
     if (railCtx.owner === null) return;
-    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab });
+    const entry = composeEntry({ rightPanel, path: railPath, openedDraft, subSessionId: openedSubSessionId, taskTab }, panelMemoryRef.current.get(railCtx.owner));
     const next = rememberEntry(panelMemoryRef.current, railCtx.owner, entry);
     if (next === panelMemoryRef.current) return;
     panelMemoryRef.current = next;
@@ -1597,16 +1732,17 @@ export function App() {
     () => new Set(runSessionKey === "" ? [] : runSessionKey.split("\n")),
     [runSessionKey],
   );
-  const subviewState: RailSubviewState = { overlay, showArchived, showCarryovers };
+  const subviewState: RailSubviewState = { overlay, showArchived };
   const applySubviewState = (next: RailSubviewState): void => {
     setOverlay(next.overlay);
     setShowArchived(next.showArchived);
-    setShowCarryovers(next.showCarryovers);
   };
   /**
    * 工具栏居中那颗胶囊的内容：设置页 = 标题（只有标题）；会话页 = SessionCapsule；
    * 首页 = 不渲染。
    */
+  // 编排页页头的状态与「会话」菜单读同一份运行态（只在编排首页那一支用；子会话表建一遍，整趟 O(n)）
+  const orchestrateStates = orchestrate ? stateIndexOf(session) : null;
   const sessionSlot =
     overlay === "settings" || overlay === "board" ? (
       <div className="cap-sess">
@@ -1616,25 +1752,47 @@ export function App() {
           </strong>
         </div>
       </div>
+    ) : orchestrateStates !== null ? (
+      // 编排：页头永远是「主智能体头像 + 工作区名 + 状态」；对话页在后面接次级的「› 会话标题」（可改名），不露会话 id。
+      // 正文与页头同一个判定（inSession）：New Task 页才有星系，对话页没有——不会出现「页头在对话里、正文是星系」的混合态
+      (() => {
+        const inSession = !(mainOpenId === "" && session.opened === null);
+        // 刚发出、meta 还没落盘的新会话：找不到 meta 时用本槽的工作区（发送就是按它发的），不能退成「星际空间」——
+        // 那会让页头在一瞬间说错这是谁（2026-11-24 CDP 取证抓到：agent 卡住时页头显示「星际空间 › 新任务」）
+        const wsId = inSession ? (mainOpenMeta?.workspaceId ?? session.workspaceId) : session.workspaceId;
+        const state = orchestrateStates.state;
+        return (
+          <WorkspaceCapsule
+            workspaceId={wsId}
+            name={session.workspaces.find((item) => item.id === wsId)?.name ?? t.agents.home}
+            status={headerStatusOf(scopeSummary(session.sessions, wsId, orchestrateStates, mainOpenId === "" ? null : mainOpenId))}
+            task={
+              inSession
+                ? // 主智能体的常驻对话：页头写「主智能体名 › 常驻对话」（它是这个智能体的那一条，不是某件事；不给改名）
+                  mainOpenId !== "" && mainSessionOf(session.sessions, wsId, settings.orchestraMain)?.id === mainOpenId
+                  ? { title: t.orchestra.mainSession }
+                  : { title: capsuleTitle, onRename: mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title) }
+                : null
+            }
+            recent={scopeRecent(session.sessions, wsId, state)}
+            now={Date.now()}
+            onOpenSession={(id) => void session.openSession(id)}
+            onSeeAll={() => changeSettings({ appMode: "agent" })}
+            onOpenHome={() => {
+              // 页头名字 = 回这个主智能体的 New Task 页（同侧栏点这一行）
+              setOverlay(null);
+              const workspace = session.workspaces.find((item) => item.id === wsId);
+              if (workspace === undefined) session.newTask();
+              else session.newTaskIn(workspace);
+            }}
+          />
+        );
+      })()
     ) : mainOpenId === "" && session.opened === null ? null : (
       <SessionCapsule
         title={capsuleTitle}
         shortId={capsuleShortId}
         onRename={mainOpenId === "" ? undefined : (title) => session.renameSession(mainOpenId, title)}
-        completion={
-          mainOpenId !== ""
-            ? {
-                state: mainOpenMeta?.completion ?? "open",
-                closing: session.closingScan,
-                busy: session.phase !== "idle",
-                scanless: mainOpenMeta?.piSessionFile == null,
-                onMark: session.startClosingRitual,
-                onSet: (next) => session.setCompletionSession(mainOpenId, next),
-              }
-            : null
-        }
-        subChip={hasSubSessions ? { count: subSessionChildren.length, waiting: waitingOnYou } : null}
-        onOpenSubSessions={openSubSessionsList}
         crumb={
           capsuleParentId !== undefined
             ? {
@@ -1646,21 +1804,56 @@ export function App() {
       />
     );
 
+  /**
+   * 编排入口页的二选一（ChatView 的 entry）：上次的选择与常驻对话指针都按工作区记在设置里（原子写、重启 / 刷新都在），
+   * 不写会话 meta。指针指向的会话在列表里但已不算数（归档 / 移走）= 丢了，发送时重建；不在列表里交给磁盘判。
+   */
+  const entryOf = (workspaceId: string) => {
+    const pointer = settings.orchestraMain?.[workspaceId] ?? null;
+    const listedMeta = pointer === null ? undefined : session.sessions.find((meta) => meta.id === pointer);
+    return {
+      choice: settings.orchestraEntry?.[workspaceId] ?? ORCHESTRA_ENTRY_DEFAULT,
+      onChoice: (choice: OrchestraEntry) => changeSettings({ orchestraEntry: { [workspaceId]: choice } }),
+      pointer,
+      pointerStale: listedMeta !== undefined && mainSessionOf(session.sessions, workspaceId, settings.orchestraMain) === null,
+      onMainCreated: (id: string) => changeSettings({ orchestraMain: { [workspaceId]: id } }),
+    };
+  };
+
+  // 星系上能点的东西各去哪（New Task 页的大星系与右栏星系图共用；单智能体形态不提供，首页星系只是图）
+  const galaxyActions: GalaxyActions | null = orchestrate
+    ? {
+        openSession: (id) => {
+          setOverlay(null);
+          void session.openSession(id);
+        },
+        openPlanet: (workspaceId, planetId) => {
+          setOverlay(null);
+          setGalaxyTarget(workspaceId);
+          setDesignerFocus((prev) => ({ kind: "planet", id: planetId, nonce: (prev?.nonce ?? 0) + 1 }));
+          setRightPanel("galaxy");
+        },
+        openStar: (workspaceId) => {
+          setOverlay(null);
+          setGalaxyTarget(workspaceId);
+          setDesignerFocus((prev) => ({ kind: "star", nonce: (prev?.nonce ?? 0) + 1 }));
+          setRightPanel("galaxy");
+        },
+        openTree: () => {
+          setOverlay(null);
+          changeSettings({ orchestraView: "tree" });
+          setRightPanel("orchestra");
+        },
+      }
+    : null;
+
   const railEntries: RailEntry[] = [
-    // 遗留事项入口（收尾扫描的下游）
-    {
-      id: "carryovers",
-      icon: FEATURE_ICON.carryovers,
-      label: t.app.carryoversEntry(openCarryoverCount),
-      lit: railSubviewLit(subviewState, "carryovers"),
-      onClick: () => applySubviewState(toggleRailSubview(subviewState, "carryovers")),
-    },
     {
       id: "archived",
       icon: FEATURE_ICON.archived,
       label: t.app.archivedEntry(archivedCount),
-      lit: railSubviewLit(subviewState, "archived"),
-      onClick: () => applySubviewState(toggleRailSubview(subviewState, "archived")),
+      lit: archivedEntryLit(subviewState),
+      onClick: () => applySubviewState(toggleArchivedEntry(subviewState)),
     },
     {
       // 受管浏览器是独立的沙盒窗口（不占右栏面板位）：点了就打开或聚焦它，没有「亮」的状态。
@@ -1695,11 +1888,16 @@ export function App() {
     <LocaleContext.Provider value={locale}>
     <DocPaperContext.Provider value={docPaper}>
     <ExperimentalFeaturesContext.Provider value={experimentalFeatures}>
-    <ProcessViewContext.Provider value={settings.processView ?? "turn"}>
+    <ProcessViewContext.Provider value={settings.processView ?? "chapters"}>
+    <ChatImageSizeContext.Provider value={chatImageSize}>
     <AutomationContext.Provider value={automationUi}>
     <AutomationRunSessionsContext.Provider value={runSessionIds}>
     <PastedTextCollapseContext.Provider value={settings.collapsePastedText ?? true}>
     <CitationOpenContext.Provider value={openCitation}>
+    <GalaxyActionsContext.Provider value={galaxyActions}>
+    <GalaxyTiltContext.Provider value={galaxyTiltOf(settings)}>
+    <GalaxyTiltSetterContext.Provider value={setGalaxyTilt}>
+    <GalaxyViewContext.Provider value={galaxyView}>
     <ToolbarPanelSlotContext.Provider value={panelSlot}>
     <div className="app-shell">
       <div className="layer">
@@ -1726,9 +1924,7 @@ export function App() {
           onSettingsTab={setSettingsTab}
           onOverlay={setOverlay}
           showArchived={showArchived}
-          showCarryovers={showCarryovers}
           onShowArchived={setShowArchived}
-          onShowCarryovers={setShowCarryovers}
           width={sidebarWidth}
           unread={new Set(unreadSessions.map((meta) => meta.id))}
           onWidthChange={setSidebarWidth}
@@ -1742,12 +1938,15 @@ export function App() {
           onUsagePetChange={(usagePet) => changeSettings({ usagePet })}
           usageSay={focus.say}
           usageCard={focus.card}
+          appMode={appMode}
+          onAppMode={(next) => changeSettings({ appMode: next })}
           collapsed={sidebarCollapsed}
           onCollapsedChange={setSidebarCollapsed}
           newTaskSignal={newTaskSignal}
-          onStartCarryoverTask={startCarryoverTask}
           filesView={focus.filesView}
           onBrowseWorkspace={focus.browseWorkspace}
+          onDesignGalaxy={toggleGalaxyDesigner}
+          designingWorkspaceId={rightPanel === "galaxy" ? galaxyTarget : null}
           onExitBrowse={focus.exitBrowse}
           onStartFocusHere={focus.startAt}
           onOpenFile={focus.openFile}
@@ -1863,13 +2062,16 @@ export function App() {
               <ChatView
                 session={session}
                 providersError={providersError}
+                orchestrate={orchestrate}
+                entry={orchestrate && session.workspaceId !== null ? entryOf(session.workspaceId) : undefined}
+                onOpenVoiceSettings={openVoiceTab}
                 bareHeader
                 onOpenReviewAt={openReviewAt}
                 excerptJump={excerptJump}
                 onExcerptSaved={bumpExcerpts}
                 onOpenSubSession={openSubSessionInPanel}
+                onOpenSubSessionsList={openSubSessionsList}
                 litSubSessionId={litSubSessionId}
-                theme={resolvedTheme}
                 starredModels={settings.starredModels ?? []}
                 onToggleStarModel={toggleStarModel}
                 onOpenProviders={openProvidersTab}
@@ -1883,6 +2085,25 @@ export function App() {
                 onOpenContextPanel={openContextPanel}
                 onOpenSideChat={openInSideChat}
                 intentOpenableIds={intentOpenableIds}
+              />
+            )}
+            {/* 「状态」卡（原型，设置 › 外观里的开关）：浮在对话区右上角 */}
+            {chatStatusOn && overlay === null && mainSessionId !== null && (
+              <ChatStatus
+                key={mainSessionId}
+                session={session}
+                engine={engine}
+                sessionId={mainSessionId}
+                entry={engine.states.get(mainSessionId) ?? EMPTY_ENTRY}
+                working={mainMeta !== undefined && (runStateOf(session, mainMeta) === "running" || runStateOf(session, mainMeta) === "waiting")}
+                onOpenSubSession={openSubSessionInPanel}
+                onOpenTerminal={(terminalId) => {
+                  setPendingTerminal(terminalId);
+                  setRightPanel("terminal");
+                }}
+                onOpenAutomation={openAutomationPanel}
+                onOpenMemory={openMemoryReview}
+                onOpenAbilities={() => setRightPanel("plugins")}
               />
             )}
           </div>
@@ -1934,12 +2155,15 @@ export function App() {
                 onPaperReady={setPaperReady}
                 onDocShown={setFilesShowsDoc}
               />
-              ) : shownPanel === "slides" ? (
+              ) : shownPanel === "docs" || shownPanel === "slides" ? (
                 <DocsPanel
+                  kind={shownPanel === "docs" ? "doc" : "slides"}
                   sessionId={session.sessionId ?? session.opened?.id ?? null}
                   workspaceId={session.workspaceId}
                   onQuote={session.addQuote}
-                  openRequest={docOpenRequest}
+                  onOpenFiles={openFilesPanel}
+                  onOpenInFiles={focus.openFile}
+                  openRequest={shownPanel === "slides" ? docOpenRequest : null}
                 />
               ) : shownPanel === "review" ? (
                 <ReviewPanel
@@ -1952,7 +2176,7 @@ export function App() {
                   onJumpExcerpt={openExcerpt}
                   onOpenInFiles={focus.openFile}
                   memoryFocus={memoryFocus}
-                  {...(railPath.panel === "review" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "review" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "review", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "automation" ? (
@@ -1972,7 +2196,7 @@ export function App() {
                     void session.openSession(id);
                   }}
                   onAskInChat={() => session.setDraft(t.automation.addByChatDraft)}
-                  {...(railPath.panel === "automation" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "automation" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "automation", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "terminal" ? (
@@ -2009,13 +2233,9 @@ export function App() {
                   cwd={session.cwd ?? ""}
                   tab={taskTab}
                   onTab={setTaskTab}
-                  {...(railPath.panel === "context" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "context" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "context", ...(sub === undefined ? {} : { sub }) })}
                   runState={mainMeta === undefined ? null : runStateOf(session, mainMeta)}
-                  carryovers={session.carryovers.filter((item) => item.sourceSessionId === mainSessionId && item.status !== "done")}
-                  onSetCarryoverStatus={session.setCarryoverStatus}
-                  onStartCarryoverTask={startCarryoverTask}
-                  onDoCarryoverNow={session.continueCarryoverInSource}
                   onStartGoalTask={startGoalTask}
                 />
               ) : shownPanel === "plugins" ? (
@@ -2032,8 +2252,46 @@ export function App() {
                   onOpenDraft={openPluginDraft}
                   onOpenSession={openDraftSession}
                   picker={tokenPickerOn ? tokenPicker : undefined}
-                  {...(railPath.panel === "plugins" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "plugins" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "plugins", ...(sub === undefined ? {} : { sub }) })}
+                />
+              ) : shownPanel === "orchestra" && orchestrate ? (
+                <OrchestraPanel
+                  session={session}
+                  workspaceId={orchestraWsId}
+                  workspaceName={session.workspaces.find((item) => item.id === orchestraWsId)?.name ?? t.agents.home}
+                  view={settings.orchestraView ?? ORCHESTRA_VIEW_DEFAULT}
+                  onView={(orchestraView) => changeSettings({ orchestraView })}
+                  onOpenSession={(id) => {
+                    setOverlay(null);
+                    void session.openSession(id);
+                  }}
+                  width={panelRenderedWidth}
+                  onWiden={(width) => {
+                    setPanelWidth(width);
+                    changeSettings({ rightPanelWidth: width });
+                  }}
+                  onSeeAll={() => changeSettings({ appMode: "agent" })}
+                  onNewTaskPage={mainOpenId === "" && session.opened === null}
+                  currentId={mainOpenId === "" ? (session.opened?.id ?? null) : mainOpenId}
+                  mainId={mainSessionOf(session.sessions, orchestraWsId, settings.orchestraMain)?.id ?? null}
+                />
+              ) : shownPanel === "galaxy" ? (
+                <GalaxyDesigner
+                  workspace={session.workspaces.find((workspace) => workspace.id === galaxyTarget) ?? null}
+                  focus={designerFocus}
+                  workspaces={session.workspaces}
+                  onWorkspacesChanged={session.reloadWorkspaces}
+                  // 形象一节的出图模型：默认跟会话栏（主槽此刻的模型），取法记在设置里
+                  avatarModel={{
+                    providers,
+                    catalog: session.catalog,
+                    composerModel: session.model,
+                    settings,
+                    starredModels: settings.starredModels ?? [],
+                    onToggleStarModel: toggleStarModel,
+                    onChoiceChange: (choice) => changeSettings(choice === null ? { avatarModel: null } : { avatarModel: choice }),
+                  }}
                 />
               ) : shownPanel === "intent" ? (
                 <IntentPanel
@@ -2048,7 +2306,7 @@ export function App() {
                   liveTurnIds={intentLiveTurnIds}
                   openableSessionIds={intentOpenableIds}
                   onOpenSession={openInSideChat}
-                  {...(railPath.panel === "intent" && railPath.sub !== undefined ? { sub: railPath.sub } : {})}
+                  {...(livePath.panel === "intent" && livePath.sub !== undefined ? { sub: livePath.sub } : {})}
                   onSubChange={(sub) => reportRailPath({ panel: "intent", ...(sub === undefined ? {} : { sub }) })}
                 />
               ) : shownPanel === "subsessions" && channelParentId !== null ? (
@@ -2077,6 +2335,7 @@ export function App() {
           onPanel={handlePanel}
           railEntries={railEntries}
           intentAvailable={settings.experimentalFeatures?.["intent-system"] === true}
+          orchestraAvailable={orchestrate}
           automation={{ running: runningCount(automations.automations) }}
           subSessions={
             channelParentId !== null && hasSubSessions
@@ -2095,13 +2354,27 @@ export function App() {
           }}
         />
       </div>
+      {/* 第一次离电进省电档：不打扰的轻提示，只出一次（点「设置」去外观页改） */}
+      {powerNotice && (
+        <div className="power-notice" role="status">
+          <span>{t.settings.galaxyBatteryNotice}</span>
+          <button type="button" className="power-notice-link" onClick={() => { setPowerNotice(false); openSettingsAppearance(); }}>
+            {t.settings.galaxyBatteryNoticeAction}
+          </button>
+        </div>
+      )}
       {onboardingOpen && <OnboardingView theme={resolvedTheme} startAt={onboardingStart} onClose={closeOnboarding} onTry={tryFromOnboarding} />}
     </div>
     </ToolbarPanelSlotContext.Provider>
+    </GalaxyViewContext.Provider>
+    </GalaxyTiltSetterContext.Provider>
+    </GalaxyTiltContext.Provider>
+    </GalaxyActionsContext.Provider>
     </CitationOpenContext.Provider>
     </PastedTextCollapseContext.Provider>
     </AutomationRunSessionsContext.Provider>
     </AutomationContext.Provider>
+    </ChatImageSizeContext.Provider>
     </ProcessViewContext.Provider>
     </ExperimentalFeaturesContext.Provider>
     </DocPaperContext.Provider>

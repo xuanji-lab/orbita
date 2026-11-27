@@ -61,7 +61,6 @@ const meta = (id: string, title: string, patch: Partial<SessionMeta> = {}): Sess
   workspaceId: null,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   piSessionFile: null,
   pinned: false,
@@ -493,12 +492,12 @@ const childRecords: SessionRecord[] = [
   channelMark("mk1", PARENT, "msg-task", "parent", "task", 1000),
   assistantItem("ca1", "Looking at FilesPanel first.", 1500),
   channelMark("mk2", PARENT, "msg-reply", "parent", "reply", 2000),
-  assistantItem("ca2", "Fixed the band in paper-themes.css.", 2500),
+  assistantItem("ca2", "Fixed the band in files-view.css.", 2500),
 ];
 
 const childChannel: RoundChannelContext = {
   messages: new Map([
-    ["msg-task", channelMessage("msg-task", "parent", "task", "Find the white band in the copybook Files panel.", 1000)],
+    ["msg-task", channelMessage("msg-task", "parent", "task", "Find the white band in the Files panel.", 1000)],
     ["msg-reply", channelMessage("msg-reply", "parent", "reply", "Only the session group, not the workspace one.", 2000)],
   ]),
   titles: new Map([[PARENT, "Image input branch"]]),
@@ -536,7 +535,7 @@ describe("numberRounds：通道标记也开一轮（与 store.ts 的 branchRoles
 });
 
 describe("简报与轮切片：通道消息的正文从通道账本补回来", () => {
-  const child = meta(CHILD, "Copybook white band", { parentId: PARENT });
+  const child = meta(CHILD, "Files white band", { parentId: PARENT });
 
   test("简报：头部是真实轮数，目录行写明谁发来的、什么类型，再接正文首行", () => {
     const result = buildTaskBriefing(child, childRecords, null, childChannel);
@@ -547,10 +546,10 @@ describe("简报与轮切片：通道消息的正文从通道账本补回来", (
     assert.doesNotMatch(result.text, /No rounds yet/);
     assert.match(
       result.text,
-      /1\. \[task from the parent session "Image input branch"\] Find the white band in the copybook Files panel\./,
+      /1\. \[task from the parent session "Image input branch"\] Find the white band in the Files panel\./,
     );
     assert.match(result.text, /2\. \[reply from the parent session "Image input branch"\] Only the session group/);
-    assert.match(result.text, /→ Fixed the band in paper-themes\.css\./);
+    assert.match(result.text, /→ Fixed the band in files-view\.css\./);
   });
 
   test("全文：通道标记渲染成「Channel · 标题行 + 正文」，夹在前后的回答之间", () => {
@@ -559,11 +558,11 @@ describe("简报与轮切片：通道消息的正文从通道账本补回来", (
     if (!result.ok) return;
     const order = [
       '**Channel · task from the parent session "Image input branch"**',
-      "Find the white band in the copybook Files panel.",
+      "Find the white band in the Files panel.",
       "Looking at FilesPanel first.",
       '**Channel · reply from the parent session "Image input branch"**',
       "Only the session group, not the workspace one.",
-      "Fixed the band in paper-themes.css.",
+      "Fixed the band in files-view.css.",
     ].map((needle) => result.text.indexOf(needle));
     assert.equal(order.includes(-1), false, `缺内容：${JSON.stringify(order)}`);
     assert.deepEqual([...order].sort((a, b) => a - b), order);
@@ -577,10 +576,10 @@ describe("简报与轮切片：通道消息的正文从通道账本补回来", (
     ];
     const channel: RoundChannelContext = {
       messages: new Map([["msg-q", channelMessage("msg-q", "child", "question", "Session group only?", 2000)]]),
-      titles: new Map([[CHILD, "Copybook white band"]]),
+      titles: new Map([[CHILD, "Files white band"]]),
     };
     const result = buildRoundsExcerpt(parent, records, "2", null, channel);
-    assert.match(result.ok ? result.text : "", /\*\*Channel · question from sub-session "Copybook white band"\*\*\n\nSession group only\?/);
+    assert.match(result.ok ? result.text : "", /\*\*Channel · question from sub-session "Files white band"\*\*\n\nSession group only\?/);
   });
 
   test("账本里没有这条消息 / 对面标题不认识：如实说读不到、给 id，不编", () => {
@@ -602,10 +601,10 @@ describe("applyReadTask：真 SessionStore + 真 ChannelStore 读子会话", () 
     channels = new ChannelStore(join(dir, "channels"));
     sessions = new SessionStore(join(dir, "sessions"), undefined, channels);
     await sessions.ensureSession(meta(PARENT, "Image input branch"));
-    await sessions.ensureSession(meta(CHILD, "Copybook white band", { parentId: PARENT }));
+    await sessions.ensureSession(meta(CHILD, "Files white band", { parentId: PARENT }));
     for (const record of childRecords) await sessions.record(CHILD, record);
     const key = { parentId: PARENT, childId: CHILD };
-    await channels.append(key, channelMessage("msg-task", "parent", "task", "Find the white band in the copybook Files panel.", 1000));
+    await channels.append(key, channelMessage("msg-task", "parent", "task", "Find the white band in the Files panel.", 1000));
     await channels.append(key, channelMessage("msg-reply", "parent", "reply", "Only the session group, not the workspace one.", 2000));
   });
   afterEach(async () => {
@@ -625,7 +624,7 @@ describe("applyReadTask：真 SessionStore + 真 ChannelStore 读子会话", () 
   // 这一条是这刀的由来：子会话的意义是替母会话省上下文，默认那次调用只给输出
   test("母会话读子会话（不带 rounds）：只给状态与回报全文，不给过程", async () => {
     await report("msg-q", "question", "Session group only, or both groups?", 1800);
-    await report("msg-done", "done", "Fixed on fix/copybook-files-band.\nSee paper-themes.css.", 2600);
+    await report("msg-done", "done", "Fixed on fix/files-white-band.\nSee files-view.css.", 2600);
     const result = await applyReadTask(sessions, readChild, workspacesStub(), channels);
     assert.equal(result.ok, true);
     if (!result.ok || result.card === null) return assert.fail("应该有任务卡");
@@ -634,10 +633,10 @@ describe("applyReadTask：真 SessionStore + 真 ChannelStore 读子会话", () 
     assert.match(result.text, /Sub-session of "Image input branch" \(id: aaaaaaaa-[^)]+\) · status: done/);
     assert.match(result.text, /Reports to the parent \(2\):/);
     assert.match(result.text, /--- Report 1 · question · [^\n]+ ---\n\nSession group only, or both groups\?/);
-    assert.match(result.text, /--- Report 2 · done · [^\n]+ ---\n\nFixed on fix\/copybook-files-band\.\nSee paper-themes\.css\./);
+    assert.match(result.text, /--- Report 2 · done · [^\n]+ ---\n\nFixed on fix\/files-white-band\.\nSee files-view\.css\./);
     // 过程与母会话自己发的东西都不给
     assert.doesNotMatch(result.text, /Looking at FilesPanel first/);
-    assert.doesNotMatch(result.text, /Fixed the band in paper-themes\.css/);
+    assert.doesNotMatch(result.text, /Fixed the band in files-view\.css/);
     assert.doesNotMatch(result.text, /Find the white band/);
     assert.doesNotMatch(result.text, /Last \d+ rounds? in full/);
     // 真要看过程：给记录文件路径，并提示 rounds
@@ -666,7 +665,7 @@ describe("applyReadTask：真 SessionStore + 真 ChannelStore 读子会话", () 
     assert.equal(result.ok, true);
     if (!result.ok) return;
     assert.match(result.text, /--- Round 1 ---/);
-    assert.match(result.text, /Find the white band in the copybook Files panel\./);
+    assert.match(result.text, /Find the white band in the Files panel\./);
     assert.match(result.text, /Only the session group, not the workspace one\./);
     assert.match(result.text, /Looking at FilesPanel first\./);
   });

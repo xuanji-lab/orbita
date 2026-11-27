@@ -8,8 +8,7 @@ import { RequestBroker } from "./request-broker.ts";
  * 问答的同款模式，通道见 ./request-broker.ts）。agent 进程不碰 userData，
  * 这是架构边界，不是谦虚。
  *
- * 两个工具天然走 ask：decidePermission 对非只读工具本来就 ask（plan 拒 /
- * manual 问 / skip 放），审批条里能看到完整参数，用户改了参数再放行也行。
+ * 两个工具不问人：2026-11-16 起没有审批，调了就写（写在哪、写了什么都在工具结果里，用户看得到）。
  */
 
 /** 主进程回执里带来的连接状态 */
@@ -19,9 +18,9 @@ export type WriteResult =
   | { ok: false; error: string };
 
 /**
- * 讲给模型听的说明（拼进 system prompt，同 describePermissionMode 的注入方式）。
+ * 讲给模型听的说明（拼进 system prompt，同 describeProtectedData 的注入方式）。
  * 工具的参数 schema 已经讲了字段；这里讲格式与语义：SKILL.md 长什么样、
- * scope 两个值各意味着什么、写盘要过审批。
+ * scope 两个值各意味着什么。
  *
  * **会话的工作区归属是参数**（2026-10-11 用户实测：模型两次拿 scope:"workspace"
  * 撞「不属于任何工作区」的墙——旧文案只说「属于工作区时默认 workspace」，
@@ -63,10 +62,10 @@ You can configure this agent itself with two tools:
   a frontmatter block (name, description) followed by markdown instructions. Each task lists the skill's
   name and description only; the body is read when the task matches that description — a skill is a
   manual loaded on demand, not something in effect every turn. scope "global" = listed in every task;
-  "workspace" = listed only in this workspace's tasks. Both are subject to user approval.
+  "workspace" = listed only in this workspace's tasks.
 - add_mcp_server adds an MCP server from its config (stdio command or http url). The result reports the
   connection status; a failed server can be fixed by editing mcp.json.
-Both tools change disk state and require approval. When the user asks for a new skill or a new MCP server,
+Both tools change disk state. When the user asks for a new skill or a new MCP server,
 use these tools instead of telling the user to copy files into place by hand.
 
 Where a lasting instruction belongs — pick by when it must apply:

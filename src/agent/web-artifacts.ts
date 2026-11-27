@@ -15,6 +15,14 @@
  *      到达的旧文件在第二遍里出现，被当成「新增」——误报与漏报同时发生。
  *   按 mtime 判定后，截断只意味着「可能漏报」，不会凭空造出「本轮生成」。
  *
+ * 但 mtime 只说明「这时间点有人写过」，不说明是谁写的。扫描根（cwd）是跨会话共享的：同一个工作区里
+ * 两条会话同时在跑时，别的会话 write / edit 出来的网页 mtime 也落在本轮窗口里，被算成「这一轮生成的」
+ * （2026-11-22 实测：会话 A 第 2 轮结尾多出会话 B 在 15:28:13 edit 的 demo/index.html）。所以再收两道：
+ *   1. **时间窗**：只有本轮自己跑 shell / 终端 / 外接工具（ToolWindows 记的执行窗口）时才可能旁路生成网页，
+ *      mtime 必须落在这些窗口里（前后各留余量）——模型想事情、别的会话写文件的空档不算。没跑过这类工具的轮不扫盘。
+ *   2. **别人写的扣掉**：同一个 agent 进程里别的会话走 write / edit 写过的路径（NoteOtherWrites 的跨会话登记，
+ *      文件账放行时登），本轮窗口内的不算本轮的。别的会话在 bash 里生成的看不见，窗口是它的兜底。
+ *
  * 这些产物**不参与撤销**（没拍内容快照，撤不回去），只供轮尾卡片展示与
  * 「在内置浏览器打开」。
  *
@@ -28,10 +36,10 @@
  *
  * 纯注入设计：读盘经 ScanFs 注入，node --test 喂假目录树。
  */
-import { readdir, stat } from "node:fs/promises";
+import { open, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
-import { isWebArtifactFile } from "../shared/files.ts";
+import { isMediaArtifactFile, isWebArtifactFile } from "../shared/files.ts";
 
 /**
  * mtime 判定的时钟余量（毫秒）。开轮时刻由 agent 进程的 `Date.now()` 记，文件
@@ -72,6 +80,11 @@ export interface ScanRoot {
 export interface WebScanResult {
   /** mtime 判为本轮新出现的网页文件绝对路径（按路径排序，显示稳定） */
   paths: string[];
+  /**
+   * 同一次扫描顺带收的音视频文件（mp3 / mp4 等，同样的 mtime 与时间窗判定，按路径排序）。
+   * 全部报上来、不在这里按名字筛——哪些是「交给用户的」由 renderer 按回答点名决定。
+   */
+  mediaPaths: string[];
   truncated: boolean;
 }
 
@@ -107,10 +120,11 @@ export async function scanWebArtifacts(
   roots: readonly ScanRoot[],
   sinceMs: number,
   fs: ScanFs = diskScanFs,
-  limits: { maxDepth?: number } = {},
+  limits: { maxDepth?: number; accept?: (path: string, mtimeMs: number) => boolean } = {},
 ): Promise<WebScanResult> {
   const maxDepth = limits.maxDepth ?? SCAN_MAX_DEPTH;
   const paths = new Set<string>();
+  const mediaPaths = new Set<string>();
   let truncated = false;
   const scanned = new Set<string>();
   for (const { root, maxEntries } of roots) {
@@ -139,16 +153,163 @@ export async function scanWebArtifacts(
         if (entry.isDir) {
           if (SKIP_DIRS.has(entry.name) || depth + 1 > maxDepth) continue;
           queue.push({ dir: join(dir, entry.name), depth: depth + 1 });
-        } else if (isWebArtifactFile(entry.name)) {
+        } else if (isWebArtifactFile(entry.name) || isMediaArtifactFile(entry.name)) {
           const path = join(dir, entry.name);
           const mtimeMs = await fs.statFile(path);
-          if (mtimeMs !== null && mtimeMs >= sinceMs) paths.add(path);
+          if (mtimeMs !== null && mtimeMs >= sinceMs && (limits.accept === undefined || limits.accept(path, mtimeMs))) {
+            (isWebArtifactFile(entry.name) ? paths : mediaPaths).add(path);
+          }
         }
       }
     }
     if (rootTruncated) truncated = true;
   }
-  return { paths: [...paths].sort(), truncated };
+  return { paths: [...paths].sort(), mediaPaths: [...mediaPaths].sort(), truncated };
+}
+
+/**
+ * 本轮可能在文件账之外生成网页的工具：shell、可见终端里敲命令、外接工具（它们能带着脚本跑）。
+ * write / edit 走文件账，读类工具不写盘——不进窗口，轮里只有它们时轮尾根本不扫盘。
+ * 可见终端里长驻的命令（dev server 之类）只算「敲下去」那一刻，之后它自己写的文件漏报，不误报。
+ */
+export function isScriptTool(toolName: string): boolean {
+  return toolName === "bash" || toolName === "powershell" || toolName === "terminal_execute" || toolName.startsWith("mcp__");
+}
+
+/**
+ * 下载类命令：curl / wget / Invoke-WebRequest 把别人的网页存成 .html，git clone 拉下整仓。它们落盘的网页是「搬来的原料」，
+ * 不是本轮做出来的东西（2026-11-23 会话 2defbe：调研时 curl 了五个官网页面去 grep，轮尾卡片把它们算成「5 个网页」）。
+ * 这类命令不开窗口。代价：同一条命令里既下载又用脚本生成网页时，生成的那份漏报——宁可漏报，不替用户没做过的事背书。
+ */
+const DOWNLOAD_COMMAND = /\b(?:curl|wget|Invoke-WebRequest|iwr|yt-dlp|youtube-dl)\b|\bgit\s+clone\b|\bgh\s+repo\s+clone\b/i;
+
+export function isDownloadCommand(args: unknown): boolean {
+  if (typeof args !== "object" || args === null || !("command" in args)) return false;
+  const command = args.command;
+  return typeof command === "string" && DOWNLOAD_COMMAND.test(command);
+}
+
+/** 一个工具执行窗口：开跑 → 落定（毫秒时间戳）。 */
+export interface ToolWindow {
+  start: number;
+  end: number;
+}
+
+/** 轮里各个脚本类工具的执行窗口（runtime 在 tool_execution_start / end 里喂）。 */
+export class ToolWindows {
+  private readonly open = new Map<string, number>();
+  private readonly closed: ToolWindow[] = [];
+
+  begin(toolCallId: string, toolName: string, at: number, args?: unknown): void {
+    if (isScriptTool(toolName) && !isDownloadCommand(args)) this.open.set(toolCallId, at);
+  }
+
+  finish(toolCallId: string, at: number): void {
+    const start = this.open.get(toolCallId);
+    if (start === undefined) return;
+    this.open.delete(toolCallId);
+    this.closed.push({ start, end: Math.max(start, at) });
+  }
+
+  /** 轮尾取窗口：还没落定的（被中断）按 now 封口。 */
+  snapshot(now: number): ToolWindow[] {
+    return [...this.closed, ...[...this.open.values()].map((start) => ({ start, end: Math.max(start, now) }))];
+  }
+}
+
+/**
+ * 别的会话在本进程里 write / edit 过的路径（文件账放行时登，进程内跨会话共享）：
+ * 扫描时据此把「mtime 落在本轮窗口里、但其实是别的会话写的」扣掉。只留一小时，登记表不无限涨。
+ */
+const OTHER_WRITES_KEEP_MS = 60 * 60 * 1000;
+const otherWrites = new Map<string, { sessionId: string; at: number }[]>();
+
+export function noteSessionWrite(sessionId: string, path: string, at: number = Date.now()): void {
+  const list = otherWrites.get(path) ?? [];
+  list.push({ sessionId, at });
+  otherWrites.set(path, list.filter((entry) => at - entry.at <= OTHER_WRITES_KEEP_MS));
+  if (otherWrites.size > 5000) {
+    for (const [key, entries] of otherWrites) {
+      if (entries.every((entry) => at - entry.at > OTHER_WRITES_KEEP_MS)) otherWrites.delete(key);
+    }
+  }
+}
+
+/** 这条路径在 sinceMs 之后被**别的**会话写过吗（写过的一律不算这条会话的旁路产物）。 */
+export function writtenByOtherSession(sessionId: string, path: string, sinceMs: number): boolean {
+  return (otherWrites.get(path) ?? []).some((entry) => entry.sessionId !== sessionId && entry.at >= sinceMs);
+}
+
+/** 测试用：清登记表。 */
+export function resetOtherWrites(): void {
+  otherWrites.clear();
+}
+
+/**
+ * 旁路扫描的接收条件：mtime 落在本轮某个脚本类工具的执行窗口里（前后各留 slack），
+ * 且不是别的会话在本窗口内 write / edit 的。没有窗口 = 本轮没跑过这类工具 = 不可能有旁路产物（调用方可直接跳过扫盘）。
+ */
+export function makeWebAccept(
+  sessionId: string,
+  windows: readonly ToolWindow[],
+  startedAt: number,
+): (path: string, mtimeMs: number) => boolean {
+  return (path, mtimeMs) => {
+    const inWindow = windows.some(
+      (window) => mtimeMs >= window.start - WEB_ARTIFACT_MTIME_SLACK_MS && mtimeMs <= window.end + WEB_ARTIFACT_MTIME_SLACK_MS,
+    );
+    if (!inWindow) return false;
+    return !writtenByOtherSession(sessionId, path, startedAt - WEB_ARTIFACT_MTIME_SLACK_MS);
+  };
+}
+
+/**
+ * 从网上存下来的页面：头部带指向 http(s) 的 canonical / og:url，或浏览器「另存为」留下的 `saved from url` 注释。
+ * 下载命令那道拦不住的（node / python 脚本里 fetch 再写盘、playwright 的 page.content()）靠这道兜。
+ * 只看文件头 64 KB：这些标记都在 <head> 里，实测五个官网页面最晚出现在第 18 KB。
+ * 代价：agent 给用户做的、写了真实域名 canonical 的站点页会被漏报（少见）。
+ */
+const SAVED_PAGE_MARKERS = [
+  /<link\b(?=[^>]*\bcanonical\b)(?=[^>]*https?:\/\/)[^>]*>/i,
+  /<meta\b(?=[^>]*\bog:url\b)(?=[^>]*https?:\/\/)[^>]*>/i,
+  /<!--\s*saved from url=/i,
+];
+export const SAVED_PAGE_HEAD_BYTES = 64 * 1024;
+
+export function looksSavedFromWeb(head: string): boolean {
+  return SAVED_PAGE_MARKERS.some((marker) => marker.test(head));
+}
+
+/** 读文件头（失败 = 空串，按不是存下来的页面处理）。 */
+export async function readFileHead(path: string, bytes: number = SAVED_PAGE_HEAD_BYTES): Promise<string> {
+  try {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(bytes);
+      const { bytesRead } = await handle.read(buffer, 0, bytes, 0);
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 扣掉从网上存下来的 .html / .htm（svg 不查）。命中数远超批量上限时不逐个读——反正要折叠成计数，读了白读。
+ */
+export async function dropSavedPages(
+  paths: readonly string[],
+  readHead: (path: string) => Promise<string> = readFileHead,
+): Promise<string[]> {
+  if (paths.length > WEB_ARTIFACT_BATCH_LIMIT * 5) return [...paths];
+  const kept: string[] = [];
+  for (const path of paths) {
+    if (/\.html?$/i.test(path) && looksSavedFromWeb(await readHead(path))) continue;
+    kept.push(path);
+  }
+  return kept;
 }
 
 /**
@@ -163,6 +324,16 @@ export function foldWebArtifacts(
     return { webArtifacts: [], webArtifactsBatch: paths.length };
   }
   return { webArtifacts: [...paths] };
+}
+
+/**
+ * 音视频候选的批量上限：超过就判定为批量操作（解压归档、整目录拷贝），一个不报——和网页的折叠同一条纪律，
+ * 只是媒体没有「N 个」那一行（卡片只显示回答点名的，没有批量计数可挂）。正常一轮脚本生成的分段 / 试音远低于此数。
+ */
+export const MEDIA_ARTIFACT_BATCH_LIMIT = 100;
+
+export function capMediaArtifacts(paths: readonly string[]): string[] {
+  return paths.length > MEDIA_ARTIFACT_BATCH_LIMIT ? [] : [...paths];
 }
 
 /**

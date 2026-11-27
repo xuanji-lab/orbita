@@ -9,15 +9,16 @@ import {
   MAX_ROW_ESTIMATE,
   MIN_ROW_ESTIMATE,
   ROW_KIND_ESTIMATES,
-  messageRowIndex,
   prependAnchorTarget,
   rowIndexByKey,
+  rowResizeCompensation,
+  toolCallRowIndex,
   viewRowIndex,
   virtualHistoryRows,
   type VirtualHistoryRow,
 } from "./virtual-history.ts";
 import type { ToolTranscriptItem } from "@earendil-works/pi-protocol";
-import type { ScanAnswerCard, ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
+import type { ToolResultIndex, TurnViewEntry } from "./tool-results.ts";
 
 /** 测试用的最小条目工厂：只塞判定会读到的字段 */
 function user(key: string): TurnViewEntry {
@@ -84,11 +85,10 @@ function resultIndex(ids: string[]): ToolResultIndex {
   return new Map(ids.map((id) => [id, completeResult(id)]));
 }
 
-const NO_CARDS: ReadonlyMap<string, ScanAnswerCard> = new Map();
 const NO_BRANCHES: ReadonlyMap<number, string> = new Map();
 
-function rows(view: TurnViewEntry[], results: ToolResultIndex = resultIndex([]), cards = NO_CARDS, branches = NO_BRANCHES) {
-  return virtualHistoryRows(view, results, cards, "parent", branches);
+function rows(view: TurnViewEntry[], results: ToolResultIndex = resultIndex([]), branches = NO_BRANCHES) {
+  return virtualHistoryRows(view, results, "parent", branches);
 }
 
 describe("virtualHistoryRows", () => {
@@ -113,16 +113,6 @@ describe("virtualHistoryRows", () => {
     assert.deepEqual(rows(view, results).map((row) => row.entry.key), ["t:0", "t:3", "t:4"]);
   });
 
-  test("同一条消息的后续 text 块被扫描卡吸收，但带分支行时保留", () => {
-    const view = [text("a:0", "a"), text("a:1", "a"), text("a:2", "a")];
-    const cards = new Map<string, ScanAnswerCard>([
-      ["a", { firstKey: "a:0", scan: {} } as unknown as ScanAnswerCard],
-    ]);
-    assert.deepEqual(rows(view, resultIndex([]), cards).map((row) => row.entry.key), ["a:0"]);
-    const branches = new Map([[2, "anchor"]]);
-    assert.deepEqual(rows(view, resultIndex([]), cards, branches).map((row) => row.entry.key), ["a:0", "a:2"]);
-  });
-
   test("通道标记：父看子非 progress 保留，父看子 progress 丢弃", () => {
     const mark = (key: string, from: "parent" | "child", kind: string): TurnViewEntry =>
       ({ kind: "channelMark", key, mark: { peerId: "p", messageId: `m-${key}`, from, kind }, timestamp: 0 } as TurnViewEntry);
@@ -134,7 +124,7 @@ describe("virtualHistoryRows", () => {
     const view: TurnViewEntry[] = [
       { kind: "channelMark", key: "k", mark: { peerId: "p", messageId: "m", from: "parent", kind: "task" }, timestamp: 0 } as TurnViewEntry,
     ];
-    const kept = virtualHistoryRows(view, resultIndex([]), NO_CARDS, "child", NO_BRANCHES);
+    const kept = virtualHistoryRows(view, resultIndex([]), "child", NO_BRANCHES);
     assert.equal(kept.length, 1);
   });
 });
@@ -155,17 +145,16 @@ describe("行下标映射", () => {
     assert.equal(map.get("nope"), undefined);
   });
 
-  test("消息 id → 虚拟行下标，折叠成员与多消息组都能找到", () => {
-    const map = messageRowIndex(list);
-    assert.equal(map.get("u1"), 0);
-    assert.equal(map.get("a"), 1);
-    assert.equal(map.get("b"), 2);
-    assert.equal(map.get("c"), 2);
-  });
-
-  test("同一条消息占多行时取最后一行", () => {
-    const map = messageRowIndex(rows([text("a:0", "a"), text("a:1", "a")]));
-    assert.equal(map.get("a"), 1);
+  test("工具调用 id → 虚拟行下标：只认顶层 toolCall（show_plugin_board 钉住单独成行），折叠里的与不存在的找不到", () => {
+    const withBoard = rows([
+      user("u1"),
+      toolCall("m:1", "board-call", "show_plugin_board", "m"),
+      turnGroup("turn:a:0", [toolCall("a:0", "t1", "read", "a")]),
+    ]);
+    const map = toolCallRowIndex(withBoard);
+    assert.equal(map.get("board-call"), 1);
+    assert.equal(map.get("t1"), undefined);
+    assert.equal(map.get("nope"), undefined);
   });
 
   test("视图下标 → 虚拟行下标（过滤掉的行没有映射）", () => {
@@ -353,5 +342,34 @@ describe("createHeightCache", () => {
     cache.clear();
     assert.equal(cache.size, 0);
     assert.equal(cache.get("a"), undefined);
+  });
+});
+
+describe("测高补偿 rowResizeCompensation", () => {
+  const base = { cached: undefined, kindEstimate: 230, itemEnd: 1000, scrollTop: 5000 };
+  test("看板行：虚拟器假设 436、实测 436，总高没变就不补偿（回头用 kind 先验 230 会凭空补 +206）", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 436, assumed: 436 }), 0);
+  });
+  test("没测过、整行都在视口上方：补 实测 − 估值（估值取虚拟器的假设，不取此刻的 kind 估值）", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230 }), 70);
+    assert.equal(rowResizeCompensation({ ...base, height: 100, assumed: 230 }), -130);
+    // 此刻的 kind 估值已被 EMA 挪到 250：旧写法补 50，实际虚拟器当时用的是 230，该补 70
+    assert.equal(rowResizeCompensation({ ...base, kindEstimate: 250, height: 300, assumed: 230 }), 70);
+  });
+  test("同一次挂载的第二次测高回调：cached 已是新高度，不重复补", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, cached: 300, assumed: 230 }), 0);
+  });
+  test("测过的行高度变了：补 实测 − 缓存（缓存优先于 measurementsCache 里可能滞后的值）", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 330, cached: 300, assumed: 230 }), 30);
+  });
+  test("行在视口里或下方：不补", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230, itemEnd: 5200 }), 0);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230, itemEnd: 5001 }), 70);
+  });
+  test("没有 measurementsCache 项：不补；assumed 缺失时依次退回缓存、kind 估值、默认值", () => {
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: 230, itemEnd: undefined }), 0);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: undefined, cached: 250 }), 50);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: undefined }), 70);
+    assert.equal(rowResizeCompensation({ ...base, height: 300, assumed: undefined, kindEstimate: undefined }), 300 - DEFAULT_ROW_ESTIMATE);
   });
 });

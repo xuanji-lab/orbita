@@ -8,10 +8,8 @@ import { RequestBroker } from "./request-broker.ts";
 import {
   createMemoryTools,
   describeMemoryOutcome,
-  MEMORY_TOOL_NAMES,
   MEMORY_TOOLS_GUIDELINE,
 } from "./memory-tools.ts";
-import { MEMORY_TOOLS } from "../shared/permission.ts";
 import type { MemoryEntry } from "../shared/memory.ts";
 
 function entry(overrides: Partial<MemoryEntry> = {}): MemoryEntry {
@@ -41,9 +39,8 @@ function setup() {
 
 type Execute = (id: string, params: unknown) => Promise<{ content: { type: string; text: string }[] }>;
 
-test("工具名与权限名单同源（三档放行靠 MEMORY_TOOLS）", () => {
-  assert.deepEqual([...MEMORY_TOOL_NAMES], [...MEMORY_TOOLS]);
-  assert.deepEqual([...setup().byName.keys()], [...MEMORY_TOOL_NAMES]);
+test("三个工具：memory_search / memory_revise / memory_retire", () => {
+  assert.deepEqual([...setup().byName.keys()], ["memory_search", "memory_revise", "memory_retire"]);
 });
 
 test("memory_revise：带会话、轮号、作用域发请求；回执翻成说明改了什么的结果", async () => {

@@ -146,7 +146,7 @@ export function RightPanelSlot(props: {
                 position: "absolute",
                 top: "calc(var(--chrome-height) + var(--space-3))",
                 bottom: "var(--space-3)",
-                right: "calc(var(--space-3) + 32px + var(--space-3))",
+                right: "calc(var(--rail-end) + var(--rail-w))",
                 background: "var(--color-bg-panel)",
                 border: "1px solid var(--glass-border)",
                 borderRadius: "var(--radius-xl)",

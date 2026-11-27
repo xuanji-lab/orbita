@@ -78,7 +78,7 @@ describe("create_skill / add_mcp_server（4-3）", () => {
     assert.match(text, /SKILL\.md/);
     assert.match(text, /"global"/);
     assert.match(text, /"workspace"/);
-    assert.match(text, /approval/);
+    assert.doesNotMatch(text, /approval/);
     // 4-7 补刀：正文写法要讲给「未来读它的 agent」
     assert.match(text, /WHEN to use it/);
     assert.match(text, /No greetings/);

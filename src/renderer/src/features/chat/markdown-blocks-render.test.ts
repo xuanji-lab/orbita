@@ -67,6 +67,7 @@ const EQUIVALENT: Array<[string, string]> = [
   ["缩进代码块（两段）", "para\n\n    code\n\n    more\n\npara2"],
   ["段落后的缩进块", "para\n\n  x\n\npara2"],
   ["两个引用块", "> a\n\n> b\n\n后记"],
+  ["提醒框 + 后记", "前言\n\n> [!note] 提示\n> 提示框里的话。\n\n后记"],
   ["表格 + 后记", "| a | b |\n|---|---|\n| 1 | 2 |\n\n后记"],
   ["setext 标题", "标题\n=====\n\n正文"],
   ["链接引用定义（退回单块）", "见 [x]\n\n[x]: http://a.com\n\n后记"],
@@ -124,5 +125,26 @@ describe("分块渲染与整篇渲染等价", () => {
     const markdown = "<details>\n<summary>展开</summary>\n\n正文\n\n</details>\n\n后记";
     const naive = markdown.split(/\n\s*\n/).filter((part) => part !== "");
     ok(normalize(naive.map(render).join("")) !== normalize(render(markdown)));
+  });
+});
+
+describe("提醒框（> [!note]）：回答里与文档面板同一套结构", () => {
+  it("画成 .callout（带 data-kind 与标题），不再是「[!note] 提示」原文", () => {
+    const html = render("> [!note] 提示\n> 提示框里的话。\n");
+    ok(html.includes('class="callout'), html);
+    ok(html.includes('data-kind="note"'), html);
+    ok(html.includes("callout-title"), html);
+    ok(!html.includes("[!note]"), "提醒框头行不能当正文露出来");
+  });
+
+  it("类型别名归一：caution → warning、error → danger", () => {
+    ok(render("> [!caution] 小心\n> x").includes('data-kind="warning"'));
+    ok(render("> [!error] 坏了\n> x").includes('data-kind="danger"'));
+  });
+
+  it("普通引用不受影响", () => {
+    const html = render("> 就是一句引用\n");
+    ok(html.includes("<blockquote>"), html);
+    ok(!html.includes("callout"));
   });
 });

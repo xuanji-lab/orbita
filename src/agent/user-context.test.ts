@@ -5,6 +5,7 @@
 import { deepStrictEqual, strictEqual } from "node:assert/strict";
 import { describe, test } from "node:test";
 import { formatUserContext, injectUserContext, type UserContext } from "./user-context.ts";
+import { replyLanguageNote } from "../shared/reply-language.ts";
 import type { ContextMessage } from "./image-byte-budget.ts";
 
 /** 固定时刻：2026-10-12 是周一、2026-10-11 是周日（这里都是上海本地凌晨 02:31） */
@@ -106,6 +107,7 @@ describe("injectUserContext", () => {
       (result.messages[0] as { content: unknown }).content,
       "<user_context>\nsent_at: 2026-10-11 18:31 Sun (UTC)\n</user_context>\nhi",
     );
+    // 英文太短（<3 词）判不出语言：不附标记（见 detectReplyLang）
   });
 
   test("没有用户消息时不替换（undefined）", () => {
@@ -147,5 +149,81 @@ describe("injectUserContext", () => {
     const snapshot = JSON.stringify(input);
     injectUserContext(input, "Asia/Shanghai");
     strictEqual(JSON.stringify(input), snapshot);
+  });
+});
+
+describe("injectUserContext · 回复语言标记（末尾一行）", () => {
+  const noteZh = replyLanguageNote("zh");
+  const noteEn = replyLanguageNote("en");
+
+  test("块数组：情境在前、正文居中、标记在末尾；正文原块一个字没动", () => {
+    const result = injectUserContext([userMessage(SH_MONDAY, "派个子会话去读一下 README")], "Asia/Shanghai");
+    if (result === undefined) throw new Error("应当发生替换");
+    const content = (result.messages[0] as { content: { type: string; text: string }[] }).content;
+    strictEqual(content.length, 3);
+    strictEqual(content[1]?.text, "派个子会话去读一下 README");
+    strictEqual(content[2]?.text, noteZh);
+  });
+
+  test("字符串正文：标记接在末尾，另起一行", () => {
+    const input = [{ role: "user", content: "请帮我读一下这个文件并总结", timestamp: SH_MONDAY }] as unknown as ContextMessage[];
+    const result = injectUserContext(input, "UTC");
+    if (result === undefined) throw new Error("应当发生替换");
+    const content = (result.messages[0] as { content: string }).content;
+    strictEqual(content.endsWith(`\n${noteZh}`), true);
+    strictEqual(content.startsWith("<user_context>"), true);
+  });
+
+  test("通道信封消息（子会话汇报 / 父的任务）同样带标记：长会话里英文汇报旁边有一行中文锚点", () => {
+    const report = [
+      "<channel from=\"child\" kind=\"done\" peer=\"c1\" message=\"m1\" title=\"t\">",
+      "Done. The README says Orbita is a local-first desktop agent.",
+      "</channel>",
+      "This message came from your sub-session \"t\" (id c1) through its channel.",
+    ].join("\n");
+    const result = injectUserContext(
+      [userMessage(SH_MONDAY, "派个子会话读一下 README"), ASSISTANT, TOOL_RESULT, userMessage(SH_MONDAY + 1, report)],
+      "Asia/Shanghai",
+    );
+    if (result === undefined) throw new Error("应当发生替换");
+    const last = (result.messages[3] as { content: { text: string }[] }).content;
+    strictEqual(last[last.length - 1]?.text, noteZh);
+  });
+
+  test("子会话：每条都是带 lang 的信封，信封正文是英文也附中文标记；没有 lang 的旧信封不附", () => {
+    const withLang =
+      '<channel from="parent" kind="task" peer="p1" message="m1" title="t" lang="zh">\nRead the README.\n</channel>\nThis message came from your parent session.';
+    const legacy =
+      '<channel from="parent" kind="task" peer="p1" message="m1" title="t">\nRead the README.\n</channel>\nThis message came from your parent session.';
+    const a = injectUserContext([userMessage(SH_MONDAY, withLang)], "UTC");
+    const b = injectUserContext([userMessage(SH_MONDAY, legacy)], "UTC");
+    if (a === undefined || b === undefined) throw new Error("应当发生替换");
+    const tail = (r: { messages: ContextMessage[] }) => {
+      const content = (r.messages[0] as { content: { text: string }[] }).content;
+      return content[content.length - 1]?.text;
+    };
+    strictEqual(tail(a), noteZh);
+    // 旧信封：一个标记也没有，最后一块就是原正文（不报错、不编语言）
+    strictEqual(tail(b), legacy);
+  });
+
+  test("语言切换：标记随当时的语言走，历史消息的标记不被后来的消息改写（重放逐字节稳定）", () => {
+    const history = [userMessage(SH_MONDAY, "你好，帮我看个东西"), ASSISTANT, userMessage(SH_MONDAY + 1, "Now please answer in English from here on")];
+    const full = injectUserContext(history, "UTC");
+    const prefix = injectUserContext(history.slice(0, 1), "UTC");
+    if (full === undefined || prefix === undefined) throw new Error("应当发生替换");
+    deepStrictEqual(full.messages[0], prefix.messages[0]);
+    const second = (full.messages[2] as { content: { text: string }[] }).content;
+    strictEqual(second[second.length - 1]?.text, noteEn);
+    const first = (full.messages[0] as { content: { text: string }[] }).content;
+    strictEqual(first[first.length - 1]?.text, noteZh);
+  });
+
+  test("标记只进发往模型的副本：入参不被改，原消息里没有 reply_language（界面 / 转录 / pi 本子都看不到）", () => {
+    const input = [userMessage(SH_MONDAY, "你好，帮我看个东西")];
+    const snapshot = JSON.stringify(input);
+    injectUserContext(input, "UTC");
+    strictEqual(JSON.stringify(input), snapshot);
+    strictEqual(snapshot.includes("reply_language"), false);
   });
 });

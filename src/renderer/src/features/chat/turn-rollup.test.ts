@@ -362,7 +362,12 @@ describe("groupTurns", () => {
       ]),
       toolItem({ toolCallId: "r1", timestamp: 2500 }),
       assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "i1", toolName: "install_plugin", input: { path: "/w/plugins/lit" } }]),
-      toolItem({ toolCallId: "i1", toolName: "install_plugin", timestamp: 3500 }),
+      toolItem({
+        toolCallId: "i1",
+        toolName: "install_plugin",
+        timestamp: 3500,
+        details: { pluginInstall: { state: "pending", reason: "mcp", name: "lit", displayName: "Lit", path: "/w/plugins/lit", scope: "workspace", workspaceName: null, skills: [], commands: [], fingerprint: "f" } },
+      }),
       assistantItem("a3", 4000, [{ type: "text", text: "那一行在等你点安装。" }]),
     ];
     const view = turnView(records, false);
@@ -377,7 +382,7 @@ describe("groupTurns", () => {
     assert.equal(line.kind === "toolCall" ? line.toolName : "", "install_plugin");
   });
 
-  test("show_image 夹在轮中间（图后还有思考+工具）也挂轮尾：单一折叠 + 画廊贴正文前，不产生两折叠夹画廊（2026-09-27 裁决 Y′）", () => {
+  test("show_image 夹在轮中间（图后还有思考+工具）也挂轮尾：单一折叠 + 图挂在回答之后，不产生两折叠夹画廊（2026-09-27 裁决 Y′；2026-11-22 图归回答，位置从正文前改到正文后）", () => {
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [
@@ -386,7 +391,7 @@ describe("groupTurns", () => {
       ]),
       toolItem({ toolCallId: "p1", toolName: "read_pdf", timestamp: 2500 }),
       assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "s1", toolName: "show_image", input: { paths: ["a.png"] } }]),
-      toolItem({ toolCallId: "s1", toolName: "show_image", timestamp: 3500 }),
+      toolItem({ toolCallId: "s1", toolName: "show_image", timestamp: 3500, details: { showImage: { images: [{ data: "AAAA", mimeType: "image/png", name: "a.png" }] } } }),
       assistantItem("a3", 4000, [
         { type: "thinking", thinking: "再看一眼" },
         { type: "toolCall", toolCallId: "r2", toolName: "read", input: { path: "b.ts" } },
@@ -395,16 +400,16 @@ describe("groupTurns", () => {
       assistantItem("a4", 9000, [{ type: "text", text: "结论在此" }]),
     ];
     const view = turnView(records, false);
-    // 单一折叠收进全部思考与工具（含 show 前后的），画廊钉在折叠后、正文前
+    // 单一折叠收进全部思考与工具（含 show 前后的），图挂在回答正文之后
     assert.deepEqual(
       view.map((entry) => entry.kind),
-      ["user", "turnGroup", "toolCall", "text"],
+      ["user", "turnGroup", "text", "toolCall"],
     );
     const fold = foldUnits(view)[0];
     assert.ok(fold !== undefined);
     // show_image 不进 members——画廊行在折叠外
     assert.ok(fold.members.every((member) => !(member.kind === "toolCall" && member.toolName === "show_image")));
-    const gallery = view[2];
+    const gallery = view[3];
     assert.ok(gallery !== undefined && gallery.kind === "toolCall");
     assert.equal(gallery.kind === "toolCall" ? gallery.toolName : "", "show_image");
   });
@@ -419,7 +424,7 @@ describe("groupTurns", () => {
       toolItem({ toolCallId: "r1", timestamp: 2200 }),
       toolItem({ toolCallId: "w1", toolName: "write", timestamp: 2400 }),
       assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "b1", toolName: "show_plugin_board", input: {} }]),
-      toolItem({ toolCallId: "b1", toolName: "show_plugin_board", timestamp: 3500 }),
+      toolItem({ toolCallId: "b1", toolName: "show_plugin_board", timestamp: 3500, details: { pluginBoard: { plugin: "lit", displayName: "Lit", title: "Lit", source: "installed", draftPath: null, at: 3500, tuned: false, cards: [], skipped: [] } } }),
       assistantItem("a3", 9000, [{ type: "text", text: "卡已经放上来了" }]),
     ];
     const view = turnView(records, false);
@@ -434,47 +439,59 @@ describe("groupTurns", () => {
     assert.equal(board?.kind === "toolCall" ? board.toolName : "", "show_plugin_board");
   });
 
-  test("内置命令的完成卡留在调用位置：先新建、后写幻灯片，落定后仍按这个顺序读（不被挂到轮尾排到写幻灯片之后）", () => {
+  test("新建演示文稿是普通的过程步（2026-11-22）：收进折叠，不在过程里出卡；做出来的演示文稿收在结尾、回复之后", () => {
+    const card = { kind: "slides", path: "/w/新加坡.slides.json", title: "新加坡", subtitle: "演示文稿 · 新加坡.slides.json" };
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [
         { type: "toolCall", toolCallId: "c1", toolName: "slides_create", input: { title: "新加坡" } },
       ]),
-      toolItem({ toolCallId: "c1", toolName: "slides_create", timestamp: 2500 }),
+      toolItem({ toolCallId: "c1", toolName: "slides_create", timestamp: 2500, details: { card } }),
       assistantItem("a2", 3000, [
-        { type: "toolCall", toolCallId: "w1", toolName: "slides_write", input: { slides: [] } },
-        { type: "toolCall", toolCallId: "w2", toolName: "slides_write", input: { slides: [] } },
+        { type: "toolCall", toolCallId: "w1", toolName: "slides_write", input: { path: "新加坡.slides.json", slides: [] } },
       ]),
-      toolItem({ toolCallId: "w1", toolName: "slides_write", timestamp: 3500 }),
-      toolItem({ toolCallId: "w2", toolName: "slides_write", timestamp: 3600 }),
+      toolItem({
+        toolCallId: "w1",
+        toolName: "slides_write",
+        timestamp: 3500,
+        content: [{ type: "text", text: "Wrote slide(s) 1, 2, 3; the deck now has 3 slide(s)." }],
+      }),
       assistantItem("a3", 9000, [{ type: "text", text: "做好了" }]),
     ];
     const view = turnView(records, false);
     assert.deepEqual(
       view.map((entry) => entry.kind),
-      ["user", "toolCall", "turnGroup", "text"],
+      ["user", "turnGroup", "text", "turnOutputs"],
     );
-    const card = view[1];
-    assert.equal(card?.kind === "toolCall" ? card.toolName : "", "slides_create");
-    // 写幻灯片收进它后面的折叠，不在卡之前
     const fold = foldUnits(view)[0];
     assert.ok(fold !== undefined);
-    assert.ok(fold.members.every((member) => !(member.kind === "toolCall" && member.toolName === "slides_create")));
+    assert.ok(fold.members.some((member) => member.kind === "toolCall" && member.toolName === "slides_create"));
   });
 
-  test("导出卡在最后一步之后：折叠在前、导出卡在后，回复仍在最末", () => {
+  test("导出 PDF 是普通的过程步：导出的文件收在结尾；只导出 PNG（自检）的轮结尾没有产物", () => {
+    const pdf = { kind: "export", path: "/w/新加坡.pdf", title: "新加坡.pdf", subtitle: "PDF · 3 页" };
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [{ type: "toolCall", toolCallId: "w1", toolName: "slides_write", input: {} }]),
       toolItem({ toolCallId: "w1", toolName: "slides_write", timestamp: 2500 }),
       assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "x1", toolName: "slides_export", input: { format: "pdf" } }]),
-      toolItem({ toolCallId: "x1", toolName: "slides_export", timestamp: 3500 }),
+      toolItem({ toolCallId: "x1", toolName: "slides_export", timestamp: 3500, details: { card: pdf } }),
       assistantItem("a3", 9000, [{ type: "text", text: "导出好了" }]),
     ];
-    const view = turnView(records, false);
     assert.deepEqual(
-      view.map((entry) => entry.kind),
-      ["user", "turnGroup", "toolCall", "text"],
+      turnView(records, false).map((entry) => entry.kind),
+      ["user", "turnGroup", "text", "turnOutputs"],
+    );
+    const png = { kind: "export", path: "/w/preview-1.png", title: "preview-1.png", subtitle: "PNG · 1 页" };
+    const selfCheck = [
+      userItem("u1", 1000),
+      assistantItem("a2", 3000, [{ type: "toolCall", toolCallId: "x1", toolName: "slides_export", input: { format: "png", page: 1 } }]),
+      toolItem({ toolCallId: "x1", toolName: "slides_export", timestamp: 3500, details: { card: png } }),
+      assistantItem("a3", 9000, [{ type: "text", text: "排版没问题" }]),
+    ];
+    assert.deepEqual(
+      turnView(selfCheck, false).map((entry) => entry.kind),
+      ["user", "turnGroup", "text"],
     );
   });
 
@@ -486,9 +503,9 @@ describe("groupTurns", () => {
       ]),
       toolItem({ toolCallId: "r1", timestamp: 2500 }),
       assistantItem("a2", 3000, [
-        { type: "toolCall", toolCallId: "s1", toolName: "reply_subsession", input: {} },
+        { type: "toolCall", toolCallId: "s1", toolName: "delegate", input: {} },
       ]),
-      toolItem({ toolCallId: "s1", toolName: "reply_subsession", timestamp: 3500 }),
+      toolItem({ toolCallId: "s1", toolName: "delegate", timestamp: 3500 }),
       assistantItem("a3", 4000, [
         { type: "toolCall", toolCallId: "e1", toolName: "edit", input: {} },
       ]),
@@ -505,7 +522,7 @@ describe("groupTurns", () => {
     assert.deepEqual(folds[1]?.members.map((m) => m.kind), ["toolCall"]);
     const middle = view[2];
     assert.ok(middle !== undefined && middle.kind === "toolCall");
-    assert.equal(middle.kind === "toolCall" ? middle.toolName : "", "reply_subsession");
+    assert.equal(middle.kind === "toolCall" ? middle.toolName : "", "delegate");
   });
 });
 
@@ -542,15 +559,15 @@ describe("turnStats", () => {
     assert.equal(stats.durationMs, 3200 - 2000);
   });
 
-  test("通道工具（report_to_parent）不进折叠统计——calls/byTool 里没有它（子会话 PR4b）", () => {
+  test("通道工具（delegate，2026-11-22 起 reply_subsession / report_to_parent 是过程里的一步、会计数）不进折叠统计——calls/byTool 里没有它（子会话 PR4b）", () => {
     const records = [
       userItem("u1", 1000),
       assistantItem("a1", 2000, [
         { type: "toolCall", toolCallId: "r1", toolName: "read", input: {} },
-        { type: "toolCall", toolCallId: "p1", toolName: "report_to_parent", input: {} },
+        { type: "toolCall", toolCallId: "p1", toolName: "delegate", input: {} },
       ]),
       toolItem({ toolCallId: "r1", timestamp: 2100 }),
-      toolItem({ toolCallId: "p1", toolName: "report_to_parent", timestamp: 2200 }),
+      toolItem({ toolCallId: "p1", toolName: "delegate", timestamp: 2200 }),
     ];
     const view = turnView(records, false);
     const fold = foldUnits(view)[0];

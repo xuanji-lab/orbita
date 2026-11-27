@@ -11,7 +11,7 @@
  *
  * App 需要给的事实都是参数：工作区与会话（工作区名、清单里的会话数）、设置里的
  * 提示音开关、文案表，再加四个出口——退掉设置页与子视图、展开侧栏、开文件面板、
- * 响提示音。App 自己那三份 state（overlay / archived / carryovers）不搬进来：
+ * 响提示音。App 自己那三份 state（overlay / archived）不搬进来：
  * 它们也属于别处的入口，搬走就要为「谁持有」再造一层。
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -37,7 +37,7 @@ interface FocusShellOptions {
   /** 设置里的完成提示音（到点那一拍读它） */
   completionSound: boolean;
   /**
-   * 退掉盖在左栏之上的三样：设置页 overlay、归档、遗留事项子视图。
+   * 退掉盖在左栏之上的两样：设置页 overlay、归档。
    * 它们的优先级都高过左栏文件视图（Sidebar 的 filesViewWs 判这三样）——起专注 /
    * 进浏览态前不退，左栏会继续停在原地（#267 B3 的根因）。
    */
@@ -127,7 +127,7 @@ export function useFocusShell(options: FocusShellOptions): FocusShell {
 
   /**
    * 起专注（工具栏浮层的「开始专注」）：专注是替代会话列表的左栏视图，设置页 /
-   * 归档 / 遗留事项都比它优先——先退掉，再停浏览态，最后才起表。气泡与卡的
+   * 归档比它优先——先退掉，再停浏览态，最后才起表。气泡与卡的
    * 一次性关闭态在这里重置（每一轮都从「没点过 x」开始）。
    */
   const startFocus = useCallback(

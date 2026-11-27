@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import {
   BOARD_SNAPSHOT_CARD_MAX_BYTES,
   BOARD_SNAPSHOT_TOTAL_MAX_BYTES,
+  boardShotInViewport,
+  boardShotRect,
   parsePluginBoardDetails,
   type PluginBoardOutcome,
   type PluginBoardResult,
@@ -334,6 +336,34 @@ describe("board:frame", () => {
     for (const raw of [null, "x", { hash: 1 }, { hash: "../x" }, { hash: "f".repeat(64) }]) {
       assert.equal(await boardFrameOf({ templates: store, frames }, raw), null, JSON.stringify(raw));
     }
+  });
+});
+
+describe("board:shot", () => {
+  test("矩形取整；非对象、非有限数、负坐标、空图与超大面积都拒绝", () => {
+    assert.deepEqual(boardShotRect({ rect: { x: 10.4, y: 20.5, width: 752.4, height: 400.4 } }), { x: 10, y: 21, width: 752, height: 400 });
+    const invalid = [
+      null,
+      "x",
+      {},
+      { rect: null },
+      { rect: { x: -1, y: 0, width: 10, height: 10 } },
+      { rect: { x: 0, y: 0, width: 0, height: 10 } },
+      { rect: { x: 0, y: 0, width: 10, height: Number.NaN } },
+      { rect: { x: 0, y: 0, width: 5000, height: 10 } },
+      { rect: { x: 0, y: 0, width: 4096, height: 4097 } },
+    ];
+    for (const raw of invalid) assert.equal(boardShotRect(raw), null, JSON.stringify(raw));
+  });
+
+  test("截图矩形只能整块落在这一页自己的视口里；留 1px 给取整", () => {
+    const viewport = { width: 1200, height: 800 };
+    assert.equal(boardShotInViewport({ x: 332, y: 104, width: 789, height: 400 }, viewport), true);
+    assert.equal(boardShotInViewport({ x: 411, y: 400, width: 789, height: 400 }, viewport), true);
+    assert.equal(boardShotInViewport({ x: 413, y: 400, width: 789, height: 400 }, viewport), false);
+    assert.equal(boardShotInViewport({ x: 332, y: 104, width: 870, height: 400 }, viewport), false);
+    assert.equal(boardShotInViewport({ x: 332, y: 104, width: 789, height: 698 }, viewport), false);
+    assert.equal(boardShotInViewport({ x: 0, y: 0, width: 1, height: 1 }, { width: 0, height: 800 }), false);
   });
 });
 

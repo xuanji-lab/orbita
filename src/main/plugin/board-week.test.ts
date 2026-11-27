@@ -34,7 +34,6 @@ function automation(over: Partial<Automation> & { schedule: AutomationSchedule }
     title: "文献追踪",
     prompt: "go",
     target: { kind: "new_session", workspaceId: "ws-1" },
-    mode: "plan",
     status: "active",
     createdBy: { kind: "user" },
     nextRunAt: null,

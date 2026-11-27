@@ -12,6 +12,7 @@ import arrowUp from "../../../../design-system/assets/icons/lucide/arrow-up.svg?
 import arrowUpRight from "../../../../design-system/assets/icons/lucide/arrow-up-right.svg?raw";
 import blend from "../../../../design-system/assets/icons/lucide/blend.svg?raw";
 import bell from "../../../../design-system/assets/icons/lucide/bell.svg?raw";
+import bellOff from "../../../../design-system/assets/icons/lucide/bell-off.svg?raw";
 import blocks from "../../../../design-system/assets/icons/lucide/blocks.svg?raw";
 import book from "../../../../design-system/assets/icons/lucide/book.svg?raw";
 import bookmark from "../../../../design-system/assets/icons/lucide/bookmark.svg?raw";
@@ -19,6 +20,7 @@ import bookOpen from "../../../../design-system/assets/icons/lucide/book-open.sv
 import bot from "../../../../design-system/assets/icons/lucide/bot.svg?raw";
 import brain from "../../../../design-system/assets/icons/lucide/brain.svg?raw";
 import alarmClock from "../../../../design-system/assets/icons/lucide/alarm-clock.svg?raw";
+import clipboard from "../../../../design-system/assets/icons/lucide/clipboard.svg?raw";
 import clipboardList from "../../../../design-system/assets/icons/lucide/clipboard-list.svg?raw";
 import hourglass from "../../../../design-system/assets/icons/lucide/hourglass.svg?raw";
 import notebookText from "../../../../design-system/assets/icons/lucide/notebook-text.svg?raw";
@@ -67,15 +69,18 @@ import alignCenter from "../../../../design-system/assets/icons/lucide/align-cen
 import alignRight from "../../../../design-system/assets/icons/lucide/align-right.svg?raw";
 import monitorPlay from "../../../../design-system/assets/icons/lucide/monitor-play.svg?raw";
 import expand from "../../../../design-system/assets/icons/lucide/expand.svg?raw";
+import maximize2 from "../../../../design-system/assets/icons/lucide/maximize-2.svg?raw";
 import minimize2 from "../../../../design-system/assets/icons/lucide/minimize-2.svg?raw";
 import imagePlus from "../../../../design-system/assets/icons/lucide/image-plus.svg?raw";
 import scrollText from "../../../../design-system/assets/icons/lucide/scroll-text.svg?raw";
 import image from "../../../../design-system/assets/icons/lucide/image.svg?raw";
+import imageOff from "../../../../design-system/assets/icons/lucide/image-off.svg?raw";
 import info from "../../../../design-system/assets/icons/lucide/info.svg?raw";
 import foldVertical from "../../../../design-system/assets/icons/lucide/fold-vertical.svg?raw";
 import flaskConical from "../../../../design-system/assets/icons/lucide/flask-conical.svg?raw";
 import folder from "../../../../design-system/assets/icons/lucide/folder.svg?raw";
 import folderOpen from "../../../../design-system/assets/icons/lucide/folder-open.svg?raw";
+import gauge from "../../../../design-system/assets/icons/lucide/gauge.svg?raw";
 import folderPlus from "../../../../design-system/assets/icons/lucide/folder-plus.svg?raw";
 import folderSync from "../../../../design-system/assets/icons/lucide/folder-sync.svg?raw";
 import gitBranch from "../../../../design-system/assets/icons/lucide/git-branch.svg?raw";
@@ -109,6 +114,11 @@ import listTree from "../../../../design-system/assets/icons/lucide/list-tree.sv
 import menu from "../../../../design-system/assets/icons/lucide/menu.svg?raw";
 import lock from "../../../../design-system/assets/icons/lucide/lock.svg?raw";
 import mic from "../../../../design-system/assets/icons/lucide/mic.svg?raw";
+import micOff from "../../../../design-system/assets/icons/lucide/mic-off.svg?raw";
+import phone from "../../../../design-system/assets/icons/lucide/phone.svg?raw";
+import phoneOff from "../../../../design-system/assets/icons/lucide/phone-off.svg?raw";
+import audioLines from "../../../../design-system/assets/icons/lucide/audio-lines.svg?raw";
+import volume2 from "../../../../design-system/assets/icons/lucide/volume-2.svg?raw";
 import minus from "../../../../design-system/assets/icons/lucide/minus.svg?raw";
 import pencilLine from "../../../../design-system/assets/icons/lucide/pencil-line.svg?raw";
 import pause from "../../../../design-system/assets/icons/lucide/pause.svg?raw";
@@ -128,8 +138,11 @@ import messagesSquare from "../../../../design-system/assets/icons/lucide/messag
 import notebookPen from "../../../../design-system/assets/icons/lucide/notebook-pen.svg?raw";
 import octagonX from "../../../../design-system/assets/icons/lucide/octagon-x.svg?raw";
 import orbit from "../../../../design-system/assets/icons/lucide/orbit.svg?raw";
+import paintbrush from "../../../../design-system/assets/icons/lucide/paintbrush.svg?raw";
 import plus from "../../../../design-system/assets/icons/lucide/plus.svg?raw";
+import radar from "../../../../design-system/assets/icons/lucide/radar.svg?raw";
 import refreshCw from "../../../../design-system/assets/icons/lucide/refresh-cw.svg?raw";
+import shuffle from "../../../../design-system/assets/icons/lucide/shuffle.svg?raw";
 import rotateCcw from "../../../../design-system/assets/icons/lucide/rotate-ccw.svg?raw";
 import settings from "../../../../design-system/assets/icons/lucide/settings.svg?raw";
 import square from "../../../../design-system/assets/icons/lucide/square.svg?raw";
@@ -167,6 +180,7 @@ import zap from "../../../../design-system/assets/icons/lucide/zap.svg?raw";
 const ICONS = {
   archive,
   bell,
+  "bell-off": bellOff,
   blend,
   blocks,
   book,
@@ -184,6 +198,7 @@ const ICONS = {
   bot,
   brain,
   "alarm-clock": alarmClock,
+  clipboard,
   "clipboard-list": clipboardList,
   hourglass,
   "notebook-text": notebookText,
@@ -224,6 +239,7 @@ const ICONS = {
   "flask-conical": flaskConical,
   folder,
   "folder-open": folderOpen,
+  "gauge": gauge,
   "folder-plus": folderPlus,
   "folder-sync": folderSync,
   "git-branch": gitBranch,
@@ -241,6 +257,7 @@ const ICONS = {
   "grid-3x3": grid3x3,
   "grip-vertical": gripVertical,
   image,
+  "image-off": imageOff,
   info,
   key,
   lightbulb,
@@ -261,15 +278,23 @@ const ICONS = {
   "message-circle": messageCircle,
   "message-square": messageSquare,
   mic,
+  // 编排对话的语音通话（2026-11-24）：通话键、挂断、静音、在听、在说
+  "mic-off": micOff,
+  phone,
+  "phone-off": phoneOff,
+  "audio-lines": audioLines,
+  "volume-2": volume2,
   "message-square-dashed": messageSquareDashed,
   "messages-square": messagesSquare,
   "notebook-pen": notebookPen,
   minus,
   "octagon-x": octagonX,
   orbit,
+  paintbrush,
   "panel-left": panelLeft,
   "panel-right": panelRight,
   "pencil-line": pencilLine,
+  radar,
   pause,
   play,
   paperclip,
@@ -280,6 +305,7 @@ const ICONS = {
   quote,
   plus,
   "refresh-cw": refreshCw,
+  shuffle,
   "rotate-ccw": rotateCcw,
   save,
   settings,
@@ -323,6 +349,7 @@ const ICONS = {
   "align-right": alignRight,
   "monitor-play": monitorPlay,
   "expand": expand,
+  "maximize-2": maximize2,
   "minimize-2": minimize2,
   "image-plus": imagePlus,
 } as const;

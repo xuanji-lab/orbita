@@ -6,22 +6,20 @@ import { ipcRenderer } from "electron";
 import { ipcChannels, type SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { ArtifactOpenResult } from "../../shared/browser.ts";
 import type { PromptImage } from "../../shared/prompt-images.ts";
-import type { RevertPlan, UndoPlan } from "../../shared/revert.ts";
+import type { ArtifactSummary, RevertPlan, UndoPlan } from "../../shared/revert.ts";
+import type { OutboxEntry } from "../../shared/outbox.ts";
 import type {
   ModelAssignEntry,
   ModelAssignGroups,
   ModelAssignRunResult,
 } from "../../shared/model-assign.ts";
-import type { WrapupConfirmInput, WrapupPlan, WrapupReviseInput, WrapupReviseResult } from "../../shared/wrapup.ts";
 import type {
-  Carryover,
-  CarryoverStatus,
-  SessionCompletion,
   SessionMeta,
   SessionMoveResult,
   SessionOlderPage,
   SessionWindowDetail,
 } from "../../shared/session.ts";
+import type { StatusDigestState } from "../../shared/status-digest.ts";
 
 export const sessionApi = {
   /** 会话列表，新的在前 */
@@ -41,6 +39,13 @@ export const sessionApi = {
    */
   loadOlder: (id: string, before: string, limit: number): Promise<SessionOlderPage> =>
     ipcRenderer.invoke(ipcChannels.sessionLoadOlder, id, before, limit),
+  /**
+   * 状态卡摘要（2026-11-27）：一批会话 id（主会话 + 全部子会话）一次取回，
+   * 回 `Record<id, StatusDigestState | null>`（null = 会话已删）。renderer 取回后只把
+   * 尾窗里比摘要新的记录用同一个 fold 叠上去，不再为状态卡逐页拉全量历史。
+   */
+  statusDigests: (ids: readonly string[]): Promise<Record<string, StatusDigestState | null>> =>
+    ipcRenderer.invoke(ipcChannels.sessionStatusDigests, ids),
   /** 改名；空名字会退回从第一条用户消息推导 */
   rename: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRename, id, title),
@@ -62,12 +67,12 @@ export const sessionApi = {
   /** 星标：价值标记，与置顶正交——不置顶，只给侧栏标识与筛选 */
   star: (id: string, starred: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionStar, id, starred),
-  /** 完成状态：done/done_with_todos 记关闭时刻；回 open（reopen）清空。纯 meta 操作，只读会话也可用 */
-  setCompletion: (id: string, completion: SessionCompletion): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionSetCompletion, id, completion),
   /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮生效 */
   setIntentEnabled: (id: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionSetIntentEnabled, id, enabled),
+  /** 会话级自动压缩开关：只落 meta，下一轮生效（false = 只认手动 /compact） */
+  setAutoCompact: (id: string, enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionSetAutoCompact, id, enabled),
   /**
    * 未读标记（后台跑完还没看）：标 `{ at, failed }`，null 清。落盘后重启仍在；
    * 侧栏竖条与铃铛清单都读 meta 上的它，不各存一份
@@ -89,21 +94,6 @@ export const sessionApi = {
   /** 导出成 Markdown，走原生保存对话框；取消返回 null，否则返回落盘路径 */
   exportMarkdown: (id: string): Promise<string | null> =>
     ipcRenderer.invoke(ipcChannels.sessionExport, id),
-  // —— 遗留事项（收尾仪式）三通道 ——
-  /** 全部遗留事项，落盘顺序。角标与筛选按 sourceSessionId 在 renderer 现算 */
-  carryoverList: (): Promise<Carryover[]> => ipcRenderer.invoke(ipcChannels.carryoverList),
-  // —— 收尾（shared/wrapup.ts）三通道 ——
-  /** 这次要扫的轮次与各轮用量；会话不存在 / 没有新轮次 null */
-  wrapupPlan: (id: string): Promise<WrapupPlan | null> => ipcRenderer.invoke(ipcChannels.sessionWrapupPlan, id),
-  /** 按用户一句话改清单（家务活模型一次独立小调用，不进会话） */
-  wrapupRevise: (id: string, input: WrapupReviseInput): Promise<WrapupReviseResult> =>
-    ipcRenderer.invoke(ipcChannels.sessionWrapupRevise, id, input),
-  /** 确认：做完的事落账、留下的事进遗留清单、会话标完成、接着做的遗留事项标做完 */
-  wrapupConfirm: (id: string, input: WrapupConfirmInput): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.sessionWrapupConfirm, id, input),
-  /** 翻转一条的状态：done 记 doneAt，回 open 清掉 */
-  carryoverSetStatus: (id: string, status: CarryoverStatus): Promise<void> =>
-    ipcRenderer.invoke(ipcChannels.carryoverSetStatus, id, status),
   // —— 会话回退 / 单轮撤销（revert.ts）四通道 + 轮尾产物打开两通道 ——
   /** 回退计划（确认框列清单用）：目标消息及之后会被撤回什么 */
   revertPlan: (id: string, targetMessageId: string): Promise<RevertPlan> =>
@@ -126,4 +116,11 @@ export const sessionApi = {
   /** 轮尾产物在系统文件管理器里定位（仅会话文件账里记过的文件） */
   revealArtifact: (id: string, path: string): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionRevealArtifact, id, path),
+  /** 编排面板协作图：一批会话的产物摘要（文件账里的文件数与扩展名）；读不到的 id 不在回执里 */
+  artifactSummary: (ids: readonly string[]): Promise<Record<string, ArtifactSummary>> =>
+    ipcRenderer.invoke(ipcChannels.sessionArtifactSummary, ids),
+  /** 发件箱：发送前落盘（等写完才回）、落账后删、启动时列出 */
+  outboxPut: (entry: OutboxEntry): Promise<void> => ipcRenderer.invoke(ipcChannels.outboxPut, entry),
+  outboxRemove: (id: string): Promise<void> => ipcRenderer.invoke(ipcChannels.outboxRemove, id),
+  outboxList: (): Promise<OutboxEntry[]> => ipcRenderer.invoke(ipcChannels.outboxList),
 };

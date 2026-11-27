@@ -9,11 +9,6 @@ describe("resolveNativeThemeSource", () => {
     deepStrictEqual(resolveNativeThemeSource("graphite"), "dark");
   });
 
-  it("纸面两档映射成 light——它们只有明", () => {
-    deepStrictEqual(resolveNativeThemeSource("copybook"), "light");
-    deepStrictEqual(resolveNativeThemeSource("typescript"), "light");
-  });
-
   it("其余档原样透传", () => {
     for (const theme of ["system", "light"] as const) {
       deepStrictEqual(resolveNativeThemeSource(theme), theme);

@@ -1,10 +1,10 @@
 import { after, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { realpath as fsRealpath, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { localRequestAllowed, looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
+import { localPageRoots, localRequestAllowed, looksLikeLocalPath, resolveLocalPage } from "./local-file.ts";
 
 // 假文件系统的 key 与 roots 一律用原生路径（resolve/join 拼），与产品代码同一套规则
 // （约定见 data-dirs.test.ts:6-7）。两个原因：一是 file:// 输入走 fileURLToPath，Windows 上
@@ -142,19 +142,43 @@ test("file://localhost 不算 UNC 主机：照常按本地路径判", async () =
  */
 describe("localRequestAllowed（页面打开之后的 file:// 闸）", () => {
   let base = "";
+  let cwd = "";
   let root = "";
   let outside = "";
+  let attached = "";
 
   before(async () => {
     base = await mkdtemp(join(tmpdir(), "orbita-local-guard-"));
-    root = join(base, "root");
+    cwd = join(base, "cwd");
+    root = join(cwd, "pages");
     outside = join(base, "outside");
+    attached = join(base, "attached");
     await mkdir(join(root, "assets"), { recursive: true });
+    await mkdir(join(root, "sub"), { recursive: true });
+    await mkdir(join(root, ".private"), { recursive: true });
+    await mkdir(join(root, ".git"), { recursive: true });
+    await mkdir(join(cwd, "private"), { recursive: true });
     await mkdir(outside);
+    await mkdir(attached);
     await writeFile(join(root, "page.html"), "<p>page</p>", "utf8");
+    await writeFile(join(root, "same.txt"), "SAME-DIR-OK", "utf8");
+    await writeFile(join(root, "sub", "child.txt"), "SUBDIR-OK", "utf8");
     await writeFile(join(root, "assets", "app.css"), "p{}", "utf8");
+    await writeFile(join(root, ".env"), "DOT-ENV-SECRET", "utf8");
+    await writeFile(join(root, ".hidden.html"), "<p>hidden page</p>", "utf8");
+    await writeFile(join(root, ".private", "secret.txt"), "DOT-DIR-SECRET", "utf8");
+    await writeFile(join(root, ".git", "config"), "DOT-GIT-SECRET", "utf8");
+    await writeFile(join(cwd, "same-cwd.txt"), "SAME-CWD-SECRET", "utf8");
+    await writeFile(join(cwd, "private", "secret.txt"), "PRIVATE-SECRET", "utf8");
+    await writeFile(join(attached, "attached-secret.txt"), "ATTACHED-SECRET", "utf8");
     await writeFile(join(outside, "secret.txt"), "OUTSIDE-SECRET", "utf8");
     await symlink(outside, join(root, "linkout"), "junction");
+    await symlink(join(root, ".env"), join(root, "ordinary-name.txt"), "file");
+    await symlink(join(root, "same.txt"), join(root, ".dot-link.txt"), "file");
+    // 页面自己就在点开头条目里时，这个条目就是页面根，里面的普通资源仍应可读。
+    await mkdir(join(root, ".well-known"), { recursive: true });
+    await writeFile(join(root, ".well-known", "page.html"), "<p>dot page</p>", "utf8");
+    await writeFile(join(root, ".well-known", "asset.txt"), "DOT-PAGE-OK", "utf8");
   });
 
   after(async () => {
@@ -162,6 +186,50 @@ describe("localRequestAllowed（页面打开之后的 file:// 闸）", () => {
   });
 
   const url = (path: string): string => pathToFileURL(path).href;
+
+  test("页面根只是网页所在目录：同目录与子目录可读，同 cwd 其他目录和附加目录不可读", async () => {
+    const pageRoots = localPageRoots(join(root, "page.html"));
+    assert.deepEqual(pageRoots, [root]);
+    assert.equal(await localRequestAllowed(url(join(root, "same.txt")), pageRoots), true);
+    assert.equal(await localRequestAllowed(url(join(root, "sub", "child.txt")), pageRoots), true);
+    assert.equal(await localRequestAllowed(url(join(cwd, "same-cwd.txt")), pageRoots), false);
+    assert.equal(await localRequestAllowed(url(join(cwd, "private", "secret.txt")), pageRoots), false);
+    assert.equal(await localRequestAllowed(url(join(attached, "attached-secret.txt")), pageRoots), false);
+  });
+
+  test("页面目录下的点开头条目默认拒绝；普通名字的链接也不能借道", async () => {
+    const pageRoots = localPageRoots(join(root, "page.html"));
+    assert.equal(await localRequestAllowed(url(join(root, ".env")), pageRoots), false);
+    assert.equal(await localRequestAllowed(url(join(root, ".private", "secret.txt")), pageRoots), false);
+    assert.equal(await localRequestAllowed(url(join(root, ".git", "config")), pageRoots), false);
+    assert.equal(await localRequestAllowed(url(join(root, "ordinary-name.txt")), pageRoots), false);
+    assert.equal(await localRequestAllowed(url(join(root, ".dot-link.txt")), pageRoots), false);
+  });
+
+  test("页面本身位于点开头条目内时，普通同目录资源仍可读", async () => {
+    const pageRoots = localPageRoots(join(root, ".well-known", "page.html"));
+    assert.equal(await localRequestAllowed(url(join(root, ".well-known", "asset.txt")), pageRoots), true);
+  });
+
+  test("顶层网页自身点开头仍按入口结果打开，但不连带放开其他点资源", async () => {
+    // 与产品调用一致：localPageRoots / pagePath 都吃 resolveLocalPage 返回的真实路径。
+    const page = await fsRealpath(join(root, ".hidden.html"));
+    const pageRoots = localPageRoots(page);
+    assert.equal(await localRequestAllowed(url(page), pageRoots, fsRealpath, page), true);
+    assert.equal(await localRequestAllowed(url(join(root, ".env")), pageRoots, fsRealpath, page), false);
+  });
+
+  test("Windows 盘符与 UNC：页面根沿用原生路径语义，点文件不碰盘", async () => {
+    assert.deepEqual(localPageRoots(join(wb, "sub", "page.html")), [join(wb, "sub")]);
+    const touched: string[] = [];
+    const spy = async (path: string): Promise<string> => {
+      touched.push(path);
+      return path;
+    };
+    const uncRoot = "\\\\nas\\proj";
+    assert.equal(await localRequestAllowed("file://NAS/proj/.env", [uncRoot], spy), false);
+    assert.deepEqual(touched, []);
+  });
 
   test("根内的页面与子资源放行（子目录、带 query / hash、目录本身）", async () => {
     assert.equal(await localRequestAllowed(url(join(root, "page.html")), [root]), true);

@@ -16,9 +16,14 @@ import type {
   ProviderUpsertInput,
   ValidationIssue,
 } from "../../shared/provider.ts";
+import type { QuotaQuery, QuotaResult } from "../../shared/quota.ts";
 
+/**
+ * `quotaInvalidated`：这次保存让这一家的旧额度作废了（换了钥匙 / 地址 / 条目 / 鉴权，或浏览器登录换了令牌）。
+ * 设置页据此让额度卡重查——卡片只认 providerId，换钥匙不会自己重查。与主进程 `provider/ipc.ts` 的同名类型同形。
+ */
 export type UpsertResult =
-  | { ok: true; provider: ProviderDto }
+  | { ok: true; provider: ProviderDto; quotaInvalidated: boolean }
   | { ok: false; issues: ValidationIssue[] };
 
 export const providerApi = {
@@ -48,6 +53,13 @@ export const providerApi = {
   /** 显示明文密钥（用户点眼睛时才调，不随 list 下发） */
   reveal: (id: string): Promise<string | null> => ipcRenderer.invoke(ipcChannels.providerReveal, id),
   /**
+   * 账号额度（余额 / 套餐窗口）。值来自主进程缓存，刷新在背后发生；
+   * 返回的永远不含密钥——密钥只在主进程 → 厂商端点这一个方向上流。
+   */
+  quota: (query: QuotaQuery): Promise<QuotaResult> => ipcRenderer.invoke(ipcChannels.providerQuota, query),
+  /**
+   * Claude OAuth 登录：主进程开系统浏览器并等回调，返回时 provider 已连凭据落盘。
+   * promise 会挂着等用户在浏览器里完成授权（上限 10 分钟）。
    * 浏览器登录订阅（Claude / ChatGPT / GitHub Copilot / xAI）：主进程开系统浏览器并等授权，
    * 返回时 provider 已连凭据落盘。promise 会挂着等用户完成授权（上限 10–15 分钟）。
    */

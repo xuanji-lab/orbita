@@ -6,6 +6,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
 import { createChannelTools, describeChannelRole } from "./channel-tools.ts";
+import type { ReplyLang } from "../shared/reply-language.ts";
 import type { ChannelSendOutcome, DelegateOutcome, ModelCostsOutcome } from "../shared/agent-ipc.ts";
 
 /** 收走请求事件，稍后人工回执——模拟主进程（同 task-tools.test.ts 的 FakeMain）。 */
@@ -26,13 +27,16 @@ class FakeMain {
 
 type Tool = ReturnType<typeof createChannelTools>[number];
 
-function setup(role: "root" | "child"): { tools: Tool[]; fake: FakeMain } {
+function setup(
+  role: "root" | "child",
+  replyLang?: () => ReplyLang | undefined,
+): { tools: Tool[]; fake: FakeMain } {
   const fake = new FakeMain();
   const broker = new RequestBroker((event) => {
     fake.sent.push(event);
   });
   fake.wire(broker);
-  return { tools: createChannelTools(broker, "session-1", role), fake };
+  return { tools: createChannelTools(broker, "session-1", role, replyLang), fake };
 }
 
 function toolByName(tools: Tool[], name: string): Tool {
@@ -161,6 +165,25 @@ describe("delegate", () => {
       card: { childId: "c", title: "t", modelId: "claude-opus", thinkingLevel: "high", workbench: "/w" },
     });
     await pending;
+  });
+
+  test("planStep：参数里有这一项；给了就在回执里点出挂在哪一步、不上 delegateRequest（只落转录 input）；没给不提", async () => {
+    const { tools, fake } = setup("root");
+    const delegate = toolByName(tools, "delegate");
+    const props = (delegate.parameters as { properties: { planStep?: { type: string } } }).properties;
+    assert.equal(props.planStep?.type, "string");
+    assert.match(delegate.description, /planStep/);
+    const card = { childId: "c", title: "t", modelId: "m", thinkingLevel: "medium" as const, workbench: "/w" };
+
+    const withStep = delegate.execute("call-p1", { title: "t", task: "d", planStep: "  写测试\n并跑通 " }, undefined, undefined, undefined as never);
+    assert.equal("planStep" in (fake.sent[0] as Record<string, unknown>), false);
+    fake.answer(fake.requestIdAt(0), { ok: true, childId: "c", title: "t", card });
+    const text = ((await withStep).content[0] as { text: string }).text;
+    assert.match(text, /plan step "写测试 并跑通"/);
+
+    const without = delegate.execute("call-p2", { title: "t", task: "d", planStep: "   " }, undefined, undefined, undefined as never);
+    fake.answer(fake.requestIdAt(1), { ok: true, childId: "c", title: "t", card });
+    assert.doesNotMatch(((await without).content[0] as { text: string }).text, /plan step/);
   });
 
   test("title / task 缺席或空白：不发请求，直接抛错", async () => {
@@ -379,5 +402,84 @@ describe("describeChannelRole", () => {
     assert.match(text, /first\s+8 characters of your own session id/);
     assert.match(text, /absolute paths/);
     assert.match(text, /still belong in cwd/);
+  });
+});
+
+describe("用户的语言随请求交给主进程", () => {
+  test("delegate / reply_subsession 带上此刻的 replyLang；算不出（undefined）时请求里没有这个键", async () => {
+    const withLang = setup("root", () => "zh");
+    const pending = toolByName(withLang.tools, "delegate").execute(
+      "c1",
+      { title: "t", task: "做一件事" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    assert.equal((withLang.fake.sent[0] as { replyLang?: string }).replyLang, "zh");
+    withLang.fake.answer(withLang.fake.requestIdAt(0), {
+      ok: true,
+      childId: "c",
+      title: "t",
+      card: { childId: "c", title: "t", modelId: "m", thinkingLevel: "medium", workbench: "/wb" },
+    });
+    await pending;
+    const reply = toolByName(withLang.tools, "reply_subsession").execute(
+      "c2",
+      { childId: "c", text: "继续" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    assert.equal((withLang.fake.sent[1] as { replyLang?: string }).replyLang, "zh");
+    withLang.fake.answer(withLang.fake.requestIdAt(1), { ok: true, messageId: "m1" });
+    await reply;
+
+    const without = setup("root");
+    const p2 = toolByName(without.tools, "delegate").execute(
+      "c3",
+      { title: "t", task: "x" },
+      undefined,
+      undefined,
+      undefined as never,
+    );
+    assert.equal("replyLang" in (without.fake.sent[0] as object), false);
+    without.fake.answer(without.fake.requestIdAt(0), { ok: false, error: "stop" });
+    await assert.rejects(p2, /stop/);
+  });
+
+  test("report_to_parent 的说明要求按 <reply_language> 标记的语言写汇报；子会话角色指引同样（防误删）", () => {
+    const { tools } = setup("child");
+    assert.match(toolByName(tools, "report_to_parent").description, /language of the <reply_language> marker/);
+    assert.match(describeChannelRole("child"), /every report_to_parent text — in the\nlanguage of the <reply_language> marker/);
+    assert.match(toolByName(setup("root").tools, "delegate").description, /language of the <reply_language> marker/);
+  });
+
+  test("工具结果末尾带语言提示（delegate / reply_subsession / report_to_parent），算不出语言时一个字都不加", async () => {
+    const zh = setup("root", () => "zh");
+    const p1 = toolByName(zh.tools, "delegate").execute("d1", { title: "t", task: "x" }, undefined, undefined, undefined as never);
+    zh.fake.answer(zh.fake.requestIdAt(0), {
+      ok: true,
+      childId: "c",
+      title: "t",
+      card: { childId: "c", title: "t", modelId: "m", thinkingLevel: "medium", workbench: "/wb" },
+    });
+    const delegated = await p1;
+    assert.match((delegated.content[0] as { text: string }).text, /Any text you write next must be in Chinese \(the user's language\)\.$/);
+    const p2 = toolByName(zh.tools, "reply_subsession").execute("r1", { childId: "c", text: "继续" }, undefined, undefined, undefined as never);
+    zh.fake.answer(zh.fake.requestIdAt(1), { ok: true, messageId: "m1" });
+    assert.equal(
+      (await p2).content[0] && ((await p2).content[0] as { text: string }).text,
+      "Reply sent to the sub-session. Any text you write next must be in Chinese (the user's language).",
+    );
+
+    const child = setup("child", () => "en");
+    const p3 = toolByName(child.tools, "report_to_parent").execute("p1", { kind: "done", text: "ok" }, undefined, undefined, undefined as never);
+    child.fake.answer(child.fake.requestIdAt(0), { ok: true, messageId: "m2" });
+    assert.match(((await p3).content[0] as { text: string }).text, /Task handed back — end this turn\. Any text you write next must be in English/);
+
+    const none = setup("child");
+    const p4 = toolByName(none.tools, "report_to_parent").execute("p2", { kind: "progress", text: "half" }, undefined, undefined, undefined as never);
+    none.fake.answer(none.fake.requestIdAt(0), { ok: true, messageId: "m3" });
+    assert.equal(((await p4).content[0] as { text: string }).text, "Reported to parent.");
   });
 });
