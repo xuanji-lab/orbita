@@ -71,6 +71,7 @@ import {
   type WebScanResult,
 } from "./web-artifacts.ts";
 import { injectUserContext } from "./user-context.ts";
+import { gitAttributionGuideline } from "./git-attribution.ts";
 import { joinSystemPrompt, orbitaSystemSegments, type PromptSegment } from "./system-prompt.ts";
 import { diffFingerprints, promptFingerprints, stabilityLogLine } from "./prompt-stability.ts";
 import {
@@ -96,6 +97,8 @@ import { createStoreTools } from "./store-tools.ts";
 import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
+import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
+import { createSandboxBrowserTools, SANDBOX_BROWSER_TOOL_NAMES } from "./sandbox-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
   applyRecallEvent,
@@ -765,6 +768,8 @@ function extraToolNames(
   automationTools: boolean,
   pluginTools: boolean,
   subAgentTools: boolean,
+  /** 电脑使用开着：这几件工具只在开着时注册，所以也只在开着时列给模型 */
+  computerUse: boolean,
 ): string[] {
   return [
     ...mcpHub.toolsFor(workspaceId ?? "").map((tool) => tool.name),
@@ -777,6 +782,7 @@ function extraToolNames(
     ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
     ...(pluginTools ? PLUGIN_TOOL_NAMES : []),
     ...(subAgentTools ? SUB_AGENT_TOOL_NAMES : []),
+    ...(computerUse ? [...COMPUTER_USE_TOOL_NAMES, ...SANDBOX_BROWSER_TOOL_NAMES] : []),
   ];
 }
 
@@ -919,8 +925,21 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 替哪个子智能体干活（指名派活的子会话）：主进程每轮现读档案带来；它的职能进系统提示
   const subAgentIdentity = "subAgent" in command ? command.subAgent : undefined;
 
-  // 工具闸门只剩抬超时与受保护路径；不再判档或问人。
-  const gate = createToolCallGate(command.protectedPaths, command.cwd);
+  // 工具闸门只剩抬超时、受保护路径与电脑使用预算（2026-11-16「只留放行」：没有档位判定、
+  // 没有请示）。预算只在电脑使用工具组真的注册时挂上：关着时这些工具不存在，计数也无从谈起。
+  // gate 一轮一份，计数天然按轮重置（口径见 shared/computer-guard.ts）。
+  const computerBudget =
+    command.computerUse?.enabled === true
+      ? {
+          // 硬限（第 91 次 / 满 20 分钟）中断本轮：与「停止」同一条链。**不关沙箱**——现场留给用户看。
+          abort: (reason: string) => {
+            abortCycle(running, command.sessionId);
+            settleIntentAsks(command.sessionId);
+            console.warn(`[computer-use] 预算硬限中断 ${command.sessionId}: ${reason}`);
+          },
+        }
+      : undefined;
+  const gate = createToolCallGate(command.protectedPaths, command.cwd, computerBudget);
   // 计划（update_plan）的「停下来对齐」：confirm 与「先给我看计划」照旧。
   // 让 agent 回头用正文说话（plan-tools.ts 头注释）；下一轮开轮时复位
   const planOptions: PlanToolOptions = {
@@ -1015,7 +1034,15 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
               // 提示词逐字节相同」这类断言可以直接对着它测，指纹记账也吃同一份段名单。
               // 开轮目录清单同样逐轮重讲：工作区挂新目录、换工作区，下一轮就生效。
               // 父子会话行不进系统提示词（本 PR）：对方工作台由 delegate 回执与通道信封告知。
-              const extra = extraToolNames(role, command.workspaceId, memoryTools, automationTools, pluginTools, subAgentTools);
+              const extra = extraToolNames(
+                role,
+                command.workspaceId,
+                memoryTools,
+                automationTools,
+                pluginTools,
+                subAgentTools,
+                command.computerUse?.enabled === true,
+              );
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
                 role,
@@ -1031,6 +1058,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 longTaskAutomationGuideline: automationTools,
                 subAgentsGuideline: subAgentTools,
                 ...(subAgentIdentity === undefined ? {} : { subAgent: subAgentIdentity }),
+                computerUse: command.computerUse,
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
               // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
@@ -1328,6 +1356,18 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...(pluginTools ? createPluginTools(requestBroker, command.sessionId) : []),
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
+    // computer use（PR2）：Windows 沙箱桌面上的像素工具组（截图 / 点击 / 打字 / 按键 /
+    // 滚动）。**挂在实验功能「电脑使用」开关后面**（缺席 = 关）：关着时工具根本不注册，
+    // 模型连它们的名字都看不到——比“执行时再拒绝”诚实（同 cite_pdf 的纪律）。
+    // 沙箱本身由用户在设置页启停，工具只经 computerUseRequest 下发。
+    ...(command.computerUse?.enabled === true ? createComputerUseTools(requestBroker, command.sessionId) : []),
+    // sandbox_*（PR3）：沙箱里那份 Edge 的 DOM 级工具（navigate / observe / click / type /
+    // extract / wait / screenshot / upload / download）。与像素组同一个实验开关——它们
+    // 操作的是同一个沙箱，分开两个开关只会让模型看到半套工具。写动作的 element 字段是
+    // 给 PR4 确认卡用的（审批卡上给用户看一句人话，而不是一个选择器）。
+    ...(command.computerUse?.enabled === true
+      ? createSandboxBrowserTools(requestBroker, command.sessionId, command.computerUse.allowNetwork)
+      : []),
     // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
     // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程
     ...createSlidesTools(requestBroker, command.sessionId, {
@@ -2261,6 +2301,11 @@ async function handle(command: AgentCommand): Promise<void> {
   if (command.type === "terminalResult") {
     // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "computerUseResult") {
+    // computer use 工具的回执：同 terminalResult，形状即契约（ok 双分支，截图多一个 shot）
     requestBroker.resolve(command.requestId, command);
     return;
   }

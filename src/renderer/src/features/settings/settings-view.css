@@ -747,6 +747,49 @@ a.exp-pr:hover {
   color: var(--color-text-secondary);
 }
 
+/* ===== 设置 › 电脑使用（SettingsView.tsx 的 ComputerUseView） ===== */
+
+/* 沙箱状态徽标：图标颜色来自视图层的 CSS 变量（statusVisual 的 tone），文字并排——
+   状态用图标 + 文字说话，颜色只是第二信号（设计系统） */
+.cu-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+/* 就绪态：整页唯一用成功绿的一处（只染图标，文字仍是正文色） */
+.cu-ready .orbita-icon {
+  color: var(--color-success);
+}
+
+/* 未就绪指引：主进程 guidance 一行一条；行里可能有命令原文，允许在任意字符处换行 */
+.cu-guidance {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0 0 var(--space-3);
+  list-style: none;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* 指引与截图块都直接接在自己那一行的下面，是那一行的内容——
+   分隔线不画在行与块之间（同 .set-row:has(+ .login-imported) 的处理） */
+.set-row:has(+ .cu-guidance),
+.set-row:has(+ .cu-shot) {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* 行底的一句常驻说明（SettingRow 的 below 那一格）：跨完两列，紧贴上面一行。
+   用在「改动什么时候生效」这类会被误读的时机上——不能只靠 info 的 hover 说清。
+   负外边距抵消一部分行间距：它是上一行的补句，不该与控件再隔一整格 */
+.cu-hint {
+  grid-column: 1 / -1;
+  margin: calc(-1 * var(--space-2)) 0 0;
 /* 设置 › 实验功能底部：每个面板打开了几次（只读，一行可折行）。次数是机器事实，走等宽字；
    0 次的那几项退到三级灰——它们正是要考虑删的 */
 .panel-usage-line {
@@ -756,6 +799,42 @@ a.exp-pr:hover {
   color: var(--color-text-secondary);
 }
 
+/* 「看一眼」的截图框：登录网站面板同一套配方（面板色 + 发丝框 + 大圆角），
+   图片按内容面宽度缩放，元信息条压在图下沿 */
+.cu-shot {
+  margin: 0;
+  overflow: hidden;
+  /* **必须压住 min-width**：它是 grid item，默认 min-width:auto 会让「内容最小宽度」
+     （这里是一张 2048px 宽的原始桌面截图）撑开 grid 列——设置页从 720 被撑到 1360，
+    右侧所有控制列被挤出视野（2026-11-18 真机验收撞到，切页签才恢复）。
+    min-width:0 让 item 服从列的宽度，图片再由 max-width 兜一层。 */
+  min-width: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+
+.cu-shot img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+.cu-shot-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 元信息是机器事实（尺寸 × 时间）：mono */
+.cu-shot-meta code {
+  font-family: var(--font-family-mono);
+}
 .panel-usage-line [data-zero] {
   color: var(--color-text-tertiary);
 }

@@ -22,6 +22,8 @@ const ALLOWED_LATIN = new Set([
   // 品牌
   "orbita",
   "GitHub",
+  // Chrome DevTools Protocol：电脑使用的浏览器通道就靠它（computerUse.browserInfo 讲「启动到 CDP 就绪」）
+  "CDP",
   // 设置 › 语音：通话的语音合成厂商（2026-11-24）
   "ElevenLabs",
   // 协议 / 格式 / 技术名
@@ -127,6 +129,13 @@ const ALLOWED_LATIN = new Set([
   "UniST",
   "UrbanCLIP",
   "arXiv",
+  // 隔离档位的平台与编号（电脑使用的能力检测：档位是产品术语，L1/L2/L3 不译）
+  "Windows",
+  "Linux",
+  "WSL2",
+  "L1",
+  "L2",
+  "L3",
   // 文件名
   "mcp.json",
   "SKILL.md",

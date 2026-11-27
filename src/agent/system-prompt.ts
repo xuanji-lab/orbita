@@ -19,6 +19,8 @@ import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
 import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
 import { describeSubAgentIdentity, SUB_AGENTS_MAIN_GUIDELINE } from "./sub-agent-tools.ts";
 import type { SubAgentTurnIdentity } from "../shared/sub-agent.ts";
+import { computerUseBudgetGuideline, computerUseNetworkGuideline } from "./computer-network.ts";
+import type { ComputerUseTurnContext } from "../shared/agent-ipc.ts";
 
 /**
  * bash 的 timeout 指引。数字与权限闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
@@ -107,6 +109,12 @@ export interface SystemPromptInput {
   subAgentsGuideline?: boolean;
   /** 这条会话替哪个子智能体干活（指名派活）：它的职能整段进提示；缺席 = 普通会话 */
   subAgent?: SubAgentTurnIdentity;
+  /**
+   * 电脑使用的现场（settings.experimentalFeatures["computer-use"]）。**只在开着时讲**：
+   * 关着时沙箱工具组根本没注册，讲它等于给模型一句假话。开着但出网开着时
+   * computerUseNetworkGuideline 返回空串，段会被下面滤掉。
+   */
+  computerUse?: ComputerUseTurnContext;
 }
 
 export interface PromptSegment {
@@ -116,6 +124,8 @@ export interface PromptSegment {
 
 /** 段序就是线上字节序：已有段不重排，避免无意义地打断整份前缀缓存。 */
 export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] {
+  // 「这次沙箱不能上网」逐轮重讲：改设置下一轮即生效；出网开着时是空串（下面滤掉）
+  const computerUseNetwork = computerUseNetworkGuideline(input.computerUse);
   return [
     { name: "pi-base", text: input.piBase },
     { name: "permission", text: describeProtectedData() },
@@ -131,6 +141,9 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
     ...(input.longTaskAutomationGuideline ? [{ name: "long-task-automation", text: LONG_TASK_AUTOMATION_GUIDELINE }] : []),
     ...(input.intentGuideline ? [{ name: "intent", text: INTENT_CONTEXT_GUIDELINE }] : []),
     { name: "quote", text: QUOTE_GUIDELINE },
+    ...(computerUseNetwork !== "" ? [{ name: "computer-use-network", text: computerUseNetwork }] : []),
+    // 「每轮动作预算」只在电脑使用开着时讲（预算随工具组注册才存在）；数字与闸门同源（shared/computer-guard.ts）
+    ...(input.computerUse?.enabled === true ? [{ name: "computer-use-budget", text: computerUseBudgetGuideline() }] : []),
     {
       name: "git-attribution",
       text: gitAttributionGuideline(input.gitAttribution, input.attributionLanguage ?? "en"),

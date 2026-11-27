@@ -5,13 +5,31 @@
  */
 import type {
   AgentCommand,
+  ComputerUseTurnContext,
   ProviderSecrets,
   SubmitAgentInput,
   TurnDirectories,
   CompactAgentInput,
 } from "../../shared/agent-ipc.ts";
-import type { CompactionSetting, Language } from "../../shared/settings.ts";
+import type { AppSettings, CompactionSetting, Language } from "../../shared/settings.ts";
+import { effectiveAllowNetwork } from "../../shared/settings.ts";
 import type { McpServer } from "../../shared/mcp.ts";
+
+/**
+ * 电脑使用的开轮现场：实验开关 + 沙箱出网，**从同一份设置值**一次算出。
+ *
+ * 抽成纯函数是为了能被 `node --test` 钉住：真正的读取点 `readComputerUse()` 在
+ * ipc.ts 里（要 electron，起不来），而这层映射——「哪个开关管注册、哪个值管提示词、
+ * 老 settings.json 缺字段时兑什么缺省」——恰好是最容易改坏的部分。读一次、算一次，
+ * 仍然是 ipc.ts 那一份读，没有第二套读写。
+ */
+export function computerUseTurnContext(settings: AppSettings | undefined): ComputerUseTurnContext {
+  return {
+    enabled: settings?.experimentalFeatures?.["computer-use"] === true,
+    // 缺省允许（effectiveAllowNetwork）：老 settings.json 没这个键 = 与开关做出来之前一样
+    allowNetwork: effectiveAllowNetwork(settings),
+  };
+}
 
 export function turnFields(
   input: SubmitAgentInput | CompactAgentInput,
@@ -29,6 +47,9 @@ export function turnFields(
     compaction: CompactionSetting;
     gitAttribution: boolean;
     attributionLanguage: Language;
+    /** 实验功能「电脑使用」的现场（settings.experimentalFeatures）：开着才注册沙箱工具组；
+     * 其中 allowNetwork 是「这次沙箱有没有出网」——只在开着时有意义 */
+    computerUse: ComputerUseTurnContext;
     /** 「先给我看计划」偏好（settings.planFirst）：开着时第一张新计划写完就停下等你点头；缺席 = 关 */
     planFirst: boolean;
     /** 插件工具的注册开关：true 才注册 install_plugin / preview_plugin / list_plugins */
@@ -36,7 +57,7 @@ export function turnFields(
     /** 所属工作区名字（store-tools 的 scope 指引讲归属用）；语义同命令字段——缺席 = 翻不出名字 */
     workspaceName?: string;
   },
-): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "planFirst" | "pluginTools"> {
+): Pick<Extract<AgentCommand, { type: "submit" }>, "sessionId" | "cwd" | "workspaceId" | "workspaceName" | "provider" | "modelId" | "thinkingLevel" | "piSessionDir" | "attachmentsDir" | "piSessionFile" | "protectedPaths" | "skillsDirs" | "directories" | "mcpServers" | "compaction" | "gitAttribution" | "attributionLanguage" | "computerUse" | "planFirst" | "pluginTools"> {
   // workspaceName 缺席时彻底不进命令对象（可送化与深比较都要稳定形状）：
   // 有工作区但翻不出名字是「未知」，不是「无工作区」——两态靠 workspaceId 区分
   const { workspaceName, ...rest } = environment;

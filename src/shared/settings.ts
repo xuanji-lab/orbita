@@ -5,6 +5,7 @@
  * 字段等有真实消费者再加，不提前占位。
  */
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
+import { COMPUTER_USE_DEFAULT_ALLOW_NETWORK, COMPUTER_USE_DEFAULT_BROWSER, COMPUTER_USE_BROWSER_CHOICES, COMPUTER_USE_DEFAULT_BACKEND, isComputerUseBackend, isComputerUseBrowser, mergeGuestAllowExe, normalizeGuestAppName, type ComputerUseBackend, type ComputerUseBrowser } from "./computer-use.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
 
@@ -118,7 +119,7 @@ export type AvatarModelChoice = ModelPair | "sub_session";
  * 各消费点的 `useExperimentalFeature(id)` 都从这里取类型。新功能挂进实验区 =
  * 这里加一个 id + 清单加一项；转正 = 两侧一起删（消费点的门同时拆）。
  */
-export const EXPERIMENTAL_FEATURE_IDS = ["intent-system"] as const;
+export const EXPERIMENTAL_FEATURE_IDS = ["intent-system", "computer-use"] as const;
 export type ExperimentalFeatureId = (typeof EXPERIMENTAL_FEATURE_IDS)[number];
 
 /**
@@ -164,6 +165,176 @@ export function parseIntentSettings(raw: unknown): IntentSettings | undefined {
   if (typeof v["newSessionOn"] === "boolean") out.newSessionOn = v["newSessionOn"];
   if (v["channel"] === "proma" || v["channel"] === "deepseek") out.channel = v["channel"];
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * 电脑使用（沙箱）的设置子对象。**只在实验开关 `computer-use` 打开时有界面**；
+ * 解析与缺省见 `parseComputerUse` / `effectiveAllowNetwork` / `effectiveGuestBrowser`。
+ *
+ * 现在有三项，**每一项都可以单独写**：`SettingsStore.write` 对 computerUse 做按键合并
+ *（同 drawer / lastUsed）——设置页只发自己改的那个键，手写的其它键不会被冲掉。
+ */
+export interface ComputerUseSettings {
+  /**
+   * 沙箱是否允许出网。**缺席 = 允许**：老 settings.json 没这个键，行为与开关做出来之前一模一样
+   * （网页自动化是 computer use 的主场景，默认关会让功能看起来坏了）。
+   * 关掉 = .wsb 的 `<Networking>Disable</Networking>`，沙箱只能做本地桌面自动化。
+   * 改动**下次启动沙箱时才生效**：.wsb 只在 start() 里渲染一次，运行中的 VM 不重启不改配置。
+   *
+   * **可选**：加了 `allowedApps` 之后，只写白名单的补丁不该被迫顺手写一个出网值；缺席时
+   * `effectiveAllowNetwork` 按缺省（允许）兜底，与老文件的语义一字不变。
+   */
+  allowNetwork?: boolean;
+  /**
+   * 应用级准入的 exe 白名单（追加在内置默认 msedge.exe 之上）。缺省 / 空表 = 只认 Edge——
+   * 空白名单就是出厂状态，不需要写入任何东西。
+   *
+   * 用途见 shared/computer-use.ts 的 `COMPUTER_USE_ADMISSION_VERDICTS`：桥在 guest 里判
+   * 「这一下打的是不是我们自己起的进程」，不在树里但 exe 在这张表里也算放行。本轮是
+   * **观察模式**：既不在树里也不在白名单里时仍不拒，只把 `admission:"bypassed"` 写进回执
+   * 与 bridge.log——先把模型实际点的 exe 量清楚，再决定要不要拒。
+   *
+   * 本 PR 不提供设置页入口（默认值就能跑）：想加就手改 settings.json，下一条输入命令即生效
+   * （控制器每条做准入判定的命令现读一次设置）。
+   */
+  allowedApps?: string[];
+  /**
+   * 沙箱里用哪个浏览器（`edge` / `chrome` / `brave` / `chromium` / `auto`）。缺席 = `edge`
+   * （沙箱预装、零准备成本，实测数字见 shared/computer-use.ts 的 COMPUTER_USE_BROWSER_CHOICES）。
+   *
+   * Chrome / Brave / Chromium **不在沙箱镜像里**：得用户自己映射或拷进去。没放进去时桥
+   * 回退 Edge，并在回执里标 `browserFallbackFrom`——所以选错不是静默的。
+   * 改了下一次 `cdp-start` 就生效（不写 .wsb、不用重启沙箱），但**已经在跑的浏览器**不换。
+   *
+   * 不认识的字符串落回 `edge` 并留一行日志：手改错的 json 不该把整个功能挡住。
+   */
+  browser?: ComputerUseBrowser;
+  /**
+   * 用哪个隔离桌面（`wsb` = L2 Windows Sandbox，`isolation-session` = L2b 多会话隔离）。
+   * 缺席 = `wsb`：P2 是**可选升级**，不是默认路径（它没有真实指针，像素工具整组降级）。
+   *
+   * 改这个值**不会**重启正在跑的会话：下一次「启动」才按新档位起。档位切了之后老的那只
+   * 必须自己 stop（不同后端各自一个单例，启动其中一个时先把另一个停掉——接线在运行时门面里）。
+   */
+  backend?: ComputerUseBackend;
+}
+
+/**
+ * 沙箱出网的生效值：只认布尔，缺席 / 坏值都按缺省（`COMPUTER_USE_DEFAULT_ALLOW_NETWORK`）。
+ * **兜底走 shared 的常量，不写 true**：主进程控制器与渲染层读的是同一个源，
+ * 改默认只改那一处（否则三处各自硬编码，行为今天对、将来会漂）。
+ */
+export function effectiveAllowNetwork(settings: { computerUse?: ComputerUseSettings } | undefined): boolean {
+  return settings?.computerUse?.allowNetwork ?? COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+}
+
+/**
+ * 下发给 guest 桥的准入白名单（内置四个浏览器 exe ∪ 设置里的 allowedApps，已规范化去重）。
+ * 与 `effectiveAllowNetwork` 同一个位置、同一条纪律：消费侧不各自拼默认值。
+ */
+export function effectiveGuestAllowExe(
+  settings: { computerUse?: ComputerUseSettings } | undefined,
+): string[] {
+  return mergeGuestAllowExe(settings?.computerUse?.allowedApps);
+}
+
+/**
+ * 沙箱浏览器的生效值：缺席 / 坏值都按缺省（`COMPUTER_USE_DEFAULT_BROWSER` = edge）。
+ * 与 `effectiveAllowNetwork` 同一条纪律：兜底走 shared 的常量，消费侧不写死。
+ */
+export function effectiveGuestBrowser(
+  settings: { computerUse?: ComputerUseSettings } | undefined,
+): ComputerUseBrowser {
+  return settings?.computerUse?.browser ?? COMPUTER_USE_DEFAULT_BROWSER;
+}
+
+/**
+ * 用哪个隔离桌面。缺席 / 坏值都按缺省（`COMPUTER_USE_DEFAULT_BACKEND` = wsb）。
+ * 与 `effectiveAllowNetwork` 同一条纪律：兜底走 shared 的常量。
+ */
+export function effectiveComputerUseBackend(
+  settings: { computerUse?: ComputerUseSettings } | undefined,
+): ComputerUseBackend {
+  // 比另外两个 effective* 多一道校验：未知值如果溜进运行时门面，`controllerOf` 会把它
+  // 当成 L2b（三元表达式的 else 支）——用户手改错一个字母就换了一个隔离边界。
+  const raw = settings?.computerUse?.backend;
+  return isComputerUseBackend(raw) ? raw : COMPUTER_USE_DEFAULT_BACKEND;
+}
+
+/**
+ * computerUse 子对象的解析：`allowNetwork` 只认布尔，`allowedApps` 只认能规范化的 exe 名字，
+ * `browser` 只认五个选项（上级未知的字符串落回 edge 并留一行日志）。
+ * 两样都没给出可用的值时返回 undefined（整段缺席 / 全是坏值 = 没设置）。
+ *
+ * `allowNetwork` 缺席是**允许**（老文件没有这个键）；`allowedApps` 缺席 = 只用内置默认；
+ * `browser` 缺席 = edge。
+ * 手改出来的 `"false"` / 数字一律当作没设置——与其它字段同一条纪律，不落假值到盘上。
+ */
+export function parseComputerUse(raw: unknown): ComputerUseSettings | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as { allowNetwork?: unknown; allowedApps?: unknown; browser?: unknown; backend?: unknown };
+  const allowedApps = parseAllowedApps(record.allowedApps);
+  const browser = parseComputerUseBrowser(record.browser);
+  const backend = parseComputerUseBackend(record.backend);
+  const hasNetwork = typeof record.allowNetwork === "boolean";
+  if (!hasNetwork && allowedApps === undefined && browser === undefined && backend === undefined) return undefined;
+  return {
+    ...(hasNetwork ? { allowNetwork: record.allowNetwork as boolean } : {}),
+    ...(allowedApps === undefined ? {} : { allowedApps }),
+    ...(browser === undefined ? {} : { browser }),
+    ...(backend === undefined ? {} : { backend }),
+  };
+}
+
+/**
+ * 隔离档位的解析。**只认两个合法值**，其它一律当作没设过（不落假值）：
+ * 与 `parseComputerUseBrowser` 不同，这里**没有“就近归一”的地方**——`wsb` / `isolation-session`
+ * 是两个真正不同的隔离边界，猜错一个就把用户放进了他没选的档位。跳过不回退成默认值，
+ * 让 `effectiveComputerUseBackend` 在实际使用时兜（老文件语义不变）。
+ */
+function parseComputerUseBackend(raw: unknown): ComputerUseBackend | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (isComputerUseBackend(raw)) return raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (isComputerUseBackend(trimmed)) return trimmed;
+    console.warn(`[settings] computerUse.backend 的值「${raw}」不认识，按 ${COMPUTER_USE_DEFAULT_BACKEND} 处理`);
+  }
+  return undefined;
+}
+
+/**
+ * 浏览器选项的解析。**宽进严出**：
+ *   - 五个合法值 → 原样保留；
+ *   - 其它**字符串**（手改成 "Chrome" 大小写 / "firefox" / 一条路径）→ 落回 edge + 一行日志。
+ *     宁可丢掉用户的选择也不让一个拼写错把整条 CDP 通道变成“起不来”，日志里能看见；
+ *   - 非字符串 / 缺席 → undefined（没设过）。
+ */
+function parseComputerUseBrowser(raw: unknown): ComputerUseBrowser | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (isComputerUseBrowser(raw)) return raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim().toLowerCase();
+    if (isComputerUseBrowser(trimmed)) return trimmed;
+    console.warn(
+      `[settings] computerUse.browser 的值「${raw}」不认识，按 ${COMPUTER_USE_DEFAULT_BROWSER} 处理` +
+        `（可选：${COMPUTER_USE_BROWSER_CHOICES.join(" / ")}）`,
+    );
+    return COMPUTER_USE_DEFAULT_BROWSER;
+  }
+  return undefined;
+}
+
+/** exe 名单：逐项规范化，坏值丢掉，按规范化后的名字去重；空表返回 undefined（不落空数组） */
+function parseAllowedApps(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    const name = normalizeGuestAppName(entry);
+    if (name !== null && !out.includes(name)) out.push(name);
+  }
+  return out.length === 0 ? undefined : out;
 }
 
 /** 星云摆放偏好：钉在哪天（本地日期键 YYYY-MM-DD）、收没收起 */
@@ -338,6 +509,8 @@ export interface AppSettings {
   starredModels?: ModelPair[];
   /** 上次使用的模型；缺席 = 应用默认。 */
   lastUsed?: LastUsedIntent;
+  /** 电脑使用（沙箱）的设置。缺席 = 沙箱允许出网（见 ComputerUseSettings）。 */
+  computerUse?: ComputerUseSettings;
   /**
    * 意图系统（实验功能 intent-system）的设置子对象。**只在实验开关打开时生效**；
    * 解析与缺省见 IntentSettings / effectiveIntentSettings。
@@ -412,6 +585,11 @@ export interface AppSettings {
    * （逐项记账，不是只有「开」才落盘）。全关 / 空表不落这个键。关着只藏入口
    * 不动数据——已存的主题照常应用、已星标的会话原样在盘上，
    * 开了就回来。
+   *
+   * 各项的语义：
+   * - `computer-use`：设置里的「电脑使用」页——能力检测、沙箱启停与手动「看一眼」。
+   *   关着只藏入口：不占侧栏一格，页面也进不去；沙箱进程不在其管控下常驻，
+   *   开了入口就回来。
    *
    * 下架的项（2026-10-23 输入框黑洞 / 俄罗斯方块，用户：「composer 的交互还不完善的
    * 基础上，暂时先下架华而不实的交互功能」）：id 从表里删掉即可——盘上残留的
@@ -774,6 +952,8 @@ export function parseSettings(raw: unknown): AppSettings {
     /** 旧键（2026-10-25 之前）：providersPage.cardSize 缺席时读它，任何一次写入都把它从盘上带走 */
     providerCardSize?: unknown;
     experimentalFeatures?: unknown;
+    /** 电脑使用（沙箱）的设置子对象 */
+    computerUse?: unknown;
     /** 意图系统（实验）的设置子对象 */
     intent?: unknown;
     vector?: unknown;
@@ -800,6 +980,7 @@ export function parseSettings(raw: unknown): AppSettings {
   const usagePet = parseUsagePet(record.usagePet);
   // 实验功能逐项开关（含旧键迁移，见 parseExperimentalFeatures）
   const experimentalFeatures = parseExperimentalFeatures(record.experimentalFeatures);
+  const computerUse = parseComputerUse(record.computerUse);
   const intent = parseIntentSettings(record.intent);
   const vector = parseVectorSettings(record.vector);
   const providersPage = parseProvidersPage(record.providersPage, record.providerCardSize);
@@ -884,6 +1065,7 @@ export function parseSettings(raw: unknown): AppSettings {
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
     ...(experimentalFeatures === undefined ? {} : { experimentalFeatures }),
+    ...(computerUse === undefined ? {} : { computerUse }),
     ...(intent === undefined ? {} : { intent }),
     ...(vector === undefined ? {} : { vector }),
   };

@@ -5,7 +5,18 @@
 import type { IconName } from "../../shell/Icon";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 
-export type SettingsTab = "general" | "guide" | "providers" | "migration" | "browser" | "voice" | "plugins" | "memory" | "experimental";
+export type SettingsTab =
+  | "general"
+  | "guide"
+  | "providers"
+  | "migration"
+  | "browser"
+  | "voice"
+  | "plugins"
+  | "memory"
+  | "experimental"
+  /** 实验功能「电脑使用」：只在 settings.experimentalFeatures["computer-use"] 开着时出现在导航里 */
+  | "computer-use";
 
 export interface SettingsTabDef {
   id: SettingsTab;
@@ -24,5 +35,6 @@ export const SETTINGS_TABS: readonly SettingsTabDef[] = [
   { id: "plugins", icon: FEATURE_ICON.plugins },
   // 记忆库（原右侧图标条的入口，2026-11-06 挪进设置）
   { id: "memory", icon: FEATURE_ICON.memory },
+  { id: "computer-use", icon: "monitor" },
   { id: "experimental", icon: "flask-conical" },
 ];

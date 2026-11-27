@@ -45,7 +45,7 @@ import { intentTurnEnv } from "./intent-env.ts";
 import { memoryBuildEligible } from "../memory/turn-tracker.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
-import type { IntentTurnContext } from "../../shared/agent-ipc.ts";
+import type { ComputerUseTurnContext, IntentTurnContext } from "../../shared/agent-ipc.ts";
 import {
   mergeMcpConfigs,
   resolveServersForWorkspace,
@@ -60,7 +60,7 @@ import { resolveTurnDirectories } from "./turn-directories.ts";
 import { SubAgentStore } from "../planet/sub-agents.ts";
 import type { SubAgentTurnIdentity } from "../../shared/sub-agent.ts";
 import { attributionOf } from "../../shared/session.ts";
-import { turnFields } from "./turn-fields.ts";
+import { computerUseTurnContext, turnFields } from "./turn-fields.ts";
 import { browserDownloadDir } from "../browser/download-dir.ts";
 import { AgentHost } from "./host.ts";
 
@@ -243,6 +243,16 @@ export function registerAgentIpc(
   /** Git 标识同款每轮现读；缺席 = 开启（兼容从没动过这个开关的旧设置文件） */
   const readGitAttribution = async (): Promise<boolean> =>
     (await settings.read()).gitAttribution ?? true;
+
+
+  /**
+   * 电脑使用每轮现读：实验开关决定**工具组注册**（关着时沙箱工具根本不进会话），
+   * 出网开关决定**模型怎么理解网页打不开**（见 ComputerUseTurnContext）。两个事实
+   * 来自同一份设置、同一次 `settings.read()`：不另开一套读写，也不会两轮之间漂移。
+   * 映射本身在 turn-fields.ts 的纯函数里（那边可测；这里是唯一读设置的、要 electron 的地方）。
+   */
+  const readComputerUse = async (): Promise<ComputerUseTurnContext> =>
+    computerUseTurnContext(await settings.read());
 
   /** 「先给我看计划」偏好同样每轮现读：改了下一轮即生效；缺席 = 关 */
   const readPlanFirst = async (): Promise<boolean> => (await settings.read()).planFirst === true;
@@ -555,6 +565,7 @@ export function registerAgentIpc(
         attributionLanguage: await readAttributionLanguage(),
         workspaceName: await workspaceNameOf(input.workspaceId),
         planFirst: await readPlanFirst(), pluginTools: true,
+        computerUse: await readComputerUse(),
       }),
     });
     await settleFirstTurn(input, piSessionFile);
@@ -588,13 +599,13 @@ export function registerAgentIpc(
     await beginMemoryTurn(input.sessionId, text);
     const automationTools = await readAutomationTools(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await readSubAgentEnv(input)), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId, input.autoCompact), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.interrupt({ type: "interrupt", text, sessionMemory: true, ...(automationTools ? { automationTools: true } : {}), ...(await readSubAgentEnv(input)), ...(await sentImages(input)), ...(await sentFileRefs(input)), ...(input.pasted !== undefined && input.pasted.length > 0 ? { pasted: input.pasted } : {}), ...(intentEnv.intent !== undefined ? { intent: intentEnv.intent } : {}), ...(intentEnv.backfill !== undefined ? { backfill: intentEnv.backfill } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId, input.autoCompact), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), computerUse: await readComputerUse(), planFirst: await readPlanFirst(), pluginTools: true }) });
     await settleFirstTurn(input, piSessionFile);
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
     const capabilities = await readCapabilities(input.workspaceId);
-    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), planFirst: await readPlanFirst(), pluginTools: true }) });
+    const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), computerUse: await readComputerUse(), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);
   });
 

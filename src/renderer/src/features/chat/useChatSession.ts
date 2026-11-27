@@ -402,6 +402,11 @@ export interface ChatSession {
    * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
    */
   startTaskWithDraft: (workspace: Workspace | null, text: string) => void;
+  /** 本槽是否正看着一条已经存在的会话（活会话或盘上打开的）；新任务槽为 false */
+  hasSession: boolean;
+  /** 急停命中本会话的时刻（12 秒后自动清）；null = 没有提示 */
+  estopAt: number | null;
+
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
   intentRecalls: readonly IntentRecallRecord[];
@@ -434,6 +439,9 @@ interface ViewHandle {
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
   alignThinking(event: { providerId: string; modelId: string; level: PiThinkingLevel }): void;
+  /** 急停命中本槽正看着的会话：给一条「已急停」提示（12 秒自动收） */
+  handleEmergencyStop(at: number): void;
+
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条迁到了别的工作区：meta、作用域芯片与 cwd 跟着变 */
@@ -1005,6 +1013,14 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
             }
           }
         }
+        // 急停（主进程广播）：命中的会话复位授权标识，并给一条「已急停」提示。
+        // **不关沙箱**（主进程的语义），这里只做界面反馈。
+        if (event.type === "computerUseEmergencyStop") {
+          for (const view of views.current) {
+            const viewed = view.viewedIdRef.current;
+            if (viewed !== null && event.sessionIds.includes(viewed)) view.handleEmergencyStop(event.at);
+          }
+        }
         // 工具耗时在这里记账（事件必经之路）：组折叠时成员行不渲染，渲染驱动会漏
         if (
           event.type === "progress" &&
@@ -1406,6 +1422,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     modelRef.current = model;
   }, [model]);
 
+  /** 急停发生的时刻（本槽正看着的会话被命中时置位）；12 秒后自动收掉提示 */
+  const [estopAt, setEstopAt] = useState<number | null>(null);
+
   // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
   const sessionRef = useRef<string | null>(null);
@@ -1602,6 +1621,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         modelRef.current = next;
         setModel(next);
       },
+      handleEmergencyStop: (at) => setEstopAt(at),
+
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
       // 只认当前型号报的：轮中切了型号（新型号下一轮才生效），旧型号此后因改档再报的
@@ -2387,6 +2408,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     sessionRef.current = null;
     engine.setError(null);
     setOpened(null);
+    setEstopAt(null);
     // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
     // 思考档按规则重算：模型不变，但档位不能沿用刚才打开的那条旧会话的账——
     // 否则「回首页开新任务」看起来会像是继承了上一条会话的思考档
@@ -2731,6 +2753,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
   );
+
+  /** 急停提示只留一会儿：它不是持续状态，落在转录上方会长期占位 */
+  useEffect(() => {
+    if (estopAt === null) return;
+    const timer = setTimeout(() => setEstopAt(null), 12_000);
+    return () => clearTimeout(timer);
+  }, [estopAt]);
+
 
   const changeThinkingLevel = useCallback(
     (next: ThinkingLevel) => {
@@ -3322,6 +3352,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     moveQueuedTo,
     newTask,
     newTaskIn,
+    hasSession: sessionId !== null || opened !== null,
+    estopAt,
     startTaskWithDraft,
   };
 }
