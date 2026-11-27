@@ -37,7 +37,7 @@ const environment = {
   compaction: { enabled: true } as CompactionSetting,
   gitAttribution: true,
   attributionLanguage: "en" as const,
-  computerUse: { enabled: true, platformSupported: true, allowNetwork: true },
+  computerUse: { enabled: true, platformSupported: true, allowNetwork: true, networkControlled: true },
   planFirst: false,
   pluginTools: false,
 };
@@ -97,12 +97,18 @@ describe("turnFields", () => {
     assert.equal("piSessionFile" in fields, false);
   });
 
-  test("computerUse 整份透传：开关、平台支持与沙箱出网三个事实都在命令里（模型的提示词与工具注册靠它们分叉）", () => {
+  test("computerUse 整份透传：开关、平台支持、沙箱出网与「后端能不能真断」四个事实都在命令里（提示词与工具注册靠它们分叉）", () => {
     const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
       ...environment,
-      computerUse: { enabled: true, platformSupported: true, allowNetwork: false },
+      // L2b 的那一对：用户关了出网，但这个后端断不了——两个事实必须各自到达 agent
+      computerUse: { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: false },
     });
-    assert.deepEqual(fields.computerUse, { enabled: true, platformSupported: true, allowNetwork: false });
+    assert.deepEqual(fields.computerUse, {
+      enabled: true,
+      platformSupported: true,
+      allowNetwork: false,
+      networkControlled: false,
+    });
   });
 });
 
@@ -115,16 +121,18 @@ describe("turnFields", () => {
  */
 describe("computerUseTurnContext（设置 → 命令）", () => {
   /** 设置夹具：只给与电脑使用有关的键，其余取默认（theme / drawer 是 AppSettings 的必填项） */
-  const settings = (value: { experimentalFeatures?: Record<string, boolean>; computerUse?: { allowNetwork: boolean } }): AppSettings =>
-    ({ theme: "system", drawer: { width: 320, docked: [] }, ...value }) as AppSettings;
+  const settings = (value: {
+    experimentalFeatures?: Record<string, boolean>;
+    computerUse?: { allowNetwork?: boolean; backend?: "wsb" | "isolation-session" | "qemu" };
+  }): AppSettings => ({ theme: "system", drawer: { width: 320, docked: [] }, ...value }) as AppSettings;
 
-  test("开着且允许出网：enabled 与 allowNetwork 各自取自己的键，Windows 上平台支持为真", () => {
+  test("开着且允许出网：enabled 与 allowNetwork 各自取自己的键，Windows 上平台支持为真，缺省后端 wsb 能断网", () => {
     assert.deepEqual(
       computerUseTurnContext(
         settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: true } }),
         "win32",
       ),
-      { enabled: true, platformSupported: true, allowNetwork: true },
+      { enabled: true, platformSupported: true, allowNetwork: true, networkControlled: true },
     );
   });
 
@@ -134,18 +142,43 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       enabled: true,
       platformSupported: false,
       allowNetwork: true,
+      networkControlled: true,
     });
     assert.equal(computerUseTurnContext(on, "linux").platformSupported, false);
     assert.equal(computerUseTurnContext(on, "freebsd").platformSupported, false);
   });
 
-  test("开着但禁出网：这正是要告诉模型的那一对值", () => {
+  test("开着但禁出网（wsb / qemu）：这正是要告诉模型的那一对值——关着且做得到", () => {
+    for (const backend of ["wsb", "qemu"] as const) {
+      assert.deepEqual(
+        computerUseTurnContext(
+          settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: false, backend } }),
+          "win32",
+        ),
+        { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: true },
+        backend,
+      );
+    }
+  });
+
+  test("L2b 上禁出网：开关是关的，但这个后端断不了——networkControlled 必须为 false（提示词据此改口）", () => {
     assert.deepEqual(
       computerUseTurnContext(
-        settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: false } }),
+        settings({
+          experimentalFeatures: { "computer-use": true },
+          computerUse: { allowNetwork: false, backend: "isolation-session" },
+        }),
         "win32",
       ),
-      { enabled: true, platformSupported: true, allowNetwork: false },
+      { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: false },
+    );
+    // 开着的时候它当然也「能出网」——两格各自如实，跟 allowNetwork 不合并
+    assert.equal(
+      computerUseTurnContext(
+        settings({ computerUse: { allowNetwork: true, backend: "isolation-session" } }),
+        "win32",
+      ).networkControlled,
+      false,
     );
   });
 
@@ -154,12 +187,14 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       enabled: false,
       platformSupported: true,
       allowNetwork: false,
+      networkControlled: true,
     });
     // 其它实验开关开着不算「电脑使用开着」
     assert.deepEqual(computerUseTurnContext(settings({ experimentalFeatures: { "pdf-citations": true } }), "win32"), {
       enabled: false,
       platformSupported: true,
       allowNetwork: true,
+      networkControlled: true,
     });
   });
 
@@ -168,30 +203,40 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       enabled: true,
       platformSupported: true,
       allowNetwork: true,
+      networkControlled: true,
     });
     assert.deepEqual(computerUseTurnContext(settings({}), "win32"), {
       enabled: false,
       platformSupported: true,
       allowNetwork: true,
+      networkControlled: true,
     });
     // 整份设置都读不到（store 空 / 坏文件被兜成 undefined）也不能变成「禁出网」
     assert.deepEqual(computerUseTurnContext(undefined, "win32"), {
       enabled: false,
       platformSupported: true,
       allowNetwork: true,
+      networkControlled: true,
     });
   });
 
   test("设置值一路进到命令：turnFields 拿到的就是这份现场，不二次解释", () => {
     const context = computerUseTurnContext(
-      settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: false } }),
+      settings({
+        experimentalFeatures: { "computer-use": true },
+        computerUse: { allowNetwork: false, backend: "isolation-session" },
+      }),
       "win32",
     );
     const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
       ...environment,
       computerUse: context,
     });
-    assert.deepEqual(fields.computerUse, { enabled: true, platformSupported: true, allowNetwork: false });
+    assert.deepEqual(fields.computerUse, {
+      enabled: true,
+      platformSupported: true,
+      allowNetwork: false,
+      networkControlled: false,
+    });
   });
 });
-

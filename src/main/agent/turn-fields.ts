@@ -12,7 +12,8 @@ import type {
   CompactAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { AppSettings, CompactionSetting, Language } from "../../shared/settings.ts";
-import { effectiveAllowNetwork } from "../../shared/settings.ts";
+import { effectiveAllowNetwork, effectiveComputerUseBackend } from "../../shared/settings.ts";
+import { backendNetworkControl } from "../../shared/computer-use.ts";
 import { computerUsePlatformSupport } from "../../shared/computer-use-platform.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 
@@ -36,6 +37,10 @@ export function computerUseTurnContext(
     platformSupported: computerUsePlatformSupport(platform).supported,
     // 缺省允许（effectiveAllowNetwork）：老 settings.json 没这个键 = 与开关做出来之前一样
     allowNetwork: effectiveAllowNetwork(settings),
+    // 两个事实分开算：用户选了什么（上一行）与这个后端做不做得到（这一行）。
+    // 缺省后端 wsb 做得到；选了 L2b 而开关还关着时，模型得到的是一句「断不了网」，
+    // 不是「你没有网」——见 agent/computer-network.ts 的四象限。
+    networkControlled: backendNetworkControl(effectiveComputerUseBackend(settings)) === "enforced",
   };
 }
 
@@ -56,7 +61,8 @@ export function turnFields(
     gitAttribution: boolean;
     attributionLanguage: Language;
     /** 实验功能「电脑使用」的现场（settings.experimentalFeatures）：开着才注册沙箱工具组；
-     * 其中 allowNetwork 是「这次沙箱有没有出网」——只在开着时有意义 */
+     * 其中 allowNetwork 是「用户选了什么」、networkControlled 是「这个后端能不能兑现」
+     * ——两者同时成立才告诉模型它没有出网 */
     computerUse: ComputerUseTurnContext;
     /** 「先给我看计划」偏好（settings.planFirst）：开着时第一张新计划写完就停下等你点头；缺席 = 关 */
     planFirst: boolean;

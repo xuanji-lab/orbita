@@ -55,6 +55,12 @@ export interface ComputerUseRuntimeDeps {
   isolation: IsolationSessionController;
   /** 当前设置选的后端（每次 start 现读，改设置下一次启动生效） */
   backend: () => ComputerUseBackend | Promise<ComputerUseBackend>;
+  /**
+   * 当前设置里的「允许沙箱出网」（每次 start 现读）。只有 QEMU 后端用它——WSB 的开关
+   * 由控制器自己的 deps.allowNetwork 读，L2b 根本做不到（backendNetworkControl）。
+   * 缺省 = 允许（与 effectiveAllowNetwork 同缺省；不传它的调用方是单测 / 不关心网络的环境）。
+   */
+  allowNetwork?: () => boolean | Promise<boolean>;
   /** L3 的后端（QEMU）。不传就用默认配置自己造一个——单测与不关心镜像路径的调用方不必给 */
   qemu?: SandboxProvider;
   /** 能力探测里的 L2b 依赖检查 */
@@ -89,7 +95,8 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    * QEMU 也在这张表里（P3 的空位），它的 status() 恒为 off——注册在这里是为了让
    * 「谁在跑」这件事只有一处枚举，而不是每个方法各写一份 if。
    */
-  const qemu: SandboxProvider = deps.qemu ?? new QemuSandboxProvider();
+  const qemu: SandboxProvider =
+    deps.qemu ?? new QemuSandboxProvider({ ...(deps.allowNetwork === undefined ? {} : { allowNetwork: deps.allowNetwork }) });
   const providers: readonly SandboxProvider[] = [deps.isolation, deps.wsb, qemu];
 
   /**

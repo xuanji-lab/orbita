@@ -1135,6 +1135,9 @@ export const zh: Messages = {
     allowNetworkInfo:
       "关掉后沙箱里的进程不能上网，网页打不开，所以网页自动化需要开着；只操作本地桌面 / 文件时可以关。",
     allowNetworkBelow: "改动在下次启动沙箱时生效；正在运行的沙箱仍按启动时的设置。",
+    // 后端做不到断网时（L2b）行底那一句：为什么这一行不可操作。不说「已关闭」——那是假的
+    allowNetworkLocked:
+      "这个后端跑在你自己这台电脑上的独立登录会话里，断不了网：它用的就是你现在的网络，开关开或关都不会改变它。",
     allowNetworkAria: "沙箱网络访问",
     browser: "沙箱浏览器",
     browserInfo:

@@ -50,17 +50,17 @@ describe("computerUsePlatformSupport（电脑使用只在 Windows 上）", () =>
 
 describe("computerUseToolsActive（这一轮注不注册 computer_* / sandbox_*）", () => {
   test("Windows + 开关开着：注册", () => {
-    assert.equal(computerUseToolsActive({ enabled: true, platformSupported: true, allowNetwork: true }), true);
+    assert.equal(computerUseToolsActive({ enabled: true, platformSupported: true, allowNetwork: true, networkControlled: true }), true);
   });
 
   test("非 Windows：开关开着也不注册（拒绝文案在那里只能是做不到的建议）", () => {
-    assert.equal(computerUseToolsActive({ enabled: true, platformSupported: false, allowNetwork: true }), false);
+    assert.equal(computerUseToolsActive({ enabled: true, platformSupported: false, allowNetwork: true, networkControlled: true }), false);
     // 出网关不关都要关掉这组工具：它们操作的是同一个沙箱
-    assert.equal(computerUseToolsActive({ enabled: true, platformSupported: false, allowNetwork: false }), false);
+    assert.equal(computerUseToolsActive({ enabled: true, platformSupported: false, allowNetwork: false, networkControlled: false }), false);
   });
 
   test("开关关着 / 现场缺席：不注册", () => {
-    assert.equal(computerUseToolsActive({ enabled: false, platformSupported: true, allowNetwork: true }), false);
+    assert.equal(computerUseToolsActive({ enabled: false, platformSupported: true, allowNetwork: true, networkControlled: true }), false);
     assert.equal(computerUseToolsActive(undefined), false);
   });
 });

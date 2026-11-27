@@ -67,12 +67,19 @@ export interface ComputerUseTurnPlan {
   tools: boolean;
   /** 沙箱这次是否允许出网：只在 tools 为 true 时有意义；缺省允许，与主进程 effectiveAllowNetwork 同缺省 */
   allowNetwork: boolean;
+  /**
+   * 这个后端能不能真的把出网关掉（shared/computer-use.ts 的 backendNetworkControl）。
+   * 与 allowNetwork 一起交给 sandbox_* 工具组：少这一格，L2b 上的描述与失败文案会把
+   * 「断不了网」说成「你没网」。缺省 true（与缺省后端 wsb 一致；ctx 缺席时 tools 也是 false）。
+   */
+  networkControlled: boolean;
 }
 
 export function computerUseTurnPlan(computerUse: ComputerUseTurnContext | undefined): ComputerUseTurnPlan {
   return {
     tools: computerUseToolsActive(computerUse),
     allowNetwork: computerUse?.allowNetwork ?? true,
+    networkControlled: computerUse?.networkControlled ?? true,
   };
 }
 

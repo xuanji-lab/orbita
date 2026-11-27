@@ -1,19 +1,24 @@
 /**
- * 「沙箱这次有没有出网」这件事，讲给模型听的三种说法。
+ * 「沙箱这次有没有出网」这件事，讲给模型听的说法。
  *
  * 背景（独立评审的遗留项）：设置里关掉出网后，沙箱渲染的 .wsb 带
  * `<Networking>Disable</Networking>`，任何页面都打不开。guest 桥从 Chromium 的错误页里
  * 抠出 `ERR_INTERNET_DISCONNECTED`，配的那句人话只能说「沙箱**可能**没有出网」——它看不见
  * 设置，只能猜。于是模型拿到一个含糊的原因，换地址、重试导航，白烧几轮超时。
  *
- * 「关没关」只有主进程知道（settings.computerUse.allowNetwork，经 effectiveAllowNetwork
- * 兑缺省），随开轮命令的 `computerUse` 现场送进来（见 shared/agent-ipc.ts 的
- * ComputerUseTurnContext）。这一层只负责把它翻成模型读得懂的话，**不读设置**：
+ * 这里的输入是**两个事实**，不是一个：
+ *   allowNetwork        用户选了什么（settings.computerUse.allowNetwork，经 effectiveAllowNetwork 兑缺省）；
+ *   networkControlled   这个后端能不能真的把出网关掉（backendNetworkControl，见 shared/computer-use.ts）。
+ * 两个都随开轮命令的 `computerUse` 现场送进来（见 shared/agent-ipc.ts 的
+ * ComputerUseTurnContext）。这一层只负责把它们翻成模型读得懂的话，**不读设置**：
  * 工具组随会话每轮新建，所以设置一改下一轮的说法就变。
  *
- * **开着出网时三种说法全都退化成空 / 原样**：这时断网错误真的可能是网站挂了、宿主机没网、
- * 或者地址写错，把「设置问题」扣到它们头上就是谎言。零噪音、零改写由
- * computer-network.test.ts 钉着。
+ * 三种情形，一一对应：
+ *   开关开着                     → 什么都不讲（零噪音）：此刻断网只能用网站 / 宿主 / 地址解释；
+ *   关着 **且** 后端做得到         → 「你没有出网，这是设置，不是网站」；
+ *   关着 **但** 后端做不到         → 「用户要求断网，但这个后端断不了」——既不能让模型以为
+ *                                  自己没网（它会拿着错的前提回答），也不能装作开关生效了。
+ * 第二段与第三段的区分就靠 networkControlled 这一格；以前没有它，L2b 上说的全是第二段。
  */
 import type { ComputerUseTurnContext } from "../shared/agent-ipc.ts";
 import { computerUseToolsActive } from "../shared/computer-use-platform.ts";
@@ -24,7 +29,26 @@ import {
 } from "../shared/computer-guard.ts";
 
 /**
- * 工具描述里的一段（`sandbox_*` 的每个描述都拼它，只在关掉出网时）。
+ * 一个后端对「关掉出网」这两个事实的组合。两个布尔相邻传参太容易写反（`f(false, true)`
+ * 与 `f(true, false)` 都是合法调用），所以成对传，名字跟着事实走。
+ */
+export interface SandboxNetworkFacts {
+  /** 用户选了什么：false = 设置里关了「允许沙箱出网」 */
+  allowNetwork: boolean;
+  /** 这个后端能不能真的兑现：false = 关了也不起作用（L2b） */
+  networkControlled: boolean;
+}
+
+/**
+ * 出网确实被关掉了——**两个事实同时成立**才算。单看开关开着 / 关着都不够：
+ * 关着但后端做不到时，说「你没网」是一句假话，比不说更坏。
+ */
+function outboundNetworkIsOff(facts: SandboxNetworkFacts): boolean {
+  return facts.allowNetwork === false && facts.networkControlled;
+}
+
+/**
+ * 工具描述里的一段（`sandbox_*` 的每个描述都拼它）。
  * 写英文是跟其它工具描述一致——模型读工具描述的语言不是用户界面语言。
  */
 const SANDBOX_NO_NETWORK =
@@ -34,6 +58,16 @@ const SANDBOX_NO_NETWORK =
   "Desktop and file work in the sandbox is unaffected. If the task really needs the web, ask the user to turn " +
   "that setting on (it applies the next time the sandbox starts) or — only if the user agrees — use the host " +
   "browser_* tools instead.";
+
+/**
+ * 开关关着、但这个后端断不了网时的那句话（L2b）。**短、且不声称任何它做不到的事**：
+ * 不说「你没有出网」（它其实在用户本机的网络上），也不说「设置生效了」（没生效）。
+ * 只讲三件真事：用户的要求、这台机器能否断网、以及由此该怎么做事。
+ */
+const SANDBOX_NETWORK_UNCONTROLLED =
+  "The user turned off Settings › Experimental features › Computer use › Sandbox › \"Allow network access\", " +
+  "but this isolation backend runs in a separate logon session on the user's own computer and cannot block " +
+  "its network — assume the machine's network is reachable. Don't browse unless the task needs it.";
 
 /** 失败文案里替换掉「可能」的那句确定性结论（中文，跟 guest 桥回的人话同一种语言） */
 const NETWORK_FAILURE_OFF =
@@ -48,13 +82,16 @@ const NETWORK_FAILURE_OFF =
  */
 const NETWORK_ERROR_CODES = /ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_CONNECTION_[A-Z_]+/;
 
-/** 关掉出网时，`sandbox_*` 的描述要尾随这一段；开着时是空串（不拼） */
-export function sandboxNetworkNote(allowNetwork: boolean): string {
-  return allowNetwork ? "" : SANDBOX_NO_NETWORK;
+/** 工具描述要尾随的那一段；不需要拼时是空串（调用方原样返回，零变化） */
+export function sandboxNetworkNote(facts: SandboxNetworkFacts): string {
+  if (outboundNetworkIsOff(facts)) return SANDBOX_NO_NETWORK;
+  // 关着但断不了网：一句短话，钉住「用户要求断网 / 这个后端做不到」两个事实
+  if (facts.allowNetwork === false) return SANDBOX_NETWORK_UNCONTROLLED;
+  return "";
 }
 
 /**
- * system prompt 的一段（关掉出网时才讲）。空串会被 runtime 的 filter 滤掉，
+ * system prompt 的一段（出网确实被关掉时才讲）。空串会被 runtime 的 filter 滤掉，
  * 所以「开着出网」的轮次里提示词一字不多。
  *
  * 与工具描述那段的分工：描述贴在工具旁边（模型每次挑工具都看得见），这段在提示词里
@@ -64,6 +101,10 @@ export function computerUseNetworkGuideline(computerUse: ComputerUseTurnContext 
   // 工具组没注册（开关关着 / 不是 Windows）：讲出网是废话；缺席（旧夹具）= 什么都不讲
   if (computerUse === undefined || !computerUseToolsActive(computerUse)) return "";
   if (computerUse.allowNetwork) return "";
+  if (!computerUse.networkControlled) {
+    // 关着但后端断不了网（L2b）：一句诚实的短话。**不说**「你没有出网」——那是假的。
+    return ["<orbita-sandbox-network>", SANDBOX_NETWORK_UNCONTROLLED, "</orbita-sandbox-network>"].join("\n");
+  }
   return [
     "<orbita-sandbox-network>",
     "The Windows sandbox is set to **no outbound network** (the user turned off Settings › Experimental " +
@@ -97,14 +138,15 @@ export function computerUseBudgetGuideline(): string {
 /**
  * 失败回执里的一句人话 → 给模型看的那句。
  *
- * 只在**两件事同时成立**时改口：主进程知道出网被关掉了（allowNetwork === false），
- * 且这条错误真的是网络类（NETWORK_ERROR_CODES）。其余一律原样返回——把「网站 500」
- * 说成「你的设置关了网」比不说更坏，模型会照着错的前提向用户提要求。
+ * 只在**三件事同时成立**时改口：主进程知道出网被关掉了（allowNetwork === false）、
+ * 这个后端真的做得到（networkControlled === true）、且这条错误真的是网络类
+ * （NETWORK_ERROR_CODES）。其余一律原样返回——把「网站 500」说成「你的设置关了网」比
+ * 不说更坏，模型会照着错的前提向用户提要求；L2b 上把「可能没网」改成「确定没网」同理。
  *
  * 原样返回必须是**同一份字符串**：调用点直接抛它，开着出网时模型看到的一个字都不变。
  */
-export function networkFailureError(message: string, allowNetwork: boolean): string {
-  if (allowNetwork) return message;
+export function networkFailureError(message: string, facts: SandboxNetworkFacts): string {
+  if (!outboundNetworkIsOff(facts)) return message;
   if (!NETWORK_ERROR_CODES.test(message)) return message;
   return `${message}\n\n${NETWORK_FAILURE_OFF}`;
 }

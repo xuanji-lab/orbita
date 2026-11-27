@@ -1217,6 +1217,9 @@ export const en = {
       "Off keeps everything in the sandbox off the network — pages can't load, so web automation needs it on; local desktop automation still works.",
     allowNetworkBelow:
       "Takes effect the next time the sandbox starts; a running sandbox keeps the setting it started with.",
+    /** 后端做不到断网时（L2b）行底那一句：为什么这一行不可操作。不说 "off"——那是假的 */
+    allowNetworkLocked:
+      "This backend runs in a separate logon session on your own computer and cannot block the network: it uses your machine's network, and this switch changes nothing either way.",
     allowNetworkAria: "Sandbox network access",
     browser: "Sandbox browser",
     browserInfo:

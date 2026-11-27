@@ -866,8 +866,19 @@ export interface ComputerUseTurnContext {
    * 沙箱是否允许出网（`effectiveAllowNetwork`，**缺席即允许**）。false = 宿主渲染的 .wsb
    * 带 `<Networking>Disable</Networking>`，网页打不开是设置造成的，不是网站的问题。
    * 只在 enabled 为 true 时有意义（开关关着时沙箱工具根本不注册）。
+   *
+   * **它只说用户选了什么，不说这个后端做不做得到**——两件事分开两个字段。
    */
   allowNetwork: boolean;
+  /**
+   * 这个后端能不能真的把出网关掉（`backendNetworkControl`，见 shared/computer-use.ts）：
+   * wsb / qemu 能，isolation-session 不能（它就在用户这台机器的另一个登录会话里）。
+   *
+   * 只有 `allowNetwork === false && networkControlled === true` 时「没有出网」才是事实；
+   * 少了这一格，L2b 上的模型会被通知一件不存在的事（它其实在用户本机的网络上）。
+   * 由主进程用「设置里的 backend + allowNetwork」算好，agent 进程不自己读设置。
+   */
+  networkControlled: boolean;
 }
 
 /**

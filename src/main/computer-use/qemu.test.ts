@@ -15,7 +15,7 @@ import { deflateSync } from "node:zlib";
 import { computerUseGuestCommands, COMPUTER_USE_DESKTOP_KEY } from "../../shared/computer-use.ts";
 import { SANDBOX_NOT_RUNNING } from "./provider.ts";
 import { QEMU_CAPABILITIES, QEMU_REFUSALS, QemuSandboxProvider } from "./qemu.ts";
-import { qemuAccelSpec } from "./qemu-vm.ts";
+import { qemuAccelSpec, qemuNetdevSpec, qemuVmArgs } from "./qemu-vm.ts";
 import type { QemuVmHandle, QemuVmOptions, QemuVmPorts } from "./qemu-vm.ts";
 
 const CRC_TABLE = (() => {
@@ -163,6 +163,27 @@ describe("QemuSandboxProvider：L3 的命令映射与能力降级", () => {
     void ports;
     return provider;
   }
+
+  it("启动时读一次出网开关并交给 bootVm（断网只发生在「关」的档，且不影响桌面通道）", async () => {
+    const ports: QemuVmPorts = { desk: port, monitor: 1, rfb: 2 };
+    const seen: boolean[] = [];
+    const provider = new QemuSandboxProvider({
+      bootVm: (options: QemuVmOptions & { ports: QemuVmPorts }): QemuVmHandle => {
+        seen.push(options.allowNetwork);
+        return { pid: process.pid, ports, token: "fake-token", qemuLog: "", serialLog: "", args: [], spawnedAt: Date.now() };
+      },
+      stopVm: async (): Promise<{ stopped: boolean; forced: boolean }> => ({ stopped: true, forced: false }),
+      openPointer: async () => ({
+        click: async () => undefined,
+        scroll: async () => undefined,
+        close: () => undefined,
+      }),
+      allowNetwork: () => false,
+    });
+    await provider.start();
+    assert.deepEqual(seen, [false], "设置里关着出网时，bootVm 必须收到 allowNetwork=false");
+    await provider.stop();
+  });
 
   it("没在跑时：车道方法回同一句「先启动」，不是静默空回", async () => {
     const provider = fakeProvider();
@@ -341,5 +362,57 @@ describe("QEMU 加速器参数：只给 x86_64 + WHPX 关内核 irqchip", () => 
     assert.equal(qemuAccelSpec("arm64", "whpx"), "whpx");
     assert.equal(qemuAccelSpec("x64", "hvf"), "hvf");
     assert.equal(qemuAccelSpec("ia32", "whpx"), "whpx");
+  });
+});
+
+
+/**
+ * 出网开关落到 QEMU 命令行：`-netdev user` 上的 `restrict=on`。
+ *
+ * 两件事必须同时成立，少一件就是回归：
+ *   1. 关掉出网时 guest 出不去（restrict=on）——QEMU 文档：「isolate guest from the rest of
+ *      the network」；restrict 只管隐式的出站 / 入站，**不作用于显式 hostfwd**；
+ *   2. 桌面通道的两条 hostfwd（8080 桌面服务、5900 RFB）一个都不能丢——丢了断网变断腿，
+ *      截屏与指针输入全部失效。开着出网时反过来：不能带 restrict（用户选了允许）。
+ * 真起一台 VM 要镜像与 QEMU 二进制（仓外产物），所以这里只断言拼出来的参数。
+ */
+describe("QEMU 出网开关：restrict=on 只加在「关」上，hostfwd 一条都不能丢", () => {
+  const ports: QemuVmPorts = { desk: 6250, monitor: 6251, rfb: 6252 };
+
+  it("关掉出网：restrict=on 与两条 hostfwd 同时在", () => {
+    const spec = qemuNetdevSpec(ports, false);
+    assert.match(spec, /restrict=on/);
+    assert.ok(spec.includes(`hostfwd=tcp:127.0.0.1:${ports.desk}-:8080`), spec);
+    assert.ok(spec.includes(`hostfwd=tcp:127.0.0.1:${ports.rfb}-:5900`), spec);
+    assert.match(spec, /^user,id=n0,/);
+  });
+
+  it("开着出网：不带 restrict（用户选了允许），转发规则照旧", () => {
+    const spec = qemuNetdevSpec(ports, true);
+    assert.doesNotMatch(spec, /restrict/);
+    assert.ok(spec.includes(`hostfwd=tcp:127.0.0.1:${ports.desk}-:8080`), spec);
+    assert.ok(spec.includes(`hostfwd=tcp:127.0.0.1:${ports.rfb}-:5900`), spec);
+  });
+
+  it("整条命令行里 -netdev 后面跟的就是那份串（拼命令行时没被覆盖 / 漏掉）", () => {
+    const args = qemuVmArgs({
+      paths: {
+        imageDir: "C:/img",
+        qemuDir: "C:/qemu",
+        qemu: "C:/qemu/qemu-system-x86_64.exe",
+        disk: "C:/img/desktop.qcow2",
+        kernel: "C:/img/vmlinuz",
+        initrd: "C:/img/initrd.gz",
+      },
+      ports,
+      token: "t0ken",
+      allowNetwork: false,
+      serialLog: "C:/img/serial.log",
+    });
+    const at = args.indexOf("-netdev");
+    assert.ok(at >= 0);
+    const spec = args[at + 1] ?? "";
+    assert.ok(spec.includes("restrict=on"), spec);
+    assert.ok(spec.includes("hostfwd="), spec);
   });
 });

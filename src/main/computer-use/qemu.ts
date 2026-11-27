@@ -19,6 +19,7 @@
  * 现在按事实声明 shared，别把「计划里的形状」写进能力里。
  */
 import {
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_DESKTOP_KEY,
   computerUseGuestCommands,
   sessionDesktopKey,
@@ -120,6 +121,12 @@ export interface QemuSandboxHooks {
   bootVm?: typeof bootQemuVm;
   stopVm?: typeof stopQemuVm;
   openPointer?: (port: number) => Promise<PointerInput>;
+  /**
+   * 设置 › 电脑使用 › 允许沙箱出网（每次 start 现读，缺省 = 允许，与
+   * effectiveAllowNetwork 同缺省）。false 时 VM 的 `-netdev user` 带 restrict=on，
+   * guest 出不了外网；桌面通道（hostfwd）不受影响。
+   */
+  allowNetwork?: () => boolean | Promise<boolean>;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -162,7 +169,19 @@ export class QemuSandboxProvider implements SandboxProvider {
     let vm: QemuVmHandle | null = null;
     try {
       const ports = await pickFreePorts();
-      vm = (this.#hooks.bootVm ?? bootQemuVm)({ paths, ports });
+      // 启动时读一次：VM 起好后再改设置不影响这只 VM（与 .wsb 的生效时机同一条纪律）。
+      // 读失败按缺省（允许）——与 WSB 控制器那条「读超时按缺省」同一条纪律：
+      // 一次读设置失败不该把启动卡死。
+      let allowNetwork = COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+      try {
+        const wanted = await this.#hooks.allowNetwork?.();
+        if (typeof wanted === "boolean") allowNetwork = wanted;
+      } catch (cause: unknown) {
+        console.warn(
+          `[computer-use] 读不到出网开关，按缺省（允许）起 VM：${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      }
+      vm = (this.#hooks.bootVm ?? bootQemuVm)({ paths, ports, allowNetwork });
       this.#vm = vm;
       // 用 handle 里的端口而不是刚才挑的那一对：以 VM 实际用的为准（测试里两者可以不同）
       const ready = await waitForDesk({ port: vm.ports.desk, token: vm.token }, { timeoutMs: 90_000 });

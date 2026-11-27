@@ -967,6 +967,37 @@ export function isComputerUseBackend(value: unknown): value is ComputerUseBacken
 }
 
 /**
+ * 「设置里的『允许沙箱出网』关掉」这件事，在某个后端上到底能不能兑现。
+ *
+ *   enforced          关掉就是真的没有出网，模型该知道「网页打不开是设置造成的」；
+ *   not-enforceable   这个后端做不到断网，关掉开关也不改变什么——**不能**告诉模型它没网。
+ *
+ * 为什么必须收成一个谓词：同一个开关连着三个后端，其中只有一个能做得到。以前设置页与
+ * 提示词都默认「关掉 = 没网」，于是 L2b 上模型被明确告知「你没有出网」，而它其实就在
+ * 用户这台机器的网络上——查一次资料就成了一次说谎，用户也以为自己的隐私设置生效了。
+ *
+ * 三个后端的机制（改动任一处都要回来改这里）：
+ *   wsb              宿主渲染的 .wsb 带 `<Networking>Disable</Networking>`
+ *                    （main/computer-use/sandbox.ts 的 renderWsbXml）。
+ *   qemu             桌面 VM 的 `-netdev user` 加 `restrict=on`：guest 出不了外网。
+ *                    **restrict 不作用于显式的 hostfwd**，所以桌面 HTTP / RFB 两条
+ *                    回环转发照通（main/computer-use/qemu-vm.ts 的 qemuNetdevSpec）。
+ *   isolation-session 做不到。它跑在用户自己这台 Windows 的**另一个登录会话**里，
+ *                    网就是这台机器的网；MXC 自己的文档写着 *IsolationSession cannot
+ *                    restrict networking*。按账号 SID 限定的防火墙规则
+ *                    （INetFwRule3::LocalUserAuthorizedList）是 app container 专用的，
+ *                    不能用来「拦某个账号的出网」；真要做得自己写 WFP 过滤器，那是一周的
+ *                    工程，这一轮不做，也不能假装已经做了。
+ */
+export type ComputerUseNetworkControl = "enforced" | "not-enforceable";
+
+export function backendNetworkControl(backend: ComputerUseBackend): ComputerUseNetworkControl {
+  // 逐个列名字而不是「只排除一个」：将来加后端时，忘记表态会在这里读出一个默认的
+  // enforced——而默认「能断网」正是这次要修的那个谎。所以反过来写：只有真做得到的才算。
+  return backend === "wsb" || backend === "qemu" ? "enforced" : "not-enforceable";
+}
+
+/**
  * L2b 的依赖检查（设置页那一行：「可用 / 不可用 + 为什么」）。
  *
  * `available` 为 false 时 `reason` **必须有话**：只说一句「不可用」而不说是缺 Node、缺服务、

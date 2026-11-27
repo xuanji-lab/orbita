@@ -32,6 +32,7 @@ import { COMPACTION_CHOICES } from "./compact-viz.ts";
 import {
   allowNetworkEnabled,
   allowNetworkPatch,
+  allowNetworkRow,
   backendChoice,
   backendPatch,
   browserChoice,
@@ -2058,6 +2059,11 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   const browser = browserChoice(props.settings);
   /** 隔离后端：缺席 = Windows 沙箱（P2 是可选升级，不是默认路径） */
   const backend = backendChoice(props.settings);
+  /**
+   * 出网那一行能不能动：L2b 断不了网，所以它上面这一行不可操作并给出原因；
+   * wsb / qemu 照常。**已存的值不动**——只是不让编辑（换回能断网的后端时选择还在）。
+   */
+  const networkRow = allowNetworkRow(backend, t);
   /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
       用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
       沙箱回到了未启动；下一次动作即清掉。 */
@@ -2150,19 +2156,32 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
           </span>
         </SettingRow>
         {/* 生效时机常驻在行底：运行中点了「关」而沙箱还在联网，用户会以为坏了——
-            这件事不能只住在 hover 里 */}
+            这件事不能只住在 hover 里。后端断不了网时（L2b）行底换成原因，那一行也不可操作：
+            否则用户关掉开关、看到「已关」、而它照样联网——那就是设置骗人。 */}
         <SettingRow
           name={t.computerUse.allowNetwork}
           info={t.computerUse.allowNetworkInfo}
-          below={<p className="cu-hint">{t.computerUse.allowNetworkBelow}</p>}
+          below={
+            <p className="cu-hint">
+              {networkRow.editable ? t.computerUse.allowNetworkBelow : networkRow.reason}
+            </p>
+          }
         >
           {/* 设计系统里没有 Switch，开关就用两个 Chip（与设置页其它布尔项同一个形状）。
-              按钮不因沙箱状态置灰：改的是下次启动时读的 .wsb，运行中也可以先改好 */}
+              按钮不因沙箱状态置灰：改的是下次启动时读的 .wsb / VM 参数，运行中也可以先改好 */}
           <span className="set-chips" role="group" aria-label={t.computerUse.allowNetworkAria}>
-            <Chip active={allowNetwork} onClick={() => props.onChange(allowNetworkPatch(true))}>
+            <Chip
+              active={allowNetwork}
+              disabled={!networkRow.editable}
+              onClick={() => props.onChange(allowNetworkPatch(true))}
+            >
               {t.common.on}
             </Chip>
-            <Chip active={!allowNetwork} onClick={() => props.onChange(allowNetworkPatch(false))}>
+            <Chip
+              active={!allowNetwork}
+              disabled={!networkRow.editable}
+              onClick={() => props.onChange(allowNetworkPatch(false))}
+            >
               {t.common.off}
             </Chip>
           </span>

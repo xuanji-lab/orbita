@@ -10,6 +10,7 @@ import {
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_DEFAULT_BACKEND,
   COMPUTER_USE_DEFAULT_BROWSER,
+  backendNetworkControl,
   type ComputerUseBackend,
   type ComputerUseBrowser,
   type ComputerUseProbeResult,
@@ -116,6 +117,27 @@ export function allowNetworkEnabled(settings: AppSettings): boolean {
  */
 export function allowNetworkPatch(enabled: boolean): Pick<SettingsPatch, "computerUse"> {
   return { computerUse: { allowNetwork: enabled } };
+}
+
+/**
+ * 「允许沙箱出网」这一行在这只后端上能不能动——派生层，不碰组件。
+ *
+ * 为什么要有这一格：这个开关连着三个后端，其中 L2b（isolation-session）做不到断网
+ * （它就在用户自己这台机器的另一个登录会话里）。以前设置页对三个后端一视同仁：用户把
+ * 开关关掉，界面说「已关」，而 L2b 照样联网——**设置骗人**。现在这一行在后端做不到时
+ * 变成不可操作，并把原因写在行底；**已存的值一个字节也不改**（只是不让编辑），所以
+ * 换回 wsb / qemu 时用户原来的选择还在。
+ *
+ * 判定只读 shared 的 `backendNetworkControl`：提示词那边用的是同一个谓词，两边不会分叉。
+ */
+export type AllowNetworkRow =
+  | { editable: true }
+  /** reason 是行底那句人话（i18n 表里来，不在这里拼） */
+  | { editable: false; reason: string };
+
+export function allowNetworkRow(backend: ComputerUseBackend, t: Messages): AllowNetworkRow {
+  if (backendNetworkControl(backend) === "enforced") return { editable: true };
+  return { editable: false, reason: t.computerUse.allowNetworkLocked };
 }
 
 /**

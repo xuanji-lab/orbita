@@ -864,6 +864,12 @@ void app.whenReady().then(async () => {
     wsb: wsbComputerUse,
     isolation: computerUseIsolation,
     backend: async () => effectiveComputerUseBackend(await settings.read()),
+    /**
+     * L3（QEMU）的断网：同一份设置、同一个读取点（WSB 的那份在控制器自身）。
+     * L2b 读不读它都一样——它断不了网（shared/computer-use.ts 的 backendNetworkControl），
+     * 提示词也因此不会对它说「你没网」。
+     */
+    allowNetwork: async () => effectiveAllowNetwork(await settings.read()),
     probeIsolation: () => computerUseIsolation.probe(),
   });
   /**
