@@ -9123,6 +9123,8 @@ a.latex-setup-action {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  /* 选区批注的浮条 / 草稿按它定位（PdfAnnotations） */
+  position: relative;
 }
 .pdf-toolbar {
   display: flex;
@@ -10703,8 +10705,6 @@ a.latex-setup-action {
   font-size: var(--font-size-sm);
 }
 
-  /* 选区批注的浮条 / 草稿按它定位（PdfAnnotations） */
-  position: relative;
 .pdf-find-mark[data-tone="red"] {
   background: var(--color-danger-soft);
   text-decoration: line-through;
