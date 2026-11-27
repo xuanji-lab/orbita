@@ -464,6 +464,7 @@ async function writeBridgeJson(
   outDir: string,
   tcp: { port: number; token: string; ipv4?: string[] } | null,
   fwAllowed?: boolean,
+  loopback?: boolean,
 ): Promise<void> {
   const body: Record<string, unknown> = { version: tcp === null ? "0.7.2" : "0.8.2", pid: 4321 };
   if (tcp !== null) {
@@ -472,6 +473,7 @@ async function writeBridgeJson(
     body["ipv4"] = tcp.ipv4 ?? ["127.0.0.1"];
   }
   if (fwAllowed !== undefined) body["fwAllowed"] = fwAllowed;
+  if (loopback !== undefined) body["loopback"] = loopback;
   await writeFile(join(outDir, "bridge.json"), JSON.stringify(body), "utf8");
 }
 
@@ -974,6 +976,57 @@ describe("bridge-client（防火墙状态）", () => {
       assert.equal(hints.length, 1, `防火墙提示只解释一次，实际 ${hints.length} 行：\n${lines.join("\n")}`);
       assert.match(hints[0] ?? "", /fwAllowed=false/);
       assert.match(hints[0] ?? "", /点「允许」/);
+    } finally {
+      bridge.stop();
+      resetGuestCommandSeq();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── 回环模式（0.15.1，L2b isolation-session）──────────────────────────────
+//
+// 桥带 `--loopback` 启动时只绑 127.0.0.1、一条 netsh 都不跑（那条后端与宿主同一个内核、同一套
+// 防火墙），bridge.json 多一个 loopback:true。宿主侧对它的唯一用处：万一连不上，能把原因说成
+// 「跨登录会话的回环可能被拦住，所以改走文件协议」，而不是误导成「沙箱防火墙没放行」。
+
+describe("bridge-client（回环模式）", () => {
+  test("bridge.json 的 loopback 被解析出来；老桥 / .wsb 没这个字段时就当 false", () => {
+    const withField = parseBridgeInfo(
+      JSON.stringify({ version: "0.15.1", pid: 1, port: 5, token: "t", ipv4: ["127.0.0.1"], loopback: true }),
+    );
+    assert.equal(withField?.loopback, true);
+    const withoutField = parseBridgeInfo(JSON.stringify({ version: "0.8.1", pid: 1 }));
+    assert.equal(withoutField?.loopback ?? false, false, "缺字段一律回落 false（消费方语义就是 === true）");
+  });
+
+  test("loopback=true 且连不上：日志说清「回环模式」与「改走文件协议」，只解释一次，命令照常温", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orbita-bridge-loopback-"));
+    resetGuestCommandSeq();
+    const bridge = startFakeBridge(dir, () => ({ resp: { ok: true, via: "file" } }));
+    try {
+      // 端口连不上 + 桥自报回环模式（fwAllowed=true 是回环语义：无需放行，不是「放行成功」）
+      await writeBridgeJson(dir, { port: 9, token: "t" }, true, true);
+      const { value, lines } = await captureLog(async () => {
+        const resp = await sendGuestCommand(dir, "ping", {});
+        // 后台探活会在这条命令之后失败（命令本身不等它）
+        await sleep(300);
+        await sendGuestCommand(dir, "ping", {});
+        await sleep(300);
+        return resp;
+      });
+      assert.deepEqual(value, { ok: true, via: "file" }, "命令语义不变：走文件协议照样成功");
+      const hints = lines.filter((line) => line.includes("回环模式"));
+      assert.equal(hints.length, 1, `回环提示只解释一次，实际 ${hints.length} 行：\n${lines.join("\n")}`);
+      assert.match(hints[0] ?? "", /宿主连不上会话内的 127\.0\.0\.1/);
+      assert.match(hints[0] ?? "", /跨登录会话可能被策略拦住/);
+      assert.match(hints[0] ?? "", /改走文件协议/);
+      // 回环模式不是「沙箱防火墙没放行」那个现场，不许打那句误导人的提示
+      assert.equal(
+        lines.filter((line) => line.includes("沙箱防火墙未放行")).length,
+        0,
+        `回环模式不该提「沙箱防火墙未放行」：\n${lines.join("\n")}`,
+      );
     } finally {
       bridge.stop();
       resetGuestCommandSeq();

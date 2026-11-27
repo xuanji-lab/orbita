@@ -654,6 +654,10 @@ interface TcpChannelState {
   fwAllowed: boolean | undefined;
   /** 第一次连不上时已经解释过防火墙了吗（只解释一次，不刷屏） */
   fwHintLogged: boolean;
+  /** 桥是不是回环模式（bridge.json 的 loopback:true；false = 老桥 / .wsb 那条路） */
+  loopback: boolean;
+  /** 回环模式连不上时已经解释过了吗（同样只解释一次） */
+  loopbackHintLogged: boolean;
 }
 
 let tcpState: TcpChannelState | null = null;
@@ -669,20 +673,22 @@ function closeTcpState(): void {
   if (state.link !== null) state.link.close();
 }
 
-/** bridge.json 里我们关心的两件事：TCP 通道，以及它自报的防火墙状态 */
+/** bridge.json 里我们关心的三件事：TCP 通道、它自报的防火墙状态、是不是回环模式 */
 interface BridgeTcpInfo {
   channel: GuestTcpChannel | null;
   fwAllowed: boolean | undefined;
+  /** 缺字段一律当 false（老桥 / .wsb：都是 0.0.0.0 + 入站放行那套） */
+  loopback: boolean;
 }
 
 async function readTcpChannel(outDir: string): Promise<BridgeTcpInfo> {
   try {
     const raw = await readFile(join(outDir, BRIDGE_INFO_FILE), "utf8");
     const info = parseBridgeInfo(raw);
-    return { channel: info?.tcp ?? null, fwAllowed: info?.fwAllowed };
+    return { channel: info?.tcp ?? null, fwAllowed: info?.fwAllowed, loopback: info?.loopback === true };
   } catch {
     // 桥还没写通告 / 映射目录还没同步：当老桥，走文件协议
-    return { channel: null, fwAllowed: undefined };
+    return { channel: null, fwAllowed: undefined, loopback: false };
   }
 }
 
@@ -713,6 +719,8 @@ async function channelStateFor(outDir: string): Promise<TcpChannelState> {
       probeLogAt: 0,
       fwAllowed: undefined,
       fwHintLogged: false,
+      loopback: false,
+      loopbackHintLogged: false,
     };
   }
   const state = tcpState;
@@ -720,6 +728,7 @@ async function channelStateFor(outDir: string): Promise<TcpChannelState> {
     const tcp = await readTcpChannel(outDir);
     state.channel = tcp.channel;
     state.fwAllowed = tcp.fwAllowed;
+    state.loopback = tcp.loopback;
   }
   if (state.channel !== null && state.link === null) armProbe(state);
   return state;
@@ -799,6 +808,7 @@ async function runProbe(state: TcpChannelState): Promise<void> {
     const tcp = await readTcpChannel(state.outDir);
     state.channel = tcp.channel;
     state.fwAllowed = tcp.fwAllowed;
+    state.loopback = tcp.loopback;
   }
   const channel = state.channel;
   if (tcpState !== state) return;
@@ -839,6 +849,17 @@ async function runProbe(state: TcpChannelState): Promise<void> {
     console.log(
       "[computer-use] 通道：TCP 连不上，且沙箱防火墙未放行（bridge.json 的 fwAllowed=false）——" +
         "用户需要在沙箱里点「允许」；在点之前一律走文件协议",
+    );
+  }
+  // 回环模式（0.15.1，L2b）：桥只绑 127.0.0.1、一条 netsh 都没跑（那条后端与宿主同一个内核、
+  // 同一套防火墙，去关它就是改用户整机设置）。这里连不上最可能是**跨登录会话的回环被系统策略
+  // 拦住**——它不是防火墙没放行，也不该去放行任何东西：退回文件协议（每命令 3–7 秒，功能不变）。
+  // 同样只解释一次，之后只在原因变了时记一行。
+  if (state.loopback && !state.loopbackHintLogged) {
+    state.loopbackHintLogged = true;
+    console.log(
+      "[computer-use] 通道：回环模式——宿主连不上会话内的 127.0.0.1（跨登录会话可能被策略拦住），" +
+        "改走文件协议（每条命令更慢，功能不变；桥本来就没有碰宿主防火墙）",
     );
   }
   logProbeFailure(state, opened.reason);

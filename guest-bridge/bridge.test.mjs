@@ -245,18 +245,23 @@ test(
       assert.ok(await waitForFile(infoPath), `桥应写出 bridge.json。桥日志：\n${bridgeLog}`);
       const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
 
-      // ---- 通告：只给回环地址，声明没碰过防火墙 ----
+      // ---- 通告：只给回环地址 ----
       assert.deepEqual(info.ipv4, ["127.0.0.1"], "回环模式的 ipv4 必须恰好是 [127.0.0.1]（不许通告局域网地址）");
       assert.ok(Number.isInteger(info.port) && info.port > 0, "回环模式仍要通告 TCP 端口（宿主走 TCP 才快）");
       assert.match(info.token, /^[0-9a-f]{32}$/, "令牌机制不变");
-      // 语义：fwAllowed=true 指的是「TCP 可用、无需入站放行」（127.0.0.0/8 不经过防火墙筛选），
-      // fwStateOff=false 指的是「一次 netsh 都没跑、没有关过防火墙」，loopback=true 标出这是回环模式。
-      assert.equal(info.fwAllowed, true, "回环模式：无需放行即可连（不是「放行成功了」）");
-      assert.equal(info.fwStateOff, false, "回环模式：绝不允许把防火墙关掉（fwStateOff 必须 false）");
-      assert.equal(info.loopback, true, "回环模式应在 bridge.json 里标出来（回退到文件协议时能说清为什么）");
+      // loopback=true 是**有区分度**的：--no-firewall 不会写它，只有 --loopback 会。
+      assert.equal(info.loopback, true, "回环模式应在 bridge.json 里标出来（宿主退回文件协议时能说清为什么）");
+      // ⚠ fwAllowed / fwStateOff **故意不在这里断言**：这个用例必带 --no-firewall（红线 2），
+      // 而那条路本身就把 _fwAllowed 写死 true / _fwStateOff 写死 false——两个模式下都会通过，
+      // 断言它们等于没验，还会让人误以为「没碰防火墙」是这两条在守。「没碰防火墙」在这里靠下面
+      // 三条日志/帧断言的**可达性**证明（回环模式根本不进那个分支）；真机取证（netsh 调用计数、
+      // 防火墙状态前后一致）在验收记录里，不在这个宿主测试里。
 
       // ---- 日志：说清楚没碰防火墙，且监听地址是回环 ----
       assert.match(bridgeLog, /回环模式：不触碰防火墙/, `启动日志应明说回环模式不碰防火墙。桥日志：\n${bridgeLog}`);
+      // 回环模式**根本不进** PrepareFirewallBeforeListen / AddPortRuleAfterListen：任何一行
+      // 「防火墙：…」都是它走了 netsh 分支的铁证（带 --no-firewall 时那一支会打「自测跳过放行」）。
+      assert.doesNotMatch(bridgeLog, /防火墙：/, `回环模式不得进任何防火墙分支（连自测跳过那行也不该有）。桥日志：\n${bridgeLog}`);
       assert.match(bridgeLog, /TCP 通道已监听：127\.0\.0\.1:\d+/, "监听地址应是 127.0.0.1");
       assert.doesNotMatch(bridgeLog, /TCP 通道已监听：0\.0\.0\.0:/, "回环模式不得监听 0.0.0.0");
 

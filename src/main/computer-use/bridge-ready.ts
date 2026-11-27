@@ -28,6 +28,12 @@ export interface BridgeInfo {
    * undefined = 老桥没这个字段。
    */
   fwAllowed?: boolean;
+  /**
+   * 桥自报是**回环模式**（0.15.1 起，bridge.json 的 loopback）：只绑 127.0.0.1、一条 netsh 都没跑
+   * （L2b 的 isolation-session 后端跑在用户自己这台 Windows 的另一个登录会话里，不许碰宿主防火墙）。
+   * undefined = 老桥，或 .wsb 那条路（0.0.0.0 + guest 内放行）；消费方一律按 false 处理。
+   */
+  loopback?: boolean;
 }
 
 /**
@@ -61,11 +67,13 @@ export function parseBridgeInfo(raw: string): BridgeInfo | null {
   if (typeof version !== "string" || version === "") return null;
   const tcp = parseTcpChannel(record);
   const fwAllowed = record["fwAllowed"];
+  const loopback = record["loopback"];
   return {
     version,
     pid: typeof pid === "number" && Number.isInteger(pid) ? pid : 0,
     ...(tcp === undefined ? {} : { tcp }),
     ...(typeof fwAllowed === "boolean" ? { fwAllowed } : {}),
+    ...(typeof loopback === "boolean" ? { loopback } : {}),
   };
 }
 
