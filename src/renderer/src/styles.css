@@ -3983,15 +3983,17 @@ html[data-pointer-drag] iframe {
 /* ---------- PDF 批注栏（与 tex 大纲同一套形态：工具条开合、右侧竖栏） ---------- */
 /* 工具条上的开关键：有批注时带一个小圆点计数，不占正文 */
 .pdf-annot-badge {
-  margin-left: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: var(--space-0-5);
   min-width: 14px;
-  padding: 0 3px;
+  height: 14px;
+  padding: 0 var(--space-0-5);
   border-radius: var(--radius-pill);
-  background: var(--color-bg-inset);
+  background: var(--color-bg-muted);
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
-  line-height: 14px;
-  text-align: center;
 }
 .pdf-annot-rail {
   display: flex;
