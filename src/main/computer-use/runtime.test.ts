@@ -211,6 +211,51 @@ describe("运行时门面", () => {
     assert.equal(runtime.desktopKey("A"), COMPUTER_USE_DESKTOP_KEY);
   });
 
+  /**
+   * runningFacts：出网那对值必须跟着**正在跑的那只**，而且要记启动时的那份开关。
+   *
+   * 这是「设置选 wsb、实际跑着 L2b」那条谎的另一半：模型那边拿设置算会把 wsb 的「能断网」
+   * 扣到 L2b 头上。门面在 start 时把 { backend, allowNetwork } 记下来，没在跑就是 null。
+   */
+  it("runningFacts：记下启动时的后端与开关；停掉之后回 null", async () => {
+    const wsb = fakeController("wsb");
+    const iso = fakeController("iso");
+    let allowNetwork = false;
+    const runtime = createComputerUseRuntime({
+      wsb: { ...wsb.controller, probe: async () => probeResult() },
+      isolation: iso.controller as unknown as IsolationSessionController,
+      backend: () => "isolation-session",
+      allowNetwork: () => allowNetwork,
+      probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    assert.equal(await runtime.runningFacts(), null, "没在跑时没有事实可说");
+    assert.deepEqual(await runtime.start(), { ok: true });
+    assert.deepEqual(await runtime.runningFacts(), { backend: "isolation-session", allowNetwork: false });
+    // 运行中改开关不影响这一局：事实仍是启动时那份（设置页文案也说「下次启动生效」）
+    allowNetwork = true;
+    assert.deepEqual(await runtime.runningFacts(), { backend: "isolation-session", allowNetwork: false });
+    await runtime.stop();
+    assert.equal(await runtime.runningFacts(), null);
+  });
+
+  it("启动失败不留事实（否则下一轮会拿一个不存在的沙箱的出网情况说话）", async () => {
+    const wsb = fakeController("wsb", "off");
+    const iso = fakeController("iso");
+    iso.controller.start = async () => {
+      iso.setState("error");
+      return { ok: false, error: "假的启动失败" };
+    };
+    const runtime = createComputerUseRuntime({
+      wsb: { ...wsb.controller, probe: async () => probeResult() },
+      isolation: iso.controller as unknown as IsolationSessionController,
+      backend: () => "isolation-session",
+      allowNetwork: () => false,
+      probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    assert.equal((await runtime.start()).ok, false);
+    assert.equal(await runtime.runningFacts(), null);
+  });
+
   it("一个后端都没跑时，车道方法回一句能转告用户的话（不抛、不挂）", async () => {
     const wsb = fakeController("wsb");
     const iso = fakeController("iso");

@@ -19,6 +19,7 @@ import {
   COMPUTER_USE_NO_EVIDENCE_HINT,
   COMPUTER_USE_UIA_TIMEOUT_MS,
   captureNote,
+  backendNetworkControl,
   computerUseAudit,
   computerUseBackendChoices,
   computerUseChannels,
@@ -631,5 +632,31 @@ describe("computerUseAudit（审计载荷的唯一工厂）", () => {
   test("sandbox 写件与 UIA 用同一份形状（三段代码拼三份字段就会漂）", () => {
     assert.equal(computerUseAudit("sandbox-click", { selector: "#a" }).inputOrigin, "agent");
     assert.equal(computerUseAudit("uia-act", { action: "invoke", ref: 1 }).inputOrigin, "agent");
+  });
+});
+
+/**
+ * 「关掉出网」这个设置在三个后端上能不能兑现（backendNetworkControl）。
+ *
+ * 为什么单独一条：这是「设置骗人」的唯一判定点。提示词、失败文案、设置页置灰都读它，
+ * 判定错了三处会一起说谎；而两只眼睛看不出来——同一条 `.wsb` / `-netdev` 参数不会报错。
+ */
+describe("backendNetworkControl（这只后端能不能真的断网）", () => {
+  test("wsb：能——.wsb 的 <Networking>Disable</Networking>（关掉就是真没有出网）", () => {
+    assert.equal(backendNetworkControl("wsb"), "enforced");
+  });
+
+  test("qemu：能——`-netdev user` 的 restrict=on（hostfwd 照通，桌面通道不受影响）", () => {
+    assert.equal(backendNetworkControl("qemu"), "enforced");
+  });
+
+  test("isolation-session：做不到——它在用户自己这台机器的另一个登录会话里（MXC 文档：cannot restrict networking）", () => {
+    assert.equal(backendNetworkControl("isolation-session"), "not-enforceable");
+  });
+
+  test("三个后端都有明确结论，没有漏表态的（将来加后端会在这里显形）", () => {
+    for (const backend of ["wsb", "isolation-session", "qemu"] as const) {
+      assert.ok(["enforced", "not-enforceable"].includes(backendNetworkControl(backend)), backend);
+    }
   });
 });

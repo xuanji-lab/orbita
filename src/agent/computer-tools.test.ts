@@ -517,29 +517,35 @@ describe("computer_* 的审计归属（inputOrigin / maskedRegions / userTypingA
  * 「改回只认 enabled」会让下面第三条当场变红。
  */
 describe("computerUseTurnPlan（这一轮装配什么）", () => {
-  test("enabled=false：不注册工具、也不讲那两段提示词（allowNetwork 如实带着）", () => {
-    assert.deepEqual(computerUseTurnPlan({ enabled: false, platformSupported: true, allowNetwork: false }), {
-      tools: false,
-      allowNetwork: false,
-    });
+  test("enabled=false：不注册工具、也不讲那两段提示词（allowNetwork / networkControlled 如实带着）", () => {
+    assert.deepEqual(
+      computerUseTurnPlan({ enabled: false, platformSupported: true, allowNetwork: false, networkControlled: false }),
+      { tools: false, allowNetwork: false, networkControlled: false },
+    );
   });
 
-  test("enabled=true + win32：注册工具、讲提示词，出网按设置", () => {
-    assert.deepEqual(computerUseTurnPlan({ enabled: true, platformSupported: true, allowNetwork: true }), {
-      tools: true,
-      allowNetwork: true,
-    });
-    assert.equal(computerUseTurnPlan({ enabled: true, platformSupported: true, allowNetwork: false }).allowNetwork, false);
+  test("enabled=true + win32：注册工具、讲提示词，出网与「能不能真断」两个事实各取各的", () => {
+    assert.deepEqual(
+      computerUseTurnPlan({ enabled: true, platformSupported: true, allowNetwork: true, networkControlled: true }),
+      { tools: true, allowNetwork: true, networkControlled: true },
+    );
+    // L2b：开关关着，但这个后端断不了——两条事实必须各自如实下去，不能合并成一个布尔
+    assert.deepEqual(
+      computerUseTurnPlan({ enabled: true, platformSupported: true, allowNetwork: false, networkControlled: false }),
+      { tools: true, allowNetwork: false, networkControlled: false },
+    );
   });
 
   test("enabled=true + darwin：开关开着也不注册（这就是改回只认 enabled 会红的那一条）", () => {
-    assert.deepEqual(computerUseTurnPlan({ enabled: true, platformSupported: false, allowNetwork: true }), {
-      tools: false,
-      allowNetwork: true,
-    });
+    assert.deepEqual(
+      computerUseTurnPlan({ enabled: true, platformSupported: false, allowNetwork: true, networkControlled: true }),
+      { tools: false, allowNetwork: true, networkControlled: true },
+    );
   });
 
-  test("computerUse 缺席（旧命令形状 / 开关从没打开）：不注册，出网按缺省允许", () => {
-    assert.deepEqual(computerUseTurnPlan(undefined), { tools: false, allowNetwork: true });
+  test("computerUse 缺席（旧命令形状 / 开关从没打开）：不注册；缺了 networkControlled 一格就按「做不到」算", () => {
+    // 缺席不能按 true（wsb 能断）：同一轮的提示词把缺格当「做不到」、工具描述若按 true 就会说
+    // 「This sandbox has no outbound network」——两个消费者当场互相打脸（验收实测过）。
+    assert.deepEqual(computerUseTurnPlan(undefined), { tools: false, allowNetwork: true, networkControlled: false });
   });
 });

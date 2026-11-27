@@ -1033,6 +1033,56 @@ export function isComputerUseBackend(value: unknown): value is ComputerUseBacken
 }
 
 /**
+ * 正在跑的那只隔离**在启动那一刻**定下来的两个事实。
+ *
+ * 为什么一定要记当时的、不能用当前的设置算：设置页的「隔离后端」与「允许沙箱出网」都是
+ * **下次启动才生效**（backendPatch 明写不自动重启）。于是运行中改设置，模型那边就会拿到
+ * 一组与真实沙箱无关的值——「设置选 wsb、实际跑着断不了网的 L2b」时被告知「你没有出网」，
+ * 或者「运行中把开关关掉」时被告知「网页打不开」而沙箱其实还连着。这两句都是这次要修的那种谎，
+ * 只是换了个触发路径。
+ */
+export interface ComputerUseRunningFacts {
+  /** 真正在跑的那个后端（不是设置里选的那个） */
+  backend: ComputerUseBackend;
+  /**
+   * 启动时读到的「允许沙箱出网」。L2b 也记：它不改变网络，但这个值仍是用户的意图，
+   * 提示词靠它说「你要求断网，但这个后端断不了」。
+   */
+  allowNetwork: boolean;
+}
+
+/**
+ * 「设置里的『允许沙箱出网』关掉」这件事，在某个后端上到底能不能兑现。
+ *
+ *   enforced          关掉就是真的没有出网，模型该知道「网页打不开是设置造成的」；
+ *   not-enforceable   这个后端做不到断网，关掉开关也不改变什么——**不能**告诉模型它没网。
+ *
+ * 为什么必须收成一个谓词：同一个开关连着三个后端，其中只有一个能做得到。以前设置页与
+ * 提示词都默认「关掉 = 没网」，于是 L2b 上模型被明确告知「你没有出网」，而它其实就在
+ * 用户这台机器的网络上——查一次资料就成了一次说谎，用户也以为自己的隐私设置生效了。
+ *
+ * 三个后端的机制（改动任一处都要回来改这里）：
+ *   wsb              宿主渲染的 .wsb 带 `<Networking>Disable</Networking>`
+ *                    （main/computer-use/sandbox.ts 的 renderWsbXml）。
+ *   qemu             桌面 VM 的 `-netdev user` 加 `restrict=on`：guest 出不了外网。
+ *                    **restrict 不作用于显式的 hostfwd**，所以桌面 HTTP / RFB 两条
+ *                    回环转发照通（main/computer-use/qemu-vm.ts 的 qemuNetdevSpec）。
+ *   isolation-session 做不到。它跑在用户自己这台 Windows 的**另一个登录会话**里，
+ *                    网就是这台机器的网；MXC 自己的文档写着 *IsolationSession cannot
+ *                    restrict networking*。按账号 SID 限定的防火墙规则
+ *                    （INetFwRule3::LocalUserAuthorizedList）是 app container 专用的，
+ *                    不能用来「拦某个账号的出网」；真要做得自己写 WFP 过滤器，那是一周的
+ *                    工程，这一轮不做，也不能假装已经做了。
+ */
+export type ComputerUseNetworkControl = "enforced" | "not-enforceable";
+
+export function backendNetworkControl(backend: ComputerUseBackend): ComputerUseNetworkControl {
+  // 只有明确做得到的两个返回 enforced，其余（含将来新增、还没在 这个谓词里表态的后端）
+  // 一律 not-enforceable：默认「能断网」正是这次要修的那个谎，所以缺席时按做不到算。
+  return backend === "wsb" || backend === "qemu" ? "enforced" : "not-enforceable";
+}
+
+/**
  * L2b 的依赖检查（设置页那一行：「可用 / 不可用 + 为什么」）。
  *
  * `available` 为 false 时 `reason` **必须有话**：只说一句「不可用」而不说是缺 Node、缺服务、

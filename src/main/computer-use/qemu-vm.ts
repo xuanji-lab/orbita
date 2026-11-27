@@ -81,6 +81,13 @@ export interface QemuVmOptions {
   smp?: number;
   name?: string;
   logDir?: string;
+  /**
+   * guest 能不能出网（设置 › 电脑使用 › 允许沙箱出网）。**必填**：这是隔离边界的一部分，
+   * 不允许调用方漏填后默默用上网络的默认——启动路径必须显式表态。
+   * false 时 `-netdev user` 加 `restrict=on`：guest 出不去外网，**但显式 hostfwd 不受影响**，
+   * 桌面 HTTP（8080）与 RFB（5900）两条回环转发照通（见 qemuNetdevSpec）。
+   */
+  allowNetwork: boolean;
 }
 
 export interface QemuVmHandle {
@@ -136,6 +143,75 @@ export function qemuAccelSpec(arch: string, accel: string): string {
 }
 
 /**
+ * `-netdev` 的 user 网络串。**断开出网只靠一个参数，且不能弄丢转发**：
+ *   restrict=on   QEMU 文档：「isolate guest from the rest of the network」——guest 只能
+ *                 访问被显式转发的端口，DNS / 外网一概不通；
+ *   两个 hostfwd   桌面服务（8080）与 Xvnc（5900）的回环转发。它们是**显式**的，
+ *                 restrict 不作用于它们（restrict 管的是隐式的出站 / 入站），所以断开出网后
+ *                 像素操作与截图照常。丢一个 hostfwd 就等于把整个桌面通道掐了。
+ * 参数顺序：restrict 放在 hostfwd 前，只是为了让日志里一眼看到它。
+ */
+export function qemuNetdevSpec(ports: QemuVmPorts, allowNetwork: boolean): string {
+  const hostfwd =
+    `hostfwd=tcp:127.0.0.1:${ports.desk}-:${GUEST_DESK_PORT},` +
+    `hostfwd=tcp:127.0.0.1:${ports.rfb}-:${GUEST_RFB_PORT}`;
+  return allowNetwork ? `user,id=n0,${hostfwd}` : `user,id=n0,restrict=on,${hostfwd}`;
+}
+
+/** 拼命令行要的输入（与 QemuVmOptions 同源，加上已解析好的串口日志路径与令牌） */
+export interface QemuVmArgsInput {
+  paths: QemuVmPaths;
+  ports: QemuVmPorts;
+  token: string;
+  allowNetwork: boolean;
+  name?: string;
+  memMiB?: number;
+  smp?: number;
+  serialLog: string;
+}
+
+/**
+ * 整条 QEMU 命令行。抽成纯函数是为了能断言参数：开机要真实镜像与 QEMU 二进制，
+ * 单测跑不起；而 `-netdev` 里的 restrict / hostfwd 是「断网后桌面通道还在」的唯二证据。
+ */
+export function qemuVmArgs(input: QemuVmArgsInput): string[] {
+  const { paths, ports, token } = input;
+  return [
+    "-name",
+    input.name ?? "orbita-l3",
+    "-accel",
+    qemuAccelSpec(process.arch, "whpx"),
+    "-m",
+    String(input.memMiB ?? 2048),
+    "-smp",
+    String(input.smp ?? 2),
+    "-display",
+    "none",
+    "-kernel",
+    paths.kernel,
+    "-initrd",
+    paths.initrd,
+    // orbita_token= 由 guest 的 desk-service.sh 从 /proc/cmdline 读出来当请求令牌
+    "-append",
+    `console=ttyS0,115200 root=/dev/vda rootfstype=ext4 rw loglevel=3 orbita_token=${token}`,
+    "-drive",
+    `file=${paths.disk},if=none,id=d0,cache=writeback,discard=unmap`,
+    "-device",
+    "virtio-blk-pci,drive=d0",
+    "-netdev",
+    qemuNetdevSpec(ports, input.allowNetwork),
+    "-device",
+    "virtio-net-pci,netdev=n0",
+    "-vga",
+    "std",
+    "-serial",
+    `file:${input.serialLog}`,
+    "-monitor",
+    `tcp:127.0.0.1:${ports.monitor},server,nowait`,
+  ];
+}
+
+/**
  * 起一台桌面 VM（detached：本进程退出后 VM 继续跑，靠 handle 里的 pid / monitor 端口收）。 */
 export function bootQemuVm(options: QemuVmOptions & { ports: QemuVmPorts }): QemuVmHandle {
   const { paths, ports } = options;
@@ -154,41 +230,8 @@ export function bootQemuVm(options: QemuVmOptions & { ports: QemuVmPorts }): Qem
   const serialLog = path.join(logDir, `serial-${stamp}.log`);
   const fd = fs.openSync(qemuLog, "a");
 
-  const mem = String(options.memMiB ?? 2048);
-  const smp = String(options.smp ?? 2);
-  const args = [
-    "-name",
-    options.name ?? "orbita-l3",
-    "-accel",
-    qemuAccelSpec(process.arch, "whpx"),
-    "-m",
-    mem,
-    "-smp",
-    smp,
-    "-display",
-    "none",
-    "-kernel",
-    paths.kernel,
-    "-initrd",
-    paths.initrd,
-    // orbita_token= 由 guest 的 desk-service.sh 从 /proc/cmdline 读出来当请求令牌
-    "-append",
-    `console=ttyS0,115200 root=/dev/vda rootfstype=ext4 rw loglevel=3 orbita_token=${token}`,
-    "-drive",
-    `file=${paths.disk},if=none,id=d0,cache=writeback,discard=unmap`,
-    "-device",
-    "virtio-blk-pci,drive=d0",
-    "-netdev",
-    `user,id=n0,hostfwd=tcp:127.0.0.1:${ports.desk}-:${GUEST_DESK_PORT},hostfwd=tcp:127.0.0.1:${ports.rfb}-:${GUEST_RFB_PORT}`,
-    "-device",
-    "virtio-net-pci,netdev=n0",
-    "-vga",
-    "std",
-    "-serial",
-    `file:${serialLog}`,
-    "-monitor",
-    `tcp:127.0.0.1:${ports.monitor},server,nowait`,
-  ];
+  // 命令行整段在 qemuVmArgs 里拼（纯函数可断言）；这里只算好它要的输入
+  const args = qemuVmArgs({ ...options, token, serialLog });
 
   const child = spawn(paths.qemu, args, {
     detached: true,

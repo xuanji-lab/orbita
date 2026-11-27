@@ -12,7 +12,8 @@ import type {
   CompactAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { AppSettings, CompactionSetting, Language } from "../../shared/settings.ts";
-import { effectiveAllowNetwork } from "../../shared/settings.ts";
+import { effectiveAllowNetwork, effectiveComputerUseBackend } from "../../shared/settings.ts";
+import { backendNetworkControl, type ComputerUseRunningFacts } from "../../shared/computer-use.ts";
 import { computerUsePlatformSupport } from "../../shared/computer-use-platform.ts";
 import type { McpServer } from "../../shared/mcp.ts";
 
@@ -29,13 +30,25 @@ export function computerUseTurnContext(
   settings: AppSettings | undefined,
   /** process.platform：平台这层判定只有 win32 算支持；由 ipc.ts 传进来，这里不读全局 */
   platform: string,
+  /**
+   * 正在跑的那只隔离启动时定下来的事实（运行时门面的 runningFacts()）；没在跑 = null。
+   * **以它为准，不以设置为准**：后端与出网开关都是「下次启动才生效」，拿设置算会在
+   * 「设置选 wsb / 实际跑着 L2b」或「运行中把开关关掉」时对模型说假话。
+   */
+  running?: ComputerUseRunningFacts | null,
 ): ComputerUseTurnContext {
+  // 在跑的那只的后端才是真值；一只都没跑时退回设置值（那时工具只会回「沙箱没运行」，
+  // 宣不宣称都没有实际影响）
+  const backend = running?.backend ?? effectiveComputerUseBackend(settings);
   return {
     enabled: settings?.experimentalFeatures?.["computer-use"] === true,
     // 与设置页读同一个谓词（shared/computer-use-platform.ts）：非 Windows 上工具组不注册
     platformSupported: computerUsePlatformSupport(platform).supported,
-    // 缺省允许（effectiveAllowNetwork）：老 settings.json 没这个键 = 与开关做出来之前一样
-    allowNetwork: effectiveAllowNetwork(settings),
+    // 开关同样用启动时那份：运行中改了不会影响这一局，说「网页打不开」会是假话
+    allowNetwork: running === undefined || running === null ? effectiveAllowNetwork(settings) : running.allowNetwork,
+    // 两个事实分开算：用户选了什么（上一行）与这个后端做不做得到（这一行）。
+    // 「在跑的是断不了网的 L2b」时得到的是「断不了网」那句，不是「你没有网」。
+    networkControlled: backendNetworkControl(backend) === "enforced",
   };
 }
 
@@ -56,7 +69,8 @@ export function turnFields(
     gitAttribution: boolean;
     attributionLanguage: Language;
     /** 实验功能「电脑使用」的现场（settings.experimentalFeatures）：开着才注册沙箱工具组；
-     * 其中 allowNetwork 是「这次沙箱有没有出网」——只在开着时有意义 */
+     * 其中 allowNetwork 是「用户选了什么」、networkControlled 是「这个后端能不能兑现」
+     * ——两者同时成立才告诉模型它没有出网 */
     computerUse: ComputerUseTurnContext;
     /** 「先给我看计划」偏好（settings.planFirst）：开着时第一张新计划写完就停下等你点头；缺席 = 关 */
     planFirst: boolean;

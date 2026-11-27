@@ -21,9 +21,11 @@
  *      dispatch 按它算键。
  */
 import {
+  COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_DESKTOP_KEY,
   computerUseDevBackendRefusal,
   devBackendsEnabled,
+  type ComputerUseRunningFacts,
   type ComputerUseBackend,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -58,10 +60,17 @@ export interface ComputerUseRuntimeDeps {
   /** 当前设置选的后端（每次 start 现读，改设置下一次启动生效） */
   backend: () => ComputerUseBackend | Promise<ComputerUseBackend>;
   /**
+  /**
    * 开发者后端（qemu）是否放行。缺省读 `ORBITA_CU_DEV_BACKENDS`（缺席 = 关）。
    * 单测注入一个常量，**不要**在测试里改进程环境。
    */
   devBackends?: () => boolean;
+  /**
+   * 当前设置里的「允许沙箱出网」（每次 start 现读）。只有 QEMU 后端用它——WSB 的开关
+   * 由控制器自己的 deps.allowNetwork 读，L2b 根本做不到（backendNetworkControl）。
+   * 缺省 = 允许（与 effectiveAllowNetwork 同缺省；不传它的调用方是单测 / 不关心网络的环境）。
+   */
+  allowNetwork?: () => boolean | Promise<boolean>;
   /** L3 的后端（QEMU）。不传就用默认配置自己造一个——单测与不关心镜像路径的调用方不必给 */
   qemu?: SandboxProvider;
   /** 能力探测里的 L2b 依赖检查 */
@@ -76,6 +85,11 @@ export interface ComputerUseRuntime extends ComputerUseGuest {
   probe(): Promise<ComputerUseProbeResult>;
   /** 现在实际在跑哪个后端（两个都没跑 = null）。只用于日志与状态文案 */
   runningBackend(): ComputerUseBackend | null;
+  /**
+   * 正在跑的那只启动时定下来的事实；一只都没跑 = null。**agent 那边一律以它为准**：
+   * 设置是「下一次启动」的意图，不是现在这个沙箱的样子。
+   */
+  runningFacts(): Promise<ComputerUseRunningFacts | null>;
   /**
    * 现在在跑那个后端的能力声明；一个都没跑 = null。
    * 上层按它判断「这件事这个后端做不做得到」，不要再认 id（见 index.ts 的上传/下载闸门）。
@@ -96,8 +110,12 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    * QEMU 也在这张表里（P3 的空位），它的 status() 恒为 off——注册在这里是为了让
    * 「谁在跑」这件事只有一处枚举，而不是每个方法各写一份 if。
    */
-  const qemu: SandboxProvider = deps.qemu ?? new QemuSandboxProvider();
+  const qemu: SandboxProvider =
+    deps.qemu ?? new QemuSandboxProvider({ ...(deps.allowNetwork === undefined ? {} : { allowNetwork: deps.allowNetwork }) });
   const providers: readonly SandboxProvider[] = [deps.isolation, deps.wsb, qemu];
+
+  /** 本门面亲手启动的那一局的两个事实；没在跑 = null。见 ComputerUseRunningFacts 的理由 */
+  let startedFacts: ComputerUseRunningFacts | null = null;
 
   /**
    * 「现在在跑的是谁」。**不缓存**：后端自己的状态机就是真值，缓存一份迟早与它分叉
@@ -141,13 +159,25 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
         return { ok: false, error: `切换后端前停不掉 ${other.id}：${stopped.error}` };
       }
     }
-    return controllerOf(wanted).start();
+    // 启动前读一次开关：这就是这一局真正生效的那个值（WSB 的 .wsb / QEMU 的 -netdev 都在
+    // start 里各读一次同一个 SettingsStore；同一时刻同一个值）。记下来给模型用。
+    const allowNetwork = await readAllowNetwork();
+    const result = await controllerOf(wanted).start();
+    // 只有真的起来了才记账：失败时 started 必须清空，否则下一轮会拿一个不存在的沙箱的事实
+    startedFacts = result.ok === false ? null : { backend: wanted, allowNetwork };
+    return result;
   };
 
   const stop = async (): Promise<ComputerUseStopResult> => {
     const current = running();
-    if (current === null) return { ok: true };
-    return controllerOf(current).stop();
+    if (current === null) {
+      startedFacts = null;
+      return { ok: true };
+    }
+    const result = await controllerOf(current).stop();
+    // 停失败时那只可能还在跑：只在一只都不剩时才把账清掉
+    if (runningProvider() === null) startedFacts = null;
+    return result;
   };
 
   /**
@@ -185,7 +215,34 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
   const notRunning = <T>(error: string = SANDBOX_NOT_RUNNING): Extract<T, { ok: false }> =>
     ({ ok: false, error }) as unknown as Extract<T, { ok: false }>;
 
+  /**
+   * 启动时读一次出网开关。读不到按缺省（允许）——与 WSB 控制器「读超时就按缺省并留日志」
+   * 同一条纪律：一次读设置失败不该让沙箱起不来。
+   */
+  const readAllowNetwork = async (): Promise<boolean> => {
+    const read = deps.allowNetwork;
+    if (read === undefined) return COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+    try {
+      const value = await read();
+      return typeof value === "boolean" ? value : COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+    } catch (cause: unknown) {
+      log(`读不到出网开关，启动按缺省（允许）：${cause instanceof Error ? cause.message : String(cause)}`);
+      return COMPUTER_USE_DEFAULT_ALLOW_NETWORK;
+    }
+  };
+
   return {
+    runningFacts: async (): Promise<ComputerUseRunningFacts | null> => {
+      const current = runningProvider();
+      // 只有「真的在跑」的那只才有事实可说：starting / error 时拿它去告诉模型「有没有网」
+      // 都是猜（error 的沙箱可能早就没了）
+      if (current === null || current.status().state !== "running") return null;
+      if (startedFacts !== null && startedFacts.backend === current.id) return startedFacts;
+      // 这只不是经这里启动的（或账与状态对不上）：后端 id 仍是真的（它就在跑），开关只能
+      // 按当下设置尽力而为，并留一行日志——宁可这样说，也不能拿设置里的**后端**去冒充它。
+      log(`运行中的 ${current.id} 没有启动记录，出网开关按当前设置算`);
+      return { backend: current.id, allowNetwork: await readAllowNetwork() };
+    },
     status: (): SandboxStatus => {
       const backend = running();
       if (backend === null) return { state: "off" };

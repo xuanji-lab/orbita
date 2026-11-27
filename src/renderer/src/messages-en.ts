@@ -1226,8 +1226,14 @@ export const en = {
     allowNetwork: "Allow network access",
     allowNetworkInfo:
       "Off keeps everything in the sandbox off the network — pages can't load, so web automation needs it on; local desktop automation still works.",
+    /** 后端断不了网时（L2b）拿来替掉上面那句：那一档里 "off keeps it off the network" 是做不到的承诺 */
+    allowNetworkInfoLocked:
+      "This backend runs in a separate logon session on your own computer and cannot block its network: it uses this machine's network, so this row only records what you want — On or Off changes nothing.",
     allowNetworkBelow:
       "Takes effect the next time the sandbox starts; a running sandbox keeps the setting it started with.",
+    /** 后端做不到断网时（L2b）行底那一句：为什么这一行不可操作。不说 "off"——那是假的 */
+    allowNetworkLocked:
+      "This backend runs in a separate logon session on your own computer and cannot block the network: it uses your machine's network, and this switch changes nothing either way.",
     allowNetworkAria: "Sandbox network access",
     browser: "Sandbox browser",
     browserInfo:

@@ -16,7 +16,8 @@ import {
   type ComputerUseToolOutcome,
 } from "../shared/computer-use.ts";
 
-const setup = (allowNetwork = true) => {
+/** 夹具：两个事实成对传（与 createSandboxBrowserTools 的入参同一个形状） */
+const setup = (allowNetwork = true, networkControlled = true) => {
   const sent: Record<string, unknown>[] = [];
   const timeouts: Array<number | undefined> = [];
   const broker = new RequestBroker((event) => sent.push(event as Record<string, unknown>));
@@ -28,7 +29,7 @@ const setup = (allowNetwork = true) => {
   }) as typeof broker.request;
 
   const tools = new Map(
-    createSandboxBrowserTools(broker, "session-1", allowNetwork).map((tool) => [tool.name, tool]),
+    createSandboxBrowserTools(broker, "session-1", { allowNetwork, networkControlled }).map((tool) => [tool.name, tool]),
   );
   const answer = (index: number, outcome: ComputerUseToolOutcome): void =>
     broker.resolve(String(sent[index]?.["requestId"]), outcome);
@@ -288,6 +289,20 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
       assert.doesNotMatch(tool.description, /no outbound network/, name);
       assert.doesNotMatch(tool.description, /Allow network access/, name);
     }
+  });
+
+  test("关着但后端断不了网（L2b）：拼的是「断不了网」那句，不是「你没有出网」", () => {
+    const { tools } = setup(false, false);
+    for (const [name, tool] of tools) {
+      assert.match(tool.description, /cannot block its network/, name);
+      assert.doesNotMatch(tool.description, /no outbound network/, name);
+      assert.match(tool.description, /^Operates the sandbox's browser/, name);
+    }
+  });
+
+  test("关着但后端断不了网（L2b）+ 网络类错误：原话原样——不能把「可能没网」改成「确定没网」", async () => {
+    const { runWith } = setup(false, false);
+    assert.equal(await rejection(runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: NET_ERROR })), NET_ERROR);
   });
 
   test("关掉出网 + 网络类错误：补上确定句，并保留 guest 的原话（不吞码）", async () => {

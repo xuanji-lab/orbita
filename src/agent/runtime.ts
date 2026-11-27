@@ -1376,7 +1376,10 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // 操作的是同一个沙箱，分开两个开关只会让模型看到半套工具。写动作的 element 字段是
     // 给 PR4 确认卡用的（审批卡上给用户看一句人话，而不是一个选择器）。
     ...(computerUsePlan.tools
-      ? createSandboxBrowserTools(requestBroker, command.sessionId, computerUsePlan.allowNetwork)
+      ? createSandboxBrowserTools(requestBroker, command.sessionId, {
+          allowNetwork: computerUsePlan.allowNetwork,
+          networkControlled: computerUsePlan.networkControlled,
+        })
       : []),
     // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
     // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程

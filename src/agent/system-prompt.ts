@@ -111,10 +111,11 @@ export interface SystemPromptInput {
   /** 这条会话替哪个子智能体干活（指名派活）：它的职能整段进提示；缺席 = 普通会话 */
   subAgent?: SubAgentTurnIdentity;
   /**
-   * 电脑使用的现场（settings.experimentalFeatures["computer-use"] + 平台支持）。
+   * 电脑使用的现场（settings.experimentalFeatures["computer-use"] + 平台支持 + 出网两个事实）。
    * **只在工具组真注册时讲**（computerUseToolsActive：开着且是 Windows）：否则沙箱工具
-   * 根本没注册，讲它等于给模型一句假话。开着但出网开着时 computerUseNetworkGuideline
-   * 返回空串，段会被下面滤掉。
+   * 根本没注册，讲它等于给模型一句假话。三种其余情形：出网开着 → 空串（零噪音）；
+   * 关着且后端做得到 → 「你没有出网」；关着但后端断不了（L2b）→ 「这个后端断不了网」。
+   * 后两者都由 computerUseNetworkGuideline 分叉，段会被下面滤掉空串。
    */
   computerUse?: ComputerUseTurnContext;
 }
