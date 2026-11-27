@@ -1075,6 +1075,9 @@ export const zh: Messages = {
       },
       requirement:
         "要在 Windows 上用：需要专业版 / 企业版 / 教育版（家庭版没有 Windows 沙箱功能），并在「启用或关闭 Windows 功能」里打开 Windows 沙箱。",
+      // 平台值不明（preload 桥没就绪，api.platform 是空串）：既不给控件也不给卡，只留这一句。
+      // 不说「平台不支持」——那会把一个启动故障归错地方
+      unknown: "界面还没和主进程连上，暂时判断不了这台电脑能不能用电脑使用。重启应用后再看这一页。",
     },
     capabilityGroup: "能力检测",
     sandboxFeature: "沙箱功能",

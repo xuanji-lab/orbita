@@ -1156,6 +1156,10 @@ export const en = {
       },
       requirement:
         "To use it on Windows you need Pro / Enterprise / Education (Home has no Windows Sandbox feature) and the Windows Sandbox optional feature turned on.",
+      // Platform value unknown (preload bridge missing → api.platform is an empty string): neither
+      // controls nor the unsupported card — blaming the platform here would misattribute a startup failure
+      unknown:
+        "The interface isn't connected to the main process yet, so it can't tell whether this computer supports computer use. Restart the app and check this page again.",
     },
     capabilityGroup: "Capability check",
     sandboxFeature: "Windows Sandbox",

@@ -271,6 +271,15 @@ describe("电脑使用 · 平台闸门（这一页画控件还是警示卡）", 
     assert.deepEqual(computerUsePage("win32"), { kind: "controls" });
   });
 
+  test("平台值不明（preload 桥没就绪：空串 / 缺字段）：既不给控件也不给卡——此刻 IPC 全挂，报「平台不支持」是错误归因", () => {
+    for (const platform of ["", "   ", null, undefined]) {
+      const page = computerUsePage(platform);
+      assert.equal(page.kind, "unknown", String(platform));
+      assert.notEqual(page.kind, "unsupported");
+      assert.notEqual(page.kind, "controls");
+    }
+  });
+
   test("非 Windows：整页换成警示卡，reasonKey 指向对应那一句（macOS / Linux / 其它）", () => {
     const mac = computerUsePage("darwin");
     assert.equal(mac.kind, "unsupported");

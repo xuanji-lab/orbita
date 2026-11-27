@@ -97,8 +97,7 @@ import { createStoreTools } from "./store-tools.ts";
 import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
-import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
-import { computerUseToolsActive } from "../shared/computer-use-platform.ts";
+import { COMPUTER_USE_TOOL_NAMES, computerUseTurnPlan, createComputerUseTools } from "./computer-tools.ts";
 import { createSandboxBrowserTools, SANDBOX_BROWSER_TOOL_NAMES } from "./sandbox-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
 import {
@@ -926,20 +925,18 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
   // 替哪个子智能体干活（指名派活的子会话）：主进程每轮现读档案带来；它的职能进系统提示
   const subAgentIdentity = "subAgent" in command ? command.subAgent : undefined;
   /**
-   * 电脑使用工具组（computer_* + sandbox_*）这一轮注不注册：实验开关 **与** Windows 平台
-   * 两条都成立（判定在 shared/computer-use-platform.ts 的 computerUseToolsActive，四处共用）。
-   * 非 Windows 上不注册：拒绝文案在那里只能给「去设置里启动」，模型会反复重试。
-   * 宿主浏览器那组（browser_*）不经过沙箱，不受这条影响。
+   * 电脑使用这一轮的装配计划：实验开关 **与** Windows 平台两条都成立才注册工具组
+   * （判定在 computer-tools.ts 的 computerUseTurnPlan，四处共用同一个返回值——本文件不再
+   * 自己写 `enabled === true`）。非 Windows 上不注册：拒绝文案在那里只能给「去设置里启动」，
+   * 模型会反复重试。宿主浏览器那组（browser_*）不经过沙箱，不受这条影响。
    */
-  const computerUseActive = computerUseToolsActive(command.computerUse);
-  /** 沙箱出网（描述与失败文案用）：缺省允许，与主进程 effectiveAllowNetwork 同一个缺省 */
-  const computerUseAllowNetwork = command.computerUse?.allowNetwork ?? true;
+  const computerUsePlan = computerUseTurnPlan(command.computerUse);
 
   // 工具闸门只剩抬超时、受保护路径与电脑使用预算（2026-11-16「只留放行」：没有档位判定、
   // 没有请示）。预算只在电脑使用工具组真的注册时挂上：关着时这些工具不存在，计数也无从谈起。
   // gate 一轮一份，计数天然按轮重置（口径见 shared/computer-guard.ts）。
   const computerBudget =
-    computerUseActive
+    computerUsePlan.tools
       ? {
           // 硬限（第 91 次 / 满 20 分钟）中断本轮：与「停止」同一条链。**不关沙箱**——现场留给用户看。
           abort: (reason: string) => {
@@ -1051,7 +1048,7 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 automationTools,
                 pluginTools,
                 subAgentTools,
-                computerUseActive,
+                computerUsePlan.tools,
               );
               const segments = orbitaSystemSegments({
                 piBase: adaptSystemPrompt(event.systemPrompt),
@@ -1068,7 +1065,8 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
                 longTaskAutomationGuideline: automationTools,
                 subAgentsGuideline: subAgentTools,
                 ...(subAgentIdentity === undefined ? {} : { subAgent: subAgentIdentity }),
-                computerUse: command.computerUse,
+                // 工具没注册就不讲它们（两段提示词吃这个同一个判定）
+                computerUse: computerUsePlan.tools ? command.computerUse : undefined,
               });
               notePromptStability(command.sessionId, segments, [...ENABLED_BUILTIN_TOOLS, ...extra]);
               // 上下文面板的「规则与说明」组：每轮推一次最新清单。pi 基底单独计（它的估算
@@ -1367,18 +1365,18 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     ...createTaskTools(requestBroker, command.sessionId),
     ...createBrowserTools(requestBroker, command.sessionId),
     // computer use（PR2）：Windows 沙箱桌面上的像素工具组（截图 / 点击 / 打字 / 按键 /
-    // 滚动）。**挂在实验功能「电脑使用」开关 + Windows 平台两道上**（computerUseActive）：
+    // 滚动）。**挂在实验功能「电脑使用」开关 + Windows 平台两道上**（computerUsePlan.tools）：
     // 不满足时工具根本不注册，模型连它们的名字都看不到——比“执行时再拒绝”诚实（同 cite_pdf
     // 的纪律）。非 Windows 上尤其如此：那里的拒绝文案只能给「去设置里启动」，一句做不到的
     // 建议只会换来重试。
     // 沙箱本身由用户在设置页启停，工具只经 computerUseRequest 下发。
-    ...(computerUseActive ? createComputerUseTools(requestBroker, command.sessionId) : []),
+    ...(computerUsePlan.tools ? createComputerUseTools(requestBroker, command.sessionId) : []),
     // sandbox_*（PR3）：沙箱里那份 Edge 的 DOM 级工具（navigate / observe / click / type /
     // extract / wait / screenshot / upload / download）。与像素组同一个实验开关——它们
     // 操作的是同一个沙箱，分开两个开关只会让模型看到半套工具。写动作的 element 字段是
     // 给 PR4 确认卡用的（审批卡上给用户看一句人话，而不是一个选择器）。
-    ...(computerUseActive
-      ? createSandboxBrowserTools(requestBroker, command.sessionId, computerUseAllowNetwork)
+    ...(computerUsePlan.tools
+      ? createSandboxBrowserTools(requestBroker, command.sessionId, computerUsePlan.allowNetwork)
       : []),
     // 演示文稿（./slides-tools.ts）：slides_create / read / write / edit / insert_image / export。
     // 文件读写在本进程直做（路径限工作区 + 附加目录），只有导出过 broker 找主进程

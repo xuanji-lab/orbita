@@ -202,8 +202,15 @@ export function SettingsView(props: {
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           {/* 平台闸门（2026-11-27）：非 Windows 上整页换说明卡，一个启动按钮都不画——
               那些按钮在那边点了必然失败（主进程 start() 与 agent 工具注册读同一个谓词）。
-              入口不藏：藏掉会让用户以为页面坏了 */}
-          {cuPage.kind === "unsupported" ? (
+              入口不藏：藏掉会让用户以为页面坏了。平台值不明（preload 桥没就绪）时
+              两样都不给，只留一句中性提示：这时候报「平台不支持」是错误归因 */}
+          {cuPage.kind === "unknown" ? (
+            <div className="set-page">
+              <p className="set-row-hint" role="status">
+                {t.computerUse.platformUnsupported.unknown}
+              </p>
+            </div>
+          ) : cuPage.kind === "unsupported" ? (
             <ComputerUseUnsupported support={cuPage.support} />
           ) : (
             /* 出网开关读写同一份设置（App 的 changeSettings → api.settings.set），不另开通道 */
