@@ -499,7 +499,7 @@
 }
 
 /* ---- 专注写作 ---- */
-:root[data-theme="light"] .dp[data-paper="focus"] {
+:root:is([data-theme="light"], [data-theme="glass"]) .dp[data-paper="focus"] {
   --dp-bg: var(--color-bg-app);
 }
 :root[data-theme="graphite"] .dp[data-paper="focus"],

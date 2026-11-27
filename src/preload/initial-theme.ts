@@ -6,9 +6,11 @@
  * 那趟 IPC 跑完、再让 `useTheme` 套一层交叉淡入动画。
  */
 import { LANGUAGES, THEME_PREFERENCES, type Language, type ThemePreference } from "../shared/settings.ts";
+import { REOPENED_ARG } from "../shared/window.ts";
 
 const ARG_PREFIX = "--orbita-theme=";
 const LANGUAGE_PREFIX = "--orbita-language=";
+
 
 /**
  * 从 `argv` 里找 `--orbita-theme=` 前缀的值。**手改坏的 argv、缺参数、非法值统统回
@@ -32,4 +34,13 @@ export function readInitialLanguage(argv: readonly string[]): Language | null {
   if (arg === undefined) return null;
   const value = arg.slice(LANGUAGE_PREFIX.length);
   return (LANGUAGES as readonly string[]).includes(value) ? (value as Language) : null;
+}
+
+/**
+ * 这扇窗是不是主进程为换窗口材质（切进 / 切出液态玻璃）按原位置重开的。是的话，渲染层
+ * 接上旧窗留下的视图（开着的会话、设置页），而不是回首页（view-handoff.ts）。
+ * 冷启动、Dock 重开都不带这个参数——那时照旧落在首页。
+ */
+export function readReopened(argv: readonly string[]): boolean {
+  return argv.includes(REOPENED_ARG);
 }

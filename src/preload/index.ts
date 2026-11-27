@@ -33,7 +33,7 @@ import { panelUsageApi } from "./api/panel-usage.ts";
 import { rightPanelMemoryApi } from "./api/right-panel-memory.ts";
 import { windowApi } from "./api/window.ts";
 import { workspaceApi } from "./api/workspace.ts";
-import { readInitialLanguage, readInitialTheme } from "./initial-theme.ts";
+import { readInitialLanguage, readInitialTheme, readReopened } from "./initial-theme.ts";
 
 const api = {
   agent: agentApi,
@@ -81,6 +81,8 @@ const api = {
   initialTheme: readInitialTheme(process.argv),
   /** 冷启动第一帧的语言偏好（`--orbita-language=`），同 initialTheme；没选过语言是 null */
   initialLanguage: readInitialLanguage(process.argv),
+  /** 为换窗口材质（液态玻璃）重开的窗口（`--orbita-reopened`）：渲染层接上旧窗的视图，同步常量 */
+  reopened: readReopened(process.argv),
 } as const;
 
 export type OrbitaApi = typeof api;

@@ -13,3 +13,10 @@ export const windowChannels = {
 } as const;
 
 export type WindowChannel = (typeof windowChannels)[keyof typeof windowChannels];
+
+/**
+ * 主进程为换窗口材质（切进 / 切出液态玻璃）按原位置重开主窗口时，给新窗加的命令行参数
+ * （webPreferences.additionalArguments）。preload 读到它（readReopened）就让渲染层接上
+ * 旧窗留下的视图，不回首页。冷启动、Dock 重开都不带。
+ */
+export const REOPENED_ARG = "--orbita-reopened";

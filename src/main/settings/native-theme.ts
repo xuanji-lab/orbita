@@ -13,5 +13,7 @@ export type NativeThemeSource = "system" | "light" | "dark";
 
 export function resolveNativeThemeSource(theme: ThemePreference): NativeThemeSource {
   if (theme === "graphite" || theme === "black") return "dark";
+  // 液态玻璃是浅色档的一种窗口材质：原生层（玻璃本身、对话框）按浅色走
+  if (theme === "glass") return "light";
   return theme;
 }
