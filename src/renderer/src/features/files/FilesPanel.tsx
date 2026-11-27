@@ -539,6 +539,17 @@ export function FilesPanel(props: {
     setEditorsVersion((version) => version + 1);
   }, []);
 
+  /** 大纲开着的文件（按钮在标签页头部，状态在编辑器里，这里只做转发） */
+  const [outlinePaths, setOutlinePaths] = useState<ReadonlySet<string>>(new Set());
+  const handleOutlineChange = useCallback((path: string, open: boolean): void => {
+    setOutlinePaths((current) => {
+      if (current.has(path) === open) return current;
+      const next = new Set(current);
+      if (open) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
   const handleEditorDirty = useCallback((path: string, dirty: boolean): void => {
     setDirtyPaths((current) => {
       if (current.has(path) === dirty) return current;
@@ -2315,6 +2326,12 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                   editor={{
                     register: registerEditor,
                     onDirtyChange: handleEditorDirty,
+                    onOutlineChange: handleOutlineChange,
+                    // 标签页头部右上角的大纲键：与 PDF 工具条上的批注键对称
+                    outline: {
+                      open: outlinePaths.has(leftPath ?? shownTab.path),
+                      onToggle: () => editorsRef.current.get(leftPath ?? shownTab.path)?.toggleOutline(),
+                    },
                     onSaved: handleEditorSaved,
                     onError: handleEditorError,
                     // agent 与本文件同改一个文件：只读 / 重载 / 按块撤销（按左块路径取）。

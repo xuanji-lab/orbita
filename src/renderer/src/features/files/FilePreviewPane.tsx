@@ -102,6 +102,13 @@ export function FilePreviewPane(props: {
     onDirtyChange: (path: string, dirty: boolean) => void;
     onSaved?: () => void;
     onError: (path: string, message: string) => void;
+    /** 大纲开合变了（编辑器 → 上一层） */
+    onOutlineChange?: (path: string, open: boolean) => void;
+    /**
+     * 标签页头部右上角的大纲键（与 PDF 工具条上的批注键对称）：
+     * 开合状态与动作都在编辑器里，这里只画键。
+     */
+    outline?: { open: boolean; onToggle: () => void };
     /** agent 与本文件同改一个文件的边界（只读 / 重载 / 按块撤销） */
     collab?: EditorCollabView;
     /** 右键「在 PDF 中定位」（SyncTeX 正向查找）；缺席 = 不出这一项 */
@@ -362,7 +369,23 @@ export function FilePreviewPane(props: {
               >
                 <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
               </PanelIconButton>
-            )}          </div>
+            )}
+            {/* 大纲：只对 .tex 的编辑器出现，钉在行尾（与 PDF 工具条最右的批注键同一个位置感）。
+                视图开关住在标签页头部，状态条只留光标与保存结果 */}
+            {props.editor?.outline !== undefined && editorInitial !== null && (
+              <PanelIconButton
+                title={t.editor.outlineTip}
+                onClick={props.editor.outline.onToggle}
+              >
+                <Icon
+                  name="list-tree"
+                  size={16}
+                  strokeWidth={1.8}
+                  style={props.editor.outline.open ? { color: "var(--color-text-primary)" } : undefined}
+                />
+              </PanelIconButton>
+            )}
+          </div>
         )}
       </header>
       {(showModeToggle || canEdit) && (

@@ -4430,6 +4430,22 @@ a.latex-setup-action {
   background: var(--color-bg-panel);
 }
 /* 正文区 = 编辑器 + 可选的大纲抽屉（并排，不浮层：右栏本来就窄，浮层会盖住源码） */
+/* 窄栏（并排时的源码栏常态就是 320）：大纲与大屏 PDF 那条换用同一条规则——
+ * 点开就看大纲，点回去看正文。挤压式并排在这个宽度里只剩 ~150px 正文，
+ * 折行成一列字（2026-11-27 截图实测）。 */
+.files-panel-pane {
+  container-type: inline-size;
+}
+@container (max-width: 460px) {
+  .tex-editor-body:has(> .tex-outline) .tex-editor-host {
+    display: none;
+  }
+  .tex-editor-body:has(> .tex-outline) .tex-outline {
+    width: 100%;
+    border-left: 0;
+  }
+}
+
 .tex-editor-body {
   display: flex;
   flex: 1 1 auto;
