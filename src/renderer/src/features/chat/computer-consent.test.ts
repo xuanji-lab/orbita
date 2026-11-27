@@ -4,14 +4,16 @@
  * 这些断言就是两张 UI 的契约：未授权 / 等回答 / 已允许 / 已拒绝 四种形态下，
  * 确认行与记录行分别出不出现、挂在哪一条工具调用下面。
  */
-import test from "node:test";
+import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import {
   consentRecordKind,
   firstComputerUseToolCallId,
+  groupHoldsPendingAsk,
   isComputerUseToolName,
-  runningComputerUseToolCallId,
+  pendingComputerUseToolCallId,
+  shouldShowConsentAskFallback,
   showsConsentStatusLine,
 } from "./computer-consent.ts";
 
@@ -62,19 +64,19 @@ test("第一处电脑工具调用：名额给最早那条（记录行的挂点�
   assert.equal(firstComputerUseToolCallId([]), null);
 });
 
-test("正在等授权的调用：最后一条还没落定的（确认行的挂点）；都落定就是 null", () => {
+test("正在等授权的调用：最后一条还没有结果的（确认行的挂点，注意它不是 running）；都落定就是 null", () => {
   // t2 还没有结果 → 它是正在跑的那条
-  assert.equal(runningComputerUseToolCallId(TRANSCRIPT), "t2");
+  assert.equal(pendingComputerUseToolCallId(TRANSCRIPT), "t2");
   // 加一条 running 的结果帧 → 它才是最靠后、还在等授权的那条
   const withRunning = [
     ...TRANSCRIPT,
     assistantToolCalls("a3", [{ id: "t3", name: "computer_click" }]),
     toolResult("t3", "computer_click", "running"),
   ];
-  assert.equal(runningComputerUseToolCallId(withRunning), "t3");
+  assert.equal(pendingComputerUseToolCallId(withRunning), "t3");
   // 全部落定 → 没有确认行的挂点（落在 footer 兜底位）
   const settled = [...TRANSCRIPT, assistantToolCalls("a3", [{ id: "t2", name: "sandbox_navigate" }]), toolResult("t2", "sandbox_navigate", "success")];
-  assert.equal(runningComputerUseToolCallId(settled), null);
+  assert.equal(pendingComputerUseToolCallId(settled), null);
 });
 
 test("记录行：只在第一处电脑调用下面画，且 unset（撤销后）整行消失", () => {
@@ -93,4 +95,27 @@ test("乙的状态行：只有已允许才出现（未授权交给甲，拒绝�
   assert.equal(showsConsentStatusLine("allowed"), true);
   assert.equal(showsConsentStatusLine("unset"), false);
   assert.equal(showsConsentStatusLine("denied"), false);
+});
+
+/**
+ * 2026-11-27 真机验收的阻塞级 bug：确认行两处让位、结果两处都不画。
+ * 这里的断言钉住两个新规则——兜底位只认「行内登记过没有」，分组里有挂起提问必须强制展开。
+ */
+describe("确认行的避让与折叠兜底", () => {
+  test("兜底位：没有登记就画（哪怕 ask 带着 toolCallId——行内可能根本没画出来）", () => {
+    assert.equal(shouldShowConsentAskFallback({ requestId: "r1" }, new Set()), true);
+  });
+
+  test("兜底位：行内为同一个提问登记了就不画；登记的是别的提问也不影响", () => {
+    assert.equal(shouldShowConsentAskFallback({ requestId: "r1" }, new Set(["r1"])), false);
+    assert.equal(shouldShowConsentAskFallback({ requestId: "r1" }, new Set(["r0"])), true);
+    assert.equal(shouldShowConsentAskFallback(null, new Set()), false);
+  });
+
+  test("分组里有挂起提问 → 强制展开；提问结了就恢复", () => {
+    assert.equal(groupHoldsPendingAsk(["a", "b", "c"], "b"), true);
+    assert.equal(groupHoldsPendingAsk(["a", "b"], null), false);
+    assert.equal(groupHoldsPendingAsk(["a", "b"], "z"), false);
+    assert.equal(groupHoldsPendingAsk([], "z"), false);
+  });
 });

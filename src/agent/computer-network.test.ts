@@ -144,8 +144,22 @@ describe("networkFailureError", () => {
     assert.match(text, /这是设置，不是网站的问题/);
     assert.match(text, /允许沙箱出网/);
     assert.match(text, /下次启动沙箱时生效/);
-    // guest 那句「换一个一定能打开的地址试一次」必须被点名废止：它就在上面，模型很容易照着做
-    assert.match(text, /「换一个一定能打开的地址试一次」都不用再验证/);
+    // 确定是设置问题：第一段那句「换一个一定能打开的地址试一次」也要真的消失，
+    // 而不是只靠第二段「别这么做」去压它（模型先读到的是第一段）
+    assert.match(text, /不要换地址、不要换站点/);
+    assert.doesNotMatch(text, /换一个一定能打开的地址试一次/);
+  });
+
+  test("误导的「确认方式」整句被摘掉，它前后的话与错误码原样保留", () => {
+    const guest =
+      "页面没有加载：ERR_INTERNET_DISCONNECTED（沙箱可能没有出网）。" +
+      "确认方式：换一个一定能打开的地址试一次；如果所有站点都是这个错，那是网络的问题，不是这一页的问题。" +
+      "仍要操作当前界面时改用 computer_screenshot / computer_click 像素工具。";
+    const text = networkFailureError(guest, { allowNetwork: false, networkControlled: true });
+    assert.match(text, /ERR_INTERNET_DISCONNECTED/);
+    assert.match(text, /仍要操作当前界面时改用 computer_screenshot/);
+    assert.doesNotMatch(text, /换一个一定能打开的地址试一次/);
+    assert.ok(!text.includes("。。"), "摘句不能留下叠在一起的句号");
   });
 
   test("关着 + 断不了（L2b）：原样返回——不能把「可能没网」改成「确定没网」", () => {

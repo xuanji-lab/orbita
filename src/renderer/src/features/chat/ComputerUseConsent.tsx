@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect } from "react";
 import type { AgentEvent } from "@shared/agent-ipc";
 import {
   COMPUTER_USE_CONSENT_DENIED_TEXT,
@@ -6,7 +6,7 @@ import {
 } from "@shared/computer-use";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
-import { consentRecordKind, showsConsentStatusLine } from "./computer-consent.ts";
+import { consentRecordKind, shouldShowConsentAskFallback, showsConsentStatusLine } from "./computer-consent.ts";
 import "./computer-consent.css";
 
 /**
@@ -29,6 +29,11 @@ export interface ComputerUseConsentContextValue {
   triggerToolCallId: string | null;
   /** 确认行的挂点：正在等授权的那条调用（null = 落到输入框上方的兜底位） */
   askToolCallId: string | null;
+  /** 行内已经为哪些提问画了确认行（requestId）。兜底位据此确定性地避让，不靠猜 */
+  drawnAskIds: ReadonlySet<string>;
+  /** 行内画了确认行时登记；卸载 / 提问结束就撤销登记 */
+  claimAsk: (requestId: string) => void;
+  releaseAsk: (requestId: string) => void;
   onAnswer: (requestId: string, decision: "allowed" | "denied") => void;
   onRevoke: () => void;
 }
@@ -72,13 +77,29 @@ function AskLine(props: {
  * 工具行下面的那一小块：确认行（正在等）或记录行（已答完）。挂在工具行组件里，
  * 由它自己判断这条调用是不是挂点——这样折叠 / 分组逻辑一个字都不用改。
  */
-export function ComputerUseConsentTail(props: { toolCallId: string; running: boolean }) {
+export function ComputerUseConsentTail(props: { toolCallId: string; recordOnly?: boolean }) {
   const t = useT();
   const ctx = useContext(ComputerUseConsentContext);
+  // 确认行的条件**不含「这一行在跑」**：被闸门挡住的调用恰恰没有结果（pending / blocked），
+  // 用 running 判会导致行内永远不画（2026-11-27 真机验收的阻塞级 bug）。
+  // 只认「这条调用是不是挂点」——那是主进程事件 + 转录派生的事实。
+  const ask = ctx?.ask ?? null;
+  // recordOnly：已落定的轮次里只画记录态——问句只属于「正在等」的那一帧，
+  // 不能因为挂点恰好是第一处调用而在折叠行下面补一张过期的确认行。
+  const drawsAsk = props.recordOnly !== true && ask !== null && ctx !== null && ctx.askToolCallId === props.toolCallId;
+  const requestId = drawsAsk && ask !== null ? ask.requestId : null;
+  const claimAsk = ctx?.claimAsk;
+  const releaseAsk = ctx?.releaseAsk;
+  // 登记「行内已经画了」：兜底位据此避让（而不是靠「ask 带没带 toolCallId」猜）。
+  // 用一个稳定 deps（requestId + 两个稳定回调）——ctx 每次授权状态变化都是新对象，
+  // 把它放进 deps 会反复撤销 / 重登记，兜底位在两帧之间闪一下。
+  useEffect(() => {
+    if (requestId === null || claimAsk === undefined || releaseAsk === undefined) return;
+    claimAsk(requestId);
+    return () => releaseAsk(requestId);
+  }, [requestId, claimAsk, releaseAsk]);
   if (ctx === null) return null;
-  if (ctx.ask !== null && props.running && ctx.askToolCallId === props.toolCallId) {
-    return <AskLine ask={ctx.ask} onAnswer={ctx.onAnswer} />;
-  }
+  if (drawsAsk && ask !== null) return <AskLine ask={ask} onAnswer={ctx.onAnswer} />;
   const kind = consentRecordKind(ctx.consent, props.toolCallId, ctx.triggerToolCallId);
   if (kind === null) return null;
   return <RecordLine kind={kind} onRevoke={ctx.onRevoke} />;
@@ -113,8 +134,8 @@ function RecordLine(props: { kind: "allowed" | "denied"; onRevoke: () => void })
  */
 export function ComputerUseConsentAskFallback() {
   const ctx = useContext(ComputerUseConsentContext);
-  if (ctx === null || ctx.ask === null || ctx.askToolCallId !== null) return null;
-  return <AskLine ask={ctx.ask} onAnswer={ctx.onAnswer} />;
+  if (ctx === null || !shouldShowConsentAskFallback(ctx.ask, ctx.drawnAskIds)) return null;
+  return <AskLine ask={ctx.ask!} onAnswer={ctx.onAnswer} />;
 }
 
 /** 乙：输入框上方的常驻状态行（只有已授权才出现；撤销永远在手边） */

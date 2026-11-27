@@ -72,8 +72,18 @@ const SANDBOX_NETWORK_UNCONTROLLED =
 /** 失败文案里替换掉「可能」的那句确定性结论（中文，跟 guest 桥回的人话同一种语言） */
 const NETWORK_FAILURE_OFF =
   "确定原因（宿主设置，不是猜测）：沙箱当前被设置为**不允许出网**（设置 › 实验功能 › 电脑使用 › " +
-  "允许沙箱出网 = 关），所以这个地址打不开——这是设置，不是网站的问题。上面那句「可能没有出网」与「换一个一定能打开的地址试一次」都不用再验证：" +
-  "换地址、换站点都是同样的结果，也别改用宿主机浏览器绕过去。要用网络请让用户在设置里打开「允许沙箱出网」（下次启动沙箱时生效）。";
+  "允许沙箱出网 = 关），所以这个地址打不开——这是设置，不是网站的问题。**不要换地址、不要换站点，" +
+  "也别改用宿主机浏览器绕过去**：结果会一样。要用网络请让用户在设置里打开「允许沙箱出网」" +
+  "（下次启动沙箱时生效）。";
+
+/**
+ * guest 桥那句通用的「怎么确认」建议（guest-bridge/Cdp.cs 的 NavErrorMessage，两份代码各一份）。
+ * 出网确定被关掉时它是**错的建议**：换地址只会再失败一次。改写时必须先把它摘掉再追加权威
+ * 结论——两段话一正一反摆在一起，模型更容易照第一段做（2026-11-27 真机验收顺手项）。
+ * 桥不重编也能生效：摘的是回执文本，与桥的二进制无关。
+ */
+const GUEST_CONFIRM_ADVICE =
+  "确认方式：换一个一定能打开的地址试一次；如果所有站点都是这个错，那是网络的问题，不是这一页的问题。";
 
 /**
  * 网络类错误码：guest 从浏览器错误页正文或 `Page.navigate` 的 errorText 里抠出来的那几族。
@@ -148,5 +158,8 @@ export function computerUseBudgetGuideline(): string {
 export function networkFailureError(message: string, facts: SandboxNetworkFacts): string {
   if (!outboundNetworkIsOff(facts)) return message;
   if (!NETWORK_ERROR_CODES.test(message)) return message;
-  return `${message}\n\n${NETWORK_FAILURE_OFF}`;
+  // 先摘掉 guest 那句「换一个一定能打开的地址试一次」，再追加确定结论：
+  // 留它在前面就是自相矛盾（换地址必然再失败一次），而模型先读到的往往是第一段。
+  const cleaned = message.split(GUEST_CONFIRM_ADVICE).join("");
+  return `${cleaned}\n\n${NETWORK_FAILURE_OFF}`;
 }
