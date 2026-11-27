@@ -24,6 +24,7 @@ import {
 import { isNotFound } from "../fs-errors.ts";
 import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import type { SessionStore } from "../session/store.ts";
+import type { SessionMeta } from "../../shared/session.ts";
 import type { ChannelStore } from "./store.ts";
 import type { ChannelEvent } from "../../shared/agent-ipc.ts";
 
@@ -74,10 +75,12 @@ export class ChannelReconciler {
     const worker = async (): Promise<void> => {
       for (let meta = queue.shift(); meta !== undefined; meta = queue.shift()) {
         try {
-          const notice = await this.reconcileSession(meta.id, {
-            interruptedCause: "app-exit",
-            deferBroadcast: true,
-          });
+          // 列表里已经有 meta：传进去，免得每个子会话再读一遍 meta 文件（Windows 上 1000+ 次小文件读）
+          const notice = await this.reconcileSession(
+            meta.id,
+            { interruptedCause: "app-exit", deferBroadcast: true },
+            meta,
+          );
           if (notice !== null) notices.push(notice);
         } catch (cause) {
           // 一条坏会话不能拖垮启动；账本没读到就不编结束态，下次启动再试。
@@ -90,9 +93,14 @@ export class ChannelReconciler {
   }
 
   /** 同一子会话串行，避免 phase idle / failed / 启动清扫并发追加两条终局。 */
-  reconcileSession(childId: string, options: ReconcileOptions): Promise<ChannelClosureNotice | null> {
+  reconcileSession(
+    childId: string,
+    options: ReconcileOptions,
+    /** 调用方手里已有的 meta（启动全扫）；缺省现读。只用它的 parentId——父子关系建后不变 */
+    known?: Pick<SessionMeta, "parentId">,
+  ): Promise<ChannelClosureNotice | null> {
     const previous = this.chains.get(childId) ?? Promise.resolve(null);
-    const pending = previous.catch(() => null).then(() => this.reconcileNow(childId, options));
+    const pending = previous.catch(() => null).then(() => this.reconcileNow(childId, options, known));
     this.chains.set(childId, pending);
     const cleanup = (): void => {
       if (this.chains.get(childId) === pending) this.chains.delete(childId);
@@ -101,8 +109,12 @@ export class ChannelReconciler {
     return pending;
   }
 
-  private async reconcileNow(childId: string, options: ReconcileOptions): Promise<ChannelClosureNotice | null> {
-    const meta = await this.deps.sessions.readMeta(childId);
+  private async reconcileNow(
+    childId: string,
+    options: ReconcileOptions,
+    known?: Pick<SessionMeta, "parentId">,
+  ): Promise<ChannelClosureNotice | null> {
+    const meta = known ?? (await this.deps.sessions.readMeta(childId));
     if (meta === null || meta.parentId === undefined) return null;
     if (options.force !== true && this.isActive(childId)) return null;
     const key: ChannelKey = { parentId: meta.parentId, childId };
