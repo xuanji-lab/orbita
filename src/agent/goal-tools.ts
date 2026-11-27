@@ -55,7 +55,7 @@ export function createGoalTools(options: { branch: () => readonly unknown[] }): 
       "The long-lived goal of this conversation: what the user wants out of the whole thing, which may take " +
       "several turns or more than one session. Write it mostly in the user's own words; do not turn it into " +
       "your plan (steps belong in update_plan, which sits under the goal) and keep progress and scheduling out of " +
-      "it: no \"already done\", \"next\", \"not this time\" (those go in the plan or `later`; the goal only " +
+      "it: no \"already done\", \"next\", \"not this time\" (those go in the plan; the goal only " +
       "changes when what the user wants changes). Set it once the user's objective " +
       "is clear and will take more than a single reply; skip it for quick questions and one-off tasks. " +
       "When the user restates, narrows, widens or drops part of what they want, call update_goal again with " +

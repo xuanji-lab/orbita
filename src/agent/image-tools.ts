@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { basename, isAbsolute, join } from "node:path";
+import { copyFile, mkdir, readFile, stat } from "node:fs/promises";
+import { basename, extname, isAbsolute, join, relative } from "node:path";
 import * as ncanvas from "@napi-rs/canvas";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
@@ -21,6 +21,10 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
  * 这一刀内）；单张 ≤30MB（prompt-images 的同款上限——超出多半是误选）。
  * 读盘在 agent 进程直读（与 read / read_pdf 同一信任边界），零副作用——
  * READ_ONLY_TOOLS 收编。
+ *
+ * **会话看不到的图先拷进工作台**（2026-11-23）：回答里的 `![](路径)` 由界面按文件面板的白名单读
+ * （工作区 / 附加目录 / 会话工作台 / 附件副本），白名单外的（如 /tmp）先画灰框、再收成一颗打不开的签。
+ * 所以图不在这几个根里时，拷一份到 `<会话工作台>/shots/`，回执里给的是拷过去的路径。
  */
 
 /** 一次最多展示几张。画廊形态的排版上限，多了刷屏 */
@@ -81,16 +85,54 @@ export function imageMimeOf(head: Buffer): string | null {
   return null;
 }
 
-export function createImageTools(cwd: string): ToolDefinition[] {
+/** 回答里的图能被界面读到的根（与文件面板白名单同口径）；workbench = 白名单外的图拷到哪（null = 不拷） */
+export interface ImageVisibility {
+  roots: readonly string[];
+  workbench: string | null;
+}
+
+/** path 在不在任何一个根里（纯字符串判断；根与路径都是绝对路径） */
+export function insideRoots(path: string, roots: readonly string[]): boolean {
+  return roots.some((root) => {
+    if (root === "") return false;
+    const rel = relative(root, path);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  });
+}
+
+/** 白名单外的图拷进 `<workbench>/shots/`，同名不覆盖（加 -2、-3…），返回新路径 */
+async function copyIntoShots(path: string, workbench: string): Promise<string> {
+  const dir = join(workbench, "shots");
+  await mkdir(dir, { recursive: true });
+  const ext = extname(path);
+  const stem = basename(path, ext);
+  for (let n = 1; n < 1000; n += 1) {
+    const target = join(dir, n === 1 ? `${stem}${ext}` : `${stem}-${n}${ext}`);
+    try {
+      await stat(target);
+    } catch {
+      await copyFile(path, target);
+      return target;
+    }
+  }
+  return path;
+}
+
+export function createImageTools(cwd: string, visibility: ImageVisibility = { roots: [], workbench: null }): ToolDefinition[] {
   const showImage: ToolDefinition = {
     name: "show_image",
     label: "show_image",
     description:
-      "Show images to the user in the conversation — for figures you cropped from a PDF, pictures in a " +
-      "folder, generated files, anything the user should look at with their own eyes. Pass 1-6 image file " +
-      "paths; they render as a gallery card in the chat. You also receive the images yourself (on vision " +
-      "models), so you can keep talking about them. Reading an image for yourself only (user does not " +
-      "need to see it) is the read tool's job — do not call show_image for that.",
+      "Show images to the user — for figures you cropped from a PDF, pictures in a folder, generated files, " +
+      "anything the user should look at with their own eyes. Pass 1-6 image file paths. You also receive the " +
+      "images yourself (on vision models), so you can keep talking about them. Reading an image for yourself " +
+      "only (user does not need to see it) is the read tool's job — do not call show_image for that. " +
+      "The images are drawn inside your final answer, not before it: for each image write one sentence that " +
+      "explains it and place it with a markdown image on its own line, using the absolute path in angle brackets " +
+      "(`![short caption](</absolute/path/to/image.png>)`), then the sentence about it. An image you do not " +
+      "embed that way is shown after your answer with no explanation, so always embed and explain. " +
+      "An image outside the workspace, attached directories and the session workbench is copied into the workbench's shots/ folder first; embed the path this tool returns. " +
+      "Never refer to an image as \"the one above\" — the user sees it where you place it.",
     parameters: {
       type: "object",
       properties: {
@@ -112,6 +154,7 @@ export function createImageTools(cwd: string): ToolDefinition[] {
       }
 
       const images: { data: string; mimeType: string; name: string }[] = [];
+      const absolutes: string[] = [];
       for (const path of paths) {
         const absolute = isAbsolute(path) ? path : join(cwd, path);
         const buffer = await readFile(absolute);
@@ -125,14 +168,21 @@ export function createImageTools(cwd: string): ToolDefinition[] {
         // 缩到转录友好的尺寸；content 与 details 共用这一份 base64（不再双存原图）
         const shrunk = await shrinkIfNeeded(buffer, mimeType);
         images.push({ data: shrunk.data, mimeType: shrunk.mimeType, name: basename(path) });
+        const visible = visibility.workbench === null || insideRoots(absolute, [cwd, ...visibility.roots, visibility.workbench]);
+        absolutes.push(visible || visibility.workbench === null ? absolute : await copyIntoShots(absolute, visibility.workbench));
       }
 
       // 模型视野：视觉模型带 image 块（一跳两得）；非视觉省略 + read 同款 note。
       // details 永远带全量图片给 UI（用户的画廊不随模型视力消失）
       const canSee = ctx?.model?.input.includes("image") ?? false;
+      // 回答里怎么放图（renderer 的 MarkdownBlock 认这个写法）：路径用尖括号包，含空格 / 中文也安全
+      const embed =
+        "Place each one in your final answer with a one-sentence explanation: " +
+        absolutes.map((path, i) => `![${images[i]?.name ?? ""}](<${path}>)`).join(" ") +
+        " — images you do not embed are shown after your answer without explanation.";
       const shown = `Showing ${images.length} image${images.length > 1 ? "s" : ""} to the user: ${images
         .map((img) => img.name)
-        .join(", ")}.`;
+        .join(", ")}. ${embed}`;
       const modelContent: (
         | { type: "text"; text: string }
         | { type: "image"; data: string; mimeType: string }

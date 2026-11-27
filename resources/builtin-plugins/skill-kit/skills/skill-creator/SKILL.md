@@ -11,7 +11,7 @@ version: "1.1.2-orbita"
 - **动手写新 skill 之前，先用同一个插件里的 find-skills 找现成的**，能改造就不从零写。
 - **子 agent = `delegate` 工具**（派子会话）。并行跑测试用例、grader / comparator / analyzer 都用它；派之前先用 `model_costs` 选便宜够用的型号，子会话的产出放在本会话工作台 `subsessions/<名字>/`。子会话报的 `total_tokens` / `duration_ms` 不一定有，没有就不写 timing.json。
 - **没有 `claude -p`**：描述优化（`run_loop.py` / `run_eval.py`）依赖 Claude Code CLI，本机没装就跳过，改用人工改 description：列 10 条该触发 / 不该触发的真实说法让用户看。
-- **写入 Orbita**：只有 SKILL.md 的 skill 用 `create_skill` 工具（用户会看到审批）；带 scripts / references 的先在工作台里写好，再整理成插件放在当前工作区的 `plugins/<名>/` 下（`.claude-plugin/plugin.json` + `skills/<slug>/…`，格式见 plugin-creator 的 plugin-layout.md），**先用一句话问用户能不能装**，同意后调 `install_plugin`。不要手工往 Orbita 的数据目录里复制文件或建符号链接；重名（用户已有同名技能）就停下来问，不覆盖。
+- **写入 Orbita**：只有 SKILL.md 的 skill 用 `create_skill` 工具；带 scripts / references 的先在工作台里写好，再整理成插件放在当前工作区的 `plugins/<名>/` 下（`.claude-plugin/plugin.json` + `skills/<slug>/…`，格式见 plugin-creator 的 plugin-layout.md），**先用一句话问用户能不能装**，同意后调 `install_plugin`。不要手工往 Orbita 的数据目录里复制文件或建符号链接；重名（用户已有同名技能）就停下来问，不覆盖。
 - **看结果**：`eval-viewer/generate_review.py --static <输出.html>` 生成静态页，用内置浏览器（browser_navigate 本地文件）打开给用户；用户可能只看得到截图，关键页面要截图并 show_image。
 - **沟通用中文、大白话**；评测的测试提示词用用户真实会说的话（中文、口语、带他的项目名）。
 - 做一整个插件（技能 + 工作流 + 看板）走 plugin-creator；插件里的每个 skill 则按这里的写法做。

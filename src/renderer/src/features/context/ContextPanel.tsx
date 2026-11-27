@@ -14,7 +14,6 @@ import { PanelHelp, RightPanelFrame } from "../../shell/RightPanel";
 import { PanelEmpty } from "../../shell/PanelEmpty";
 import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { Chip } from "../../shell/Chip";
-import type { Carryover } from "@shared/session";
 import { TaskProgress } from "./TaskProgress";
 import { formatTokens } from "../../utils/format-tokens.ts";
 import type { SessionEntry } from "../chat/session-states.ts";
@@ -59,12 +58,6 @@ export function ContextPanel(props: {
   onTab: (tab: TaskPanelTab) => void;
   /** 会话运行态（runStateOf，侧栏状态饼同一个推导）：进度页签头一行的在跑 / 等你 */
   runState: SessionRunState;
-  /** 这条会话收割的遗留（进度页签的「留到以后」） */
-  carryovers: readonly Carryover[];
-  onSetCarryoverStatus: (id: string, status: Carryover["status"]) => void;
-  /** 「转成任务」：与侧栏遗留面板「带上下文继续」同一条路（App 的 startCarryoverTask） */
-  onStartCarryoverTask: (item: Carryover) => void;
-  onDoCarryoverNow: (item: Carryover) => void;
   /** 「带着目标开新会话」（App 的 startGoalTask） */
   onStartGoalTask: (sourceSessionId: string, makeSeed: (sourceTitle: string | null) => string | null) => void;
   /**
@@ -120,10 +113,6 @@ export function ContextPanel(props: {
           sessionId={props.sessionId}
           entry={props.entry}
           runState={props.runState}
-          carryovers={props.carryovers}
-          onSetCarryoverStatus={props.onSetCarryoverStatus}
-          onStartCarryoverTask={props.onStartCarryoverTask}
-          onDoCarryoverNow={props.onDoCarryoverNow}
           onStartGoalTask={props.onStartGoalTask}
           onOpenContext={() => props.onTab("context")}
         />
@@ -145,7 +134,7 @@ export function ContextPanel(props: {
   );
 }
 
-function ContextBody(props: {
+export function ContextBody(props: {
   sessionId: string;
   entry: SessionEntry;
   cwd: string;

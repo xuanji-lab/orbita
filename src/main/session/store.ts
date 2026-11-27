@@ -2,12 +2,12 @@
  * 会话落盘 —— 每条会话两个文件（设计与被否决的方案见
  * `docs/plans/2026-08-25-会话存储与命名工作区.md`）：
  *
- *   sessions/<id>.meta.json   可变（标题 / updatedAt / 权限档），原子写
+ *   sessions/<id>.meta.json   可变（标题 / updatedAt / 模型），原子写
  *   sessions/<id>.jsonl       只追加，一行一个 SessionRecord
  *
  * 分两个文件的理由：meta 会变而 transcript 只增。把可变记录塞进只追加的日志里，
  * 要么改个标题就重写全文，要么读取时全文扫描找最后一条 meta。分开之后
- * **列会话只需读 N 个小 meta 文件，完全不碰日志**。
+ * **启动建 meta 索引只需读 N 个小 meta 文件，完全不碰日志；之后列会话走内存索引**。
  */
 import { appendFile, copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -22,15 +22,13 @@ import {
   type SentImage,
 } from "../../shared/prompt-images.ts";
 import { isNotFound } from "../fs-errors.ts";
-import { headStringField, scanJsonlLines } from "../jsonl-scan.ts";
+import { forEachBufferLine, headStringField, scanJsonlLines } from "../jsonl-scan.ts";
 import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
-import type { PermissionMode } from "../../shared/permission.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
-import { isClosingScanText } from "../../shared/wrapup-scan.ts";
+import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
 
 /** 收尾扫描的机器提问（用户消息形，但不是用户说的话） */
 function isMachinePrompt(record: SessionRecord): boolean {
@@ -51,7 +49,6 @@ import {
   SESSION_PAGE_RECORDS,
   sortSessions,
   UNASSIGNED_PROVIDER_ID,
-  type SessionCompletion,
   type SessionDetail,
   type SessionMeta,
   type SessionOlderPage,
@@ -67,6 +64,7 @@ import {
   type FileChange,
   type FileChangePayload,
   type FileTurnRecord,
+  type MediaArtifact,
 } from "../../shared/revert.ts";
 
 /**
@@ -86,10 +84,24 @@ export function isSessionId(id: string): boolean {
   return SESSION_ID.test(id);
 }
 
+/**
+ * 日志写事件的挂钩（状态卡摘要等派生数据的推进点）。全部可选——不传时 Store 行为与以前相同。
+ */
+export interface SessionStoreHooks {
+  /** 一条记录追加落盘后（record 的唯一收口：recorder / 轮尾账 / 回退界碑都过它） */
+  onRecordAppended?: (id: string) => void;
+  /** 日志被整份替换（导入更新 commitImportUpdate）：派生数据作废重算 */
+  onLogReplaced?: (id: string) => void;
+  /** 新会话的日志一次写成（分支 commitBranch / 导入 commitImported）：records 是初始 transcript，logBytes 是写盘字节数 */
+  onLogSeeded?: (id: string, records: readonly SessionRecord[], logBytes: number) => void;
+  /** 会话删除（级联的每一条都会过） */
+  onRemoved?: (id: string) => void;
+}
+
 const META_SUFFIX = ".meta.json";
 
 /**
- * `list()` 一批同时读几个 meta。16 是折中：libuv 的文件线程池默认 4，并发再大也
+ * `buildMetaIndex()` 启动时一批同时读几个 meta。16 是折中：libuv 的文件线程池默认 4，并发再大也
  * 只能摊到 4 个线程上；批太大反而让 JSON.parse（同步、在主线程）与其它 IPC 抢时间。
  */
 const META_READ_BATCH = 16;
@@ -194,10 +206,20 @@ export class SessionStore {
   private readonly workbenchesDir: string;
 
   /**
+   * 日志写事件的挂钩（状态卡摘要等派生数据的推进点；index.ts 接线）。全部可选——
+   * 不传时 Store 行为与以前逐字节相同。
+   */
+  private readonly hooks: SessionStoreHooks;
+
+  /**
    * 快照正文仓（sessions/<id>.snapshots/，revert.ts）：轮尾账的 before / after
    * 正文按内容寻址存在这里，JSONL 只存引用。与会话同生共死（remove 一并删）。
    */
   readonly snapshots: SnapshotStore;
+
+  /** 启动时读一次、随后随本 Store 的写入增量维护的 meta 索引；list / descendants 不再整表读盘 */
+  private readonly metaById = new Map<string, SessionMeta>();
+  private readonly metaIndexReady: Promise<void>;
 
   /**
    * 每条会话的 meta 写入链（见 `queueMeta`）。会话删掉时清掉自己那条，
@@ -214,12 +236,56 @@ export class SessionStore {
    */
   private readonly channels: ChannelStore | undefined;
 
-  constructor(dir: string, workbenchesDir?: string, channels?: ChannelStore) {
+  constructor(dir: string, workbenchesDir?: string, channels?: ChannelStore, hooks: SessionStoreHooks = {}) {
     this.dir = dir;
     this.workbenchesDir = workbenchesDir ?? join(dirname(dir), "workbenches");
     this.channels = channels;
+    this.hooks = hooks;
     this.snapshots = new SnapshotStore(dir);
     this.citedPdfs = new CitedPdfIndex((id) => this.logPath(id));
+    // 启动即建索引；调用方（list / 第一条 meta 写入）会等它。给拒绝分支挂一个空处理器，
+    // 避免「建了 Store 但从没列会话」时变成 unhandled rejection；真正 await 它的调用方仍拿到原错误。
+    this.metaIndexReady = this.buildMetaIndex();
+    void this.metaIndexReady.catch(() => undefined);
+  }
+
+  /**
+   * 启动时仅有的一次整表扫描。单条坏 meta 照旧跳过；目录不存在是空索引，其它目录错误照抛。
+   * 扫描期间本 Store 的 meta 写入都在 `writeMeta` 里等它，所以不会出现「旧扫描覆盖新写入」。
+   */
+  private async buildMetaIndex(): Promise<void> {
+    let names: string[];
+    try {
+      names = await readdir(this.dir);
+    } catch (cause) {
+      if (isNotFound(cause)) return;
+      throw cause;
+    }
+    const ids = names
+      .filter((name) => name.endsWith(META_SUFFIX))
+      .map((name) => name.slice(0, -META_SUFFIX.length));
+    for (let start = 0; start < ids.length; start += META_READ_BATCH) {
+      const batch = ids.slice(start, start + META_READ_BATCH);
+      const read = await Promise.all(batch.map((id) => this.readMeta(id).catch(() => null)));
+      for (const meta of read) {
+        if (meta !== null) this.metaById.set(meta.id, meta);
+      }
+    }
+  }
+
+  /**
+   * 所有 meta 落盘唯一收口：原子写成功后才更新内存索引；失败时索引继续指向上一份完整值。
+   * 写盘时一律盖上 `mode: "skip"`：只为回滚兼容——旧版把缺的 mode 读成只读计划档，
+   * 装回旧版后新版聊过的会话会全部写不了文件。新版自己不读它（parseSessionMeta 不返回它，
+   * 所以内存索引里也没有）；不再支持回滚到带权限档的版本时可连同类型字段一起删掉。
+   */
+  private async writeMeta(meta: SessionMeta): Promise<void> {
+    await this.metaIndexReady;
+    await writeJsonAtomic(this.metaPath(meta.id), { ...meta, mode: "skip" });
+    // 与旧 list() 逐条 readMeta 的口径一致：可选默认值 / 归一化也在索引里生效，不能只存写入前的对象
+    const normalized = parseSessionMeta(meta);
+    if (normalized === null) this.metaById.delete(meta.id);
+    else this.metaById.set(meta.id, normalized);
   }
 
   private metaPath(id: string): string {
@@ -444,11 +510,11 @@ export class SessionStore {
     return this.queueMeta(meta.id, async () => {
       const current = await this.readMeta(meta.id);
       if (current === null) {
-        await writeJsonAtomic(this.metaPath(meta.id), meta);
+        await this.writeMeta(meta);
         return;
       }
       if (current.piSessionFile === meta.piSessionFile) return;
-      await writeJsonAtomic(this.metaPath(meta.id), {
+      await this.writeMeta({
         ...current,
         piSessionFile: meta.piSessionFile,
       });
@@ -467,6 +533,8 @@ export class SessionStore {
     if (meta === null) return; // 会话的 meta 没了就别再往日志里加，避免长出孤儿日志
     await mkdir(this.dir, { recursive: true });
     await appendFile(this.logPath(id), `${JSON.stringify(item)}\n`, "utf8");
+    // 派生数据（状态卡摘要）的推进点：追加落盘之后、meta 更新之前，同步入链不 await
+    this.hooks.onRecordAppended?.(id);
 
     // **基于链内刚读的 meta 算**，不用上面 appendFile 之前那份快照——
     // 写盘期间标题可能刚落、最近提问可能刚被别的消息推过
@@ -508,8 +576,9 @@ export class SessionStore {
     changes: readonly FileChangePayload[],
     webArtifacts: readonly string[] = [],
     webArtifactsBatch?: number,
+    mediaArtifacts: readonly MediaArtifact[] = [],
   ): Promise<FileTurnRecord | null> {
-    if (changes.length === 0 && webArtifacts.length === 0 && webArtifactsBatch === undefined) return null;
+    if (changes.length === 0 && webArtifacts.length === 0 && webArtifactsBatch === undefined && mediaArtifacts.length === 0) return null;
     const persisted: FileChange[] = [];
     for (const change of changes) {
       persisted.push({
@@ -527,6 +596,7 @@ export class SessionStore {
       changes: persisted,
       ...(webArtifacts.length > 0 ? { webArtifacts: [...webArtifacts] } : {}),
       ...(webArtifactsBatch !== undefined ? { webArtifactsBatch } : {}),
+      ...(mediaArtifacts.length > 0 ? { mediaArtifacts: [...mediaArtifacts] } : {}),
     };
     await this.record(id, record);
     return record;
@@ -595,7 +665,7 @@ export class SessionStore {
     return this.queueMeta(id, async () => {
       const meta = await this.readMeta(id);
       if (meta === null || meta.providerId !== UNASSIGNED_PROVIDER_ID) return false;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, providerId, modelId });
+      await this.writeMeta({ ...meta, providerId, modelId });
       return true;
     });
   }
@@ -613,7 +683,7 @@ export class SessionStore {
       if (meta === null) return;
       const patch = typeof changes === "function" ? changes(meta) : changes;
       if (patch === null) return;
-      await writeJsonAtomic(this.metaPath(id), { ...meta, ...patch });
+      await this.writeMeta({ ...meta, ...patch });
     });
   }
 
@@ -650,10 +720,6 @@ export class SessionStore {
     return this.update(id, { piSessionFile });
   }
 
-  setMode(id: string, mode: PermissionMode): Promise<void> {
-    return this.update(id, { mode });
-  }
-
   /**
    * 「转成普通会话」：把一条自动化新开的会话标成 promoted，从此进左侧栏。
    * 只对带 automationId 的会话有意义——别的会话原样不动（返回 false）。
@@ -668,7 +734,7 @@ export class SessionStore {
     return changed;
   }
 
-  /** 改思考档（照 setMode）：重开与下一轮开机的装配都读它 */
+  /** 改思考档：重开与下一轮开机的装配都读它 */
   setThinkingLevel(id: string, thinkingLevel: ThinkingLevel): Promise<void> {
     return this.update(id, { thinkingLevel });
   }
@@ -691,61 +757,10 @@ export class SessionStore {
   }
 
   /**
-   * 完成状态：翻到 done / done_with_todos 的那一刻记下关闭时刻，reopen（回 open）
-   * 时清掉——closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态。
-   * **同态幂等**：已是 done 再设 done 不刷新关闭时刻，「什么时候干完的」是历史
-   * 事实，不是最后一次点击。非 open 两态之间切换（done → done_with_todos）算一次
-   * 真实的翻档，刷新；本 PR 的 UI 只产生 open ↔ done，这条分支为 carryover 留着。
-   */
-  setCompletion(id: string, completion: SessionCompletion): Promise<void> {
-    return this.update(id, (meta) =>
-      (meta.completion ?? "open") === completion
-        ? null
-        : { completion, closedAt: completion === "open" ? null : Date.now() },
-    );
-  }
-
-  /**
-   * 收尾确认（session:wrapup-confirm）：一次 meta 写入里追加收尾记录、翻完成状态、取走这条会话
-   * 在接着做的遗留事项 id（返回给调用方去标做完）。会话不存在返回 null。
-   * 完成状态的翻法同 setCompletion：同态不刷新关闭时刻。
-   */
-  confirmWrapup(
-    id: string,
-    wrapup: SessionWrapup,
-    completion: Exclude<SessionCompletion, "open">,
-  ): Promise<{ resumed: string[] } | null> {
-    return this.queueMeta(id, async () => {
-      const meta = await this.readMeta(id);
-      if (meta === null) return null;
-      const resumed = meta.resumedCarryovers ?? [];
-      const same = (meta.completion ?? "open") === completion;
-      const next: SessionMeta = {
-        ...meta,
-        wrapups: [...(meta.wrapups ?? []), wrapup],
-        completion,
-        closedAt: same ? (meta.closedAt ?? Date.now()) : Date.now(),
-      };
-      delete next.resumedCarryovers;
-      await writeJsonAtomic(this.metaPath(id), next);
-      return { resumed };
-    });
-  }
-
-  /** 记下这条会话在接着做某条遗留事项（遗留清单的「继续」）；重复的 id 不再记 */
-  addResumedCarryover(id: string, carryoverId: string): Promise<void> {
-    return this.update(id, (meta) =>
-      (meta.resumedCarryovers ?? []).includes(carryoverId)
-        ? null
-        : { resumedCarryovers: [...(meta.resumedCarryovers ?? []), carryoverId] },
-    );
-  }
-
-  /**
    * 未读标记（后台跑完还没看，2026-10-10 落盘）：`{ at, failed }` 标未读，null 清。
    * at / failed 由 renderer 在落定那一刻铸——什么时候跑完的、是不是挂了，是落定时
    * 的事实不是写盘时的事实。不做幂等判断：renderer 只在标 / 清那两次调，重复写
-   * 同值无害（setCompletion 防的是“重刷新关闭时刻”那类历史改写，这里没有）。
+   * 同值无害。
    */
   setUnread(id: string, unread: { at: number; failed: boolean } | null): Promise<void> {
     return this.update(id, { unread });
@@ -754,6 +769,11 @@ export class SessionStore {
   /** 意图召回的会话级开关（实验功能 intent-system）：只落 meta，下一轮开轮现读 */
   setIntentEnabled(id: string, enabled: boolean): Promise<void> {
     return this.update(id, { intentEnabled: enabled });
+  }
+
+  /** 会话级自动压缩开关：只落 meta，下一轮开轮现读（sessionCompaction 与全局偏好合并） */
+  setAutoCompact(id: string, enabled: boolean): Promise<void> {
+    return this.update(id, { autoCompact: enabled });
   }
 
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */
@@ -807,7 +827,6 @@ export class SessionStore {
         workspaceId: meta.workspaceId,
         providerId: meta.providerId,
         modelId: meta.modelId,
-        mode: meta.mode,
         thinkingLevel: meta.thinkingLevel,
         piSessionFile: null,
         pinned: false,
@@ -840,12 +859,12 @@ export class SessionStore {
     } catch (cause) {
       if (!isNotFound(cause)) throw cause;
     }
-    await writeJsonAtomic(this.metaPath(plan.meta.id), { ...plan.meta, piSessionFile });
+    await this.writeMeta({ ...plan.meta, piSessionFile });
     if (plan.records.length > 0) {
-      await writeTextAtomic(
-        this.logPath(plan.meta.id),
-        `${plan.records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      );
+      const text = `${plan.records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+      await writeTextAtomic(this.logPath(plan.meta.id), text);
+      // 派生数据（状态卡摘要）直接播种：记录就在内存里，省一次全量扫
+      this.hooks.onLogSeeded?.(plan.meta.id, plan.records, Buffer.byteLength(text));
     }
   }
 
@@ -858,12 +877,11 @@ export class SessionStore {
    */
   async commitImported(meta: SessionMeta, records: readonly SessionRecord[]): Promise<void> {
     await mkdir(this.dir, { recursive: true });
-    await writeJsonAtomic(this.metaPath(meta.id), meta);
+    await this.writeMeta(meta);
     if (records.length > 0) {
-      await writeTextAtomic(
-        this.logPath(meta.id),
-        `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
-      );
+      const text = `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+      await writeTextAtomic(this.logPath(meta.id), text);
+      this.hooks.onLogSeeded?.(meta.id, records, Buffer.byteLength(text));
     }
   }
 
@@ -886,40 +904,25 @@ export class SessionStore {
       const current = await this.readMeta(id);
       if (current === null) throw new Error("the session was deleted before the update landed");
       await writeTextAtomic(this.logPath(id), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
-      await writeJsonAtomic(this.metaPath(id), { ...current, ...patch });
+      // 日志整份换了：派生数据（状态卡摘要）作废重算
+      this.hooks.onLogReplaced?.(id);
+      await this.writeMeta({ ...current, ...patch });
     });
   }
 
   /**
-   * 会话列表：置顶在前，其余最近的在前。**坏掉的 meta 直接跳过**，不让一条坏记录挡住整张列表。
+   * 会话列表：置顶在前，其余最近的在前。
    *
-   * meta 按 `META_READ_BATCH` 个一批 `Promise.all` 读：串行时一个会话一次
-   * `readFile` 往返，1432 条实测约 126ms；有上限并发把往返叠起来。批内顺序不影响
-   * 结果——最后统一走 `sortSessions`（只认 pinned / updatedAt），与串行逐条读到
-   * 的那份逐条一致（store.test.ts 有一条 >16 条的对照用例）。
+   * 启动时 `buildMetaIndex` 分批读一次全部 meta；之后只排内存索引，不再每次读 N 个小文件。
+   * 所有本 Store 的写入 / 删除都增量维护它。单条 `readMeta` 仍直接读盘，打开会话时能看到外部修改。
+   *
+   * **外部改文件策略**：不做文件 watcher，也不在 list 里重新校验。本进程外新增 / 改 / 删的 meta
+   * 不保证反映到 list / descendants，重启后重建索引才完全对齐；旧索引只是快照，不会让调用抛错。
+   * 删除一个已被外部删掉的会话也安全：remove 的 rm(force) 与 readMeta(null) 都能接住。
    */
   async list(): Promise<SessionMeta[]> {
-    let names: string[];
-    try {
-      names = await readdir(this.dir);
-    } catch (cause) {
-      // 目录还不存在 = 一条会话都没有；**读不了 ≠ 没有**——权限、ENOTDIR 等照抛，
-      // 吞成空列表会让用户以为会话全没了（D-3 的根因）
-      if (isNotFound(cause)) return [];
-      throw cause;
-    }
-    const ids = names
-      .filter((name) => name.endsWith(META_SUFFIX))
-      .map((name) => name.slice(0, -META_SUFFIX.length));
-    const metas: SessionMeta[] = [];
-    for (let start = 0; start < ids.length; start += META_READ_BATCH) {
-      const batch = ids.slice(start, start + META_READ_BATCH);
-      const read = await Promise.all(batch.map((id) => this.readMeta(id).catch(() => null)));
-      for (const meta of read) {
-        if (meta !== null) metas.push(meta);
-      }
-    }
-    return sortSessions(metas);
+    await this.metaIndexReady;
+    return sortSessions([...this.metaById.values()]);
   }
 
   async load(id: string): Promise<SessionDetail | null> {
@@ -978,7 +981,8 @@ export class SessionStore {
       console.error(`[session] 分页锚点在生效视图里找不到（会话可能刚被回退）：${id} / ${before}`);
       return { records: [], hasMore: false };
     }
-    const start = alignToTurnStart(effective, Math.max(0, end - pageRecords(limit)));
+    // 往后找轮边界不能越过 end：锚点自己就是轮边界，越过了会把它当起点，回一张空页却说「还有更多」
+    const start = alignToTurnStart(effective, Math.max(0, end - pageRecords(limit)), end);
     return { records: effective.slice(start, end), hasMore: start > 0 };
   }
 
@@ -1052,6 +1056,9 @@ export class SessionStore {
     this.citedPdfs.forget(id);
     await rm(this.logPath(id), { force: true });
     await rm(this.metaPath(id), { force: true });
+    this.metaById.delete(id);
+    // 派生数据（状态卡摘要的 status.json）跟会话一起走
+    this.hooks.onRemoved?.(id);
     // 原图在 meta 之后删：删失败最多残留一个没人引用的目录，不会出现「会话还在、图没了」
     await rm(this.attachmentsPath(id), { recursive: true, force: true });
     // 快照正文仓同理（回退能力的代价面，跟会话一起走）
@@ -1129,51 +1136,26 @@ export class SessionStore {
     return this.foldReverts(await this.readLogEntries(id));
   }
 
-  /** 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环。 */
+  /**
+   * 原始逐行解析（不折叠）。readLog / readRawLog 共用这一个循环；逐行判定收敛在 parseLogLine。
+   *
+   * 切行按换行字节切 Buffer、每行再解码（forEachBufferLine），不做「整份 toString 再
+   * split("\n")」——194 MB 会话实测 split 段 107ms / 同步段 289ms，逐行切把这一段省掉，
+   * 也不再产生整份大字符串与装着全部行的数组。行切法与 split 逐行一致（见函数注释），
+   * 新旧实现对同一批输入的结果逐条相等（store.test.ts 的对照测试把关）。
+   */
   private async readLogEntries(id: string): Promise<SessionRecord[]> {
-    let raw: string;
+    let raw: Buffer;
     try {
-      raw = await readFile(this.logPath(id), "utf8");
+      raw = await readFile(this.logPath(id));
     } catch {
       return [];
     }
     const records: SessionRecord[] = [];
-    for (const line of raw.split("\n")) {
-      if (line.trim() === "") continue;
-      try {
-        const parsed: unknown = JSON.parse(line);
-        // 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——
-        // 半截摘要当消息渲染，比少渲染一行更糟
-        if (isCompactedRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
-        // 半截标记被当成消息强转，下游访问 content 就是 undefined
-        if (isChannelMarkRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
-        if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) {
-          records.push(parsed);
-          continue;
-        }
-        const suspect = parsed as { role?: unknown } | null;
-        if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") continue;
-        if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") continue;
-        if (
-          suspect !== null &&
-          typeof suspect === "object" &&
-          (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo")
-        ) {
-          continue;
-        }
-        records.push(parsed as TranscriptItem);
-      } catch {
-        // 半截行：跳过它，前面读到的照常返回
-      }
-    }
+    forEachBufferLine(raw, (line) => {
+      const record = parseLogLine(line);
+      if (record !== undefined) records.push(record);
+    });
     return records;
   }
 
@@ -1193,6 +1175,44 @@ export class SessionStore {
     }
     return effective;
   }
+}
+
+/**
+ * 一行日志 → 一条记录：JSON 解析 + 逐字段校验，不落地返回 undefined。
+ * 坏行（半截 JSON、长着特殊记录的脸但字段不齐）跳过——只追加的文件最后一行
+ * 可能因断电只写了一半，为此丢掉整条会话不划算。
+ *
+ * 「这行落不落地」的判定只有这一份：readLogEntries 的行循环、行切分的新旧对照
+ * 测试（store.test.ts）都从它过，谁也不许另抄一份判定链。
+ */
+export function parseLogLine(line: string): SessionRecord | undefined {
+  if (line.trim() === "") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    // 半截行：跳过它，前面读到的照常返回
+    return undefined;
+  }
+  // 界碑逐字段校验；**长着界碑的脸但字段不齐的行跳过**——
+  // 半截摘要当消息渲染，比少渲染一行更糟
+  if (isCompactedRecord(parsed)) return parsed;
+  // 通道标记同一条纪律：字段齐的收下，长着它的脸但不齐的跳过——
+  // 半截标记被当成消息强转，下游访问 content 就是 undefined
+  if (isChannelMarkRecord(parsed)) return parsed;
+  // 文件账三件（revert.ts）同一条纪律：字段齐的收下，不齐的跳过
+  if (isFileTurnRecord(parsed) || isRevertRecord(parsed) || isUndoRecord(parsed)) return parsed;
+  const suspect = parsed as { role?: unknown } | null;
+  if (suspect !== null && typeof suspect === "object" && suspect.role === "compacted") return undefined;
+  if (suspect !== null && typeof suspect === "object" && suspect.role === "channel-mark") return undefined;
+  if (
+    suspect !== null &&
+    typeof suspect === "object" &&
+    (suspect.role === "file-turn" || suspect.role === "revert" || suspect.role === "undo")
+  ) {
+    return undefined;
+  }
+  return parsed as TranscriptItem;
 }
 
 /** IPC 进来的 limit 在这条线上夹住：它来自 renderer，不设上限就是给了一条自选的传输量 */
@@ -1221,11 +1241,15 @@ function isTurnStart(record: SessionRecord | undefined): boolean {
  * 它们归到上一个不在窗口里的 user 名下）。往后找不到（窗口里一条 user 都没有，
  * 例如最后 600 条都在同一轮里）就往回找最近的那条——宁可窗口比一页稍大，
  * 也不给一段无主的历史。两边都没有（整条会话一条 user 记录也没有）只能按 start 切。
+ *
+ * `end` 是窗口的右界（不含）：往后找只在 [start, end) 里找。`loadWindow` 的右界是数组末尾；
+ * `loadOlder` 的右界是锚点——锚点本身一定是轮边界，不设界就会找到它，切出空页。
+ * 一轮比一页还长时，这里的结果是「往回找」到那一轮的起点，页比 limit 大。
  */
-function alignToTurnStart(records: readonly SessionRecord[], start: number): number {
+function alignToTurnStart(records: readonly SessionRecord[], start: number, end: number = records.length): number {
   if (start <= 0) return 0;
   if (isTurnStart(records[start])) return start;
-  for (let i = start; i < records.length; i += 1) {
+  for (let i = start; i < end; i += 1) {
     if (isTurnStart(records[i])) return i;
   }
   for (let i = start - 1; i >= 0; i -= 1) {

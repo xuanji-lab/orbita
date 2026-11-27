@@ -12,6 +12,7 @@ import type {
   FileLinesRequest,
   FileListRequest,
   FileListResponse,
+  FileMediaUrl,
   FilePreview,
   FileRoot,
   FileRootsRequest,
@@ -19,6 +20,7 @@ import type {
   FileWriteResult,
   FsEntryFact,
   PdfFile,
+  WebThumb,
 } from "../../shared/files.ts";
 import type { XlsxPreview, XlsxReadRequest, XlsxWriteRequest, XlsxWriteResult } from "../../shared/xlsx.ts";
 import type { PptxPreview, PptxReadRequest } from "../../shared/pptx.ts";
@@ -32,7 +34,7 @@ export const filesApi = {
   reveal: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsReveal, req),
   /** 读一个文件给面板预览（同 root/dir 白名单，`dir` 就是文件路径） */
   read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
-  /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf；实验功能「PDF 引用」） */
+  /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf） */
   readPdf: (req: FileListRequest): Promise<PdfFile> => ipcRenderer.invoke(ipcChannels.fsReadPdf, req),
   /**
    * 编辑器写回一个文本文件（同白名单）。`expectedHash` 对不上盘上内容时回 conflict、
@@ -48,7 +50,10 @@ export const filesApi = {
   writeXlsx: (req: XlsxWriteRequest): Promise<XlsxWriteResult> =>
     ipcRenderer.invoke(ipcChannels.fsWriteXlsx, req),
   /** 读一份 .pptx 的只读大纲（同白名单，且须是 .pptx；只读，不含任何写入口） */
-  readPptx: (req: PptxReadRequest): Promise<PptxPreview> => ipcRenderer.invoke(ipcChannels.fsReadPptx, req),  /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */
+  readPptx: (req: PptxReadRequest): Promise<PptxPreview> => ipcRenderer.invoke(ipcChannels.fsReadPptx, req),
+  /** 给音 / 视频文件要播放地址（同白名单，且须是媒体扩展名）；<audio> / <video> 拿它按 Range 流式读 */
+  mediaUrl: (req: FileListRequest): Promise<FileMediaUrl> => ipcRenderer.invoke(ipcChannels.fsMediaUrl, req),
+  /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */
   lineIndex: (req: FileLineIndexRequest): Promise<FileLineIndex> =>
     ipcRenderer.invoke(ipcChannels.fsLineIndex, req),
   /** 取消一次还在扫的 lineIndex（换标签 / 卸载时调；已完成的请求什么都不会发生） */
@@ -60,6 +65,8 @@ export const filesApi = {
   open: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpen, req),
   /** 在内置浏览器「你的」tab 打开网页文件（同白名单，且须是网页文件） */
   openInBrowser: (req: FileListRequest): Promise<void> => ipcRenderer.invoke(ipcChannels.fsOpenInBrowser, req),
+  /** 网页文件的缩略图：主进程隐藏窗口截一张真图（同白名单）；截不出来 = null */
+  webThumb: (req: FileListRequest): Promise<WebThumb | null> => ipcRenderer.invoke(ipcChannels.fsWebThumb, req),
   /** 把一批绝对路径 stat 成盘上事实（输入框附件分拣与面板已发送附件列表用；不在面板白名单内）。stat 不到两个字段都是 null */
   statKind: (paths: readonly string[]): Promise<FsEntryFact[]> => ipcRenderer.invoke(ipcChannels.fsStatKind, paths),
   /** 开系统目录选择器挑文件夹（多选，给回形针的「添加文件夹」）；取消返回 null */

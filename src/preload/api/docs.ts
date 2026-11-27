@@ -18,7 +18,7 @@ import type {
   DocSaveAsRequest,
   DocSaveAsResult,
   DocFile,
-  DocListEntry,
+  DocListing,
   DocListRequest,
   DocTarget,
   DocWriteRequest,
@@ -43,7 +43,7 @@ export const docsApi = {
   /** 在当前会话的工作区根下新建一份文档 / 演示文稿 */
   create: (req: DocCreateRequest): Promise<DocCreated> => ipcRenderer.invoke(ipcChannels.docCreate, req),
   /** 工作区里的 .md 列表（最近改的在前） */
-  list: (req: DocListRequest): Promise<DocListEntry[]> => ipcRenderer.invoke(ipcChannels.docList, req),
+  list: (req: DocListRequest): Promise<DocListing> => ipcRenderer.invoke(ipcChannels.docList, req),
   /** 开始监听一份文档；盘上变化走 onChanged */
   watch: (req: DocTarget): Promise<void> => ipcRenderer.invoke(ipcChannels.docWatch, req),
   unwatch: (req: DocTarget): Promise<void> => ipcRenderer.invoke(ipcChannels.docUnwatch, req),

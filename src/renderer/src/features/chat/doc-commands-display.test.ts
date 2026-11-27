@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { builtinCommand, docEditLabel, docEditPath, docEditSection, docEditSummary, fileLabel, PINNED_CARD_COMMANDS, toolWord } from "./builtin-commands.ts";
+import { builtinCommand, docEditLabel, docEditPath, docEditSection, docEditSummary, fileLabel, toolWord } from "./builtin-commands.ts";
 import { parseEditDiff, rollupToolKey, toolCallSummary } from "./tool-results.ts";
 
 describe("文档内置命令的展示", () => {
@@ -14,12 +14,6 @@ describe("文档内置命令的展示", () => {
     assert.equal(toolCallSummary("doc_export", { path: "a.md", format: "docx" }), "Word · a");
     assert.equal(toolCallSummary("doc_export", { path: "a.md", format: "md-plain" }), "Markdown · 通用格式 · a");
     assert.equal(toolCallSummary("doc_open", {}), null);
-  });
-
-  it("打开与导出钉卡，插图不钉", () => {
-    assert.ok(PINNED_CARD_COMMANDS.has("doc_open"));
-    assert.ok(PINNED_CARD_COMMANDS.has("doc_export"));
-    assert.ok(!PINNED_CARD_COMMANDS.has("doc_insert_image"));
   });
 
   it("文件标签去掉 .markdown / .txt", () => {

@@ -2,6 +2,12 @@
  * 主进程入口。职责边界（AGENTS.md「架构边界」）：只负责窗口、IPC 与持久化。
  * agent runtime 将跑在独立 utility 进程，不在这里 —— 见 docs/single-agent-guideline.md §二。
  */
+import { OutboxStore } from "./session/outbox.ts";
+import { registerOutboxIpc } from "./session/outbox-ipc.ts";
+import { broadcastAvatarJob, loadSurface, registerAvatarIpc, registerPlanetIpc } from "./planet/ipc.ts";
+import { AVATAR_PLUGIN, AVATAR_SKILL, AvatarJobs, execPluginScript } from "./planet/avatar.ts";
+import { SubAgentStore } from "./planet/sub-agents.ts";
+import { applySubAgentRequest } from "./planet/sub-agent-requests.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
@@ -10,7 +16,8 @@ import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
-import { effectiveLanguage, type Language, type ThemePreference } from "../shared/settings.ts";
+import { resolveAvatarModel } from "../shared/planet-avatar.ts";
+import { effectiveLanguage, lastUsedPair, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { OFFICECLI_PATH_ENV, resolveOfficecliPath } from "./agent/officecli-bin.ts";
@@ -52,7 +59,9 @@ import {
 import { IntentIngestTracker } from "./agent/intent-ingest.ts";
 import { postIntentIngest, postIntentInvalidate } from "./agent/intent-lab-client.ts";
 import { effectiveIntentSettings } from "../shared/settings.ts";
-import { broadcastChannelEvent, registerChannelIpc } from "./channel/ipc.ts";
+import { broadcastChannelEvent, broadcastClosureNotices, registerChannelIpc } from "./channel/ipc.ts";
+import { StartupClosureQueue } from "./channel/startup-closures.ts";
+import { ChannelReconciler } from "./channel/reconcile.ts";
 import { broadcastAutomationEvent, registerAutomationIpc } from "./automation/ipc.ts";
 import { KeepAwake } from "./automation/keep-awake.ts";
 import { deliverAutomationRun, launchAutomationRun, type LaunchDeps } from "./automation/launch.ts";
@@ -62,9 +71,10 @@ import { AutomationStore } from "./automation/store.ts";
 import { applyChannelSend, applyDelegate, type ChannelDeps } from "./channel/requests.ts";
 import { ChannelStore } from "./channel/store.ts";
 import { registerProviderIpc } from "./provider/ipc.ts";
+import { QuotaCache } from "./provider/quota-cache.ts";
+import { quotaHintOf, type QuotaExhaustedHint } from "../shared/quota.ts";
 import { registerSessionIpc } from "./session/ipc.ts";
 import { moveSessions } from "./session/move.ts";
-import { registerWrapupIpc } from "./session/wrapup-ipc.ts";
 import { registerMcpIpc } from "./mcp/ipc.ts";
 import { McpStore } from "./mcp/store.ts";
 import { PluginAgentRequests } from "./plugin/agent-requests.ts";
@@ -72,6 +82,7 @@ import { DraftSessionBook } from "./plugin/draft-sessions.ts";
 import { scanDrafts } from "./plugin/drafts.ts";
 import { builtinPluginsDir } from "./plugin/builtin.ts";
 import { BoardTemplateStore, PluginBoards, boardPluginsIn } from "./plugin/board-snapshot.ts";
+import { registerChatEmbedIpc } from "./chat-embed/ipc.ts";
 import { registerBoardIpc } from "./plugin/board-ipc.ts";
 import { BOARD_TEMPLATES_DIR } from "../shared/plugin-board.ts";
 import { registerPluginIpc } from "./plugin/ipc.ts";
@@ -83,8 +94,8 @@ import { registerSkillIpc } from "./skill/ipc.ts";
 import { SkillStore } from "./skill/store.ts";
 import { createSessionRecorder } from "./session/recorder.ts";
 import { SessionStore } from "./session/store.ts";
+import { StatusDigestStore } from "./session/status-digest.ts";
 import { ExcerptStore } from "./excerpt/store.ts";
-import { CarryoverStore } from "./session/carryover-store.ts";
 import { priceChartSourceOf, registerPriceChartIpc, registerUsageIpc, startTaskLedger } from "./usage/ipc.ts";
 import { applyModelCosts } from "./usage/model-costs.ts";
 import { readPiThinkingTimeline, TaskLedger } from "./usage/task-ledger.ts";
@@ -103,6 +114,8 @@ import { registerFilesIpc } from "./files/ipc.ts";
 import { registerDocxIpc } from "./docx/ipc.ts";
 import { applyDocxEditRequest } from "./docx/agent-edit.ts";
 import { dispatchDocxEdit } from "./docx/ipc.ts";
+import { installMediaProtocol, registerMediaScheme } from "./files/media-protocol.ts";
+import { MediaTokens } from "./files/media-stream.ts";
 import { applyDocRequest } from "./doc-panel/agent-requests.ts";
 import { printDocPdf } from "./doc-panel/print-doc-pdf.ts";
 import { registerDocIpc } from "./doc-panel/ipc.ts";
@@ -125,6 +138,7 @@ import { registerDocxExportIpc } from "./docx-export/ipc.ts";
 import { registerCiteIpc } from "./cite/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
+import { registerPowerIpc } from "./power/ipc.ts";
 import { ChimeLog } from "./notify/chime-log.ts";
 import { registerNotifyIpc } from "./notify/ipc.ts";
 import { registerBrowserIpc } from "./browser/ipc.ts";
@@ -135,7 +149,7 @@ import { registerRightPanelMemoryIpc } from "./right-panel-memory/ipc.ts";
 import { RightPanelMemoryStore } from "./right-panel-memory/store.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
-import { pageBackgroundColor } from "./browser/page-background.ts";
+import { PAGE_BACKGROUNDS, pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
 import { browserDownloadDir } from "./browser/download-dir.ts";
@@ -156,6 +170,8 @@ preferIPv4();
 
 // 插件面板的 iframe 协议（orbita-panel://）：Electron 要求自定义协议在 app ready 之前登记
 registerPanelScheme();
+// 文件面板的音视频协议（orbita-media://）：同样要在 app ready 之前登记
+registerMediaScheme();
 
 // Windows 的系统通知按 AUMID 归到应用（否则打包版可能根本不弹，或弹成 Electron 的
 // 默认名）。与 electron-builder 的 appId 同值；要在任何通知发出前设（模块顶层即可）。
@@ -174,6 +190,21 @@ const devDirs = devDataDirs({
 });
 // 显式给了 `--user-data-dir`（CDP 验收用隔离目录的惯例）就听它的：不然这里会把隔离目录盖回 orbita-dev
 if (devDirs !== null && !app.commandLine.hasSwitch("user-data-dir")) app.setPath("userData", devDirs.userData);
+
+/*
+ * 假麦克风（只给开发版的无人验收用）：夜里没人点系统的麦克风授权框，也不许替用户改系统设置，
+ * 于是让 Chromium 用一段 wav 当麦克风、免掉页内授权。**只在开发版 + 显式环境变量下生效**：
+ * ORBITA_FAKE_MIC_WAV=<wav 绝对路径>（播完即静音，不循环）。打包版不认这个变量。
+ */
+const fakeMicWav = app.isPackaged ? undefined : process.env["ORBITA_FAKE_MIC_WAV"];
+if (fakeMicWav !== undefined && fakeMicWav !== "") {
+  app.commandLine.appendSwitch("use-fake-ui-for-media-stream");
+  app.commandLine.appendSwitch("use-fake-device-for-media-stream");
+  app.commandLine.appendSwitch("use-file-for-fake-audio-capture", `${fakeMicWav}%noloop`);
+  // 音频服务默认在沙箱里的独立进程，读不到这个文件（实测报 Failed to read … Try disabling the sandbox）：
+  // 假麦克风开着时让它跑在主进程里、不进沙箱——只影响这种开发验收实例
+  app.commandLine.appendSwitch("disable-features", "AudioServiceOutOfProcess,AudioServiceSandbox");
+}
 
 /*
  * 单实例锁。「关窗 = 收进托盘」之后，双击桌面图标必须回到原进程——否则两个进程
@@ -262,7 +293,7 @@ function createMainWindow(
       : // Windows/Linux：转帧式窗口——最小化/最大化/关闭由渲染层标题栏自绘
         // （标题栏上还有「复制 transcript」与「抽屉开关」，这是 right-drawer-X 的落位）。
         // resizable 的帧式窗口在 Windows 上保留系统缩放边，不受 frame:false 影响。
-        { frame: false, backgroundColor: "#e7ebef" }),
+        { frame: false, backgroundColor: PAGE_BACKGROUNDS.light }),
     webPreferences: rendererPreferences(theme, language),
   });
   mainWindows.track(window);
@@ -312,7 +343,7 @@ function createMainWindow(
       appTray = installCloseToTray({
         window,
         icon,
-        language: effectiveLanguage(theme, language),
+        language: effectiveLanguage(language),
         readLanguage,
       });
     }
@@ -417,10 +448,6 @@ void app.whenReady().then(async () => {
   // 一个 secrets.json 一个实例：provider 的 API key 与语音厂商的密钥共用，读改写不互相踩
   const secrets = new SafeStorageSecrets(configDir);
   const providers = new ProviderStore(configDir, secrets);
-  registerVoiceIpc(
-    new VoiceStore(configDir, secrets),
-    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
-  );
   // workspace 的 IPC 在下面注册（要一并注入 skills 的连带清理，见 registerWorkspaceIpc）
 
   /*
@@ -432,6 +459,8 @@ void app.whenReady().then(async () => {
    * additionalArguments，渲染层首帧同步读出，见 preload/initial-theme.ts）。
    */
   const settings = new SettingsStore(configDir);
+  // 子智能体档案（工作区 planet/agents/<id>/agent.json）：面板 IPC、agent 工具、指名派活共用一个
+  const subAgentStore = new SubAgentStore();
   // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
   // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
   // 不再随设置开关拉起 / 停
@@ -446,20 +475,26 @@ void app.whenReady().then(async () => {
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
   // 通道账本（子会话 2026-09-23）先于 SessionStore 建：SessionStore 的级联删要用它
   const channels = new ChannelStore(join(configDir, "channels"));
-  const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels);
+  // 状态卡摘要（2026-11-27）：每条会话一份 sessions/<id>.status.json，record 落盘的同一处推进；
+  // 先于 SessionStore 建——它的钩子（onRecordAppended 等）在构造时就接上
+  const statusDigests = new StatusDigestStore(join(configDir, "sessions"));
+  const sessions = new SessionStore(join(configDir, "sessions"), join(configDir, "workbenches"), channels, {
+    onRecordAppended: (id) => statusDigests.touch(id),
+    onLogReplaced: (id) => statusDigests.invalidate(id),
+    onLogSeeded: (id, records, logBytes) => statusDigests.seed(id, records, logBytes),
+    onRemoved: (id) => void statusDigests.remove(id),
+  });
+  // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
+  registerVoiceIpc(
+    new VoiceStore(configDir, secrets),
+    new DictationSessions({ openSocket: openUndiciSocket, diagnose: diagnoseOverHttps }),
+    { workbenchPath: (sessionId) => sessions.workbenchPath(sessionId) },
+  );
   // 任务账本（侧栏用量格 usage:week / usage:event 与价格 · 能力图共用）：assistant 记录落盘的同一条
   // 路径上按「会话 × 型号 × 档的连续一段」增量记账，意图召回另记按天的一份；升级后第一次启动回填
   // 一次，注册即异步装载 + 回填，不阻塞启动。取代原来的日账本 usage-daily.json（不再读写，留在盘上无害）
   const taskLedger = new TaskLedger(join(configDir, "usage-tasks.json"));
-  const record = createSessionRecorder(sessions, taskLedger, (sessionId, drafts) => {
-    // 「以后再做」：agent 写 update_plan 时当场记下的事。有新增才广播，界面听到就重拉清单
-    void carryovers
-      .appendNoticed(sessionId, drafts)
-      .then((created) => {
-        if (created.length > 0) broadcastAgentEvent({ type: "carryoversChanged" });
-      })
-      .catch((error: unknown) => console.error("[carryover] 以后再做没记上（不影响对话）", sessionId, error));
-  });
+  const record = createSessionRecorder(sessions, taskLedger);
   startTaskLedger(taskLedger, {
     list: () => sessions.list(),
     readUsageLog: (id) => sessions.readUsageLog(id),
@@ -538,6 +573,67 @@ void app.whenReady().then(async () => {
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
   const phases = new Map<string, SessionPhase>();
+  const channelReconciler = new ChannelReconciler({ sessions, channels, phases, broadcast: broadcastChannelEvent });
+  const channelIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const cancelChannelIdleClose = (sessionId: string): void => {
+    clearTimeout(channelIdleTimers.get(sessionId));
+    channelIdleTimers.delete(sessionId);
+  };
+  const scheduleChannelIdleClose = (sessionId: string): void => {
+    cancelChannelIdleClose(sessionId);
+    // item_finished 的 record() 是异步落盘。等一个很短轮尾再读，且落账前还会复查 phase / 账本；
+    // 用户立刻重试或终止时这一轮清扫会作废，不会关掉新轮。
+    const timer = setTimeout(() => {
+      channelIdleTimers.delete(sessionId);
+      void channelReconciler
+        .reconcileSession(sessionId, { interruptedCause: "incomplete" })
+        .catch((cause: unknown) => console.error("[channel] 子会话轮尾收尾失败", sessionId, cause));
+    }, 80);
+    channelIdleTimers.set(sessionId, timer);
+  };
+  const closeChannelsForLostProcess = (): void => {
+    const lost = [...phases].filter(([, phase]) => phase !== "idle").map(([sessionId]) => sessionId);
+    phases.clear();
+    for (const sessionId of lost) {
+      cancelChannelIdleClose(sessionId);
+      void channelReconciler
+        .reconcileSession(sessionId, { interruptedCause: "process-exit", force: true })
+        .catch((cause: unknown) => console.error("[channel] agent 进程退出后的子会话收尾失败", sessionId, cause));
+    }
+  };
+  /*
+   * 额度缓存只建一份：provider 的额度查询（registerProviderIpc）与 failed 事件的
+   * 额度补丁读同一份 `<userData>/quota-cache.json`。
+   */
+  const quotaCache = new QuotaCache(configDir);
+  /**
+   * 给这条会话的失败找一个「额度窗口用尽」的提示。
+   *
+   * 判据只有缓存快照（`quotaHintOf`），**不按厂商文案匹配**——各家措辞不同，
+   * 匹配表一定会漏，还会把「钥匙错」误判成「额度用尽」。缓存过期 / 从没查过 /
+   * 窗口没满都返回 null：宁可不解释，也不编。
+   *
+   * **它不能拿来判定失败原因**：缓存只说明「这个窗口满了」这个事实，不说明本次
+   * 失败是它造成的——「钥匙过期 + 恰好有个窗口满了」时主因是 401。要判定原因就
+   * 得按厂商文案做匹配，那是我们明确拒绝的做法。所以渲染层把它放在厂商原文
+   * 之后的副行，写成「账户额度：…」而不是「失败原因：…」。
+   *
+   * **全程不抛**：读盘出错只是少一句提示，不该把这条失败事件本身弄丢——
+   * 用户至少还看得到厂商原文。
+   */
+  const quotaHintFor = async (sessionId: string): Promise<QuotaExhaustedHint | null> => {
+    try {
+      const meta = await sessions.readMeta(sessionId);
+      if (meta === null) return null;
+      const snapshot = (await quotaCache.read())[meta.providerId] ?? null;
+      return quotaHintOf(snapshot, Date.now());
+    } catch (cause) {
+      console.error("[quota] 失败事件补额度提示时读缓存出错", sessionId, cause);
+      return null;
+    }
+  };
+  // 「生成形象」的任务表：在 agentIpc 之后才建（要它的 submitTurn），agent 事件先到的话这里是 null、不旁听
+  let avatarJobs: AvatarJobs | null = null;
   // 随包的 rg / fd 挂到 agent 进程 PATH 最前面：pi 的 grep / find 不再去 GitHub 下载（search-bins.ts）。
   // 目录不在（开发版没跑过 fetch 脚本）就原样给环境，pi 照旧自己找
   const searchBins = bundledBinDir({
@@ -657,6 +753,30 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // 子智能体：agent 的 create_sub_agent / update_sub_agent / revise_sub_agent_avatar / list_sub_agents——写工作区 planet/ 在主进程，任何路径都回执
+    if (event.type === "subAgentRequest") {
+      void applySubAgentRequest(
+        {
+          sessions,
+          workspaces,
+          settings,
+          store: subAgentStore,
+          broadcast: (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }),
+          // 聊天里建的子智能体没带地表图：走面板同一套出图（候选进同一个挑选面板）
+          startAvatar: async (workspaceId, bodyId, instruction) =>
+            avatarJobs === null ? { ok: false, error: "出图还没就绪" } : avatarJobs.generate({ workspaceId, bodyId, ...(instruction === undefined ? {} : { instruction, useCurrentSurface: true }) }),
+        },
+        event,
+      )
+        .then((outcome) => agentHost.answerSubAgent(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerSubAgent(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     if (event.type === "channelSendRequest") {
       void applyChannelSend(deps, event)
         .then((outcome) => agentHost.answerChannelSend(event.requestId, outcome))
@@ -671,13 +791,19 @@ void app.whenReady().then(async () => {
     // 子会话：主进程按 phase 事件维护活会话状态；runtime 整个退出时全部会话的
     // 活跑状态都不可信了，清空。**都不 return**——事件照常往下 record + broadcast
     // （failed(null) 本来就要转发给 renderer，告诉它进程挂了）。
-    if (event.type === "phase") phases.set(event.sessionId, event.phase);
+    if (event.type === "phase") {
+      phases.set(event.sessionId, event.phase);
+      if (event.phase === "idle") scheduleChannelIdleClose(event.sessionId);
+      else cancelChannelIdleClose(event.sessionId);
+    }
+    // 「生成形象」的幕后会话停了：收尾这一组候选（只旁听，不 return）
+    avatarJobs?.onAgentEvent(event);
     // 自动化的运行收尾 / this_session 的等待送达都靠这些事件（phase idle、最终回答、stats、failed）。
     // 只旁听，不 return：事件照常往下 record + broadcast
     automationScheduler.onAgentEvent(event);
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
     if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
-    if (event.type === "failed" && event.sessionId === null) phases.clear();
+    if (event.type === "failed" && event.sessionId === null) closeChannelsForLostProcess();
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
     // 通道账本一并传进去：子会话每一轮的开头是通道消息，正文在那里。
     // 任何路径都必须回执（同 delegateRequest）：读盘抛错没有 catch 的话，agent 进程里的
@@ -866,7 +992,7 @@ void app.whenReady().then(async () => {
       // 等**落盘完**再广播，并带上落盘记录的真 id——renderer 的轮尾卡拿它当 key
       // 与撤销的 turnId（单轮撤销按它回查账本），自造 id 会对不上盘
       void sessions
-        .recordFileTurn(event.sessionId, event.changes, event.webArtifacts ?? [], event.webArtifactsBatch)
+        .recordFileTurn(event.sessionId, event.changes, event.webArtifacts ?? [], event.webArtifactsBatch, event.mediaArtifacts ?? [])
         .then((record) => {
           if (record === null) return;
           broadcastAgentEvent({
@@ -881,11 +1007,35 @@ void app.whenReady().then(async () => {
             // 旁路网页产物随视图过一道：卡片收起态就靠它出网页行；批量折叠的计数同路
             ...(record.webArtifacts !== undefined ? { webArtifacts: record.webArtifacts } : {}),
             ...(record.webArtifactsBatch !== undefined ? { webArtifactsBatch: record.webArtifactsBatch } : {}),
+            ...(record.mediaArtifacts !== undefined ? { mediaArtifacts: record.mediaArtifacts } : {}),
           });
         })
         .catch((cause: unknown) =>
           console.error("[session] 轮尾文件账落盘失败", event.sessionId, cause),
         );
+      return;
+    }
+    // 回合级失败补一句额度提示：额度快照只在主进程的缓存文件里，agent 进程与
+    // renderer 都看不见——补数据只能在这一跳做。判据是快照本身（某个窗口已满且
+    // 重置时刻在未来），不是厂商文案；补不上就原样广播。
+    // 读 meta / 缓存是异步的，这条失败可能比紧随的 phase(idle) 晚到 renderer：
+    // 不影响正确性——turnError 槽在 idle 上不清理（见 session-states.ts）。
+    // **已知风险**：用户若在这几毫秒里开始了新一轮，这条晚到的失败会挂到新一轮上
+    // （非 idle 的 phase 会清标注，但清除发生在这条之前）。读盘只有毫秒级，目前接受；
+    // 以后若这里变成网络请求，必须加序号 / phase 守卫再广播。
+    if (event.type === "failed" && event.turn === true && event.sessionId !== null) {
+      const turnFailed = event;
+      const sessionId = event.sessionId;
+      // 子会话的模型错误就是确定终局：不等 phase idle，也不靠工具尾帧猜。根会话由 readMeta 检查跳过。
+      void channelReconciler
+        .reconcileSession(sessionId, { interruptedCause: "incomplete", failureText: event.message, force: true })
+        .catch((cause: unknown) => console.error("[channel] 子会话模型失败收尾失败", sessionId, cause));
+      void quotaHintFor(sessionId).then((quota) => {
+        const out = quota === null ? turnFailed : { ...turnFailed, quota };
+        intentIngest.onEvent(out);
+        record(out);
+        broadcastAgentEvent(out);
+      });
       return;
     }
     // 内建目录（启动时一次，pi.dev 刷新后再一次）：不属于任何会话，不落账、不进意图存档，只转给窗口
@@ -908,8 +1058,6 @@ void app.whenReady().then(async () => {
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
   // 删除会话时把 runtime 里那条 pi 会话也放掉——不然每开一条任务就多一份驻留，
   // 活到退出应用（刀 0-4 债务 A）。会话分支（session:branch）也要走 agent 进程裁 pi 本子
-  // 遗留事项（收尾仪式）全局一份；与 sessions/ 目录平级，一眼看得出哪份归谁
-  const carryovers = new CarryoverStore(join(configDir, "carryovers.jsonl"));
   /*
    * 意图系统（实验功能 intent-system）的主进程三件套：
    * 1. 存档跟踪器（/ingest）：submit 判定要存档时 begin，事件泵喂 onEvent；
@@ -1155,6 +1303,10 @@ void app.whenReady().then(async () => {
       },
     },
   });
+  // 发件箱：点了发送的话先落盘再开跑，下次启动核对没落账的（session/outbox.ts）
+  registerOutboxIpc(new OutboxStore(configDir));
+  // 星系设计稿：工作区 planet/ 里的插件稿与伴随文件（planet/store.ts）
+  registerPlanetIpc(workspaces, subAgentStore, (change) => broadcastAgentEvent({ type: "subAgentsChanged", ...change }));
   registerSessionIpc(
     sessions,
     (id) => {
@@ -1165,7 +1317,6 @@ void app.whenReady().then(async () => {
       memoryTurns.forget(id);
     },
     agentHost,
-    carryovers,
     providers,
     (sessionId, path) => browserSandbox.openSessionArtifact(sessionId, path),
     (ids, workspaceId) =>
@@ -1182,6 +1333,7 @@ void app.whenReady().then(async () => {
         ids,
         workspaceId,
       ),
+    statusDigests,
     async (sessionId, reverted) => {
       await Promise.all([
         intentOnReverted(sessionId, reverted.turnIds),
@@ -1189,21 +1341,6 @@ void app.whenReady().then(async () => {
       ]);
     },
   );
-  // 收尾（session:wrapup-*）：扫描计划、按反馈改清单、确认落账
-  registerWrapupIpc({
-    sessions,
-    carryovers,
-    providers,
-    settings,
-    host: agentHost,
-    catalog: () => agentHost.listBuiltins(),
-    // 确认的做完的事记进任务账本（价格图的主会话任务）
-    onConfirmed: (sessionId, wrapup) => {
-      void taskLedger.recordWrapup(sessionId, wrapup).catch((error: unknown) => {
-        console.error("[task-ledger] 收尾记账失败（下次升级回填会从 meta 补上）", error);
-      });
-    },
-  });
   // pi 的本子和我们的记录分开放，一眼看得出哪份归谁（guideline §四）
   /*
    * 中心存储与 global 集合先建出来：**空目录就是说明书**——用户打开 userData 看到
@@ -1319,6 +1456,9 @@ void app.whenReady().then(async () => {
   });
   // docx 轻量编辑（docx:open / docx:save）：白名单同上，上一版备份放 userData 里
   registerDocxIpc(workspaces, sessions, join(configDir, "docx-backups"));
+  // 媒体播放协议（orbita-media://）：token 映射到已过白名单的真实路径，只认 token
+  const mediaTokens = new MediaTokens();
+  installMediaProtocol(mediaTokens, (url) => isOwnRendererPage(url, ownRendererOrigin()));
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
   registerSlidesIpc(workspaces, sessions);
@@ -1327,11 +1467,15 @@ void app.whenReady().then(async () => {
   // 专注模式（focus:changes / focus:notify-done / focus:summarize）：U/M 只读跑 git，
   // 时间到发系统通知，收工小结把素材交给 agent 进程的家务活模型（摘抄也是素材）
   registerFocusIpc(workspaces, sessions, providers, settings, agentHost, excerpts);
+  // 电源状态（power:state / power:changed）：离电时 renderer 进省电档（星系停转、碎石带隐藏、眼睛不跟）
+  registerPowerIpc();
   // 提示音记账（notify:chime-log）：每真响一声记一行，事后对证「那一声是谁」
   registerNotifyIpc(new ChimeLog(join(configDir, "chime-log.jsonl")));
   // provider 域的 handler 要带 agentHost：OAuth 令牌的 Test 探测改走 agent 进程（真会话同源客户端）。
+  // 第三个参数是额度缓存实例（<userData>/quota-cache.json）：额度查询与 failed 事件的
+  // 额度补丁读同一份；缓存模块自己不在顶层读 app。
   // 放在 agentHost 建好之后注册；同为 ipcMain.handle，注册顺序不影响谁先谁后可用。
-  registerProviderIpc(providers, agentHost);
+  registerProviderIpc(providers, agentHost, quotaCache);
   // 侧栏用量格与价格 · 能力图：同一本任务账本，型号显示名 / 单价要服务商声明与 pi 目录
   registerUsageIpc({ ledger: taskLedger, providers: () => providers.load(), catalog: () => agentHost.listBuiltins() });
   // 设置页的图与 agent 的 model_costs 工具读同一份（同一个 memo）：priceChart 在上面
@@ -1366,7 +1510,7 @@ void app.whenReady().then(async () => {
   // 文件面板（fs:roots / fs:list / fs:reveal / fs:write-xlsx）：根每次现算，不缓存。
   // 网格写回要把人的改动记进 Office 的那份改动清单（与 edit_office 同一批），所以放在
   // office 之后建——那一个是进程级单例，agent 的 read_office / edit_office 也用它。
-  registerFilesIpc(workspaces, sessions, (path, roots) => browserSandbox.openLocalFile(path, roots), office);
+  registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path), mediaTokens, office);
   // 旧版本留在会话工作台里的空 office-backups（只删空目录，非空的旧备份一个字节都不动）
   void removeEmptyLegacyOfficeBackupDirs(join(configDir, "workbenches")).catch(() => undefined);
   // Word 导出：pandoc 探测 / 模板体检 / 内置默认模板的 IPC 面（设置页的「Word 导出」组）。
@@ -1405,11 +1549,48 @@ void app.whenReady().then(async () => {
     settings,
     intentIngest,
     memoryTurns,
+    // 中途起来的窗口（重开 / 刷新）问「谁在跑」：phases 表是 phase 事件记的真值，进程退出时整表清空
+    () => {
+      const live: Record<string, Exclude<SessionPhase, "idle">> = {};
+      for (const [sessionId, phase] of phases) if (phase !== "idle") live[sessionId] = phase;
+      return live;
+    },
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
   // turnFields/readDirectories 那一整套装配；steer 走 agentHost（AgentHostCore 的方法）；
   // abort 同源（agent:abort）；cancelBrowserHandoff 是 BrowserSandbox 的幂等取消。
+  // 「生成形象」：幕后会话跑插件「行星造物」的 planet-render 技能出候选，主进程读插件账本推进度（planet/avatar.ts）
+  avatarJobs = new AvatarJobs({
+    workspaces,
+    pluginRoot: async () => {
+      const record = (await plugins.records()).find((each) => each.name === AVATAR_PLUGIN);
+      if (record === undefined) return null;
+      const root = plugins.rootOf(record);
+      return existsSync(join(root, AVATAR_SKILL)) ? root : null;
+    },
+    sessions,
+    // 模型：面板随请求带来的型号最优先（它在胶囊上显示的就是这一对），没带才按设置里的取法解析——
+    // 没选过 = 会话栏的模型（主进程读得到的只有 lastUsed），选了「子会话模型」才走子会话默认那条链路。
+    // 不用杂务模型——画 SVG、按退出码重画是正经的多步活
+    resolveModel: async (request) => {
+      const current = await settings.read();
+      return resolveAvatarModel({
+        requested: request.model,
+        session: lastUsedPair(current),
+        settings: { avatarModel: current.avatarModel, subSessionModel: current.subSessionModel, subSessionThinking: current.subSessionThinking },
+        providers: await providers.list(),
+      });
+    },
+    submitTurn: (input) => agentIpc.submitTurn(input),
+    abort: (sessionId) => agentHost.abort(sessionId),
+    runScript: execPluginScript,
+    loadImage: loadSurface,
+    emit: broadcastAvatarJob,
+    now: Date.now,
+    newId: randomUUID,
+  });
+  registerAvatarIpc(avatarJobs);
   const deps: ChannelDeps = {
     sessions,
     channels,
@@ -1421,8 +1602,17 @@ void app.whenReady().then(async () => {
     cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
     phases,
     broadcast: broadcastChannelEvent,
+    subAgents: {
+      profile: async (workspaceId, id) => {
+        const workspace = (await workspaces.list()).find((each) => each.id === workspaceId);
+        return workspace === undefined ? null : subAgentStore.profile(workspace.path, id);
+      },
+    },
   };
-  registerChannelIpc(deps);
+  // 启动收尾（上次退出时还在跑的子会话补一条终局）不挡首屏：先注册 IPC，建完主窗口再后台跑
+  // （startup-closures.ts 的理由与 Windows 实测）
+  const startupClosures = new StartupClosureQueue((notices) => broadcastClosureNotices(deps, notices));
+  registerChannelIpc(deps, startupClosures);
 
   /*
    * GitHub 出口只有一个：检查更新（provider）与「所有版本」列表共用同一个客户端——
@@ -1486,6 +1676,8 @@ void app.whenReady().then(async () => {
     templates: boardTemplates,
     frames: panelFrames,
   });
+  // 回答里的 ```html-embed 内嵌交互图：与看板卡共用一次性文档仓库（同一套 CSP 响应头）
+  registerChatEmbedIpc(panelFrames);
   automationScheduler.start();
   setTimeout(() => void automationScheduler.tick().catch(() => undefined), 5_000);
   powerMonitor.on("resume", () => void automationScheduler.tick().catch(() => undefined));
@@ -1514,8 +1706,11 @@ void app.whenReady().then(async () => {
   });
 
   app.on("before-quit", () => {
+    for (const sessionId of channelIdleTimers.keys()) cancelChannelIdleClose(sessionId);
     automationScheduler.stop();
     keepAwake.release();
+    // 状态卡摘要：脏的尽力落盘（不等——落不下也没关系，重启后按 logOffset 增量补扫自愈）
+    void statusDigests.flush().catch(() => undefined);
     appTray?.beginQuit();
     appTray?.destroy();
     appTray = null;
@@ -1549,10 +1744,17 @@ void app.whenReady().then(async () => {
   /** 托盘菜单文案要跟界面语言走；读一次最新设置即可（没有第二处消费者，不另开推送通道） */
   const readLanguage = async (): Promise<Language> => {
     const current = await settings.read();
-    return effectiveLanguage(current.theme, current.language);
+    return effectiveLanguage(current.language);
   };
 
   createMainWindow(initialSettings.theme, initialSettings.language, openLink, readLanguage);
+  void channelReconciler
+    .reconcileAll()
+    .catch((cause: unknown) => {
+      console.error("[channel] 启动子会话收尾失败", cause);
+      return [];
+    })
+    .then((notices) => startupClosures.resolve(notices));
 
   // macOS：点 dock 图标且无窗口时重开——同样先读一次设置再建窗口（SettingsStore
   // 有缓存，命中时同步可得），用的是这一刻的最新值，不是冷启动时的旧 initialSettings

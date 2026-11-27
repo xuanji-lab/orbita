@@ -84,23 +84,23 @@ export function registerLatexIpc(
     items.push({
       id: "synctex",
       ok: syncOk,
-      detail: syncOk ? syncCandidate : "这台电脑上没有找到 synctex 命令（TeX 发行版可能缺组件）",
+      path: syncOk ? syncCandidate : null,
     });
     // chktex
     const chktex = await probeChktex(latexmk);
     items.push({
       id: "chktex",
       ok: chktex !== null,
-      detail: chktex ?? "未安装（行内检查可选）",
+      path: chktex,
     });
     // pandoc（≥3.10.2 才支持公式编号 \\tag）
     const pandoc = await createPandocProbe().probe();
     items.push({
       id: "pandoc",
       ok: pandoc.supported,
-      detail: pandoc.supported
-        ? `${pandoc.version ? formatPandocVersion(pandoc.version) : "已安装"} · ${pandoc.path ?? "PATH"}`
-        : (pandoc.message ?? "需要 3.10.2 或更新"),
+      path: pandoc.path,
+      version: pandoc.version === null ? null : formatPandocVersion(pandoc.version),
+      minVersion: pandoc.minVersion,
     });
     return { items };
   });

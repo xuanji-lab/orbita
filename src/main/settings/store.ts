@@ -41,7 +41,7 @@ export class SettingsStore {
         ? current.drawer
         : parseSettings({ theme: current.theme, drawer: { ...current.drawer, ...patch.drawer } })
             .drawer;
-    // lastUsed 同款按键合并：切档只写 mode，不该把已记的 providerId/modelId 抹掉
+    // lastUsed 同款按键合并：只写给了的键，不该把已记的 providerId/modelId 抹掉
     const lastUsed =
       patch.lastUsed === undefined
         ? current.lastUsed
@@ -61,6 +61,11 @@ export class SettingsStore {
       patch.pluginsPage === undefined ? current.pluginsPage : { ...current.pluginsPage, ...patch.pluginsPage };
     // 向量设置也是 patch：只改 mode 不该把模型 / 卸载分钟 / 电池偏好冲回默认
     const vector = patch.vector === undefined ? current.vector : { ...current.vector, ...patch.vector };
+    // 常驻对话指针与入口选择同款按工作区键合并：一个工作区记下自己的，不该把别的工作区的抹掉
+    const orchestraMain =
+      patch.orchestraMain === undefined ? current.orchestraMain : { ...current.orchestraMain, ...patch.orchestraMain };
+    const orchestraEntry =
+      patch.orchestraEntry === undefined ? current.orchestraEntry : { ...current.orchestraEntry, ...patch.orchestraEntry };
     const next = parseSettings({
       ...current,
       ...patch,
@@ -70,6 +75,8 @@ export class SettingsStore {
       providersPage,
       pluginsPage,
       vector,
+      orchestraMain,
+      orchestraEntry,
     });
     await writeJsonAtomic(this.filePath, next);
     this.cache = next;

@@ -19,7 +19,6 @@ import { plainParagraphs } from "./read-quote.ts";
 import { remarkOfm } from "../../../../shared/ofm/remark-ofm.ts";
 import { normalizeEmphasisInnerSpace } from "../chat/emphasis-space.ts";
 import { MdPre } from "../chat/CodeBlock";
-import { dominantScript } from "../chat/dominant-script";
 import { remarkDemoteBoundaryMath } from "../chat/math-guard";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
@@ -228,7 +227,7 @@ export const OfmReader = memo(function OfmReader(props: { text: string; env: Ofm
   const tooLong = props.text.length > READ_VIEW_LIMIT;
   return (
     <OfmEnvContext.Provider value={props.env}>
-      <div className="chat-md ofm-doc" data-script={dominantScript(props.text)}>
+      <div className="chat-md ofm-doc">
         {tooLong ? (
           <>
             <p className="ofm-note">{t.doc.readTooLong}</p>
@@ -247,7 +246,7 @@ export const OfmReader = memo(function OfmReader(props: { text: string; env: Ofm
 /** `.txt`：不当 markdown 解析——保留换行与缩进，按段落排版 */
 export function PlainTextReader(props: { text: string }) {
   return (
-    <div className="chat-md ofm-doc ofm-plain-text" data-script={dominantScript(props.text)}>
+    <div className="chat-md ofm-doc ofm-plain-text">
       {plainParagraphs(props.text).map((paragraph, index) => (
         <p key={index} data-sl={paragraph.sl} data-el={paragraph.el}>
           {paragraph.text}

@@ -53,6 +53,9 @@ function probe(available = true): LatexProbe {
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
+/** 固定往回拨的时间戳：mtime 与「本轮开始时刻」的比较不能靠碰运气（见「失败时磁盘上的旧 PDF」） */
+const ago = (ms: number): Date => new Date(Date.now() - ms);
+
 /** 给等结果的用例加一个硬截止，坏了要报错而不是把测试挂死 */
 async function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -659,7 +662,13 @@ describe("LatexRunner —— 陈旧日志与陈旧 PDF（M3/M4）", () => {
     const dir = project({ "main.tex": "\\documentclass{article}" });
     mkdirSync(join(dir, "build"), { recursive: true });
     writeFileSync(join(dir, "build", "main.pdf"), "%PDF-1.4 old\n", "utf8");
-    // 旧 PDF 比源文件新：pdfIsCurrent 会把它当成“与源码一致”，但 pdfFresh 必须是 false
+    // 旧 PDF 比源文件新：pdfIsCurrent 会把它当成“与源码一致”，但 pdfFresh 必须是 false。
+    // **两个时间戳都要显式往回拨**：freshOf 判 `mtime >= runStartedAt`，而这里只写了
+    // 文件、没回拨时，写入与 compile 取 runStartedAt 完全可能落在同一毫秒（快机器上
+    // 实测 11 跑 5 红）——那就是靠“刚好慢一拍”碰巧过，不是测事实。回拨后
+    // pdf（-60s）> main.tex（-120s）> 本轮 runStartedAt，三个关系都是确定的。
+    utimesSync(join(dir, "main.tex"), ago(120_000), ago(120_000));
+    utimesSync(join(dir, "build", "main.pdf"), ago(60_000), ago(60_000));
     const config = { recipe: [nodeExe, "-e", "process.exit(1)"] };
     mkdirSync(join(dir, ".orbita"), { recursive: true });
     writeFileSync(join(dir, ".orbita", "latex.json"), JSON.stringify(config), "utf8");

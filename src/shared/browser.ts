@@ -196,8 +196,7 @@ export const BROWSER_DIAGNOSTICS_DEFAULT_LIMIT = 100;
 
 /**
  * agent 的浏览器工具请求（agent 进程 → 主进程，作用于该会话自己的 agent tab）。
- * 读取类、滚动与交接各档免审批（shared/permission.ts 的 BROWSER_READ_TOOLS / USER_ACTION_TOOL）；
- * 点击、输入、按键会改变页面状态（提交表单、下单、发消息），照写操作过闸。
+ * 点击、输入、按键会改变页面状态（提交表单、下单、发消息），工具说明要求模型没被要求就不做这类事。
  * 交互动作只作用于 agent 自己的 tab——「你的」tab 只读（2026-09-27 裁决）。
  */
 export type BrowserToolRequest =

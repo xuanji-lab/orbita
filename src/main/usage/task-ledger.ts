@@ -48,8 +48,9 @@
  * 旁写明为什么。用户的正式数据 3GB 级，整本重扫一次就是一次几秒的启动开销。
  * - 1 → 2（加 intent，意图召回按天）：要从会话里重扫 intent-recall 记录，不迁移，重建。
  *   （1、2 都没发给用户过。）
- * - 2 → 3（加 done）：done 只来自会话 meta.wrapups，不用读会话正文。迁移把 done 置空并标
- *   donePending，下一次 backfill 只扫会话清单补上（见 fillPendingDones）。
+ * - 2 → 3（加 done）：done 是旧版收尾确认的「做完的事」。
+ * - 3 → 4（删 done / donePending）：「完成 / 收尾」功能已删，账本不再记也不再读 meta.wrapups；迁移把旧文件里的
+ *   done 与 donePending 丢掉，其余（任务、open、intent、backfilled）原样保留，子会话任务不丢、不触发回填。
  *
  * **纯模块**：不 import electron，可被 `node --test` 直接测。
  */
@@ -59,7 +60,6 @@ import { headStringField, scanJsonlLines, timeSlicer } from "../jsonl-scan.ts";
 import { isNotFound } from "../fs-errors.ts";
 import { isThinkingLevel, type ThinkingLevel } from "../../shared/thinking.ts";
 import type { SessionMeta, SessionRecord } from "../../shared/session.ts";
-import type { SessionWrapup } from "../../shared/wrapup.ts";
 import { stampedThinkingLevel } from "../../shared/session.ts";
 import { usageCountsOfIntent } from "../../shared/intent-recall.ts";
 import {
@@ -67,12 +67,10 @@ import {
   chartTasks,
   emptyTaskBook,
   levelChangeOfLine,
-  storedDonesOf,
   taskRecordsOf,
   type ChartTask,
   type DayCounts,
   type LevelChange,
-  type StoredDone,
   type StoredTask,
   type TaskBook,
   type TaskRecord,
@@ -130,17 +128,13 @@ export interface BackfillStats {
  * （见 packDay）。任务按下标存，open 指向下标。
  */
 interface LedgerOnDisk {
-  /** 3：加了 done（收尾确认的做完的事，价格图的主会话任务）。旧版本怎么升见文件头「版本升级」 */
-  version: 3;
-  /** 2 → 3 迁移后、done 还没从 meta.wrapups 补齐（补齐前就落了盘也不丢这件事） */
-  donePending?: true;
+  /** 4：删了 done。旧版本怎么升见文件头「版本升级」 */
+  version: 4;
   backfilled: boolean;
   untrustedSessions: number;
   tasks: { s: string; p: string; m: string; l: ThinkingLevel | null; d: Record<string, number[]> }[];
   open: Record<string, number>;
   intent: Record<string, number[]>;
-  /** 做完的事：s 会话、w 收尾记录 id、p / m / l 归属、t 合计（packDay 同一个 9 数格式） */
-  done: { s: string; w: string; p: string; m: string; l: ThinkingLevel; t: number[] }[];
 }
 
 export class TaskLedger {
@@ -148,12 +142,9 @@ export class TaskLedger {
   private readonly timeZone: string | undefined;
   private book: TaskBook = emptyTaskBook();
   private intent = new Map<string, TokenCounts>();
-  private dones: StoredDone[] = [];
   private readonly listeners: (() => void)[] = [];
   private seen = new Map<string, string>();
   private backfilled = false;
-  /** done 还要从会话 meta.wrapups 补（2 → 3 迁移留下的活） */
-  private donePending = false;
   private untrusted = 0;
   private writes: Promise<unknown> = Promise.resolve();
   /** 账面每变一次加一：图的请求按它判断上次算好的结果还能不能直接用 */
@@ -195,9 +186,7 @@ export class TaskLedger {
       }
       this.book = parsed.book;
       this.intent = parsed.intent;
-      this.dones = parsed.dones;
       this.backfilled = parsed.backfilled;
-      this.donePending = parsed.donePending;
       this.untrusted = parsed.untrusted;
     });
   }
@@ -232,33 +221,14 @@ export class TaskLedger {
   }
 
   /**
-   * 记一次收尾确认（session:wrapup-confirm 落定后）：每件做完的事一个价格图任务。同一个收尾
-   * 记录 id 只记一次。不动按天的 token 账——那几轮的 token 早在落盘时记过了。
-   */
-  recordWrapup(sessionId: string, wrapup: SessionWrapup): Promise<void> {
-    return this.runSerialized(async () => {
-      if (this.dones.some((done) => done.wrapupId === wrapup.id)) return;
-      const added = storedDonesOf(sessionId, wrapup);
-      if (added.length === 0) return;
-      this.dones.push(...added);
-      this.changes += 1;
-      await this.persist();
-      this.emit();
-    });
-  }
-
-  /**
    * 第一次运行（或账本损坏重建）：扫全部非导入会话，按 createdAt 正序把 assistant 记录喂进账本，
    * 然后落 backfilled 标记——之后启动不再扫。与 record 同一条写入链：扫描期间新落盘的消息排在
    * 扫描后面，seen 表保证同一条只计一次。按 8ms 时间片让事件循环（读会话本身也是流式、按时间片
-   * 让），不长时间占着主进程。已回填过但有迁移留下的 done 要补时，只扫会话清单补 done。
+   * 让），不长时间占着主进程。
    */
   backfill(source: TaskBackfillSource): Promise<BackfillStats | null> {
     return this.runSerialized(async () => {
-      if (this.backfilled) {
-        if (this.donePending) await this.fillPendingDones(source);
-        return null;
-      }
+      if (this.backfilled) return null;
       const started = Date.now();
       const slice = timeSlicer();
       const all = new Set<string>(this.seen.keys());
@@ -283,10 +253,6 @@ export class TaskLedger {
           this.seen.set(item.id, this.dateKey(item.timestamp));
           appendTaskRecord(this.book, meta.id, item, this.dateKey);
         }
-        for (const wrapup of meta.wrapups ?? []) {
-          if (this.dones.some((done) => done.wrapupId === wrapup.id)) continue;
-          this.dones.push(...storedDonesOf(meta.id, wrapup));
-        }
         for (const record of raw) {
           if (record.role !== "intent-recall" || record.usage === undefined || all.has(record.id)) continue;
           const tokens = usageCountsOfIntent(record.usage);
@@ -298,7 +264,6 @@ export class TaskLedger {
         await slice();
       }
       this.backfilled = true;
-      this.donePending = false;
       this.untrusted = untrusted;
       this.changes += 1;
       this.pruneSeen();
@@ -306,21 +271,6 @@ export class TaskLedger {
       this.emit();
       return { sessions, untrustedSessions: untrusted, ms: Date.now() - started };
     });
-  }
-
-  /** 2 → 3 迁移的后半：从各会话 meta.wrapups 补 done（只读会话清单，不读正文）。在写入链内调 */
-  private async fillPendingDones(source: TaskBackfillSource): Promise<void> {
-    for (const meta of await source.list()) {
-      if (meta.importedFrom !== undefined) continue;
-      for (const wrapup of meta.wrapups ?? []) {
-        if (this.dones.some((done) => done.wrapupId === wrapup.id)) continue;
-        this.dones.push(...storedDonesOf(meta.id, wrapup));
-      }
-    }
-    this.donePending = false;
-    this.changes += 1;
-    await this.persist();
-    this.emit();
   }
 
   /** 等写入链上已排的任务（含回填）都落定：图的首次请求可能赶上回填在途 */
@@ -333,14 +283,9 @@ export class TaskLedger {
     return this.book.tasks;
   }
 
-  /** 收尾确认的做完的事（只读快照） */
-  doneTasks(): readonly StoredDone[] {
-    return this.dones;
-  }
-
-  /** 价格图的任务全集：做完的事 + 每个子会话一件（childIds：哪些会话是子会话） */
+  /** 价格图的任务全集：每个子会话一件（childIds：哪些会话是子会话） */
   chartTasks(childIds: ReadonlySet<string>): ChartTask[] {
-    return chartTasks(this.book.tasks, this.dones, childIds);
+    return chartTasks(this.book.tasks, childIds);
   }
 
   /** 意图召回按天（日期 → token） */
@@ -399,8 +344,7 @@ export class TaskLedger {
 
   private async persist(): Promise<void> {
     const file: LedgerOnDisk = {
-      version: 3,
-      ...(this.donePending ? { donePending: true as const } : {}),
+      version: 4,
       backfilled: this.backfilled,
       untrustedSessions: this.untrusted,
       tasks: this.book.tasks.map((task) => ({
@@ -412,14 +356,6 @@ export class TaskLedger {
       })),
       open: Object.fromEntries(this.book.open),
       intent: Object.fromEntries([...this.intent].map(([date, tokens]) => [date, packTokens(tokens)])),
-      done: this.dones.map((done) => ({
-        s: done.sessionId,
-        w: done.wrapupId,
-        p: done.providerId,
-        m: done.modelId,
-        l: done.level,
-        t: packDay(done.totals),
-      })),
     };
     await writeJsonAtomic(this.file, file);
   }
@@ -459,15 +395,20 @@ function unpackDay(raw: unknown): DayCounts | null {
   return { tokens: tokens(0), recordedCost: n[4] ?? 0, unpricedTokens: tokens(5) };
 }
 
-const LEDGER_VERSION = 3;
+const LEDGER_VERSION = 4;
 
 /**
  * 盘上版本迁移：键 = 旧版本号，值 = 把这一版的对象升到下一版。load 从读到的版本逐级升到
  * LEDGER_VERSION；中间缺一级就当坏文件重建。规则见文件头「版本升级」——1 不在表里是有意的。
  */
 const MIGRATIONS: Record<number, (old: Record<string, unknown>) => Record<string, unknown>> = {
-  // 2 → 3：加 done。done 只来自 meta.wrapups，置空 + donePending，下一次 backfill 只扫清单补上
-  2: (old) => ({ ...old, version: 3, done: [], donePending: true }),
+  // 2 → 3：加 done（后来整个删了，见 3 → 4）。这一步只升版本号，不必再造 done
+  2: (old) => ({ ...old, version: 3 }),
+  // 3 → 4：删 done / donePending（旧版收尾确认的记账，功能已删）
+  3: (old) => {
+    const { done: _done, donePending: _pending, ...rest } = old;
+    return { ...rest, version: 4 };
+  },
 };
 
 /** 读到的对象逐级迁移到当前版本；迁不上返回 null（按坏文件重建） */
@@ -487,9 +428,7 @@ function migrateLedger(value: Record<string, unknown>): Record<string, unknown> 
 function parseLedgerFile(raw: string): {
   book: TaskBook;
   intent: Map<string, TokenCounts>;
-  dones: StoredDone[];
   backfilled: boolean;
-  donePending: boolean;
   untrusted: number;
 } | null {
   let value: unknown;
@@ -500,7 +439,7 @@ function parseLedgerFile(raw: string): {
   }
   if (typeof value !== "object" || value === null) return null;
   const v = migrateLedger(value as Record<string, unknown>);
-  if (v === null || !Array.isArray(v["tasks"]) || !Array.isArray(v["done"])) return null;
+  if (v === null || !Array.isArray(v["tasks"])) return null;
   const tasks: StoredTask[] = [];
   for (const entry of v["tasks"] as unknown[]) {
     if (typeof entry !== "object" || entry === null) return null;
@@ -532,22 +471,11 @@ function parseLedgerFile(raw: string): {
       intent.set(date, { input, output, cacheRead, cacheWrite });
     }
   }
-  const dones: StoredDone[] = [];
-  for (const entry of v["done"] as unknown[]) {
-    if (typeof entry !== "object" || entry === null) return null;
-    const d = entry as Record<string, unknown>;
-    const totals = unpackDay(d["t"]);
-    if (typeof d["s"] !== "string" || typeof d["w"] !== "string" || typeof d["p"] !== "string" || typeof d["m"] !== "string") return null;
-    if (!isThinkingLevel(d["l"]) || totals === null) return null;
-    dones.push({ sessionId: d["s"], wrapupId: d["w"], providerId: d["p"], modelId: d["m"], level: d["l"], totals });
-  }
   const untrusted = typeof v["untrustedSessions"] === "number" ? v["untrustedSessions"] : 0;
   return {
     book: { tasks, open },
     intent,
-    dones,
     backfilled: v["backfilled"] === true,
-    donePending: v["donePending"] === true,
     untrusted,
   };
 }

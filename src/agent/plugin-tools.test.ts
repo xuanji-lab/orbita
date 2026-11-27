@@ -5,17 +5,16 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
-import type { PermissionMode } from "../shared/permission.ts";
 import type { PluginInstallRow } from "../shared/plugin.ts";
 import type { PluginBoardResult } from "../shared/plugin-board.ts";
-import { createPluginTools, describeBoard, describeInstalled, describePlugins, describePreview, PLUGIN_TOOL_NAMES } from "./plugin-tools.ts";
+import { boardFailure, createPluginTools, describeBoard, describeInstalled, describePlugins, describePreview } from "./plugin-tools.ts";
 
-const setup = (mode: PermissionMode = "skip"): { tools: ReturnType<typeof createPluginTools>; sent: Record<string, unknown>[]; broker: RequestBroker } => {
+const setup = (): { tools: ReturnType<typeof createPluginTools>; sent: Record<string, unknown>[]; broker: RequestBroker } => {
   const sent: Record<string, unknown>[] = [];
   const broker = new RequestBroker((event) => {
     sent.push(event as Record<string, unknown>);
   });
-  return { tools: createPluginTools(broker, "session-1", () => mode), sent, broker };
+  return { tools: createPluginTools(broker, "session-1"), sent, broker };
 };
 
 const ROW: PluginInstallRow = {
@@ -44,20 +43,20 @@ const install = (tools: ReturnType<typeof createPluginTools>) => {
 };
 
 describe("install_plugin", () => {
-  test("工具名与权限名单对得上", () => {
+  test("四个工具：install / preview / list / show_plugin_board", () => {
     const { tools } = setup();
-    assert.deepEqual(tools.map((tool) => tool.name), [...PLUGIN_TOOL_NAMES]);
+    assert.deepEqual(tools.map((tool) => tool.name), ["install_plugin", "preview_plugin", "list_plugins", "show_plugin_board"]);
   });
 
-  test("参数翻成 pluginInstallRequest（带 sessionId 与此刻的权限档）；回执 installed → 告诉模型已装、范围、技能，那一行进 details", async () => {
-    const { tools, sent, broker } = setup("skip");
+  test("参数翻成 pluginInstallRequest（带 sessionId，不带权限档）；回执 installed → 告诉模型已装、范围、技能，那一行进 details", async () => {
+    const { tools, sent, broker } = setup();
     const pending = install(tools).execute("c1", { path: "  /ws/plugins/lit  ", scope: "workspace" }, undefined, undefined, undefined as never);
     const request = sent[0];
     assert.equal(request?.["type"], "pluginInstallRequest");
     assert.equal(request?.["sessionId"], "session-1");
     assert.equal(request?.["path"], "/ws/plugins/lit");
     assert.equal(request?.["scope"], "workspace");
-    assert.equal(request?.["mode"], "skip");
+    assert.equal("mode" in (request ?? {}), false);
     broker.resolve(String(request?.["requestId"]), { ok: true, kind: "installed", name: "lit", scope: "workspace", skills: ["lit-scan"], mcp: [], dataDir: "/u/plugin-data/lit", row: ROW });
     const result = await pending;
     const text = (result.content[0] as { text: string }).text;
@@ -68,21 +67,8 @@ describe("install_plugin", () => {
     assert.deepEqual(result.details, { pluginInstall: ROW });
   });
 
-  test("权限档每次现读：会话中途切到 manual，下一次请求带的就是 manual", () => {
-    let mode: PermissionMode = "skip";
-    const sent: Record<string, unknown>[] = [];
-    const broker = new RequestBroker((event) => {
-      sent.push(event as Record<string, unknown>);
-    });
-    const tools = createPluginTools(broker, "s", () => mode);
-    void install(tools).execute("c1", { path: "/p" }, undefined, undefined, undefined as never);
-    mode = "manual";
-    void install(tools).execute("c2", { path: "/p" }, undefined, undefined, undefined as never);
-    assert.deepEqual(sent.map((event) => event["mode"]), ["skip", "manual"]);
-  });
-
   test("回执 pending：不说「装好了」，告诉模型没装、为什么、结束这一轮、别再调；那一行进 details", async () => {
-    const { tools, sent, broker } = setup("skip");
+    const { tools, sent, broker } = setup();
     const pending = install(tools).execute("c1", { path: "/p" }, undefined, undefined, undefined as never);
     const row: PluginInstallRow = { ...ROW, state: "pending", reason: "mcp", commands: ["node server.js"] };
     broker.resolve(String(sent[0]?.["requestId"]), { ok: true, kind: "pending", name: "lit", scope: "workspace", skills: ["lit-scan"], mcp: ["srv"], row });
@@ -155,7 +141,7 @@ describe("install_plugin", () => {
     assert.match(description, /FIRST ask the user, in one plain sentence/);
     assert.match(description, /"Installed"/);
     assert.match(description, /"Not installed yet"/);
-    assert.match(description, /Manual permission mode/);
+    assert.doesNotMatch(description, /Manual permission mode/);
     assert.match(description, /LINK/);
     assert.match(description, /<workspace>\/plugins\/<name>\//);
   });
@@ -284,6 +270,54 @@ describe("show_plugin_board", () => {
     assert.match(tuned, /Do not explain them again unless the user asks/);
     assert.doesNotMatch(tuned, /point out anything wrong/);
     assert.doesNotMatch(tuned, /Not shown/);
+  });
+});
+
+describe("show_plugin_board：画不出来要让模型看见", () => {
+  const card = { ...BOARD.cards[0]!, usingSample: false };
+
+  test("一张卡都没画出来：抛错，列出每张的原因（template / data 的 detail 原样带上）和下一步", async () => {
+    const { tools, broker, sent } = setup();
+    const tool = tools.find((each) => each.name === "show_plugin_board");
+    assert.ok(tool !== undefined);
+    const pending = tool.execute("c1", { plugin: "lit" }, undefined, undefined, undefined as never);
+    const broken: PluginBoardResult = {
+      ...BOARD,
+      cards: [],
+      skipped: [
+        { id: "today", reason: "template", detail: "not-found: ./board/today.html" },
+        { id: "papers", reason: "data", detail: "invalid-json: Unexpected token" },
+      ],
+    };
+    broker.resolve(String(sent[0]?.["requestId"]), { ok: true, board: broken });
+    await assert.rejects(pending, (error: Error) => {
+      assert.match(error.message, /drew no cards/);
+      assert.match(error.message, /today: template \(not-found: \.\/board\/today\.html\)/);
+      assert.match(error.message, /papers: data \(invalid-json: Unexpected token\)/);
+      assert.match(error.message, /Fix the template or data file and call show_plugin_board again/);
+      assert.match(error.message, /ids from the plugin's board manifest/);
+      return true;
+    });
+  });
+
+  test("清单里一张卡都没声明：同样抛错，说去清单里加", () => {
+    const text = boardFailure({ ...BOARD, cards: [], skipped: [] });
+    assert.match(text ?? "", /declares no board cards/);
+    assert.equal(boardFailure(BOARD), null);
+  });
+
+  test("画出一部分、有卡因 template / data / 未知 id 没画：成功，但不再说「The cards are shown」，改成要求修好重调", () => {
+    const text = describeBoard({ ...BOARD, cards: [card], tuned: true, skipped: [{ id: "list", reason: "template", detail: "not-found: ./b.html" }, { id: "x", reason: "unknown-card", detail: "x" }] });
+    assert.match(text, /Not shown:\n- list: template \(not-found: \.\/b\.html\)/);
+    assert.match(text, /NOT drawn and can be fixed: list, x/);
+    assert.match(text, /call show_plugin_board again for those cards \(cards: \["list","x"\]\) before you finish this turn/);
+    assert.doesNotMatch(text, /The cards are shown/);
+  });
+
+  test("超上限（too-large / budget / repeat）不算错：话术照旧", () => {
+    const text = describeBoard({ ...BOARD, cards: [card], skipped: [{ id: "a", reason: "too-large", detail: "0: 1 bytes" }, { id: "b", reason: "budget", detail: "x" }, { id: "c", reason: "repeat", detail: "y" }] });
+    assert.match(text, /The cards are shown/);
+    assert.doesNotMatch(text, /before you finish this turn/);
   });
 });
 

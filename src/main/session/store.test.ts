@@ -1,13 +1,14 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
-import { buildClosingScanPrompt } from "../../shared/wrapup-scan.ts";
+import { CLOSING_SCAN_HEAD } from "../../shared/legacy-closing-scan.ts";
 import assert from "node:assert/strict";
 import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import { branchRoles, SessionStore } from "./store.ts";
+import { branchRoles, parseLogLine, SessionStore } from "./store.ts";
 import { ChannelStore } from "../channel/store.ts";
-import { UNASSIGNED_PROVIDER_ID, SESSION_INITIAL_RECORDS, SESSION_PAGE_RECORDS, sortSessions, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
+import { UNASSIGNED_PROVIDER_ID, SESSION_INITIAL_RECORDS, SESSION_PAGE_RECORDS, isChannelMarkRecord, isCompactedRecord, sortSessions, type ChannelMarkRecord, type SessionMeta, type SessionRecord } from "../../shared/session.ts";
+import { isFileTurnRecord, isRevertRecord, isUndoRecord } from "../../shared/revert.ts";
 import type { ChannelMessage } from "../../shared/channel.ts";
 
 const ID = "a7f3c1d2-4b8e-4f21-9c3a-0d1e2f3a4b5c";
@@ -21,7 +22,6 @@ const meta = (patch: Partial<SessionMeta> = {}): SessionMeta => ({
   cwd: "/repo/orbita-lab",
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "plan",
   thinkingLevel: "medium",
   createdAt: 1000,
   updatedAt: 1000,
@@ -90,7 +90,9 @@ describe("SessionStore", () => {
     const sessions = join(dir, "sessions");
     await chmod(sessions, 0o000);
     try {
-      await assert.rejects(store.list(), /EACCES/);
+      // 已建好的索引不再读目录；模拟重启，让新 Store 的启动扫描真正撞上 EACCES
+      const reopened = new SessionStore(sessions);
+      await assert.rejects(reopened.list(), /EACCES/);
     } finally {
       await chmod(sessions, 0o700); // 不恢复的话 afterEach 的 rm 也删不掉
     }
@@ -103,8 +105,36 @@ describe("SessionStore", () => {
     assert.deepEqual((await store.load(ID))?.transcript, []);
   });
 
-  // list() 按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
-  test("list() 分批并发：>16 条仍按 sortSessions 排，坏 meta 照旧跳过", async () => {
+  // 回滚兼容：旧版把缺的 mode 读成只读计划档，新版写的 meta 必须带 mode:"skip"。
+  describe("meta 的 mode 回滚兼容字段", () => {
+    const rawMeta = async (id: string): Promise<Record<string, unknown>> =>
+      JSON.parse(await readFile(join(dir, "sessions", `${id}.meta.json`), "utf8")) as Record<string, unknown>;
+
+    test("新建会话的 meta 带 mode:skip", async () => {
+      await store.ensureSession(meta());
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+    });
+
+    test("旧会话 meta 是 plan，新版动过一次后改写成 skip；读回时不暴露 mode", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      await writeFile(join(dir, "sessions", `${ID}.meta.json`), JSON.stringify({ ...meta(), mode: "plan" }), "utf8");
+      await store.setPiSessionFile(ID, null);
+      assert.equal((await rawMeta(ID))["mode"], "skip");
+      assert.equal((await store.readMeta(ID))?.mode, undefined);
+    });
+
+    test("没被碰过的旧会话 meta 原样不动", async () => {
+      await mkdir(join(dir, "sessions"), { recursive: true });
+      const path = join(dir, "sessions", `${ID}.meta.json`);
+      const text = JSON.stringify({ ...meta(), mode: "manual" });
+      await writeFile(path, text, "utf8");
+      await store.list();
+      assert.equal(await readFile(path, "utf8"), text);
+    });
+  });
+
+  // 启动索引按 16 条一批并发读 meta：批边界前后顺序、坏 meta 跳过都必须与逐条读一致
+  test("list() 启动索引分批并发：>16 条仍按 sortSessions 排，坏 meta 照旧跳过", async () => {
     const ids: string[] = [];
     for (let i = 0; i < 40; i += 1) {
       const id = `c0ffee00-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
@@ -199,16 +229,8 @@ describe("SessionStore", () => {
   test("收尾扫描的机器提问不进 recentQueries", async () => {
     await store.ensureSession(meta());
     await store.record(ID, userItem("真问题"));
-    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
+    await store.record(ID, userItem(`${CLOSING_SCAN_HEAD}\n回看这几轮……`, 4000));
     assert.deepEqual((await store.load(ID))?.meta.recentQueries, ["真问题"]);
-  });
-
-  test("收尾扫描轮压过的权限档不写回会话 meta（审核 F-4）", async () => {
-    // 扫描轮在已有会话上 submit：主进程走 settleFirstTurn → ensureSession（带着压成 manual 的档）+ 落扫描提问
-    await store.ensureSession(meta({ mode: "skip", piSessionFile: "/pi/a.jsonl" }));
-    await store.ensureSession(meta({ mode: "manual", piSessionFile: "/pi/a.jsonl" }));
-    await store.record(ID, userItem(buildClosingScanPrompt({ sinceTurn: 1, lastTurn: 1, turns: [] }), 4000));
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
   test("列表按 updatedAt 倒序——新的在前", async () => {
@@ -230,6 +252,112 @@ describe("SessionStore", () => {
     await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1","role":"user"', { flag: "a" });
     const detail = await store.load(ID);
     assert.equal(detail?.transcript.length, 1);
+  });
+
+  // ── readLogEntries 行切分：新旧实现对照（perf/session-log-lines）──
+  // 旧实现是 readFile(utf8) → split("\n") → 逐行 parseLogLine；新实现按换行字节切 Buffer、
+  // 每行再解码。下面内联旧实现的最小副本当对照基准——逐行判定 parseLogLine 两边共用同一份，
+  // 副本复制的只是「怎么拿到行」——同一批输入，新旧结果必须逐条相等。
+  describe("readLogEntries 行切分对照", () => {
+    /** readLogEntries 改动前的最小副本：整份读成字符串再 split("\n")。只当对照基准，别处别用。 */
+    async function readLogEntriesLegacy(path: string): Promise<SessionRecord[]> {
+      let raw: string;
+      try {
+        raw = await readFile(path, "utf8");
+      } catch {
+        return [];
+      }
+      const records: SessionRecord[] = [];
+      for (const line of raw.split("\n")) {
+        const record = parseLogLine(line);
+        if (record !== undefined) records.push(record);
+      }
+      return records;
+    }
+
+    const logLine = (id: string, text: string): string =>
+      JSON.stringify({ id, role: "user", content: [{ type: "text", text }] });
+
+    const CASES: ReadonlyArray<{ name: string; text: string; expected: number }> = [
+      {
+        name: "没有结尾换行",
+        text: [logLine("u1", "第一行"), logLine("u2", "第二行")].join("\n"),
+        expected: 2,
+      },
+      {
+        name: "CRLF 换行",
+        text: [logLine("u1", "甲"), logLine("u2", "乙")].join("\r\n") + "\r\n",
+        expected: 2,
+      },
+      {
+        name: "连续空行与末尾空行",
+        text: [logLine("u1", "一"), "", "", logLine("u2", "二"), ""].join("\n") + "\n\n\n",
+        expected: 2,
+      },
+      {
+        name: "夹着非法 JSON 的行（裸字符串是合法 JSON，照样收下）",
+        text: [logLine("u1", "前"), "{ 这不是 JSON", logLine("u2", "后"), '"裸字符串"'].join("\n") + "\n",
+        expected: 3,
+      },
+      {
+        name: "行内多字节中文和 emoji",
+        text: logLine("u1", "中文🎉混排 émigré 東京") + "\n",
+        expected: 1,
+      },
+      { name: "空文件", text: "", expected: 0 },
+      {
+        name: "只有一行且超长（约 4.5 MB，无结尾换行）",
+        text: logLine("u1", "汉".repeat(1_500_000)),
+        expected: 1,
+      },
+      {
+        name: "最后一行没换行且是坏行",
+        text: [logLine("u1", "完整"), '{"id":"u2","role":"user"'].join("\n"),
+        expected: 1,
+      },
+      {
+        name: "BOM 开头（带 BOM 的第一行 JSON.parse 失败，跳过）",
+        text: "\uFEFF" + logLine("u1", "甲") + "\n" + logLine("u2", "乙") + "\n",
+        expected: 1,
+      },
+      {
+        name: "特殊记录：字段齐的收下，长着它的脸但字段不齐的跳过",
+        text:
+          [
+            '{"role":"compacted","id":"c1"}',
+            '{"role":"compacted","id":"c2","summary":"摘要","tokensBefore":100,"timestamp":1}',
+            '{"role":"revert","id":"r1"}',
+            '{"role":"revert","id":"r2","targetMessageId":"u1","restored":[],"timestamp":1}',
+            '{"role":"undo","id":"d1","turnId":"t1"}',
+            '{"role":"file-turn","id":"f1"}',
+            '{"role":"channel-mark","id":"m1"}',
+            logLine("u1", "普通消息"),
+          ].join("\n") + "\n",
+        expected: 3,
+      },
+      {
+        name: "只含空白的行",
+        text: [logLine("u1", "甲"), "   ", "\t", logLine("u2", "乙")].join("\n") + "\n",
+        expected: 2,
+      },
+    ];
+
+    for (const { name, text, expected } of CASES) {
+      test(name, async () => {
+        const path = join(dir, "sessions", `${ID}.jsonl`);
+        await mkdir(join(dir, "sessions"), { recursive: true });
+        await writeFile(path, text, "utf8");
+        const legacy = await readLogEntriesLegacy(path);
+        const current = await store.readRawLog(ID);
+        assert.deepEqual(current, legacy);
+        assert.equal(current.length, expected);
+      });
+    }
+
+    test("日志文件不存在：新旧都回空", async () => {
+      assert.deepEqual(await store.readRawLog(ID), []);
+      assert.deepEqual(await readLogEntriesLegacy(join(dir, "sessions", `${ID}.jsonl`)), []);
+    });
   });
 
   test("meta 不在就不往日志里加，避免长出孤儿日志", async () => {
@@ -255,12 +383,6 @@ describe("SessionStore", () => {
     await writeFile(join(dir, "sessions", `${ID}.jsonl`), '{"id":"u1"}\n', "utf8");
     assert.deepEqual(await store.list(), []);
     assert.equal(await store.load(ID), null);
-  });
-
-  test("setMode 落盘——重开会话不该静默换档", async () => {
-    await store.ensureSession(meta());
-    await store.setMode(ID, "skip");
-    assert.equal((await store.load(ID))?.meta.mode, "skip");
   });
 
   test("setThinkingLevel 落盘——重开与下一轮开机的装配都读它", async () => {
@@ -293,6 +415,15 @@ describe("SessionStore", () => {
   });
 
   // 与 update 的既有语义一致：meta 不在就悄悄不做，不为它抛错或重建文件
+  test("setAutoCompact 落 meta、重开还在；ensureSession 建会话时带着 autoCompact: false 原样落盘", async () => {
+    await store.ensureSession(meta({ autoCompact: false }));
+    assert.equal((await new SessionStore(join(dir, "sessions")).readMeta(ID))?.autoCompact, false);
+    await store.setAutoCompact(ID, true);
+    const after = await new SessionStore(join(dir, "sessions")).readMeta(ID);
+    assert.equal(after?.autoCompact, true);
+    assert.equal(after?.pinned, false);
+  });
+
   test("setStarred 对不存在的会话悄悄不做", async () => {
     await store.setStarred(ID, true);
     assert.deepEqual(await store.list(), []);
@@ -310,67 +441,27 @@ describe("SessionStore", () => {
     assert.equal(after?.unread, null);
   });
 
-  // 完成状态机：翻到 done 的那一刻记下关闭时刻；reopen（回 open）清空——
-  // closedAt 与 completion 同进退，不留「open 却带着关闭时刻」的半态
-  test("setCompletion：done 记关闭时刻，reopen 清空，done_with_todos 也可写", async () => {
-    await store.ensureSession(meta({ pinned: true }));
-    await store.setStarred(ID, true);
-    await store.setCompletion(ID, "done");
-    let after = (await store.list()).find((m) => m.id === ID);
-    assert.equal(after?.completion, "done");
-    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
-    // 完成只动自己这对字段：置顶/星标/归档原样
-    assert.equal(after?.pinned, true);
-    assert.equal(after?.starred, true);
-    assert.equal(after?.archived, false);
-
-    await store.setCompletion(ID, "open"); // reopen
-    after = (await store.list()).find((m) => m.id === ID);
-    assert.equal(after?.completion, "open");
-    assert.equal(after?.closedAt, null);
-
-    await store.setCompletion(ID, "done_with_todos");
-    after = (await store.list()).find((m) => m.id === ID);
-    assert.equal(after?.completion, "done_with_todos");
-    assert.ok(typeof after?.closedAt === "number" && after.closedAt > 0);
-  });
-
-  // 重复 Mark done 不该刷新关闭时刻——「什么时候干完的」是历史事实，不是最后一次点击
-  test("setCompletion 同态幂等：done 再 done 不改关闭时刻", async () => {
-    await store.ensureSession(meta());
-    await store.setCompletion(ID, "done");
-    const first = (await store.load(ID))?.meta.closedAt;
-    // 隔开毫秒：非幂等实现会在这里刷新出新的 Date.now()
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await store.setCompletion(ID, "done");
-    assert.equal((await store.load(ID))?.meta.closedAt, first);
-  });
-
-  // 遗留事项闭环：继续开出的会话记下它接的是哪条；收尾确认时取走（交给调用方标做完）并清空
-  test("addResumedCarryover 去重；confirmWrapup 追加收尾记录、翻完成状态、取走在做的遗留事项", async () => {
+  // 「完成」与遗留事项已删：盘上旧会话的 meta 还带着 completion / closedAt / resumedCarryovers / 收尾记录，
+  // 读照常读（星标等保留），旧字段忽略；下一次写 meta 时这些键全部不再带
+  test("旧版 meta 带着 completion / closedAt / resumedCarryovers：照常打开，改别的字段后这些键（含 wrapups）消失，星标保留", async () => {
     await store.ensureSession(meta({ starred: true }));
-    await store.addResumedCarryover(ID, "c1");
-    await store.addResumedCarryover(ID, "c1");
-    await store.addResumedCarryover(ID, "c2");
-    assert.deepEqual((await store.load(ID))?.meta.resumedCarryovers, ["c1", "c2"]);
+    const path = join(dir, "sessions", `${ID}.meta.json`);
+    const onDisk = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
     const wrapup = { id: "w1", at: 5, throughTurn: 3, items: [] };
-    assert.deepEqual(await store.confirmWrapup(ID, wrapup, "done_with_todos"), { resumed: ["c1", "c2"] });
-    const after = (await store.load(ID))?.meta;
-    assert.equal(after?.resumedCarryovers, undefined);
-    assert.deepEqual(after?.wrapups, [wrapup]);
-    assert.equal(after?.completion, "done_with_todos");
-    assert.equal(after?.starred, true);
-    // 重开后再确认：收尾记录累加，在做的已清空
-    await store.setCompletion(ID, "open");
-    assert.deepEqual(await store.confirmWrapup(ID, { ...wrapup, id: "w2", throughTurn: 5 }, "done"), { resumed: [] });
-    assert.deepEqual((await store.load(ID))?.meta.wrapups?.map((w) => w.id), ["w1", "w2"]);
-    assert.equal(await store.confirmWrapup("00000000-0000-4000-8000-000000000000", wrapup, "done"), null);
-  });
-
-  // 与 setStarred 同一条语义：meta 不在就悄悄不做
-  test("setCompletion 对不存在的会话悄悄不做", async () => {
-    await store.setCompletion(ID, "done");
-    assert.deepEqual(await store.list(), []);
+    await writeFile(
+      path,
+      JSON.stringify({ ...onDisk, completion: "done_with_todos", closedAt: 1700000000000, resumedCarryovers: ["c1"], wrapups: [wrapup] }),
+      "utf8",
+    );
+    const read = (await store.list()).find((m) => m.id === ID);
+    assert.equal(read?.starred, true);
+    assert.equal(read !== undefined && "completion" in read, false);
+    assert.equal(read !== undefined && "wrapups" in read, false);
+    await store.setPinned(ID, true);
+    const rewritten = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    for (const key of ["completion", "closedAt", "resumedCarryovers", "wrapups"]) assert.equal(key in rewritten, false, key);
+    assert.equal(rewritten["pinned"], true);
+    assert.equal(rewritten["starred"], true);
   });
 
   // id 从 renderer 经 IPC 进来，直接拼路径的话一个 ../../ 就能写到别处
@@ -490,6 +581,91 @@ describe("SessionStore", () => {
     const detail = await store.load(ID);
     assert.equal(detail?.meta.title, "第一句");
     assert.equal(detail?.meta.titleSource, "user");
+  });
+});
+
+// ── meta 索引：启动读一次，之后随写入增量更新（2026-11-23）──
+
+describe("SessionStore meta 索引", () => {
+  test("list / descendants 建过索引后不再逐条 readMeta", async () => {
+    await store.ensureSession(meta({ id: ID }));
+    await store.ensureSession(meta({ id: OTHER, parentId: ID }));
+    await store.list();
+
+    // 旧实现每次 list 都走 readMeta；把它直接炸掉后，旧 list 会吞错并回 []，这条就会红
+    store.readMeta = async () => {
+      throw new Error("索引建好后不该再读单条 meta");
+    };
+    assert.deepEqual((await store.list()).map((entry) => entry.id), [OTHER, ID].sort((a, b) => a.localeCompare(b)));
+    assert.deepEqual(await store.descendants(ID), [OTHER]);
+  });
+
+  test("通用 update、assignModel 写完，list 立即拿到同一份新值", async () => {
+    await store.ensureSession(meta({ providerId: UNASSIGNED_PROVIDER_ID, importedModel: "old" }));
+    await store.rename(ID, "索引里的新标题");
+    assert.equal((await store.list()).find((entry) => entry.id === ID)?.title, "索引里的新标题");
+
+    assert.equal(await store.assignModel(ID, "zai", "glm-5.4"), true);
+    assert.equal((await store.list()).find((entry) => entry.id === ID)?.providerId, "zai");
+  });
+
+  test("导入新会话与再次导入更新都进索引；删除后立即出索引", async () => {
+    await store.commitImported(meta({ id: OTHER, title: "导入", updatedAt: 2000 }), [userItem("你好")]);
+    assert.equal((await store.list()).find((entry) => entry.id === OTHER)?.title, "导入");
+
+    await store.commitImportUpdate(OTHER, [userItem("你好"), assistantItem("回答")], {
+      recentQueries: ["新的最近提问"],
+      stats: null,
+      updatedAt: 9000,
+    });
+    const updated = (await store.list()).find((entry) => entry.id === OTHER);
+    assert.equal(updated?.updatedAt, 9000);
+    assert.deepEqual(updated?.recentQueries, ["新的最近提问"]);
+
+    await store.remove(OTHER);
+    assert.equal((await store.list()).some((entry) => entry.id === OTHER), false);
+  });
+
+  test("commitBranch 写完新 meta 就进索引", async () => {
+    await store.ensureSession(meta({ piSessionFile: "C:/pi-sessions/source.jsonl" }));
+    await store.record(ID, userItem("问"));
+    await store.record(ID, assistantItem("答"));
+    const plan = await store.prepareBranch(ID, "a1");
+    await store.commitBranch(plan, "C:/pi-sessions/branch.jsonl");
+    const branch = (await store.list()).find((entry) => entry.id === plan.newId);
+    assert.equal(branch?.piSessionFile, "C:/pi-sessions/branch.jsonl");
+  });
+
+  test("进程外新增 / 改文件：list 保留启动快照不抛，readMeta 看新值，重启后对齐", async () => {
+    await store.ensureSession(meta({ title: "索引里的旧标题" }));
+    await store.list();
+    await writeFile(
+      join(dir, "sessions", `${ID}.meta.json`),
+      JSON.stringify(meta({ title: "进程外改的新标题", updatedAt: 8000 })),
+      "utf8",
+    );
+    await writeFile(
+      join(dir, "sessions", `${OTHER}.meta.json`),
+      JSON.stringify(meta({ id: OTHER, title: "进程外新增", updatedAt: 9000 })),
+      "utf8",
+    );
+
+    assert.equal((await store.list()).find((entry) => entry.id === ID)?.title, "索引里的旧标题");
+    assert.equal((await store.list()).some((entry) => entry.id === OTHER), false);
+    assert.equal((await store.readMeta(ID))?.title, "进程外改的新标题");
+    assert.equal((await store.readMeta(OTHER))?.title, "进程外新增");
+    const reopened = new SessionStore(join(dir, "sessions"));
+    assert.equal((await reopened.list()).find((entry) => entry.id === ID)?.title, "进程外改的新标题");
+    assert.equal((await reopened.list()).some((entry) => entry.id === OTHER), true);
+  });
+
+  test("进程外已删掉 meta：旧快照可列出，remove 仍安全并清掉索引", async () => {
+    await store.ensureSession(meta());
+    await store.list();
+    await rm(join(dir, "sessions", `${ID}.meta.json`), { force: true });
+    assert.equal((await store.list()).length, 1);
+    await store.remove(ID);
+    assert.deepEqual(await store.list(), []);
   });
 });
 
@@ -1406,6 +1582,47 @@ describe("SessionStore · 窗口分页", () => {
     const page = await store.loadOlder(ID, "u0", SESSION_PAGE_RECORDS);
     assert.deepEqual(page.records, []);
     assert.equal(page.hasMore, false);
+  });
+
+  test("loadOlder：前一轮比一页还长时，回的是那一整轮，不是空页", async () => {
+    // 第 0 轮很长（32 条，比一页 10 条多），第 1 轮很短
+    const longTurn = turnBlock(0, 30);
+    await seedLog(ID, [...longTurn, ...turnBlock(1, 2)]);
+    // 锚点 u1 之前的 10 条里没有轮边界。改前：往后找越过锚点，回 { records: [], hasMore: true }，
+    // 聊天面再也翻不到这一轮之前，状态卡的整任务拉取也在这里失败
+    const page = await store.loadOlder(ID, "u1", 10);
+    assert.equal(page.records.length, longTurn.length);
+    assert.equal(page.records[0]?.id, "u0");
+    assert.equal(page.hasMore, false);
+  });
+
+  test("loadOlder：连续几轮都比一页长，一路翻得到顶，每页非空且无重叠", async () => {
+    const turns = [turnBlock(0, 30), turnBlock(1, 40), turnBlock(2, 25), turnBlock(3, 2)];
+    const all = turns.flat();
+    await seedLog(ID, all);
+    const collected: string[] = [];
+    let anchor = "u3";
+    for (let guard = 0; guard < 10; guard += 1) {
+      const page = await store.loadOlder(ID, anchor, 10);
+      assert.ok(page.records.length > 0, `第 ${guard} 页不应为空（hasMore 说还有更多时必须真的有记录）`);
+      collected.unshift(...page.records.map((record) => record.id));
+      if (!page.hasMore) break;
+      anchor = page.records[0]!.id;
+    }
+    assert.deepEqual(collected, all.slice(0, all.length - turns[3]!.length).map((record) => record.id));
+  });
+
+  test("loadWindow：最后一轮比一页还长，窗口往回对齐到那一轮的起点，hasMore 与下一页衔接", async () => {
+    // 同一个对齐函数的另一侧（右界是数组末尾）：不受 loadOlder 修复影响，这里钉住它的行为
+    const longTurn = turnBlock(1, 40);
+    await seedLog(ID, [...turnBlock(0, 2), ...longTurn]);
+    const detail = await store.loadWindow(ID, 10);
+    assert.equal(detail?.transcript[0]?.id, "u1");
+    assert.equal(detail?.transcript.length, longTurn.length);
+    assert.equal(detail?.window.hasMore, true);
+    const older = await store.loadOlder(ID, "u1", 10);
+    assert.deepEqual(older.records.map((record) => record.id), ["u0", "a0", "t0-0", "t0-1"]);
+    assert.equal(older.hasMore, false);
   });
 
   test("折叠语义不变：窗口从 fold 后的生效视图取，不是盘上的原始行", async () => {

@@ -1,0 +1,788 @@
+/*
+ * 对话区右上角「状态」卡（原型，ChatStatus.tsx）。白底淡边、与结尾产物卡（.turn-output）同一语言；
+ * 长相是浮卡（圆角、浮层影子、高度按内容），但**挤对话列**（2026-11-22 20:25 用户：「保持浮卡，但是要挤对话列！」）：
+ * 卡开着时 ChatStatus 在 .pane-main 上写 --cs-reserve（卡宽 + 两侧间距），对话列右侧让出这一块，正文在卡左边排开。
+ * 字号三档：节名与行 base、组名 / 行尾 / 子会话 sm、计数 xs。
+ */
+.pane-main > .chat-pane,
+.pane-main .chat-pane {
+  padding-right: var(--cs-reserve, 0px);
+}
+
+.cs-host {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: var(--z-float);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.cs-host > * {
+  pointer-events: auto;
+}
+
+/* 收起的小钮：右上角一枚，有动静时露状态饼 + 一句话（按「要不要你」只说一种） */
+.cs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--control-height-sm);
+  min-width: var(--control-height-sm);
+  justify-content: center;
+  padding: 0 var(--space-2-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.cs-pill:hover {
+  color: var(--color-text-primary);
+}
+.cs-pill[data-signal="waiting"],
+.cs-pill[data-signal="stuck"] {
+  color: var(--color-warning);
+}
+.cs-pill[data-signal="failed"] {
+  color: var(--color-danger);
+}
+
+.cs-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  min-height: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  container: cs-card / inline-size;
+}
+/* 行尾机器人的宽 / 窄两种写法：卡窄时收成一个头像 + 个数，把宽度让给步骤名 */
+.cs-card .cs-compact {
+  display: none;
+}
+@container cs-card (max-width: 340px) {
+  .cs-card .cs-wide {
+    display: none;
+  }
+  .cs-card .cs-compact {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-0-5);
+  }
+}
+
+/* 左缘拖柄：8px 宽的热区骑在卡边上；悬停卡时露一根短竖条，拖的时候整页 col-resize */
+.cs-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-1) * -1);
+  z-index: 2;
+  width: var(--space-2);
+  cursor: col-resize;
+  touch-action: none;
+}
+.cs-resize::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(50% - 1px);
+  width: 3px;
+  height: var(--space-8);
+  margin-top: calc(var(--space-4) * -1);
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.cs-card:hover > .cs-resize::after,
+.cs-resize:focus-visible::after,
+.cs-resize[data-active]::after {
+  opacity: 1;
+}
+.cs-resize[data-active]::after {
+  background: var(--color-text-secondary);
+}
+:root.cs-resizing,
+:root.cs-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+.cs-top {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding-right: var(--space-1-5);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.cs-top > .cs-goal {
+  flex: 1;
+  min-width: 0;
+}
+.cs-top-fill {
+  flex: 1;
+  min-height: var(--space-8);
+}
+.cs-close {
+  flex: none;
+  margin-top: var(--space-1-5);
+  display: grid;
+  place-items: center;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+/* 收起态只有一枚小钮：状态与不打岔入口同排，不再在正文上叠第二排浮层。
+   同时给这枚钮留出真实的顶部空间——它不是「背景变不透明」就算不遮正文。 */
+.pane-main:has(.cs-collapsed) .chat-pane {
+  padding-top: calc(var(--control-height-sm) + var(--space-3));
+}
+.cs-collapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding-right: var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+}
+.cs-collapsed .cs-pill {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cs-collapsed .cs-hold-pill {
+  gap: var(--space-1);
+  margin-top: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cs-collapsed .cs-hold-name {
+  display: none;
+}
+
+.cs-hold-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.cs-hold-lead {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-secondary);
+}
+.cs-hold-dot {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-danger);
+}
+.cs-hold-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.cs-hold-name {
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+.cs-hold-desc {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.cs-hold-n {
+  flex: none;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.cs-hold-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-1) 0 var(--space-2-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-popover);
+}
+.cs-close:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.cs-scroll:empty {
+  display: none;
+}
+.cs-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+/* 目标：一行，旁边写第几版 */
+.cs-goal {
+  padding: var(--space-2-5) 0 var(--space-2-5) var(--space-3);
+}
+.cs-goal-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.cs-goal-text {
+  flex: 1;
+  min-width: 0;
+  /* 短标题最多两行，再长省略；点开看全文 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-wrap: pretty;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.cs-goal-line:hover .cs-goal-text {
+  color: var(--color-text-secondary);
+}
+.cs-ver {
+  flex: none;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+.cs-goal-line[aria-expanded="true"] .cs-ver {
+  color: var(--color-text-primary);
+  background: var(--color-bg-active);
+}
+/* 展开：全文一段（次级色、sm），旧版本在下面一条竖线里，每条最多三行 */
+.cs-goal-more {
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: var(--space-1-5);
+  padding-right: var(--space-2);
+}
+.cs-goal-full {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.cs-vers {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0 0 0 var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+  border-left: 1px solid var(--color-border-default);
+}
+.cs-vers li {
+  display: grid;
+  gap: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.cs-ver-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cs-ver-n {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 节：节名一行（base 半粗），节与节之间靠留白，不画线 */
+.cs-sec {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: var(--space-1) 0;
+}
+.cs-sec + .cs-sec {
+  margin-top: var(--space-2);
+}
+.cs-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3) var(--space-1);
+}
+.cs-head-label {
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.cs-n {
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+
+/* 一行：状态槽 · 文字（一行省略）· 行尾（钉在右内边距） */
+.cs-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+}
+.cs-btn {
+  cursor: pointer;
+}
+.cs-btn:hover {
+  background: var(--option-hover-bg);
+}
+.cs-slot {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--color-text-tertiary);
+}
+.cs-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cs-text.mono {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+.cs-tail {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.cs-meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.cs-by {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+/* ── 进度：母节点 = 步骤（状态圆点、正文字）；折叠行 = chevron + 次级色、小一档，没有状态圆点 ── */
+.cs-plan {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+/* 步骤名最多两行：圆点与行尾对齐到第一行 */
+.cs-step {
+  align-items: flex-start;
+}
+.cs-step > .cs-slot,
+.cs-step > .cs-tail {
+  height: calc(1em * var(--line-height-ui));
+}
+.cs-step-text {
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-wrap: pretty;
+}
+.cs-step-chev {
+  color: var(--color-text-tertiary);
+}
+.cs-plan li[data-status="done"] > .cs-row {
+  color: var(--color-text-tertiary);
+}
+.cs-plan li[data-status="done"] > .cs-row .cs-mark {
+  color: var(--color-success);
+}
+.cs-plan li[data-status="in_progress"] > .cs-row .cs-step-text {
+  font-weight: var(--weight-semibold);
+}
+.cs-plan li[data-status="waiting"] > .cs-row .cs-mark {
+  color: var(--color-warning);
+}
+.cs-plan li[data-status="pseudo"] > .cs-row {
+  color: var(--color-text-secondary);
+}
+.cs-plan li[data-open] > .cs-row {
+  background: var(--option-hover-bg);
+}
+.cs-fold {
+  min-height: var(--control-height-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.cs-fold .cs-slot {
+  color: var(--color-text-secondary);
+}
+
+/* 行尾机器人：在干活的几个画几个；要你的（问 / 卡住）黄、失败红，颜色之外字也写（子会话行里） */
+.cs-robots {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.cs-robot {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-text-secondary);
+}
+.cs-robot[data-state="waiting"],
+.cs-robot[data-state="stuck"] {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+}
+.cs-robot[data-state="failed"] {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+.cs-robot-more {
+  margin-left: var(--space-0-5);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * ── 子节点：从步骤「垂下来」──
+ * 竖引导线落在母步骤圆点的中线（行左内边距 12 + 6 = 18，圆点 12–26 的中线），子会话行从步骤文字的左起线（12 + 14 + 8 = 34）开始；
+ * 行头是小机器人（与母步骤的状态圆点不同形状），字轻一档（sm）。底部「收起」也在这一层里。
+ */
+.cs-kids {
+  list-style: none;
+  margin: 0 var(--space-3) var(--space-1-5) calc(var(--space-3) + var(--space-1-5));
+  padding: var(--space-0-5) 0 var(--space-0-5) calc(var(--space-2) + var(--space-1-5));
+  display: grid;
+  gap: 0;
+  border-left: 1px solid var(--color-border-strong);
+}
+.cs-kid {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  box-sizing: border-box;
+  width: calc(100% + var(--space-2));
+  margin-left: calc(var(--space-2) * -1);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.cs-kid:hover {
+  background: var(--color-bg-hover);
+}
+.cs-kid-bot {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  height: calc(1em * var(--line-height-ui));
+  color: var(--color-text-tertiary);
+}
+.cs-kid[data-state="running"] .cs-kid-bot {
+  color: var(--color-info);
+}
+.cs-kid[data-state="waiting"] .cs-kid-bot,
+.cs-kid[data-state="stuck"] .cs-kid-bot {
+  color: var(--color-warning);
+}
+.cs-kid[data-state="failed"] .cs-kid-bot {
+  color: var(--color-danger);
+}
+.cs-kid-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.cs-kid-title,
+.cs-kid-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.cs-kid-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: var(--weight-medium);
+}
+.cs-kid-state {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-tertiary);
+}
+.cs-kid[data-state="stuck"] .cs-kid-state,
+.cs-kid[data-state="waiting"] .cs-kid-state {
+  color: var(--color-warning);
+  font-weight: var(--weight-semibold);
+}
+.cs-kid[data-state="failed"] .cs-kid-state {
+  color: var(--color-danger);
+  font-weight: var(--weight-semibold);
+}
+.cs-kid[data-state="done"] {
+  color: var(--color-text-tertiary);
+}
+.cs-kid-call {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-text-secondary);
+}
+.cs-kid-call.mono {
+  font-family: var(--font-family-mono);
+}
+.cs-kid-time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.cs-kid[data-state="stuck"] .cs-kid-time {
+  color: var(--color-warning);
+}
+.cs-kid-more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: var(--control-height-xs);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.cs-kid-more:hover {
+  color: var(--color-text-primary);
+}
+
+/* ── 产物：一类一行，每行一排大缩略图，横向滑；最后一张露出下一张的一角 ── */
+.cs-og {
+  padding: 0 var(--space-3);
+}
+.cs-og + .cs-og {
+  margin-top: var(--space-3);
+}
+.cs-og-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  padding: var(--space-1) 0 var(--space-1-5);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.cs-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 80%;
+  gap: var(--space-3);
+  margin: 0 calc(var(--space-3) * -1);
+  padding: 0 var(--space-3) var(--space-1);
+  scroll-padding: 0 var(--space-3);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+.cs-strip[data-single] {
+  grid-auto-columns: 100%;
+}
+.cs-thumb {
+  display: grid;
+  gap: var(--space-0-5);
+  align-content: start;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  scroll-snap-align: start;
+  cursor: pointer;
+}
+.cs-thumb-box {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  margin-bottom: var(--space-1);
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+}
+.cs-thumb-box[data-kind="slides"] {
+  aspect-ratio: 16 / 9;
+}
+.cs-thumb-box[data-kind="doc"],
+.cs-thumb-box[data-kind="pdf"] {
+  background: var(--color-bg-panel);
+}
+.cs-thumb:hover .cs-thumb-box {
+  border-color: var(--color-border-strong);
+}
+.cs-thumb-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.cs-thumb-source {
+  display: none;
+}
+.cs-thumb-video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+}
+.cs-thumb-video[data-ready] {
+  opacity: 1;
+}
+.cs-thumb-doc {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  padding: var(--space-6) var(--space-8);
+  transform-origin: top left;
+  pointer-events: none;
+}
+.cs-thumb-shot {
+  /* 网页截图是 1280×800 的顶部一屏：贴顶铺满，不留边 */
+  object-fit: cover;
+  object-position: top left;
+}
+.cs-thumb-pdf {
+  display: block;
+}
+.cs-thumb-icon {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--color-text-tertiary);
+}
+/* 看板缩略图：铺满缩略框；卡在里面按固定一格宽排版、整块等比缩放居中（BoardThumb.tsx）。只是看的，不吃指针 */
+.cs-board-thumb {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.cs-board-stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform-origin: center;
+}
+
+.cs-thumb-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  font-weight: var(--weight-medium);
+}
+.cs-thumb-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cs-thumb-kind {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* ── 记忆一行：图标 · 记忆 · 行尾右对齐的摘要 · chevron（第二版的「这次用到的」只剩它，不要节标题）── */
+.cs-used-label {
+  flex: none;
+}
+.cs-used-tail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: right;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}

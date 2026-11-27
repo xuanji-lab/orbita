@@ -52,7 +52,7 @@ export function shouldAutoOpenOnboarding(settingsLoaded: boolean, settings: Pick
   return settingsLoaded && settings.onboardingSeen !== true;
 }
 
-/** 截图用哪一套：两档暗色用玄的那套，其余（浅色、纸面两档）用浅色那套 */
+/** 截图用哪一套：两档暗色用玄的那套，浅色用浅色那套 */
 export function shotTheme(theme: Exclude<ThemePreference, "system">): "light" | "dark" {
   return theme === "black" || theme === "graphite" ? "dark" : "light";
 }

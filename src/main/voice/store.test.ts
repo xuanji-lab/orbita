@@ -4,8 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SecretsPort } from "../provider/store.ts";
-import { DEFAULT_DOUBAO_RESOURCE_ID } from "../../shared/voice.ts";
-import { parseDictationProvider, parseDoubao, VoiceStore } from "./store.ts";
+import { DEFAULT_DOUBAO_RESOURCE_ID, DEFAULT_ELEVENLABS_MODEL_ID, DEFAULT_ELEVENLABS_VOICE_ID } from "../../shared/voice.ts";
+import { parseDictationProvider, parseDoubao, parseElevenlabs, VoiceStore } from "./store.ts";
 
 function memorySecrets(): SecretsPort & { all: Map<string, string> } {
   const all = new Map<string, string>();
@@ -125,4 +125,34 @@ test("阶跃 key：存后只回掩码、voice.json 里没有；草稿优先；�
   // 空 key 保存 = 保留已存的（改别的格子时不必重粘）
   assert.deepEqual(await store.saveStepfun({ apiKey: "" }), { apiKeyMasked: "abc…ijkl" });
   assert.equal(await store.stepfunApiKey(), "abcdefghijkl");
+});
+
+test("parseElevenlabs：空或坏值回默认音色与模型", () => {
+  assert.deepEqual(parseElevenlabs(null), { voiceId: DEFAULT_ELEVENLABS_VOICE_ID, modelId: DEFAULT_ELEVENLABS_MODEL_ID });
+  assert.deepEqual(parseElevenlabs({ voiceId: " v1 ", modelId: 3 }), { voiceId: "v1", modelId: DEFAULT_ELEVENLABS_MODEL_ID });
+});
+
+test("ElevenLabs：key 进钥匙串不进文件；读回只给掩码；空 key 保留；不冲掉豆包", async (t) => {
+  const dir = await tempDir(t);
+  const store = new VoiceStore(dir, memorySecrets());
+  assert.deepEqual(await store.elevenlabsConfig(), {
+    voiceId: DEFAULT_ELEVENLABS_VOICE_ID,
+    modelId: DEFAULT_ELEVENLABS_MODEL_ID,
+    apiKeyMasked: null,
+  });
+  assert.equal(await store.elevenlabsCredentials(), null);
+  await store.saveDoubao({ appId: "123", resourceId: "", accessToken: "tok-123456" });
+  const saved = await store.saveElevenlabs({ voiceId: "voice-a", modelId: "eleven_v4", apiKey: "sk_abcdefghijkl" });
+  assert.deepEqual(saved, { voiceId: "voice-a", modelId: "eleven_v4", apiKeyMasked: "sk_…ijkl" });
+  const onDisk = await readFile(join(dir, "voice.json"), "utf8");
+  assert.doesNotMatch(onDisk, /sk_abcdefghijkl/);
+  assert.match(onDisk, /"doubao"/);
+  await store.saveElevenlabs({ voiceId: "voice-b", modelId: "", apiKey: "" });
+  assert.deepEqual(await store.elevenlabsCredentials(), {
+    apiKey: "sk_abcdefghijkl",
+    voiceId: "voice-b",
+    modelId: DEFAULT_ELEVENLABS_MODEL_ID,
+  });
+  // 试听：草稿 key 优先
+  assert.equal((await store.elevenlabsCredentialsFor({ voiceId: "x", modelId: "m", apiKey: " draft-key " }))?.apiKey, "draft-key");
 });

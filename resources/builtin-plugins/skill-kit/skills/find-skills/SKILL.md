@@ -12,7 +12,7 @@ version: "1.0.2-orbita"
 - **给用户看的是候选，不是安装命令**：列 2–3 个，写清每个能做什么、要改哪里才适合他、许可证、来源链接。用户选了再装。
 - **不要用 `npx skills add -g`**：它装进 `~/.agents/skills/`（Windows 是用户目录下的 `.agents\skills\`），Orbita 故意不读这个目录，装了也不生效。
 - **取回来再装**：先把候选取到会话工作台（`git clone --depth 1 <仓库>` 后只留那个技能的文件夹，或从 raw.githubusercontent.com 取单个文件），读一遍，按用户的情况改造，然后按形态走：
-  - **只有 SKILL.md 的单文件技能** → 用 `create_skill` 工具写入（用户会看到审批）。
+  - **只有 SKILL.md 的单文件技能** → 用 `create_skill` 工具写入。
   - **带 scripts / references / assets 的多文件技能** → 整理成插件放在当前工作区的 `plugins/<名>/` 下（`.claude-plugin/plugin.json` + `skills/<slug>/…`，格式见 plugin-creator 的 plugin-layout.md），**先用一句话问用户能不能装**，同意后调 `install_plugin`。
   - 不要手工往 Orbita 的数据目录里复制文件或建符号链接；重名（用户已有同名技能）就停下来问。
 - 保留上游的许可证与署名：改造后的技能在 SKILL.md 或 NOTICE 里写明来源与许可。

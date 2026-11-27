@@ -49,7 +49,7 @@ beforeEach(async () => {
   await sessions.ensureSession({
     id: S1, title: "", titleSource: "derived", cwd: "/tmp", workspaceId: "ws-1",
     piSessionFile: "/tmp/pi.jsonl", pinned: false, archived: false, recentQueries: [],
-    stats: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", createdAt: 1, updatedAt: 1,
+    stats: null, providerId: "p", modelId: "m", thinkingLevel: "medium", createdAt: 1, updatedAt: 1,
   });
 });
 afterEach(async () => {
@@ -82,7 +82,7 @@ describe("applySkillWrite（真 store）", () => {
     await sessions.ensureSession({
       id: S2, title: "", titleSource: "derived", cwd: "/tmp", workspaceId: null,
       piSessionFile: "/tmp/x.jsonl", pinned: false, archived: false, recentQueries: [],
-      stats: null, providerId: "p", modelId: "m", mode: "plan", thinkingLevel: "medium", createdAt: 1, updatedAt: 1,
+      stats: null, providerId: "p", modelId: "m", thinkingLevel: "medium", createdAt: 1, updatedAt: 1,
     });
     const result = await applySkillWrite(skills, sessions, skillEvent({ sessionId: S2, scope: "workspace" }));
     assert.equal(result.ok, false);

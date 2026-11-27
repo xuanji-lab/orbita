@@ -69,6 +69,27 @@ describe("claude 的思考档按型号（白名单纠目录的「缺键默认支
   });
 });
 
+describe("智谱 GLM-5.4（2026-11-23 上线，目前只在 Coding Plan 开放；出处见 known-models.ts 的注释）", () => {
+  test("1M 窗口、输出 131072、思考关不掉的三档、默认 max、只收 adaptive；收图与单价都不写", () => {
+    const params = knownModelParams("glm-5.4");
+    assert.equal(params.contextWindow, 1_000_000);
+    // 输出上限是端点实测的（131073 被 400「限制数值范围[1,131072]」），不写会落 8192 兜底
+    assert.equal(params.maxTokens, 131_072);
+    assert.equal(params.reasoning, true);
+    assert.deepEqual(params.thinkingLevels, ["low", "high", "max"]);
+    assert.equal(params.defaultThinkingLevel, "max");
+    assert.equal(defaultThinkingLevel("glm-5.4"), "max");
+    // Anthropic 兼容端点只读 output_config.effort：不声明的话 pi 发 budget_tokens，选的档被无视
+    assert.equal(params.adaptiveThinking, true);
+    // 官方写明收图（5.4 起才收）：兜底本来就带 image，不重复声明
+    assert.equal("input" in params, false);
+    // API 等安全评估后才开、没有官方价：不写单价，不编数
+    assert.equal("officialCost" in params, false);
+    // 目录还没收录，不写显示名就只剩小写 id
+    assert.equal(knownDisplayName("glm-5.4"), "GLM-5.4");
+  });
+});
+
 describe("默认思考档（wafo 2026-09-23：重启落模型默认档）", () => {
   test("同时写了档位表与默认档的，默认档必须在档位表里——否则默认就是一个发不出去的档", () => {
     for (const [modelId, params] of Object.entries(KNOWN_MODELS)) {
@@ -88,9 +109,15 @@ describe("默认思考档（wafo 2026-09-23：重启落模型默认档）", () =
 
   test("同一型号的两种写法共用一份口径：deepseek-flash / deepseek-v4.1-flash，K3.1 Pro 的四个 id", () => {
     assert.deepEqual(knownModelParams("deepseek-v4.1-flash"), knownModelParams("deepseek-flash"));
+    // 参数四个 id 一样；单价 Pro 与 Highspeed 不同，各自成对（Kimi Code 与开放平台同一价）
+    const { officialCost: _pro, ...pro } = knownModelParams("k3.1-pro");
     for (const id of ["k3.1-pro-highspeed", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
-      assert.deepEqual(knownModelParams(id), knownModelParams("k3.1-pro"), id);
+      const { officialCost: _cost, ...params } = knownModelParams(id);
+      assert.deepEqual(params, pro, id);
     }
+    assert.deepEqual(knownModelParams("kimi-k3.1-pro").officialCost, knownModelParams("k3.1-pro").officialCost);
+    assert.deepEqual(knownModelParams("kimi-k3.1-pro-highspeed").officialCost, knownModelParams("k3.1-pro-highspeed").officialCost);
+    assert.notDeepEqual(knownModelParams("k3.1-pro").officialCost, knownModelParams("k3.1-pro-highspeed").officialCost);
   });
 
   test("K3 两处默认档不同：Kimi Code 的 k3 / k3-256k 默认 high，开放平台的 kimi-k3 默认 max", () => {
@@ -222,6 +249,7 @@ describe("型号头像三级规则的前两级（原型 4，2026-10-24）", () =
     assert.deepEqual(modelAvatarOf("deepseek-v4-pro"), { kind: "own", key: "deepseek-v4-pro" });
     assert.deepEqual(modelAvatarOf("glm-5.3"), { kind: "own", key: "glm-5.3" });
     assert.deepEqual(modelAvatarOf("glm-5.3-flash"), { kind: "own", key: "glm-5.3-flash" });
+    assert.deepEqual(modelAvatarOf("glm-5.4"), { kind: "own", key: "glm-5.4" });
     // 阶跃官方 id 与 OpenCode Go 的免费档是同一个模型
     for (const id of ["step-5-preview", "step-5-preview-free"]) assert.deepEqual(modelAvatarOf(id), { kind: "own", key: "step-5-preview" }, id);
     assert.deepEqual(modelAvatarOf("mimo-v2.6-flash"), { kind: "own", key: "mimo-v2.6-flash" });

@@ -84,6 +84,16 @@ describe("SettingsStore", () => {
     assert.equal((await store.read()).providersPage, undefined);
   });
 
+  test("常驻对话指针与入口选择按工作区合并：记第二个不抹第一个，重开 store 还在，改别的设置不抹它们", async () => {
+    await store.write({ orchestraMain: { ws1: "s1" }, orchestraEntry: { ws1: "main" } });
+    await store.write({ orchestraMain: { ws2: "s2" }, orchestraEntry: { ws2: "new" } });
+    await store.write({ orchestraMain: { ws1: "s3" } });
+    await store.write({ theme: "light" });
+    const reopened = await new SettingsStore(dir).read();
+    assert.deepEqual(reopened.orchestraMain, { ws1: "s3", ws2: "s2" });
+    assert.deepEqual(reopened.orchestraEntry, { ws1: "main", ws2: "new" });
+  });
+
   test("向量设置按键合并：只切模式不抹掉模型、卸载时间与电池偏好", async () => {
     await store.write({
       vector: { model: "qwen3-embedding-0.6b", idleUnloadMin: 9, deferOnBattery: false },
@@ -120,6 +130,33 @@ describe("SettingsStore", () => {
     assert.deepEqual((await new SettingsStore(dir).read()).choreModel, undefined);
   });
 
+  test("avatarModel：挑定的型号 / 「子会话模型」写进去重开还在；补丁发 null 选回默认（跟会话栏）；坏值不落盘", async () => {
+    await store.write({ theme: "graphite", avatarModel: { providerId: "kimi-coding", modelId: "k3.1-pro" } });
+    assert.deepEqual((await new SettingsStore(dir).read()).avatarModel, { providerId: "kimi-coding", modelId: "k3.1-pro" });
+    await store.write({ sidebarWidth: 300 });
+    assert.deepEqual((await new SettingsStore(dir).read()).avatarModel, { providerId: "kimi-coding", modelId: "k3.1-pro" }, "改别的设置不抹它");
+    await store.write({ avatarModel: "sub_session" });
+    assert.equal((await new SettingsStore(dir).read()).avatarModel, "sub_session");
+    // undefined 在补丁语义里是「这个键没改」，所以选回默认必须是显式的 null
+    const cleared = await store.write({ avatarModel: null });
+    assert.equal("avatarModel" in cleared, false);
+    assert.equal(cleared.theme, "graphite");
+    const onDisk = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("avatarModel" in onDisk, false);
+    // 盘上的坏值（别的取法名、半截的一对）当作没选过：回到默认，不拦应用启动
+    await writeFile(
+      join(dir, "settings.json"),
+      JSON.stringify({ theme: "light", avatarModel: { providerId: "kimi-coding" } }),
+      "utf8",
+    );
+    assert.equal((await new SettingsStore(dir).read()).avatarModel, undefined);
+    await writeFile(join(dir, "settings.json"), JSON.stringify({ theme: "light", avatarModel: "follow" }), "utf8");
+    assert.equal((await new SettingsStore(dir).read()).avatarModel, undefined);
+    // 选回默认之后再写具体型号：仍是完整的成对
+    await store.write({ avatarModel: { providerId: "zhipu-coding", modelId: "glm-5.4" } });
+    assert.deepEqual((await new SettingsStore(dir).read()).avatarModel, { providerId: "zhipu-coding", modelId: "glm-5.4" });
+  });
+
   test("旧键 titleModel 平滑迁移：读得到，任何一次写入都把旧键从盘上带走", async () => {
     // 旧版本写的盘上只有 titleModel（只管起名的时代）
     await writeFile(join(dir, "settings.json"), JSON.stringify({ theme: "light", titleModel: { providerId: "kimi", modelId: "kimi-k3" } }));
@@ -132,14 +169,33 @@ describe("SettingsStore", () => {
     assert.deepEqual((await new SettingsStore(dir).read()).choreModel, { providerId: "kimi", modelId: "kimi-k3" });
   });
 
-  test("lastUsed 的部分更新按键合并——切档不抹已记的模型", async () => {
+  test("星系倾角：写进去重开还在；改别的设置不抹它；坏值不落盘", async () => {
+    await store.write({ galaxyTilt: 25 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
+    await store.write({ sidebarWidth: 300 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 25);
+    await store.write({ galaxyTilt: 37, galaxyAzimuth: 123, galaxyTurntable: false });
+    assert.equal((await new SettingsStore(dir).read()).galaxyTilt, 37, "1° 精度");
+    assert.equal((await new SettingsStore(dir).read()).galaxyAzimuth, 123);
+    assert.equal((await new SettingsStore(dir).read()).galaxyTurntable, false);
+    await store.write({ galaxyZoom: 1.4 });
+    assert.equal((await new SettingsStore(dir).read()).galaxyZoom, 1.4, "缩放与倾角、方位一起存");
+    await store.write({ galaxyDustDensity: "tenth" });
+    assert.equal((await new SettingsStore(dir).read()).galaxyDustDensity, "tenth", "碎石密度写进去重开还在");
+    assert.equal((await new SettingsStore(dir).read()).galaxyAzimuth, 123);
+    await store.write({ galaxyTilt: 37.5, galaxyAzimuth: 400 });
+    const raw = JSON.parse(await readFile(join(dir, "settings.json"), "utf8")) as Record<string, unknown>;
+    assert.equal("galaxyTilt" in raw, false, "不是整数度的值丢掉，回到默认");
+    assert.equal("galaxyAzimuth" in raw, false, "越界的方位角丢掉");
+  });
+
+  test("lastUsed 的部分更新按键合并——只改模型 id 不抹已记的服务商", async () => {
     await store.write({ lastUsed: { providerId: "zhipu-coding", modelId: "glm-5.3-flash" } });
-    await store.write({ lastUsed: { mode: "skip" } });
+    await store.write({ lastUsed: { modelId: "glm-5.3" } });
     const read = await store.read();
     assert.deepEqual(read.lastUsed, {
       providerId: "zhipu-coding",
-      modelId: "glm-5.3-flash",
-      mode: "skip",
+      modelId: "glm-5.3",
     });
   });
 });

@@ -2,21 +2,23 @@
  * 系统提示词的段装配。抽成纯函数后，测试可以直接比较「派出 / 删除子会话前后」
  * 整份提示词的字节；prompt-stability 也吃同一份段名单，变化能归因到具体段。
  *
- * attached、权限模式、cwd、本会话工作台与浏览器下载目录仍按原行为留在这里；
+ * attached、受保护数据说明、cwd、本会话工作台与浏览器下载目录仍按原行为留在这里；
  * 父子会话清单不进系统提示词，对方工作台由 delegate 回执和通道信封告知。
  */
 import type { TurnDirectories } from "../shared/agent-ipc.ts";
-import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS, type PermissionMode } from "../shared/permission.ts";
+import { COMMAND_TIMEOUT_DEFAULT_SECONDS, COMMAND_TIMEOUT_FLOOR_SECONDS } from "../shared/permission.ts";
 import { QUOTE_GUIDELINE } from "../shared/quote.ts";
 import type { Language } from "../shared/settings.ts";
 import { INTENT_CONTEXT_GUIDELINE } from "../shared/intent-recall.ts";
-import { describePermissionMode } from "./permission.ts";
+import { describeProtectedData } from "./permission.ts";
 import { describeDirectories } from "./directories-prompt.ts";
 import { describeChannelRole } from "./channel-tools.ts";
 import { storeToolsGuideline } from "./store-tools.ts";
 import { gitAttributionGuideline } from "./git-attribution.ts";
 import { REPLY_LANGUAGE_GUIDELINE } from "./prompt-narration.ts";
 import { MEMORY_TOOLS_GUIDELINE } from "./memory-tools.ts";
+import { describeSubAgentIdentity, SUB_AGENTS_MAIN_GUIDELINE } from "./sub-agent-tools.ts";
+import type { SubAgentTurnIdentity } from "../shared/sub-agent.ts";
 
 /**
  * bash 的 timeout 指引。数字与权限闸门同源（shared 的 `gatedCommandTimeout`）：小于下限的抬到下限，
@@ -44,12 +46,52 @@ const LONG_TASK_AUTOMATION_GUIDELINE =
   "and check whether the job finished (cancel the automation once it has), then end your turn. " +
   "Tell the user in one sentence what is running, where the log is, and that you will come back to it on your own.";
 
+/**
+ * 回答里的图（2026-11-26 用户：「内嵌交互图可以做一下。提示词优化一下」）。Orbita 的回答把 ```mermaid 画成静态图、
+ * 把 ```html-embed 画成沙箱里的交互图（renderer/features/chat/HtmlEmbedBlock.tsx）；模型不知道就一张也不画
+ * ——改前实测 Kimi / GLM 讲数据流、走算法、做对比 8 道题 0 张图。这一段讲三件事：什么时候画（讲流程 / 架构 /
+ * 逐步演示 / 结构性对比）、mermaid 够用就用 mermaid、闲聊与表格能说清的不画；以及 html-embed 的写法约束，
+ * 每一条都对着沙箱的真实限制：不能联网（CSP default-src 'none'）、颜色走宿主下发的主题变量（深浅主题切换跟着变）、
+ * 宽度随对话列高度随内容（上限 720）、不放常驻动画（离开视口会被暂停，常驻动画只会白耗 GPU）、体积有上限。
+ * 写法里的「片段不写整页 / style→内容→script 最后 / 文字写在回答里、图里只放图 / 逐步演示用 stepper」学自
+ * Claude 内联可视化的设计规范。
+ */
+const INLINE_VISUALS_GUIDELINE = [
+  "<orbita-inline-visuals>",
+  "Your answers render as Markdown, and two kinds of fenced blocks render as pictures instead of code:",
+  "- ```mermaid: a static diagram (flowchart, sequence, state, class, ER, gantt, pie).",
+  "- ```html-embed: an interactive figure, a small HTML/SVG/JS fragment run in a sandbox inside the answer, as wide as the " +
+    "conversation column, its height fitted to its content (at most 720px).",
+  "Draw one on your own, without being asked, when a picture explains better than prose: a process, data flow or " +
+    "architecture where order and connections matter; an algorithm, protocol or lifecycle walked through step by step; " +
+    "two things whose difference is in how they flow or are built (draw them side by side). When the explanation has " +
+    "stages, prefer an html-embed stepper: the whole diagram stays visible (every stage as a box, arrows between them), " +
+    "Previous / Next buttons and a position marker such as 2 / 5 move a highlight from stage to stage, and one short " +
+    "caption under the diagram says what happens in the current stage; not a slideshow of text cards. When a single " +
+    "static picture of boxes and arrows is enough, use mermaid. Do not draw for small talk, plain facts, short answers or " +
+    "lists, or when a table says it (a list of attributes side by side is a table). One figure per answer is the norm, two at " +
+    "most. The explanation stays in your prose; the figure holds only the visual (labels and one short caption per step).",
+  "Writing html-embed:",
+  "- A fragment, not a page: no <!doctype>, <html>, <head> or <body>. A short <style>, then the markup, then one <script> " +
+    "at the end. Under 30 KB.",
+  "- Self-contained: the sandbox blocks all network and file access, so no external scripts, stylesheets, fonts, images " +
+    "or fetch. Inline SVG and data: URIs only.",
+  "- Colours come only from the host theme variables, never hard-coded, so light and dark themes both work: " +
+    "--color-text-primary / -secondary / -tertiary, --color-bg-muted (fills), --color-border-subtle / -default / -strong, " +
+    "--color-accent (only for the current or highlighted element), --color-info, --color-success, --color-warning, " +
+    "--color-danger; fonts --font-family-base and --font-family-mono; sizes --font-size-base / -sm / -xs; " +
+    "radius --radius-md. The host paints the ground behind the figure (--color-bg-panel); leave your outermost element unpainted. Plain <button> " +
+    "elements are already styled.",
+  "- Size follows the container, which is 480 to 900px wide: width 100%, rows that wrap (flex-wrap) rather than shrink, " +
+    "SVG with a viewBox and width=\"100%\", no fixed pixel widths, no 100vh, no position: fixed; keep it under about 600px tall.",
+  "- No continuous animation (no infinite CSS animation, requestAnimationFrame loop or setInterval); a short transition " +
+    "when the step changes is fine. No emoji. Text inside the figure is in the user's language.",
+  "</orbita-inline-visuals>",
+].join("\n");
+
 export interface SystemPromptInput {
   /** pi 基底，已由 adaptSystemPrompt 处理 */
   piBase: string;
-  mode: PermissionMode;
-  /** 当前实际注册的非内建工具名，与工具注册共用同一来源 */
-  extraToolNames: readonly string[];
   role: "root" | "child";
   workspace: { name?: string } | null;
   cwd: string;
@@ -61,6 +103,10 @@ export interface SystemPromptInput {
   memoryToolsGuideline: boolean;
   /** 本会话注册了 automation_create（根会话且自动化开着）：讲长任务放后台、建自动化回来看的指引 */
   longTaskAutomationGuideline: boolean;
+  /** 本会话注册了子智能体工具（编排形态的主智能体）：讲一段「有子智能体可派、怎么建」；缺席 = 不讲 */
+  subAgentsGuideline?: boolean;
+  /** 这条会话替哪个子智能体干活（指名派活）：它的职能整段进提示；缺席 = 普通会话 */
+  subAgent?: SubAgentTurnIdentity;
 }
 
 export interface PromptSegment {
@@ -72,9 +118,12 @@ export interface PromptSegment {
 export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] {
   return [
     { name: "pi-base", text: input.piBase },
-    { name: "permission", text: describePermissionMode(input.mode, input.extraToolNames) },
+    { name: "permission", text: describeProtectedData() },
     { name: "directories", text: describeDirectories(input.cwd, input.directories) },
     { name: "channel-role", text: describeChannelRole(input.role) },
+    // 子智能体两段只在用到时出现：普通会话的整份提示逐字节不变（不打断已有会话的前缀缓存）
+    ...(input.subAgent === undefined ? [] : [{ name: "sub-agent", text: describeSubAgentIdentity(input.subAgent) }]),
+    ...(input.subAgentsGuideline === true ? [{ name: "sub-agents", text: SUB_AGENTS_MAIN_GUIDELINE }] : []),
     ...(input.memoryToolsGuideline ? [{ name: "memory-tools", text: MEMORY_TOOLS_GUIDELINE }] : []),
     { name: "store-tools", text: storeToolsGuideline(input.workspace, input.cwd) },
     { name: "tool-guidelines", text: TOOL_GUIDELINES },
@@ -86,6 +135,8 @@ export function orbitaSystemSegments(input: SystemPromptInput): PromptSegment[] 
       name: "git-attribution",
       text: gitAttributionGuideline(input.gitAttribution, input.attributionLanguage ?? "en"),
     },
+    // 插在 reply-language 之前（那段锁在最末）：前面已有段的字节不动，前缀缓存只从这里断开
+    { name: "inline-visuals", text: INLINE_VISUALS_GUIDELINE },
     { name: "reply-language", text: REPLY_LANGUAGE_GUIDELINE },
   ];
 }

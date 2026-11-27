@@ -151,15 +151,12 @@ export function planNotice(input: { watched: boolean; windowActive: boolean; sou
  * - `"running"`：在跑（1/3 蓝）——自己或任一直接子会话的 phase 不是 idle。
  *   子会话在跑算母会话在跑：侧栏只列根会话，母会话的行就是那个任务的唯一入口；
  *   行首状态槽的 git-fork 再说「是孩子在跑」这一句。
- * - `"waiting"`：在等你回复（2/3 橙）——自己或任一直接子会话挂着工具审批。
- *   子会话的审批亮在母会话那一行（同上：入口在母）。今天接的是审批，以后的
- *   「问用户问题」也走这一档。
+ * - `"waiting"`：在等你回复（2/3 橙）——自己或任一直接子会话写完计划停下等你确认。
  * - `"done"`：跑完、还没看（3/3 绿）——meta 上的未读标记（落盘，重启后还在）。
  * - `"failed"`：跑挂了、还没看（3/3 红）——未读标记带 failed。同样算未读。
  * - `null`：读完即不亮。
  *
- * 优先级 waiting > running > unread：审批挂着时 phase 还是 turn，若 running 压过
- * waiting，橙永远不亮——「在等你」是比「在跑」更具体的事实，压过它。在跑压过
+ * 优先级 waiting > running > unread：「在等你」是比「在跑」更具体的事实，压过它。在跑压过
  * 未读：又开了一轮就不再是「跑完」；落定后未读要么被覆盖成新值要么被清。
  */
 export type SessionRunState = "running" | "waiting" | "done" | "failed" | null;
@@ -167,11 +164,9 @@ export type SessionRunState = "running" | "waiting" | "done" | "failed" | null;
 /** 推导只需要槽的这两个字段——不依赖整个 SessionEntry，测试不用造全量槽 */
 export interface RunSlot {
   phase: "idle" | "turn" | "compaction";
-  /** 挂着的工具审批数（0 = 没有） */
-  approvals: number;
   /**
    * 停在「计划等你确认」上（最后一次 update_plan 要求确认，且之后还没有用户消息；plan-timeline 的
-   * planAwaitingIn）。算「等你」的第二个来源——不加的话 plan 档写完计划停下，侧栏 / 铃铛 / 首页卡
+   * planAwaitingIn）。算「等你」的一个来源——不加的话写完计划停下，侧栏 / 铃铛 / 首页卡
    * 会把它画成跑完的绿饼。缺席 = 否。
    */
   planAwaiting?: boolean;
@@ -186,7 +181,7 @@ export function sessionRunState(input: {
   unread: { at: number; failed: boolean } | null;
 }): SessionRunState {
   const slots = [input.slot, ...input.children];
-  if (slots.some((slot) => slot !== undefined && (slot.approvals > 0 || slot.planAwaiting === true))) return "waiting";
+  if (slots.some((slot) => slot !== undefined && slot.planAwaiting === true)) return "waiting";
   if (slots.some((slot) => slot !== undefined && slot.phase !== "idle")) return "running";
   if (input.unread === null) return null;
   return input.unread.failed ? "failed" : "done";
@@ -254,27 +249,27 @@ export function runStateLabel(
 export interface RunStateSource {
   readonly sessions: readonly SessionMeta[];
   phaseOf(id: string): RunSlot["phase"];
-  approvalsOf(id: string): readonly unknown[];
   /** 停在「计划等你确认」上（缺席 = 不认这个来源） */
   planAwaitingOf?(id: string): boolean;
+  /** 这条会话最近一轮失败的错误（如模型返回 401）；null = 没失败。缺席 = 不认这个来源。
+   *  具体形状由来源决定（旧测试用字符串，ChatSession 用 TurnFailure）；这里只判有无。 */
+  turnErrorOf?(id: string): unknown;
 }
 
 /**
  * 一条根会话的运行态（侧栏状态饼、工作区汇总、首页会话卡、工作区文件共用）：查它
  * 自己的槽——后台在跑的会话切走了也照样亮，与「当前看哪条」无关。子会话只取一层
- * （childSessions 同口径），子会话在跑 / 在等审批都记到母会话上（入口在母）。
+ * （childSessions 同口径），子会话在跑 / 计划等你回复都记到母会话上（入口在母）。
  * 未读读 meta（落盘，重启后还在）。
  */
 export function runStateOf(source: RunStateSource, meta: SessionMeta): SessionRunState {
   return sessionRunState({
     slot: {
       phase: source.phaseOf(meta.id),
-      approvals: source.approvalsOf(meta.id).length,
       planAwaiting: source.planAwaitingOf?.(meta.id) ?? false,
     },
     children: childSessions(source.sessions, meta.id).map((child) => ({
       phase: source.phaseOf(child.id),
-      approvals: source.approvalsOf(child.id).length,
       planAwaiting: source.planAwaitingOf?.(child.id) ?? false,
     })),
     unread: meta.unread ?? null,

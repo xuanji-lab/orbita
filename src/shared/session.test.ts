@@ -6,7 +6,6 @@ import {
   isChannelMarkRecord,
   isCompactedRecord,
   parseAgentStats,
-  parseCarryover,
   parseSessionMeta,
   childSessions,
   pushRecentQuery,
@@ -30,12 +29,9 @@ const valid = {
   pinned: false,
   archived: false,
   starred: false,
-  completion: "open" as const,
-  closedAt: null,
   unread: null,
   providerId: "zai",
   modelId: "glm-5.3",
-  mode: "manual",
   thinkingLevel: "medium" as const,
   recentQueries: [],
   stats: null,
@@ -138,23 +134,7 @@ describe("deriveSessionTitle", () => {
 
 describe("parseSessionMeta", () => {
   it("完整的一条原样解出来", () => {
-    deepStrictEqual(parseSessionMeta(valid), { ...valid, mode: "manual" });
-  });
-
-  it("收尾记录与在做的遗留事项：好的留下，坏条目逐条丢，空了就缺席", () => {
-    const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const item = { title: "修登录", turns: [1, 2], providerId: "p", modelId: "m", level: "high", tokens: zero, recordedCost: 0.1, unpricedTokens: zero };
-    const good = { id: "w1", at: 1, throughTurn: 2, items: [item] };
-    const parsed = parseSessionMeta({
-      ...valid,
-      wrapups: [good, { ...good, id: "w2", items: [{ ...item, turns: [3, 1] }] }, { id: "w3" }],
-      resumedCarryovers: ["c1", "c1", 7, ""],
-    });
-    deepStrictEqual(parsed?.wrapups, [good]);
-    deepStrictEqual(parsed?.resumedCarryovers, ["c1"]);
-    const empty = parseSessionMeta({ ...valid, wrapups: [{ id: "bad" }], resumedCarryovers: [] });
-    strictEqual(empty !== null && "wrapups" in empty, false);
-    strictEqual(empty !== null && "resumedCarryovers" in empty, false);
+    deepStrictEqual(parseSessionMeta(valid), { ...valid });
   });
 
   // 少一条会话，比多一条指向空白的假会话好
@@ -169,13 +149,22 @@ describe("parseSessionMeta", () => {
     strictEqual(parseSessionMeta([]), null);
   });
 
+  it("会话级自动压缩开关只认布尔：false / true 原样，缺席与坏值不落键（= 跟随全局）", () => {
+    strictEqual(parseSessionMeta({ ...valid, autoCompact: false })?.autoCompact, false);
+    strictEqual(parseSessionMeta({ ...valid, autoCompact: true })?.autoCompact, true);
+    for (const bad of [undefined, null, "false", 0]) strictEqual("autoCompact" in (parseSessionMeta({ ...valid, autoCompact: bad }) ?? {}), false);
+  });
+
   it("标题可以缺——建了还没发消息的会话就是这样", () => {
     strictEqual(parseSessionMeta({ ...valid, title: undefined })?.title, "");
   });
 
-  it("不认识的权限档退回最保守的 plan，而不是丢掉整条会话", () => {
-    strictEqual(parseSessionMeta({ ...valid, mode: "yolo" })?.mode, "plan");
-    strictEqual(parseSessionMeta({ ...valid, mode: undefined })?.mode, "plan");
+  it("旧会话存着的权限档（plan / manual / 坏值）照常解析，且不再读进 meta——一律按放行跑", () => {
+    for (const mode of ["plan", "manual", "skip", "yolo"]) {
+      const parsed = parseSessionMeta({ ...valid, mode });
+      notStrictEqual(parsed, null);
+      strictEqual(parsed !== null && "mode" in parsed, false);
+    }
   });
 
   it("思考档：合法透传（7 档全集）；缺省与坏值退 medium——字段落地前的老会话实际跑的就是它", () => {
@@ -192,7 +181,6 @@ describe("parseSessionMeta", () => {
   it("不认识的字段丢掉，不原样带过去", () => {
     deepStrictEqual(parseSessionMeta({ ...valid, junk: 1, nested: { a: 1 } }), {
       ...valid,
-      mode: "manual",
     });
   });
 
@@ -261,38 +249,24 @@ describe("parseSessionMeta", () => {
     );
   });
 
-  // 生命周期字段（星标 / 完成状态）之前存的会话没有这三个字段：星标默认关、
-  // 状态默认 open、没有关闭时刻——老会话不因加字段而变样
-  it("缺 starred / completion / closedAt 给默认值：false / open / null", () => {
+  it("缺 starred 给默认值 false", () => {
+    strictEqual(parseSessionMeta({ ...valid, starred: undefined })?.starred, false);
+  });
+
+  // 「完成」与遗留事项已删：旧会话 meta 里的 completion / closedAt / resumedCarryovers 读时忽略，不报错、不出现在结果里
+  it("旧版 completion / closedAt / resumedCarryovers / wrapups 读时忽略（含坏形状的 wrapups），会话照常打开", () => {
     const meta = parseSessionMeta({
       ...valid,
-      starred: undefined,
-      completion: undefined,
-      closedAt: undefined,
+      completion: "done_with_todos",
+      closedAt: 5000,
+      resumedCarryovers: ["c1"],
+      wrapups: [{ id: "w1", at: 1, throughTurn: 2, items: [] }, { id: "bad" }],
     });
+    notStrictEqual(meta, null);
+    for (const key of ["completion", "closedAt", "resumedCarryovers", "wrapups"]) {
+      strictEqual(meta !== null && key in meta, false, `${key} 不该出现`);
+    }
     strictEqual(meta?.starred, false);
-    strictEqual(meta?.completion, "open");
-    strictEqual(meta?.closedAt, null);
-  });
-
-  it("completion 只收合法枚举：合法透传，坏值回落 open，不丢整条会话", () => {
-    strictEqual(parseSessionMeta({ ...valid, completion: "done" })?.completion, "done");
-    strictEqual(
-      parseSessionMeta({ ...valid, completion: "done_with_todos" })?.completion,
-      "done_with_todos",
-    );
-    strictEqual(parseSessionMeta({ ...valid, completion: "banana" })?.completion, "open");
-    strictEqual(parseSessionMeta({ ...valid, completion: 42 })?.completion, "open");
-  });
-
-  it("closedAt 只收有限数字：NaN / Infinity / 非数字一律 null，合法数字透传", () => {
-    strictEqual(parseSessionMeta({ ...valid, closedAt: 5000 })?.closedAt, 5000);
-    strictEqual(parseSessionMeta({ ...valid, closedAt: Number.NaN })?.closedAt, null);
-    strictEqual(
-      parseSessionMeta({ ...valid, closedAt: Number.POSITIVE_INFINITY })?.closedAt,
-      null,
-    );
-    strictEqual(parseSessionMeta({ ...valid, closedAt: "yesterday" })?.closedAt, null);
   });
 
   // 未读标记（2026-10-10 落盘）：缺席 / 坏值都当已读，不丢整条会话
@@ -378,7 +352,6 @@ describe("recentQueriesFromRecords", () => {
 describe("sortSessions", () => {
   const at = (id: string, updatedAt: number, pinned = false): SessionMeta => ({
     ...valid,
-    mode: "manual",
     id,
     updatedAt,
     pinned,
@@ -399,7 +372,6 @@ describe("sortSessions", () => {
 describe("rootSessions / childSessions", () => {
   const at = (id: string, createdAt: number, parentId?: string): SessionMeta => ({
     ...valid,
-    mode: "manual",
     id,
     createdAt,
     ...(parentId === undefined ? null : { parentId }),
@@ -457,7 +429,7 @@ describe("transcriptToMarkdown", () => {
   };
 
   it("带 meta 时出标题与机器事实", () => {
-    const md = transcriptToMarkdown([user], { ...valid, mode: "manual", title: "重做外壳" });
+    const md = transcriptToMarkdown([user], { ...valid, title: "重做外壳" });
     match(md, /^# 重做外壳\n/);
     match(md, /- Folder: `\/Users\/wafo\/repo\/orbita-lab`/);
     match(md, /- Model: `zai \/ glm-5\.3`/);
@@ -579,6 +551,15 @@ describe("isChannelMarkRecord", () => {
     strictEqual(isChannelMarkRecord({ ...mark, timestamp: "soon" }), false);
     strictEqual(isChannelMarkRecord(null), false);
     strictEqual(isChannelMarkRecord("channel-mark"), false);
+  });
+
+  it("also（合并投递的其余信封）缺席合法；出现了就必须逐条合法", () => {
+    const one = { peerId: "c2", messageId: "m2", from: "child", kind: "done" };
+    strictEqual(isChannelMarkRecord({ ...mark, also: [one] }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, also: [] }), true);
+    strictEqual(isChannelMarkRecord({ ...mark, also: "m2" }), false);
+    strictEqual(isChannelMarkRecord({ ...mark, also: [{ ...one, kind: "nope" }] }), false);
+    strictEqual(isChannelMarkRecord({ ...mark, also: [{ ...one, messageId: 3 }] }), false);
   });
 
   it("from 只认 parent / child；kind 只认六种——手改出来的其它值整行判坏", () => {
@@ -741,37 +722,5 @@ describe("引用块不进标题与导出正文", () => {
     const md = transcriptToMarkdown([{ id: "u", role: "user", content: [{ type: "text", text: quoted }], timestamp: 1 }]);
     match(md, /> 被引用的话\n\n我的问题/);
     doesNotMatch(md, /quoted_context/);
-  });
-});
-
-describe("parseCarryover 的来源与状态", () => {
-  const base = {
-    id: "c1",
-    title: "日期解析不一致",
-    detail: "",
-    sourceSessionId: "s1",
-    sourceMessageRange: null,
-    status: "open",
-    createdAt: 1,
-    doneAt: null,
-  };
-
-  it("旧记录没有 origin / anchor：读成 wrapup / null", () => {
-    const parsed = parseCarryover(base);
-    strictEqual(parsed?.origin, "wrapup");
-    strictEqual(parsed?.anchor, null);
-  });
-
-  it("noticed 与锚点原样保留", () => {
-    const parsed = parseCarryover({ ...base, origin: "noticed", anchor: "call_9" });
-    strictEqual(parsed?.origin, "noticed");
-    strictEqual(parsed?.anchor, "call_9");
-  });
-
-  it("状态认 done / dismissed，其余回落 open", () => {
-    strictEqual(parseCarryover({ ...base, status: "dismissed" })?.status, "dismissed");
-    strictEqual(parseCarryover({ ...base, status: "done", doneAt: 5 })?.status, "done");
-    strictEqual(parseCarryover({ ...base, status: "weird" })?.status, "open");
-    strictEqual(parseCarryover({ ...base, origin: "other" })?.origin, "wrapup");
   });
 });

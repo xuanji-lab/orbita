@@ -42,8 +42,7 @@ describe("空白 tab 垫底色", () => {
     assert.equal(pageBackgroundColor("system", false), PAGE_BACKGROUNDS.light);
   });
 
-  it("手选的档不看系统深浅：黛在浅色系统下仍是黛，纸面档在深色系统下仍是纸面", () => {
+  it("手选的档不看系统深浅：黛在浅色系统下仍是黛", () => {
     assert.equal(pageBackgroundColor("graphite", false), PAGE_BACKGROUNDS.graphite);
-    assert.equal(pageBackgroundColor("copybook", true), PAGE_BACKGROUNDS.copybook);
   });
 });

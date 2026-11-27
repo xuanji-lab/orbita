@@ -7,6 +7,7 @@ import { stat } from "node:fs/promises";
 import { ipcChannels } from "../../shared/agent-ipc.ts";
 import {
   isPdfFile,
+  type FileMediaUrl,
   isWebPageFile,
   type FileLineIndex,
   type FileLineIndexRequest,
@@ -15,6 +16,7 @@ import {
   type FileListRequest,
   type FilePreview,
   type PdfFile,
+  type WebThumb,
   type FileRootsRequest,
   type FileWriteRequest,
   type FileWriteResult,
@@ -39,9 +41,12 @@ import type { OfficeService } from "../office/service.ts";
 import { writeEditedFile } from "./write.ts";
 import { readXlsxInWorker, writeXlsxInWorker } from "../xlsx/service.ts";
 import { readPptxInWorker } from "../pptx/service.ts";
+import { localPageRoots } from "../browser/local-file.ts";
+import { webThumbOf } from "./web-thumb.ts";
+import { issueMediaUrl, type MediaTokens } from "./media-stream.ts";
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
- * 传函数不传沙盒：文件面板只需要这一个动作。roots 是页面打开之后能读的本地范围（页面闸）
+ * 传函数不传沙盒：文件面板只需要这一个动作；页面可读根由浏览器按网页真实路径收窄。
  */
 /** 在途的行索引请求：`<窗口 id>:<requestId>` → 它的取消控制器 */
 const pendingIndexes = new Map<string, AbortController>();
@@ -51,7 +56,8 @@ const pendingKey = (senderId: number, requestId: string): string => `${senderId}
 export function registerFilesIpc(
   workspaces: WorkspaceStore,
   sessions: SessionStore,
-  openInBrowser: (path: string, roots: readonly string[]) => Promise<void>,
+  openInBrowser: (path: string) => Promise<void>,
+  mediaTokens: MediaTokens,
   /** 网格写回后把人的改动记进**与 agent 同一份**改动清单（office/service.ts） */
   office?: OfficeService,
 ): void {
@@ -198,6 +204,16 @@ export function registerFilesIpc(
   });
 
   /**
+   * 给音 / 视频文件发播放地址：同 fs:read 的白名单（root 白名单 + realpath 后在根内），外加只认媒体扩展名
+   * ——判定用 realpath 之后的路径，改名成 foo.mp3 的符号链接指向别的文件同样被拒；这条通道不能变成
+   * 「流式读任意文件」。token 映射到这个真实路径，`orbita-media://` 协议只认 token（media-stream.ts）。
+   */
+  ipcMain.handle(ipcChannels.fsMediaUrl, async (_event, req: FileListRequest): Promise<FileMediaUrl> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    return issueMediaUrl(mediaTokens, roots, req);
+  });
+
+  /**
    * 用系统默认应用打开 dir（同白名单）。`shell.openPath` 失败时回一个非空字符串
    * 而不是抛错——这里统一成异常，让 renderer 一条 catch 处理到底。
    */
@@ -216,18 +232,31 @@ export function registerFilesIpc(
    * 路径：指向别的类型的 foo.html 软链接同样被拒。
    *
    * 入口闸只管第一个地址；页面打开之后它自己还能 fetch / iframe / 跳转到任意 file://（#365）。
-   * 所以把这条会话的白名单根一并交给浏览器：页面之后对 file:// 的请求只在这些根里放行——
-   * 与文件面板本身能读的范围一样，不多不少。
+   * 这里只交出已 realpath 的网页本身，由浏览器把页面可读根收窄到它所在的目录，而不是整条会话白名单。
    */
   ipcMain.handle(ipcChannels.fsOpenInBrowser, async (_event, req: FileListRequest): Promise<void> => {
     const roots = await resolveFileRoots(workspaces, sessions, req);
     const path = await whitelistedPath(roots, req);
     if (!isWebPageFile(path)) throw new Error(`Only web pages open in the built-in browser; ${path} is not one.`);
-    // cited 根是「某一份引用过的 PDF」本身，不该顺带成为网页能读的范围
-    await openInBrowser(
-      path,
-      roots.filter((root) => root.exists && root.kind !== "cited").map((root) => root.path),
-    );
+    await openInBrowser(path);
+  });
+
+  /**
+   * 网页缩略图：同一道白名单，且须是网页文件（realpath 后判，与 fs:open-in-browser 同口径）。
+   * 页面里的 file:// 子资源只在页面所在目录内放行（同 fs:open-in-browser 的页面闸）。
+   * 截不出来（超时 / 加载失败）回 null——renderer 落成图标卡，不当错误处理。
+   */
+  ipcMain.handle(ipcChannels.fsWebThumb, async (_event, req: FileListRequest): Promise<WebThumb | null> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    let path: string;
+    try {
+      path = await whitelistedPath(roots, req);
+    } catch {
+      return null;
+    }
+    if (!isWebPageFile(path)) return null;
+    // 缩略图窗口里的页面同样只读自己所在目录（与内置浏览器的页面闸同一规则，见 local-file.ts 的 localPageRoots）
+    return webThumbOf(path, localPageRoots(path));
   });
 
   /**

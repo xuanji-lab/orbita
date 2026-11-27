@@ -1,4 +1,4 @@
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 // CJK 加粗（2026-10-14 用户报的两例）：CommonMark 的定界规则下 `**标题： **`
 // 的收尾 ** 前是空白、`**说明：**后文` 的收尾 ** 前是中文标点且后是汉字，都算
@@ -11,10 +11,10 @@ import remarkBreaks from "remark-breaks";
 // katex 的 CSS 必须与 rehype-katex 实际用的渲染器同版——直装 katex 已锁 0.16.47 对齐
 import "katex/dist/katex.min.css";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-import { Component, memo, useMemo, useContext } from "react";
+import { Component, createContext, memo, useMemo, useContext, useState } from "react";
 import type { Components } from "react-markdown";
 import type { PluggableList } from "unified";
-import { MdPre } from "./CodeBlock";
+import { FenceHighlightContext, MdPre } from "./CodeBlock";
 import { MermaidPendingContext } from "./MermaidBlock.tsx";
 import { endsInsideFence } from "./mermaid-render.ts";
 import { remarkDemoteBoundaryMath } from "./math-guard";
@@ -22,14 +22,20 @@ import { rehypePluginsFor, streamRenderPolicy } from "./stream-render.ts";
 import { splitMarkdownBlocks } from "./markdown-blocks.ts";
 import { CITATION_MARKER } from "../../../../shared/pdf-quote.ts";
 import { Icon } from "../../shell/Icon";
+import { parseTaskTokens } from "@shared/task-ref";
+import { FEATURE_ICON } from "../../shell/feature-icons.ts";
 import { chipIconName, type ChipKind } from "../../shell/composer-chips.ts";
 import { pluginChipName } from "../plugins/plugin-names.ts";
 import { usePluginNames } from "../plugins/usePluginNames.ts";
-import { dominantScript } from "./dominant-script";
 import { useT } from "../../locale.ts";
-import { useExperimentalFeature } from "../../experimental.ts";
+import { localMediaPathOfHref } from "../files/media-view.ts";
+import { openLocalMedia } from "../files/open-media-link.ts";
 import { citationIdOfHref, citationTitle, remarkCitationMarkers } from "./citation-markers.ts";
 import { CitationOpenContext, CitationTableContext } from "./citation-context.ts";
+import { ChatImageSizeContext, resolveChatPath, useChatFileScope, useChatImage } from "./chat-file-scope.ts";
+import { requestOpenPanel } from "../../shell/open-panel.ts";
+// 提醒框（`> [!note]`）的样式 = 文档面板阅读视图那一份（`.chat-md .callout`），回答里与文档里长一个样
+import "../doc-panel/doc-panel.css";
 
 /**
  * assistant 文本块的 markdown 渲染（设计系统 *AssistantText*：读起来像文档，不是聊天记录）。
@@ -50,8 +56,10 @@ import { CitationOpenContext, CitationTableContext } from "./citation-context.ts
  *   消息落定后 streaming 翻 false，尾块的那次补渲照旧。
  * - 链接全部拦给 `window.open`：主进程的 `setWindowOpenHandler` 把网页送进内置浏览器、
  *   mailto 交给系统（`src/main/index.ts` 的 openLink），外链绝不能在应用窗口内导航走。
- * - **图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
- *   渲染成占位链接，点击才去内置浏览器看（ImagePlaceholder）。
+ * - **远程图片永不加载**：远程 `<img>` 是隐私洞（模型给出图床 URL 就把用户的 IP 送出去），
+ *   渲染成占位链接，点击才去内置浏览器看（ImagePlaceholder）。**本地图照常显示**（2026-11-22 用户：
+ *   图要和它的解释放在一起）：回答里写 `![](路径)`，按文件面板同一道白名单读（chat-file-scope.ts），
+ *   不在会话能看到的目录里就是占位。
  * - **raw HTML 只放行 `<details>`/`<summary>`**：rehype-raw 解析 + rehype-sanitize
  *   白名单剥离，其余标签仍是纯文本。白名单可审计，攻击面有界。
  * - 元素样式在 `styles.css` 的 `.chat-md` 作用域里，走设计系统 token。
@@ -71,6 +79,15 @@ const CITATION_MARKER_PRESENT = new RegExp(CITATION_MARKER.source);
  * memo（每次渲染都重跑 remark / rehype），只有把这层 memo 垫在前面，流式期间未变的
  * 块才会被跳过。其余 prop 由 MarkdownBlock 用 useMemo 维持稳定身份，比较即按 text。
  */
+/**
+ * 默认的 URL 清洗会把 `file:` 与 Windows 盘符路径（`C:\\…`）当成未知协议清空；图片的 src 放行这两种本地写法
+ * （读不读得到由 ChatImage 走白名单决定），其余照默认。
+ */
+function chatUrlTransform(url: string, key: string): string {
+  if (key === "src" && (/^file:/i.test(url) || /^[A-Za-z]:[\\/]/.test(url))) return url;
+  return defaultUrlTransform(url);
+}
+
 const MarkdownChunk = memo(function MarkdownChunk(props: {
   text: string;
   remarkPlugins: PluggableList;
@@ -79,12 +96,16 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
   /** bubble 变体摊平的标题元素（全量变体传 undefined） */
   disallowedElements?: string[];
   unwrapDisallowed?: boolean;
-  /** 流式尾块且围栏还没闭合：块里的 mermaid 先不画（MermaidBlock） */
+  /** 流式尾块且围栏还没闭合：块里的 mermaid / 内嵌交互图先不画（MermaidBlock / HtmlEmbedBlock） */
   fenceOpen: boolean;
+  /** 本块的代码围栏跑不跑 shiki（流式尾块 false）。经 context 交给 MdPre，不换 components 映射 */
+  highlight: boolean;
 }) {
   return (
     <MermaidPendingContext.Provider value={props.fenceOpen}>
+      <FenceHighlightContext.Provider value={props.highlight}>
       <ReactMarkdown
+        urlTransform={chatUrlTransform}
         remarkPlugins={props.remarkPlugins}
         rehypePlugins={props.rehypePlugins}
         components={props.components}
@@ -93,6 +114,7 @@ const MarkdownChunk = memo(function MarkdownChunk(props: {
       >
         {props.text}
       </ReactMarkdown>
+      </FenceHighlightContext.Provider>
     </MermaidPendingContext.Provider>
   );
 });
@@ -114,33 +136,20 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   streaming?: boolean;
 }) {
   const bubble = variant === "bubble";
-  const citations = useExperimentalFeature("pdf-citations") && !bubble;
+  const citations = !bubble;
 
-  // 两个 pre 覆写 + 两份 components 映射：**身份稳定**是分块 memo 能命中的前提。
-  // react-markdown 不把自定义 prop 交给 components 映射里的组件，只能在这里闭住
-  // highlight；身份只在这两处各存在一份，不再随渲染新建。
-  const preHighlight = useMemo(
-    () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight />,
-    [],
-  );
-  const prePlain = useMemo(
-    () => (preProps: { children?: ReactNode }) => <MdPre {...preProps} highlight={false} />,
-    [],
-  );
-  const baseComponents = useMemo(
-    () => ({ a: ExternalAnchor, img: ImagePlaceholder, span: ChipSpan }),
-    [],
-  );
-  const highlightComponents = useMemo(
-    () => ({ ...baseComponents, pre: preHighlight }),
-    [baseComponents, preHighlight],
-  );
-  const plainComponents = useMemo(
-    () => ({ ...baseComponents, pre: prePlain }),
-    [baseComponents, prePlain],
+  // components 映射**身份稳定**是分块 memo 能命中的前提。流式尾块不上色这件事经 FenceHighlightContext
+  // 交给 MdPre，而不是给尾块换一份 `pre` 不同的映射：换映射等于换组件类型，块从尾块变成已完成块的那一帧，
+  // 块里的整棵子树会被 React 拆了重建——内嵌交互图的 iframe 会重载一次、mermaid 会重画一次。
+  // 用户气泡里的 `![](路径)` 不画成图（2026-11-23 用户：「为什么会有图出现在 user message 里」）：
+  // 用户打进去的是一段文字，模型收到的也只是这段文字、不是这张图——画成图会让人以为 agent 看到了它。
+  // 画成一颗「图片 · 文件名」小签，点了在右栏文件面板看
+  const components = useMemo(
+    () => ({ a: ExternalAnchor, img: bubble ? BubbleImageRef : ChatImage, span: ChipSpan, pre: MdPre }),
+    [bubble],
   );
 
-  // PDF 引用标记（实验功能「PDF 引用」）只在 assistant 正文里认：用户气泡里打出来的
+  // PDF 引用标记只在 assistant 正文里认：用户气泡里打出来的
   // `[^c4k2]` 是用户的字，不是 agent 核验过的引用；开关关着时标记退回纯文本
   const remarkPlugins = useMemo(
     () =>
@@ -169,8 +178,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   }, [normalized, bubble, citations]);
 
   return (
-    // data-script：以中文为主还是拉丁为主（dominant-script.ts），Typescript 主题按它换阅读字
-    <div className={bubble ? "chat-md bubble-md" : "chat-md"} data-script={dominantScript(text)}>
+    <div className={bubble ? "chat-md bubble-md" : "chat-md"}>
       <MarkdownErrorBoundary>
         {blocks.map((block, index) => {
           // 只有仍在增长的尾块走流式取舍：已完成段的字符串不变、memo 命中，
@@ -183,10 +191,11 @@ export const MarkdownBlock = memo(function MarkdownBlock({
               text={block}
               remarkPlugins={remarkPlugins}
               rehypePlugins={cheap ? rehypePlugins.streaming : rehypePlugins.settled}
-              components={cheap ? plainComponents : highlightComponents}
+              components={components}
               disallowedElements={bubble ? BUBBLE_BANNED : undefined}
               unwrapDisallowed={bubble}
               fenceOpen={cheap && endsInsideFence(block)}
+              highlight={!cheap}
             />
           );
         })}
@@ -231,6 +240,8 @@ function ExternalAnchor(props: AnchorProps) {
   const citeId = citationIdOfHref(href);
   if (citeId !== null) return <CitationAnchor id={citeId} label={children} />;
   const external = href !== undefined && /^(https?:|mailto:)/i.test(href);
+  // 指向本机音 / 视频文件的绝对路径：在右侧文件面板打开播放（其它本地路径照旧吞掉）
+  const mediaPath = external ? null : localMediaPathOfHref(href);
   return (
     <a
       {...rest}
@@ -241,8 +252,14 @@ function ExternalAnchor(props: AnchorProps) {
               event.preventDefault();
               window.open(href);
             }
-          : undefined
+          : mediaPath !== null
+            ? (event) => {
+                event.preventDefault();
+                openLocalMedia(mediaPath);
+              }
+            : undefined
       }
+      style={mediaPath !== null ? { cursor: "pointer" } : undefined}
     >
       {children}
     </a>
@@ -280,6 +297,91 @@ function CitationAnchor(props: { id: string; label: ReactNode }) {
         {props.label}
       </a>
     </sup>
+  );
+}
+
+/**
+ * 回答里的图：http(s) 的远程图走占位（不加载）；其余当本地路径（绝对路径，或相对会话目录），
+ * 在会话能看到的目录里就读出来显示，一张图占一整行，下面紧跟的段落就是它的解释。
+ */
+function ChatImage(props: ImageProps) {
+  const src = typeof props.src === "string" ? props.src : "";
+  const scope = useChatFileScope();
+  const remote = /^[a-z][a-z0-9+.-]*:/i.test(src) && !/^file:/i.test(src) && !/^[A-Za-z]:[\\/]/.test(src);
+  const path = remote || src === "" ? null : resolveChatPath(src, scope?.cwd ?? null);
+  if (path === null) return <ImagePlaceholder {...props} />;
+  return <LocalChatImage path={path} alt={typeof props.alt === "string" ? props.alt : ""} fallback={props} />;
+}
+
+function LocalChatImage(props: { path: string; alt: string; fallback: ImageProps }) {
+  const t = useT();
+  const url = useChatImage(props.path);
+  const pref = useContext(ChatImageSizeContext);
+  // 挂载时读一次偏好当初值：之后别处改了偏好，已经画好的这张不跟着跳
+  const [size, setSize] = useState(pref.size);
+  if (url === undefined) return <span className="chat-img-pending" data-size={size} aria-hidden="true" />;
+  if (url === null) {
+    // 读不到（不在这条会话能看的文件夹里，或文件没了）：明说「打不开」，悬停给路径与原因——
+    // 以前退成一颗写着图片说明的签，看不出是坏图（2026-11-23 用户）
+    const name = props.path.split(/[\\/]/).pop() ?? props.path;
+    return (
+      <span className="chat-img-missing" title={t.lightbox.missingTip(props.path)}>
+        <Icon name="image-off" size={12} strokeWidth={1.8} />
+        {t.lightbox.missing(name)}
+      </span>
+    );
+  }
+  const next = size === "large" ? "small" : "large";
+  return (
+    // 悬停图片右上角出一颗小工具条（与划选文字的「复制 / 引用」同一副样子）：大图时「缩小」、小图时「放大」，
+    // 斜对角箭头朝外 = 放大、朝里 = 缩小（2026-11-23 用户）。点了改这一张，并记成之后新图的默认。
+    // 左键图片本身在右栏文件面板里预览。图居中，大图最高 480、小图最高 160
+    <span className="chat-img-frame" data-size={size}>
+      <button
+        type="button"
+        className="chat-img-local"
+        title={t.lightbox.openInFiles}
+        aria-label={t.lightbox.openInFiles}
+        onClick={() => requestOpenPanel({ kind: "files", path: props.path, force: true })}
+      >
+        <img src={url} alt={props.alt} />
+      </button>
+      <span className="chat-img-tools quote-toolbar" role="toolbar">
+        <button
+          type="button"
+          title={next === "large" ? t.lightbox.sizeLarge : t.lightbox.sizeSmall}
+          onClick={() => {
+            setSize(next);
+            pref.setSize(next);
+          }}
+        >
+          <Icon name={next === "large" ? "maximize-2" : "minimize-2"} size={13} strokeWidth={1.8} />
+          {next === "large" ? t.lightbox.sizeLarge : t.lightbox.sizeSmall}
+        </button>
+      </span>
+    </span>
+  );
+}
+
+/** 用户气泡里的图片语法：一颗小签（文件名），不读图。本地路径点了在右栏文件面板看，远程地址照占位的规矩 */
+function BubbleImageRef(props: ImageProps) {
+  const t = useT();
+  const src = typeof props.src === "string" ? props.src : "";
+  const scope = useChatFileScope();
+  const remote = /^[a-z][a-z0-9+.-]*:/i.test(src) && !/^file:/i.test(src) && !/^[A-Za-z]:[\\/]/.test(src);
+  const path = remote || src === "" ? null : resolveChatPath(src, scope?.cwd ?? null);
+  if (path === null) return <ImagePlaceholder {...props} />;
+  const name = path.split(/[\\/]/).pop() ?? path;
+  return (
+    <button
+      type="button"
+      className="chat-img-ref"
+      title={path}
+      onClick={() => requestOpenPanel({ kind: "files", path, force: true })}
+    >
+      <Icon name="image" size={12} strokeWidth={1.8} />
+      {t.lightbox.imageRef(name)}
+    </button>
   );
 }
 
@@ -327,6 +429,44 @@ function PluginChipName(props: { target: string }) {
   return <>{pluginChipName(usePluginNames(), props.target)}</>;
 }
 
+/**
+ * 这条用户消息附了几张图（气泡正文里「[图 N]」认到 N ≤ 这个数）。默认 0 = 不画：
+ * 没带图的消息里用户自己写的「[图 1]」（粘贴来的论文段落之类）是普通文字。
+ */
+export const ImageRefCountContext = createContext(0);
+
+/** 气泡里的图小签：图标 + 「图 N」，与技能 chip 同一个长相（中性色）；N 超过附图数退回原文 */
+function ImageRefChip(props: { token: string; classes: string[] }) {
+  const t = useT();
+  const count = useContext(ImageRefCountContext);
+  const n = Number(/\d+/.exec(props.token)?.[0]);
+  if (!(n >= 1 && n <= count)) return <>{props.token}</>;
+  return (
+    <span className={props.classes.join(" ")} title={props.token}>
+      <Icon name="image" size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <span className="bubble-chip-target">{t.composer.imageRefLabel(n)}</span>
+    </span>
+  );
+}
+
+/** 这条用户消息里每个 [任务 xxxxxxxx] 指的会话标题（前缀 → 标题，取自消息里的 <referenced_task> 标签）。默认空 = 不画 */
+export const TaskTitlesContext = createContext<ReadonlyMap<string, string>>(new Map());
+
+/** 气泡里的任务胶囊：任务图标 + 会话标题（长标题省略），与技能 chip 同一个长相（中性色）；对不上标签的退回原文 */
+function TaskRefChip(props: { token: string; classes: string[] }) {
+  const t = useT();
+  const titles = useContext(TaskTitlesContext);
+  const prefix = parseTaskTokens(props.token)[0]?.prefix ?? "";
+  const title = titles.get(prefix);
+  if (title === undefined) return <>{props.token}</>;
+  return (
+    <span className={props.classes.join(" ")} title={title}>
+      <Icon name={FEATURE_ICON.taskRef} size={12} strokeWidth={1.8} className="bubble-chip-icon" />
+      <span className="bubble-chip-target">{title === "" ? t.common.newTask : title}</span>
+    </span>
+  );
+}
+
 function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) {
   const { className, children, node: _node, ...rest } = props;
   const classes = Array.isArray(className) ? className : typeof className === "string" ? className.split(/\s+/).filter(Boolean) : [];
@@ -340,6 +480,8 @@ function ChipSpan(props: ComponentPropsWithoutRef<"span"> & { node?: unknown }) 
     );
   }
   const token = String(children);
+  if (classes.includes("bubble-chip-image")) return <ImageRefChip token={token} classes={classes} />;
+  if (classes.includes("bubble-chip-task")) return <TaskRefChip token={token} classes={classes} />;
   const kind: ChipKind = token.startsWith("/mcp:") ? "mcp" : token.startsWith("/plugin:") ? "plugin" : "skill";
   const target = token.replace(/^\/(?:skill|mcp|plugin):/, "");
   return (

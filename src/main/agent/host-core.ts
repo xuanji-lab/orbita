@@ -4,6 +4,7 @@
  *
  * 只做三件事：懒启动进程、把命令发进去、把事件广播给窗口。业务判断全在两端，不在这里。
  */
+import type { SubAgentToolOutcome } from "../../shared/sub-agent.ts";
 import type {
   AgentCommand,
   AgentEvent,
@@ -24,7 +25,6 @@ import type { LatexPackageOutcome, LatexRunOutcome } from "../../shared/latex.ts
 import type { OfficeAgentOutcome } from "../../shared/office.ts";
 import type { DocxExportOutcome } from "../../shared/docx-export.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
-import type { PermissionAnswer, PermissionMode } from "../../shared/permission.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
 import type { PluginBoardOutcome } from "../../shared/plugin-board.ts";
@@ -97,9 +97,6 @@ export class AgentHostCore {
     { resolve: (bullets: string[]) => void; reject: (error: Error) => void }
   >();
   private focusSummarySeq = 0;
-  /** 在等的 choreComplete 回执（收尾清单按反馈改写），按 requestId；进程退出全部 reject */
-  private readonly pendingChores = new Map<string, { resolve: (text: string) => void; reject: (error: Error) => void }>();
-  private choreSeq = 0;
 
   /**
    * catalogScope 缺席 = 不送目录刷新范围，agent 进程就一份目录也不联网（测试与裸跑）。
@@ -170,14 +167,6 @@ export class AgentHostCore {
           else pending?.resolve(message.bullets);
           return;
         }
-        if (message.type === "choreCompleted") {
-          // 同 greetingsClassified：只结发起方，不广播
-          const pending = this.pendingChores.get(message.requestId);
-          this.pendingChores.delete(message.requestId);
-          if (message.text === null) pending?.reject(new Error(message.error ?? "the model didn't answer"));
-          else pending?.resolve(message.text);
-          return;
-        }
         if (message.type === "providerProbed") {
           // 同 greetingsClassified：只结发起方，不广播
           const pending = this.pendingProbes.get(message.requestId);
@@ -235,8 +224,6 @@ export class AgentHostCore {
         this.pendingProbes.clear();
         for (const pending of this.pendingFocusSummaries.values()) pending.reject(new Error(message));
         this.pendingFocusSummaries.clear();
-        for (const pending of this.pendingChores.values()) pending.reject(new Error(message));
-        this.pendingChores.clear();
         reject(new Error(message));
         this.onEvent({ type: "failed", sessionId: null, message });
       });
@@ -457,39 +444,6 @@ export class AgentHostCore {
   }
 
   /**
-   * 家务活模型的一次独立小调用（收尾清单按反馈改写）：交回回复原文，解析在调用方。
-   * 150 秒兜底（agent 侧 120 秒先断）。
-   */
-  async choreComplete(
-    provider: Extract<AgentCommand, { type: "choreComplete" }>["provider"],
-    modelId: string,
-    system: string,
-    prompt: string,
-  ): Promise<string> {
-    await this.ensure();
-    this.choreSeq += 1;
-    const requestId = `chore-${this.choreSeq}`;
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (!this.pendingChores.has(requestId)) return;
-        this.pendingChores.delete(requestId);
-        reject(new Error("the model didn't answer in time"));
-      }, 150_000);
-      this.pendingChores.set(requestId, {
-        resolve: (text) => {
-          clearTimeout(timer);
-          resolve(text);
-        },
-        reject: (error) => {
-          clearTimeout(timer);
-          reject(error);
-        },
-      });
-      this.post({ type: "choreComplete", requestId, provider, modelId, system, prompt });
-    });
-  }
-
-  /**
    * 连接探测（Test 的 OAuth 路由）：让 agent 进程用 pi 的客户端（与真会话同源）
    * 发一条小消息。1 分钟没回当失败——网关挂住时不让 Test 按钮一直转。
    */
@@ -520,11 +474,6 @@ export class AgentHostCore {
     });
   }
 
-  async setMode(sessionId: string, mode: PermissionMode): Promise<void> {
-    await this.ensure();
-    this.post({ type: "setMode", sessionId, mode });
-  }
-
   /**
    * 会话内换模型（C-4）。**发完即回**：成功经 `model` 事件、失败经 `failed` 事件
    * 回传，调用方不等也不该等——切换是一次真实的注册与校验，忙碌态由事件链表达。
@@ -538,17 +487,12 @@ export class AgentHostCore {
     this.post({ type: "setModel", sessionId, provider, modelId });
   }
 
-  /** 用户的审批回答。**不需要 ensure**：进程没了的话请求也早没了。 */
-  answerPermission(requestId: string, answer: PermissionAnswer): void {
-    this.child?.postMessage({ type: "permissionAnswer", requestId, answer } satisfies AgentCommand);
-  }
-
-  /** 意图确认卡的回答（实验功能 intent-system）。同 answerPermission：不 ensure、发完即回。 */
+  /** 意图确认卡的回答（实验功能 intent-system）。**不需要 ensure**：进程没了的话请求也早没了。 */
   answerIntentConfirm(requestId: string, decision: IntentConfirmDecision): void {
     this.child?.postMessage({ type: "intentConfirmResult", requestId, decision } satisfies AgentCommand);
   }
 
-  /** 写盘请求的回执（4-3）。同 answerPermission 的理由：不 ensure、发完即回。 */
+  /** 写盘请求的回执（4-3）。同 answerIntentConfirm 的理由：不 ensure、发完即回。 */
   answerSkillWrite(requestId: string, result: { ok: boolean; path?: string; error?: string }): void {
     this.child?.postMessage({
       type: "skillWriteResult",
@@ -713,8 +657,22 @@ export class AgentHostCore {
             text: outcome.text,
             ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
             ...(outcome.automations === undefined ? {} : { automations: outcome.automations }),
-            // 「改权限」那一行的数据：漏了它，工具结果里就没有那一行（2026-11-06 验收时抓到：按字段拷贝丢了新字段）
-            ...(outcome.modeRow === undefined ? {} : { modeRow: outcome.modeRow }),
+          }
+        : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** 子智能体：subAgentRequest 的回执（automation 同款）：不 ensure、发完即回。 */
+  answerSubAgent(requestId: string, outcome: SubAgentToolOutcome): void {
+    this.child?.postMessage({
+      type: "subAgentResult",
+      requestId,
+      ...(outcome.ok
+        ? {
+            ok: true as const,
+            text: outcome.text,
+            ...(outcome.id === undefined ? {} : { id: outcome.id }),
+            ...(outcome.agents === undefined ? {} : { agents: outcome.agents }),
           }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
@@ -768,7 +726,7 @@ export class AgentHostCore {
 
   /**
    * 释放一条会话（runtime 侧退订 + `session.dispose()` + 出 Map）。
-   * **不 ensure**：进程没起的话这条会话本来就不在 runtime 里（answerPermission 同款理由），
+   * **不 ensure**：进程没起的话这条会话本来就不在 runtime 里（answerIntentConfirm 同款理由），
    * 为释放去拉起一个进程才是本末倒置。发完即回，runtime 对不存在的 id 静默容忍。
    */
   disposeSession(sessionId: string): void {

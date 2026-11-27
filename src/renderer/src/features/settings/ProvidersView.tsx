@@ -9,6 +9,7 @@ import {
   knownAccessFor,
   knownProviderDefaultName,
   knownProviderGroup,
+  knownProviderQuota,
   type KnownProvider,
 } from "@shared/known-providers";
 import type { PriceChartCategory } from "@shared/price-chart";
@@ -58,6 +59,7 @@ import { shouldShowPriceChart } from "./price-chart-model.ts";
 import { rateInputText, usdOf } from "../../utils/money.ts";
 import { useBuiltinCatalog } from "./model-menu";
 import { VendorLogo } from "./VendorLogo";
+import { QuotaBlock } from "./QuotaBlock";
 import { ipcErrorText } from "../../utils/ipc-error.ts";
 
 /**
@@ -135,6 +137,13 @@ export function ProvidersView(props: {
   const [dragId, setDragId] = useState<string | null>(null);
   /** 小框高亮的目标行：框住谁，松手就落到谁的位置 */
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  /**
+   * 额度卡的查询代号：一次保存让主进程作废了旧额度（换了钥匙 / 接口地址 / 条目 / 鉴权方式，
+   * 或浏览器登录换了令牌）就 +1，额度卡换 `key` 重挂、当场重查。卡片自己只认 providerId——
+   * 不加这一下，保存完它挂着的还是上一把钥匙查出来的数字，要离开再回来才换。
+   * 只改显示名 / 型号清单的保存主进程不作废，这里也不动，不会多打一次厂商接口。
+   */
+  const [quotaRevision, setQuotaRevision] = useState(0);
 
   // —— 给导入的会话分配模型（model-assign.ts）：分组只随会话变，挂载与分配后各读一次 ——
   const [assignGroups, setAssignGroups] = useState<ModelAssignGroups | null>(null);
@@ -500,6 +509,7 @@ export function ProvidersView(props: {
       const updated = (await api.provider.list()).find((p) => p.id === draft.id.trim());
       if (updated !== undefined) loadDraft(updated);
       const account = updated?.auth.scheme === "oauth" ? updated.auth.account : null;
+      if (result.quotaInvalidated) setQuotaRevision((n) => n + 1);
       setStatus({ tone: "ok", text: t.providers.oauthLoggedIn(account) });
     } catch (cause) {
       setStatus(oauthCancelled.current ? null : { tone: "bad", text: ipcErrorText(cause) });
@@ -642,6 +652,7 @@ export function ProvidersView(props: {
     const fresh = await api.provider.list();
     const updated = fresh.find((p) => p.id === draft.id.trim());
     if (updated !== undefined) loadDraft(updated);
+    if (result.quotaInvalidated) setQuotaRevision((n) => n + 1);
     // Save 条随改动清零一起收起；这一行状态告诉用户「刚才那一下落盘了」
     setStatus({ tone: "ok", text: t.providers.saved });
   };
@@ -1149,6 +1160,24 @@ export function ProvidersView(props: {
                   </div>
                 )}
               </section>
+
+              {/*
+                账号额度（余额 / 套餐窗口）：紧接连接区、在模型区之前——它回答的是
+                「这个 key 背后的账号还剩多少」，与上面那组身份字段同属「这个账号」这一层。
+                能力为 none 的厂商整块不渲染（QuotaBlock 自己返回 null），不留空块。
+                只给已落盘的实例查：查询靠 providerId 取密钥，新建表单里还没有 id。
+                「单独开关」关掉的服务商也不画、不查：关着就是「不用它」，对着一个不用的账号打探额度只会白耗它的限流。
+                保存动了钥匙 / 地址之后换 `key` 重挂（quotaRevision）：卡片只认 providerId，不重挂就还挂着旧钥匙查出来的数字。
+              */}
+              {!isNew && editing !== undefined && isProviderEnabled(editing) && knownProviderQuota(editing) !== "none" && (
+                <QuotaBlock
+                  key={`${editing.id}:${quotaRevision}`}
+                  providerId={editing.id}
+                  probe={knownProviderQuota(editing)}
+                  hasKey={hasCredentials(editing.auth)}
+                  oauth={editing.auth.scheme === "oauth"}
+                />
+              )}
 
               <div className="pv-mhead">
                 <span className="section-label">{t.providers.models}</span>

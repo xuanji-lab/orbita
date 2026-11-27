@@ -1,0 +1,1260 @@
+/*
+ * 星系设计面板（GalaxyDesigner.tsx，原型 proto/planet-designer）。
+ * 风格锁在首页星系那一套：天体只用墨色、纸色与发丝线（styles.css 的 .home-galaxy 同一组配比），
+ * 不用 accent、不用裸 hex；受光提亮色明主题是纸面、暗档是正墨。
+ * 版式：预览 → 读数 → 真实比例条 → 分组的行（名字 + 说明在左、控件在右，滑块占整行），
+ * 组与组之间只靠 PanelGroupHead 与留白，行与行之间不画线。
+ */
+.gd {
+  --gd-light: var(--color-bg-panel);
+  --gd-shade: var(--color-text-primary);
+  --gd-eye: var(--color-text-primary);
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+:root:is([data-theme="graphite"], [data-theme="black"]) .gd {
+  --gd-light: var(--color-text-primary);
+  --gd-shade: var(--color-bg-panel);
+  --gd-eye: var(--color-bg-panel);
+}
+
+/*
+ * 面板外的同一个形象（StarFigure：侧栏工作区行的头像、工作区页页头、页面星系的主星）：
+ * 取与 .gd 同一组配比，形象在哪里都长一样。不带容器、不带内边距
+ */
+.gd-figure {
+  --gd-light: var(--color-bg-panel);
+  --gd-shade: var(--color-text-primary);
+  --gd-eye: var(--color-text-primary);
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+:root:is([data-theme="graphite"], [data-theme="black"]) .gd-figure {
+  --gd-light: var(--color-text-primary);
+  --gd-shade: var(--color-bg-panel);
+  --gd-eye: var(--color-bg-panel);
+}
+
+/* 钉在滚动区上方的预览块：下面的参数怎么滚，预览都看得见 */
+.gd-head {
+  padding-bottom: var(--space-2);
+}
+.gd-head + .gd,
+.gd:not(.gd-head) {
+  padding-top: 0;
+}
+
+/* 组头（PanelGroupHead）在这里不是可点的行：字落在行名那一列，不再内缩 */
+.gd .panel-group-head {
+  margin-top: var(--space-4);
+}
+.gd .panel-group-toggle {
+  padding: 0;
+}
+
+/* 胶囊里标题后的工作区名：说明这块面板在设计哪座星系 */
+.gd-cap-ws {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ── 预览 ── */
+.gd-stage {
+  --gd-backdrop: var(--color-bg-panel);
+  position: relative;
+  display: grid;
+  margin: 0;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--gd-backdrop);
+}
+.gd-stage[data-backdrop="shell"],
+.gd-swatch[data-backdrop="shell"] {
+  --gd-backdrop: var(--color-bg-app);
+}
+.gd-stage[data-backdrop="muted"],
+.gd-swatch[data-backdrop="muted"] {
+  --gd-backdrop: var(--color-bg-muted);
+}
+.gd-stage[data-backdrop="deep"],
+.gd-swatch[data-backdrop="deep"] {
+  /* 深衬底：衬底混一点主墨，仍是中性灰（明主题更深一档、暗档更亮一档），不借任何有职责的颜色 */
+  --gd-backdrop: color-mix(in srgb, var(--color-bg-muted) 88%, var(--color-text-primary));
+}
+.gd-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 260 / 180;
+  /* 钉在面板顶上：矮窗里不让预览吃掉参数区，宽度跟着高度收、居中 */
+  max-height: 28vh;
+  margin: 0 auto;
+}
+.gd-stage-name {
+  /* 名字占预览下面自己的一行，不压在天体上（大主星 + 日冕会伸到框底） */
+  padding: 0 var(--space-3) var(--space-2);
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 天体底色 */
+.gd-body {
+  --gd-surface: var(--color-text-tertiary);
+}
+.gd-body[data-surface="star"] {
+  --gd-surface: color-mix(in srgb, var(--color-text-tertiary) 50%, var(--color-bg-panel));
+}
+:root:is([data-theme="graphite"], [data-theme="black"]) .gd-body[data-surface="star"] {
+  --gd-surface: color-mix(in srgb, var(--color-text-secondary) 78%, var(--color-bg-panel));
+}
+.gd-body[data-surface="ice"] {
+  --gd-surface: color-mix(in srgb, var(--color-text-tertiary) 70%, var(--color-bg-panel));
+}
+.gd-body[data-surface="gas"] {
+  --gd-surface: color-mix(in srgb, var(--color-text-secondary) 60%, var(--color-text-tertiary));
+}
+.gd-surface {
+  fill: var(--gd-surface);
+}
+.gd-crater {
+  fill: color-mix(in srgb, var(--gd-surface) 72%, var(--gd-shade));
+}
+.gd-band {
+  fill: color-mix(in srgb, var(--gd-surface) 74%, var(--gd-shade));
+}
+.gd-cap,
+.gd-cloud {
+  fill: color-mix(in srgb, var(--gd-surface) 30%, var(--gd-light));
+}
+.gd-crack {
+  fill: none;
+  stroke: color-mix(in srgb, var(--gd-surface) 50%, var(--gd-shade));
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.gd-light {
+  stop-color: var(--gd-light);
+}
+/* 地表图上的球缘暗面：两档主题都取深色（明主题主墨、暗档井色），与眼睛同一种「近乎纯黑」 */
+.gd-shade-stop {
+  stop-color: var(--gd-shade);
+}
+.gd-halo {
+  stop-color: var(--gd-surface);
+}
+/* 眼睛：近乎纯黑的竖胶囊。明主题取主墨（#1f1f1f），暗档取井色（#121418 / #151517）——两档都接近纯黑；
+   不随天体底色换浅色，深色地表上照样是黑眼睛（用户给的案例就是这样） */
+.gd-eye {
+  fill: var(--gd-eye);
+}
+/* 深色地表：眼睛外描一圈很淡的亮边（受光色），描在填色外面（paint-order），不让眼睛变细 */
+.gd-eyes[data-rim] .gd-eye {
+  stroke: var(--gd-light);
+  stroke-opacity: 0.5;
+  paint-order: stroke;
+}
+/* 白眼（候选 eyes=xl-white，规则外，只供讨论）：受光色填充，外描一圈很淡的井色边，浅色地表上也认得出轮廓 */
+.gd-eyes[data-white] .gd-eye {
+  fill: var(--gd-light);
+  stroke: var(--gd-shade);
+  stroke-opacity: 0.35;
+  paint-order: stroke;
+}
+.gd-ring {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-linecap: round;
+}
+.gd-moon {
+  fill: color-mix(in srgb, var(--color-text-tertiary) 60%, var(--color-bg-panel));
+}
+.gd-corona-line {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
+}
+/* 参数不合规则：天体描一圈红虚线，比例条上相撞的行星转红——不默默画成合法的样子 */
+.gd-stage[data-invalid] .gd-surface {
+  stroke: var(--color-danger);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ── 读数 ── */
+.gd-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-0-5) var(--space-3);
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-readout b {
+  margin-left: var(--space-1);
+  font-family: var(--font-family-mono);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+/* ── 引力网格（well.ts）：三级墨的发丝线，往远处渐隐；坑越深，线越往下弯 ── */
+.gd-grid-line {
+  fill: none;
+  stroke-width: 1;
+  stroke-opacity: 0.55;
+  vector-effect: non-scaling-stroke;
+}
+.gd-grid-stop {
+  stop-color: var(--color-text-tertiary);
+}
+.gd-placeholder {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+.gd-well,
+.gd-orbit {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.gd-well {
+  aspect-ratio: 260 / 180;
+  max-height: 24vh;
+  margin: 0 auto;
+}
+.gd-orbit {
+  aspect-ratio: 260 / 140;
+  max-height: 20vh;
+  margin: 0 auto;
+}
+.gd-orbit-path {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.gd-orbit-path[data-collide] {
+  stroke: var(--color-danger);
+}
+.gd-orbit-nearest {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
+}
+.gd-orbit-planet[data-collide] .gd-surface {
+  stroke: var(--color-danger);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+/*
+ * 行星页：局部放大版式（GalaxyDesigner.tsx 的 PlanetLoupe，几何在 loupe.ts）。一张 SVG 里画引力场与大形象，
+ * 宽时左右、窄时上下由 SVG 自己按量到的宽度排，这里只管线的样子。
+ */
+.gd-stage-name {
+  grid-column: 1 / -1;
+}
+.gd-loupe {
+  display: block;
+  width: 100%;
+  height: auto;
+  /* 与主星页同一个上限：矮窗里不让预览吃掉参数区（超了按比例收、居中） */
+  max-height: 28vh;
+  margin: 0 auto;
+}
+.gd-loupe-stage[data-layout="stack"] .gd-loupe {
+  max-height: 40vh;
+}
+/* 网格淡出用的遮罩只看透明度（mask-type: alpha），颜色取什么都不影响 */
+.gd-loupe-edge-mask {
+  mask-type: alpha;
+}
+.gd-loupe-edge-stop {
+  stop-color: currentColor;
+}
+/* 两幅视图之间的界：发丝线，最淡的一档 */
+.gd-loupe-divider {
+  stroke: var(--color-border-subtle);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+/* 引线与被放大那颗的标记圈：次级墨、1px、虚线——注记，不抢天体；与「最近合法轨道」（三级墨、2 4 点线）分开 */
+.gd-loupe-leader,
+.gd-loupe-mark {
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+  stroke-opacity: 0.7;
+  stroke-dasharray: 3 3;
+  stroke-linecap: butt;
+  vector-effect: non-scaling-stroke;
+}
+.gd-empty {
+  padding: var(--space-1) 0;
+}
+.gd-empty .panel-empty {
+  padding-inline: 0;
+}
+
+/* ── 行 ── */
+.gd-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1-5) var(--space-3);
+  padding: var(--space-2) 0;
+}
+.gd-row-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+.gd-row-head {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.gd-row-name {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.gd-row-desc {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-row-ctl {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  min-width: 0;
+}
+.gd-row-wide .gd-row-ctl {
+  justify-self: stretch;
+}
+.gd-row-slider {
+  grid-column: 1 / -1;
+  display: flex;
+}
+.gd-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  /* 滑块是参数，不是主操作：中性墨，不用 accent */
+  accent-color: var(--color-text-secondary);
+}
+/* 轨道滑块：颜色只表示判据，滑块下方同时写文字，不让颜色独自承担含义 */
+.gd-orbit-range {
+  height: var(--control-height-sm);
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.gd-orbit-range::-webkit-slider-runnable-track {
+  height: var(--space-1);
+  border-radius: 999px;
+  background: var(--gd-orbit-track);
+}
+.gd-orbit-range::-webkit-slider-thumb {
+  width: var(--space-3);
+  height: var(--space-3);
+  margin-top: calc((var(--space-1) - var(--space-3)) / 2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--color-bg-panel);
+}
+.gd-orbit-range::-moz-range-track {
+  height: var(--space-1);
+  border-radius: 999px;
+  background: var(--gd-orbit-track);
+}
+.gd-orbit-range::-moz-range-thumb {
+  width: var(--space-3);
+  height: var(--space-3);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: var(--color-bg-panel);
+}
+.gd-orbit-range[data-level="red"] { color: var(--color-danger); }
+.gd-orbit-range[data-level="yellow"] { color: var(--color-warning); }
+.gd-orbit-range[data-level="green"] { color: var(--color-success); }
+.gd-orbit-status,
+.gd-orbit-notice {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-1-5);
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+}
+.gd-orbit-status .orbita-icon,
+.gd-orbit-notice .orbita-icon {
+  margin-top: var(--space-0-5);
+}
+.gd-orbit-status[data-level="red"] { color: var(--color-danger); }
+.gd-orbit-status[data-level="yellow"] { color: var(--color-warning); }
+.gd-orbit-status[data-level="green"] { color: var(--color-success); }
+.gd-error {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-1-5);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-danger);
+}
+.gd-error .orbita-icon {
+  margin-top: var(--space-0-5);
+}
+.gd .gd-number {
+  width: 76px;
+  height: var(--control-height-sm);
+  padding: 0 var(--space-2);
+  font-family: var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.gd .gd-name {
+  height: var(--control-height-sm);
+}
+.gd .gd-number[aria-invalid],
+.gd .gd-name[aria-invalid] {
+  border-color: var(--color-danger);
+}
+/* 出错的框聚焦时仍是红的：.text-field:focus 的 accent 边、焦点环与全局 :focus-visible 的 accent 描边
+   都换成 danger——聚焦着改数时，不能只看到黄 / 蓝而看不出这个值不合法 */
+.gd .gd-number[aria-invalid]:focus,
+.gd .gd-name[aria-invalid]:focus {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-danger) 22%, transparent);
+  outline-color: var(--color-danger);
+}
+.gd-value {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+.gd-fixed {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 预览背景色板：选中不用 accent（选中是中性的），用一圈主墨描在留白外 */
+.gd-swatches {
+  display: inline-flex;
+  gap: var(--space-2);
+}
+.gd-swatch {
+  --gd-backdrop: var(--color-bg-panel);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  background: var(--gd-backdrop);
+  cursor: pointer;
+}
+.gd-swatch[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--color-bg-panel),
+    0 0 0 3px var(--color-text-primary);
+}
+
+.gd-foot-note {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.gd-foot-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* 窄面板：控件换到名字下面左对齐，不和名字挤一行 */
+@container (max-width: 279px) {
+  .gd-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .gd-row-ctl {
+    justify-self: start;
+  }
+}
+
+/* 「星际空间」头像：一小撮碎石，墨色两档（与星系里的星屑同一种颜色语言） */
+.gd-dust {
+  display: block;
+  flex: none;
+}
+.gd-dust-rock {
+  fill: var(--color-text-tertiary);
+}
+.gd-dust-rock[data-tone="b"] {
+  fill: color-mix(in srgb, var(--color-text-tertiary) 60%, var(--color-bg-panel));
+}
+
+/* 「这一页画的是谁」：组名下一行说明，sm、三级墨（与设置行的说明同一种） */
+.gd-who {
+  margin: 0;
+  padding: 0 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 面板标题里的副名（工作区名为主时它是智能体名，反之亦然）：淡墨一档，同页头的 .cap-ws */
+.gd-cap-agent {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 「在改哪颗天体」：主星 + 最多 8 颗行星，一行放不下就折行；高度随行数长 */
+.seg-control.gd-body-pick {
+  flex-wrap: wrap;
+  height: auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* 眼睛大小：五档分段控件占满一行（和成分那组同一个控件），白眼后面一枚「规则外」小字 */
+.gd-eye-style {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.gd-eye-style .seg-control {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 按内容取宽、多出的平分：「白眼 规则外」比单字档宽，不挤 */
+.gd-eye-style .seg-control > button {
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.gd-off-rule {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+}
+
+/*
+ * 眼睛的心思（gaze-runtime.ts 直接写 .gd-gaze 的 transform: translate + rotate）。
+ * 眨眼：运行时按拍写 .gd-eye 的 scaleY（约 200ms 合上再张开），不用 CSS 动画——SVG 上的 CSS 动画每帧都要主线程出帧。
+ * 两处都按自己的中心转 / 缩（fill-box），不绕画布原点。
+ */
+.gd-gaze,
+.gd-gaze .gd-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/*
+ * ── 成分：元素周期表（MixSection.tsx）──
+ * 每格同尺寸的方块，只用底色不描边：常见元素铺衬底、主墨字；冷门的铺更淡的底、三级墨字（弱化，但表的形状完整）。
+ * 选中：选中底 + 半粗 + 底边一道元素自己的颜色（--gd-el，数据色，只在选中时出现，与组头小环里那一块同色）。
+ * 不用 accent：选中是中性的。
+ */
+/*
+ * 占满整行宽：.gd-row-ctl 是 inline-flex，不写 flex 的话 .gd-mix 按内容取宽——周期表的列宽就跟着元素卡里的字数走，
+ * 悬停换了一段字，整张表跟着变宽、格子等比变大（2026-11-24 用户报的「hover 上去周期表突然等比例变大」的根因）。
+ */
+.gd-mix {
+  flex: 1 1 auto;
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.gd-mix-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.gd-mix-count {
+  flex: 1 1 auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.gd-seed-value {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+/*
+ * 周期表随面板宽度横向伸展：列 = minmax(最小格宽, 1fr)，列间距随容器宽度在两档间距之间走；
+ * 格子高度与字号固定（不随宽度等比缩放，不用 aspect-ratio），行高固定——元素卡的内容变了也撑不高任何一行。
+ * 内容宽 < 312px（面板 < 344，默认 320 的面板就在这里）18 列放不下 15px 的最小格宽，换紧凑的 10 列排法（见 elements.ts tableSlot）。
+ */
+.gd-ptable {
+  --gd-cell-h: var(--control-height-xs);
+  display: grid;
+  grid-template-columns: repeat(18, minmax(15px, 1fr));
+  grid-auto-rows: var(--gd-cell-h);
+  column-gap: clamp(var(--space-0-5), 0.6cqi, var(--space-1-5));
+  row-gap: var(--space-0-5);
+}
+.gd-pcell {
+  grid-column: var(--col);
+  grid-row: var(--row);
+  display: grid;
+  place-items: center;
+  height: var(--gd-cell-h);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  /* 冷门元素也铺一层更淡的底：表的形状完整、读得出是一张表，而不是一串散字 */
+  background: color-mix(in srgb, var(--color-bg-muted) 45%, transparent);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-pcell[data-common] {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.gd-pcell:hover:enabled {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.gd-pcell[aria-pressed="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-semibold);
+  box-shadow: inset 0 -3px 0 var(--gd-el, var(--color-text-secondary));
+}
+.gd-pcell:disabled {
+  cursor: not-allowed;
+}
+.gd-pcell-fold {
+  cursor: default;
+}
+/* 元素卡：全表时在第 1–3 周期中间的空白里（3–12 列 × 1–3 行），左对齐，两行科普截断；尺寸由格子定，不由内容定 */
+.gd-pcard {
+  grid-column: 3 / 13;
+  grid-row: 1 / 4;
+  display: grid;
+  align-content: center;
+  gap: var(--space-0-5);
+  min-width: 0;
+  padding: 0 var(--space-1-5);
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-pcard-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.gd-pcard-head b {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+.gd-pcard-meta {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.gd-pcard-note {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+@container (max-width: 311px) {
+  .gd-ptable {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+  }
+  .gd-pcell {
+    grid-column: var(--ccol);
+    grid-row: var(--crow);
+  }
+  .gd-pcard {
+    grid-column: 1 / -1;
+    grid-row: var(--crow) / span 2;
+    padding: 0;
+  }
+  /* 紧凑排法里元素卡只有两行高：科普只留一行 */
+  .gd-pcard-note {
+    -webkit-line-clamp: 1;
+  }
+}
+.gd-fold {
+  justify-self: start;
+  margin-top: calc(-1 * var(--space-1));
+  color: var(--color-text-tertiary);
+}
+.gd-text-btn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-1-5);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-text-btn:hover:enabled,
+.gd-icon-btn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+.gd-text-btn:disabled {
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+.gd-icon-btn {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-shuffle {
+  color: var(--color-text-secondary);
+}
+.gd-mix-empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 一组构成项：组头 = 小环 + 层与口径 + 合计 */
+.gd-mix-group {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.gd-mix-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+.gd-mix-group-name {
+  flex: 1 1 auto;
+}
+.gd-mix-group-total {
+  font-family: var(--font-family-mono);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+.gd-pie {
+  display: block;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+.gd-pie-track {
+  fill: none;
+  stroke: var(--color-border-subtle);
+  stroke-width: 8;
+}
+.gd-pie-part {
+  fill: none;
+  stroke-width: 8;
+}
+/* 留空、按种子分到的那几块半透明；「随机一版」给的是定数，照常画 */
+.gd-pie-part[data-source="random"] {
+  stroke-opacity: 0.85;
+}
+/* 一条两行：名字 | 层 | 拿掉；滑块 | 百分数 | 来源 | 留空 */
+.gd-mix-row {
+  display: grid;
+  gap: var(--space-0-5);
+  padding: var(--space-1) 0;
+}
+.gd-mix-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.gd-mix-line .gd-mix-name,
+.gd-mix-line .gd-mix-range {
+  flex: 1 1 auto;
+}
+.gd-mix-place {
+  font-size: var(--font-size-xs);
+}
+.gd-mix-place[data-default] {
+  color: var(--color-text-tertiary);
+}
+.gd-mix-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.gd-mix-symbol {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.gd-mix-placing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* 留空：拇指与填充都退到三级墨——数是种子给的，不是你定的 */
+.gd-mix-range[data-blank] {
+  accent-color: var(--color-text-tertiary);
+  opacity: 0.6;
+}
+.gd-mix-value {
+  min-width: 48px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--color-text-primary);
+}
+.gd-mix-value[data-blank] {
+  color: var(--color-text-tertiary);
+}
+.gd-mix-source {
+  min-width: 3em;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.gd-mix-source[data-source="user"] {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+.gd-mix-clear {
+  font-size: var(--font-size-xs);
+}
+/* 推算：两列，名在左、值在右 */
+.gd-derived {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.gd-derived dt {
+  color: var(--color-text-tertiary);
+}
+.gd-derived dd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--color-text-primary);
+}
+.gd-swatch-dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+/* 颜色提示上到代码画的球上：与墨色底混一半，不压过眼睛与纹理（有地表图时图盖在上面） */
+.gd-tinted .gd-body[data-surface] {
+  --gd-surface: color-mix(in oklch, var(--color-text-tertiary) 40%, var(--gd-tint));
+}
+
+/* ── 行星页的「职能」一节与新建子智能体（SubAgentRole.tsx） ── */
+.gd .gd-role-text {
+  min-height: calc(var(--control-height-md) * 3);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.gd-role-status {
+  grid-column: 1 / -1;
+  min-height: 1lh;
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-role-status[data-save="error"] {
+  color: var(--color-danger);
+}
+.gd-role-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+.gd-role-delete,
+.gd-new-entry {
+  display: flex;
+  padding: var(--space-1) 0 var(--space-2);
+}
+/* 文字链接样的次级动作：不抢主操作的 accent；删除用 danger 墨，悬停加一层 danger 软底 */
+.gd-link,
+.gd-link-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--control-height-xs);
+  padding: 0 var(--space-1-5);
+  margin-left: calc(var(--space-1-5) * -1);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+.gd-link:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.gd-link-danger {
+  color: var(--color-danger);
+}
+.gd-link-danger:hover {
+  background: var(--color-danger-soft);
+}
+.gd-confirm {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-md);
+}
+.gd-confirm-text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.gd-confirm-acts,
+.gd-new-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.gd-new-acts {
+  padding: var(--space-2) 0;
+}
+.gd .gd-new-create {
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-base);
+}
+
+/* ── 形象（AvatarSection.tsx）：候选一排 2–4 张，球 + 后端 + 状态；没出来的写原因 ── */
+.gd-avatar {
+  display: grid;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+.gd-avatar-desc {
+  margin: 0;
+}
+.gd-avatar-revise {
+  display: grid;
+  gap: var(--space-1-5);
+}
+.gd-avatar-revise-head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+.gd-avatar-revise-head .gd-role-line {
+  flex: 1;
+  margin: 0;
+}
+.gd-avatar-instruction {
+  min-height: var(--control-height-lg);
+  line-height: var(--line-height-ui);
+}
+.gd-avatar-history {
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.gd-avatar-history summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: var(--control-height-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  list-style: none;
+}
+.gd-avatar-history summary::-webkit-details-marker {
+  display: none;
+}
+.gd-avatar-history-chevron {
+  display: inline-flex;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+.gd-avatar-history[open] .gd-avatar-history-chevron {
+  transform: rotate(180deg);
+}
+.gd-avatar-history-list {
+  display: grid;
+  gap: var(--space-3);
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-top: var(--space-2);
+}
+.gd-avatar-history-entry {
+  display: grid;
+  gap: var(--space-1-5);
+}
+.gd-avatar-history-entry + .gd-avatar-history-entry {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.gd-avatar-history-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.gd-avatar-history-head p {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+.gd-avatar-history-head .row-trailing {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.gd-avatar-history-base,
+.gd-avatar-history-empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.gd-avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.gd-avatar-cell {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.gd-avatar-tile {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-0-5);
+  width: 100%;
+  padding: var(--space-2) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-hover);
+}
+.gd-avatar-tile:disabled {
+  cursor: default;
+}
+.gd-avatar-tile:not(:disabled):hover {
+  background: var(--color-bg-hover);
+}
+/* 选中：一种容器一种语言——底色不变，只换成 accent 内描边（不叠第二层底） */
+.gd-avatar-tile[data-picked],
+.gd-avatar-tile[data-in-use] {
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+.gd-avatar-tile:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.gd-avatar-figure {
+  width: 72px;
+  height: 72px;
+  overflow: visible;
+}
+.gd-avatar-slot {
+  fill: none;
+  stroke: var(--color-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+.gd-avatar-slot[data-state="working"] {
+  animation: gd-avatar-breathe 1.6s var(--ease-in-out) infinite;
+}
+@keyframes gd-avatar-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gd-avatar-slot[data-state="working"] {
+    animation: none;
+  }
+}
+.gd-avatar-backend {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.gd-avatar-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.gd-avatar-status[data-state="failed"] {
+  color: var(--color-danger);
+}
+.gd-avatar-reason {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.gd-avatar-reason[data-kind="failed"] {
+  color: var(--color-danger);
+}
+.gd-avatar-pending {
+  display: grid;
+  gap: var(--space-0-5);
+}
+.gd-avatar-pending-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.gd-avatar-acts {
+  display: flex;
+  /* 放得下就同一行（用不用生图工具、用哪个模型在左，主操作钉行尾）；放不下时后面的换到下一行，主操作照旧钉行尾——
+     取法与型号名不省、不挤 */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* 模型胶囊（Chip + ModelPickerMenu 的锚）：型号名长过 Chip 的上限才省略（chip-label 自带省略号，全名在悬停提示里） */
+.gd-avatar-acts > :has(> .gd-avatar-model) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* 主操作组靠行尾（行里前面的设置放不下时，它换到下一行也仍在行尾） */
+.gd-avatar-primary {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+/* Chip 自带上限 260px（内联）；这一行放得下更长的「取法 · 型号名」（换行后独占一行时有 277+），上限交给这一行的宽度 */
+.gd-avatar-model {
+  min-width: 0;
+  max-width: none !important;
+}
+/* 取法那一截（「跟会话栏 · 」）比型号名弱一级：先靠颜色分层 */
+.gd-avatar-model-source {
+  color: var(--color-text-tertiary);
+}
+/* 「用生图工具」：开关在左、名字在右、说明的 info 在名字右边（用户 2026-11-25 说的位置） */
+.gd-avatar-render {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-height: var(--control-height-xs);
+  white-space: nowrap;
+}
+.gd-avatar-render-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+/* 开关下面那行说明、插件账本的说明：与这一节其余说明同一个灰度，图标 12 挂在前面 */
+.gd-avatar-render-note,
+.gd-avatar-note {
+  overflow-wrap: anywhere;
+}
+.gd .gd-avatar-generate,
+.gd .gd-avatar-use {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-base);
+}

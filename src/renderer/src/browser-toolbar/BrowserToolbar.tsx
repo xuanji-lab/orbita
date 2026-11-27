@@ -40,7 +40,7 @@ export function BrowserToolbar() {
   }, []);
   const resolved = useTheme(preference, language);
   return (
-    <LocaleContext.Provider value={effectiveLanguage(resolved, language)}>
+    <LocaleContext.Provider value={effectiveLanguage(language)}>
       <Toolbar />
     </LocaleContext.Provider>
   );

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { BUILTIN_COMMANDS, builtinCommand, fileLabel, pagesLabel, PINNED_CARD_COMMANDS } from "./builtin-commands.ts";
+import { BUILTIN_COMMANDS, builtinCommand, fileLabel, pagesLabel } from "./builtin-commands.ts";
 import { toolCallSummary, groupToolUnits, type ToolCallUnit } from "./tool-results.ts";
 
 const call = (id: string, toolName: string): ToolCallUnit => ({
@@ -96,12 +96,6 @@ describe("分组与钉卡", () => {
   it("相邻的内置命令不并组（每次调用各占一行）", () => {
     const entries = groupToolUnits([call("1", "slides_write"), call("2", "slides_write")]);
     assert.deepEqual(entries.map((entry) => entry.kind), ["toolCall", "toolCall"]);
-  });
-
-  it("slides_create 与 slides_export 钉卡，写 / 改不钉", () => {
-    assert.ok(PINNED_CARD_COMMANDS.has("slides_create"));
-    assert.ok(PINNED_CARD_COMMANDS.has("slides_export"));
-    assert.ok(!PINNED_CARD_COMMANDS.has("slides_write"));
   });
 
   it("展开体：内置命令给人看的几行，而不是写给模型的结果文本", () => {

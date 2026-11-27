@@ -1,5 +1,4 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { PermissionMode } from "../shared/permission.ts";
 import { RequestBroker } from "./request-broker.ts";
 import {
   AUTOMATION_AGENT_DEFAULT_MAX_RUNS,
@@ -7,13 +6,16 @@ import {
   AUTOMATION_INTERVAL_MIN_MINUTES,
   AUTOMATION_MAX_RUNS_PER_DAY,
   type AutomationCardView,
-  type AutomationModeRow,
   type AutomationToolOutcome,
   type AutomationToolRequest,
 } from "../shared/automation.ts";
 
+/** 三个自动化工具的名字：runtime 的提示词稳定性指纹与测试都认这一份。 */
+export const AUTOMATION_TOOL_NAMES = ["automation_create", "automation_list", "automation_cancel"] as const;
+
 /**
- * agent 的自动化工具：automation_create / automation_list / automation_cancel / automation_update。
+ * agent 的自动化工具：automation_create / automation_list / automation_cancel。
+ * （改权限档的 automation_update 随档位一起删了，2026-11-16：自动化一律放行。）
  *
  * 自动化是**工作区里那个主 agent 的工具**，不是某个会话上的工具卡：只管当前会话所在工作区的。
  * 建出来**直接生效**（用户 2026-10-31 裁决）：默认绑定创建它的这条会话——到点把指令送回这条会话，
@@ -23,9 +25,6 @@ import {
  * 只给根会话注册（主进程按 automationTools 开关装配）；自动化新开的会话与
  * 子会话不注册——自动化不能再建自动化。
  */
-
-/** 工具名（权限名单在 shared/permission.ts 的 AUTOMATION_TOOLS，两处同名） */
-export const AUTOMATION_TOOL_NAMES = ["automation_create", "automation_list", "automation_cancel", "automation_update"] as const;
 
 function requireString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim() === "") {
@@ -71,24 +70,21 @@ function describeCard(card: AutomationCardView): string {
 
 function toToolResult(outcome: AutomationToolOutcome): {
   content: { type: "text"; text: string }[];
-  details: { automation?: AutomationCardView; automationMode?: AutomationModeRow } | undefined;
+  details: { automation?: AutomationCardView } | undefined;
 } {
   if (!outcome.ok) throw new Error(outcome.error);
   const lines = outcome.automations === undefined ? [] : outcome.automations.map(describeCard);
   const text = lines.length === 0 ? outcome.text : `${outcome.text}\n${lines.join("\n")}`;
-  // details.automation 是 renderer 画对话卡的素材（create 才有）：与 delegate 的 details.delegate 同款；
-  // details.automationMode 是对话里「改权限」那一行（已改成放行 / 待你点「允许」），与 install_plugin 的 details.pluginInstall 同款
+  // details.automation 是 renderer 画对话卡的素材（create 才有）：与 delegate 的 details.delegate 同款
   const details = {
     ...(outcome.automation === undefined ? {} : { automation: outcome.automation }),
-    ...(outcome.modeRow === undefined ? {} : { automationMode: outcome.modeRow }),
   };
   return { content: [{ type: "text", text }], details: Object.keys(details).length === 0 ? undefined : details };
 }
 
-/** getMode 读这条会话此刻的权限档：主进程据它决定「skip」直接改还是留一行让用户点 */
-export function createAutomationTools(broker: RequestBroker, sessionId: string, getMode: () => PermissionMode): ToolDefinition[] {
+export function createAutomationTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
   const send = (request: AutomationToolRequest): Promise<AutomationToolOutcome> =>
-    broker.request<AutomationToolOutcome>({ type: "automationRequest", sessionId, mode: getMode(), request });
+    broker.request<AutomationToolOutcome>({ type: "automationRequest", sessionId, request });
 
   const create: ToolDefinition = {
     name: "automation_create",
@@ -97,14 +93,13 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
       "Schedule a recurring or one-off task for THIS workspace; it takes effect immediately and shows the user a card. " +
       'Use it for anything to happen later or repeatedly: "every Friday morning check X", "remind me tomorrow at 9", "check back in 20 minutes", "tell me when the build is done". ' +
       'Target "this_session" (default): when due, your instruction is sent back into THIS conversation. ' +
-      'Target "new_session": each run opens a fresh read-only session, so the instruction must be self-contained. ' +
+      'Target "new_session": each run opens a fresh session, so the instruction must be self-contained. ' +
       "For a long-running job, start it in the background, create a this_session task that checks on it, and END YOUR TURN. Do NOT sleep or poll in bash. " +
       "Check automation_list first so you do not duplicate an existing task. " +
-      'Write access: never pass mode "skip" yourself — ask the user in ONE plain sentence first, and only after they agree call automation_update. ' +
       `Limits: intervals of at least ${AUTOMATION_INTERVAL_MIN_MINUTES} minutes, at most ${AUTOMATION_MAX_RUNS_PER_DAY} runs per 24 hours; ` +
       `it stops after ${AUTOMATION_AGENT_DEFAULT_MAX_RUNS} runs if you give neither maxRuns nor until (maxRuns at most ${AUTOMATION_AGENT_MAX_RUNS_CAP}); ` +
       "at most 5 active tasks per conversation, 20 in total; times are local. " +
-      "Before the first automation_create in a conversation, read the `automation` skill (schedule format, writing the instruction, long jobs, write access).",
+      "Before the first automation_create in a conversation, read the `automation` skill (schedule format, writing the instruction, long jobs).",
     parameters: {
       type: "object",
       properties: {
@@ -140,11 +135,6 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
           enum: ["this_session", "new_session"],
           description: 'Where each run goes; default "this_session".',
         },
-        mode: {
-          type: "string",
-          enum: ["plan", "skip"],
-          description: 'new_session only; default "plan" (read-only). Do not pass "skip" before the user agreed to write access.',
-        },
         model: { type: "string", description: "Model id for the runs; new_session only." },
         plugin: { type: "string", description: "Name of an installed plugin to run each time; its board cards go on the weekly board." },
       },
@@ -162,7 +152,6 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
         ...(args["target"] === "this_session" || args["target"] === "new_session" ? { target: args["target"] } : {}),
         ...(typeof args["model"] === "string" && args["model"].trim() !== "" ? { model: args["model"] } : {}),
         ...(typeof args["plugin"] === "string" && args["plugin"].trim() !== "" ? { plugin: args["plugin"].trim() } : {}),
-        ...(args["mode"] === "plan" || args["mode"] === "skip" ? { mode: args["mode"] } : {}),
       };
       return toToolResult(await send(request));
     },
@@ -195,28 +184,5 @@ export function createAutomationTools(broker: RequestBroker, sessionId: string, 
     },
   };
 
-  const update: ToolDefinition = {
-    name: "automation_update",
-    label: "automation_update",
-    description:
-      'Change the permission of a new_session automation: "skip" = unattended with write access, "plan" = read-only. Nothing else can be changed here. ' +
-      "Ask the user in one plain sentence first and call this only after they agree. " +
-      "An automation never gets more permission than this conversation has: if this one is not in Skip mode NOTHING changes — a row with an allow button is left for the user to click; " +
-      "then end your turn and do not call it again. Ids: automation_list. Details: `automation` skill.",
-    parameters: {
-      type: "object",
-      properties: {
-        automationId: { type: "string", description: "The automation's id." },
-        mode: { type: "string", enum: ["plan", "skip"], description: '"skip" only after the user agreed.' },
-      },
-      required: ["automationId", "mode"],
-    } as never,
-    async execute(_toolCallId, params) {
-      const args = (params ?? {}) as Record<string, unknown>;
-      if (args["mode"] !== "plan" && args["mode"] !== "skip") throw new Error('"mode" must be "plan" or "skip".');
-      return toToolResult(await send({ op: "update", automationId: requireString(args["automationId"], "automationId"), mode: args["mode"] }));
-    },
-  };
-
-  return [create, list, cancel, update];
+  return [create, list, cancel];
 }

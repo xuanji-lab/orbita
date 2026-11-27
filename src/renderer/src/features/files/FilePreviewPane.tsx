@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Icon } from "../../shell/Icon";
+import { FileTypeIcon } from "../../shell/FileTypeIcon";
 import { Chip } from "../../shell/Chip";
 import { PanelButton, PanelIconButton, PanelLine } from "../../shell/RightPanel";
 import { api } from "../../api";
 import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
-import { fileIcon, formatAge, formatSize } from "./tree-view";
+import { formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
 import { isEditableLatexFile } from "./editor-state.ts";
 import { TexEditorPane, type EditorCollabView, type TexEditorHandle } from "./TexEditorPane.tsx";
@@ -18,6 +19,7 @@ import {
   EDITOR_WRITE_LIMIT,
   isPdfFile,
   isWebPageFile,
+  mediaKindOf,
   type FileListRequest,
   type FilePreview,
 } from "@shared/files";
@@ -32,10 +34,10 @@ import { PptxView } from "../pptx/PptxView";
 import type { TextQuote } from "@shared/quote";
 import { DocxView } from "../docx/DocxView";
 import { flushDocxForLeave } from "../docx/docx-flush.ts";
+import { MediaView } from "./MediaView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
 import { PdfView, type PdfJump, type PdfSyncJump } from "./PdfView";
-import { useExperimentalFeature } from "../../experimental.ts";
 import { useT } from "../../locale.ts";
 
 /** 用文档视图（阅读 / 编辑 / 源码）打开的文件：md / markdown / txt；.slides.json 由 DocEditPane 路由到演示文稿编辑器 */
@@ -150,18 +152,16 @@ export function FilePreviewPane(props: {
   const extraWorkspaceId = props.extraWorkspaceId ?? null;
   const extra = extraWorkspaceId === null ? {} : { extraWorkspaceId };
   const sentImage = props.sentImage;
-  // PDF 预览挂在自己的实验开关后面（实验功能「PDF 引用」）：关着时 PDF 照旧读不出
-  // 内容（fs:read 只回二进制占位）。附图走 session.attachment，不会是 PDF。
-  // 论文工作台直接编出来的 PDF 有 pdfPreview 豁免（见 props 注释）
-  const pdfCitations = useExperimentalFeature("pdf-citations");
-  const pdf =
-    sentImage === undefined && (pdfCitations || props.pdfPreview === true) && isPdfFile(path);
+  // 附图走 session.attachment，不会是 PDF
+  const pdf = sentImage === undefined && isPdfFile(path);
   /**
    * .tex 走编辑器（PR4）：只读预览换成 CodeMirror；仍要等 fs:read 回一份完整的文本
    * （截断到 2 MB 的文件不编辑——写回会丢后半截）。二进制 / 图片不会走到这里。
    */
   const editableLatex = sentImage === undefined && isEditableLatexFile(path);
   const [pdfReload, setPdfReload] = useState(0);
+  // 音视频走播放器（流式读，不过 fs:read）；附图不是媒体文件
+  const mediaKind = sentImage === undefined ? mediaKindOf(path) : null;
   // .docx 走应用内的分页编辑器（issue #273）：它不需要实验开关，也不再是「不支持的类型」
   const docx = sentImage === undefined && isDocxFile(path);
   const [docxReload, setDocxReload] = useState(0);
@@ -179,7 +179,7 @@ export function FilePreviewPane(props: {
     sentImage === undefined ? crumbSegmentsFromRoot(root, props.rootLabel, path) : [name];
   const previewMode = sentImage === undefined ? textPreviewMode(name) : "plain";
   const { state, refreshing, refresh } = usePreviewData(
-    sentImage === undefined,
+    sentImage === undefined && mediaKind === null,
     sessionId,
     workspaceId,
     extraWorkspaceId,
@@ -190,7 +190,7 @@ export function FilePreviewPane(props: {
   const loading =
     sentImage !== undefined
       ? imageState.status === "loading"
-      : state.status === "loading" || refreshing;
+      : mediaKind === null && (state.status === "loading" || refreshing);
   // 可以进编辑器的只有「完整读回来的文本」：main 之后「text」就是整份内容（超大的走
   // large-text / 分段预览，进不到这里），所以这里只需再挡一道写盘上限——盘上超过
   // EDITOR_WRITE_LIMIT 的 .tex 能打开却一定存不回去（fs:write 回 too-large），
@@ -293,11 +293,7 @@ export function FilePreviewPane(props: {
   return (
     <div className="files-panel-preview">
       <header className="file-preview-header">
-        <Icon
-          name={fileIcon(name, "file")}
-          size={16}
-          style={{ color: "var(--color-text-secondary)", flex: "0 0 auto" }}
-        />
+        <FileTypeIcon name={name} size={16} />
         {/* 面包屑：从所在的根开始的路径分段 + chevron 分隔；太长时在自身容器里
             **从左边裁**（保住末尾的文件段，激活标签上始终有文件名），完整绝对路径
             在本容器的 title 里；meta 在容器外不受挤 */}
@@ -361,7 +357,7 @@ export function FilePreviewPane(props: {
                     return;
                   }
                   refresh();
-                  if (pdf) setPdfReload((n) => n + 1);
+                  if (pdf || mediaKind !== null) setPdfReload((n) => n + 1);
                   else if (xlsx) setXlsxReload((n) => n + 1);
                   else if (pptx) setPptxReload((n) => n + 1);
                   else setTextReload((n) => n + 1);
@@ -414,15 +410,18 @@ export function FilePreviewPane(props: {
             ? "docx"
             : pdf
               ? "pdf"
-              : xlsx
-                ? "xlsx"
-                : pptx
-                  ? "pptx"
-                  : editorInitial !== null
-                    ? "tex"
-                    : editing || asDocument
-                      ? "edit"
-                      : undefined        }
+              : mediaKind !== null
+                ? "media"
+                : xlsx
+                  ? "xlsx"
+                  : pptx
+                    ? "pptx"
+                    : editorInitial !== null
+                      ? "tex"
+                      : editing || asDocument
+                        ? "edit"
+                        : undefined
+        }
         ref={bodyRef}
       >
         {asDocument ? (
@@ -450,6 +449,14 @@ export function FilePreviewPane(props: {
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             reloadToken={docxReload}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : mediaKind !== null ? (
+          <MediaView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            name={name}
+            kind={mediaKind}
+            reloadToken={pdfReload}
+            onOpenDefault={openDefault}
           />
         ) : pdf ? (
           <PdfView

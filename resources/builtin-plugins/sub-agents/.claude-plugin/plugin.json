@@ -1,0 +1,18 @@
+{
+  "name": "sub-agents",
+  "displayName": "子智能体",
+  "version": "0.1.0",
+  "description": "让工作区的主智能体在聊天里创建、修改子智能体（星系里的行星）：先和你问清它负责什么、怎么做、边界在哪，沉淀成一段职能提示词，再出一张无脸地表当形象（没有出图工具就先用代码画的默认球）；建好后右栏的「星系设计」会停在这颗新行星上，轨道与质量由你来定。之后派活时可以指名交给它。工具与面板是 Orbita 原生的，这里放的是「怎么用得对」。只在编排形态、有工作区时可用。",
+  "author": { "name": "Orbita" },
+  "license": "MIT",
+  "orbita": {
+    "workflow": [
+      { "title": "先 list_sub_agents：已经有负责这件事的就不重复建", "skill": "sub-agents", "detail": "同名或职能重叠时先问你是改旧的还是另建" },
+      { "title": "问清职能：负责什么、怎么做、不做什么、交付什么", "skill": "sub-agents", "detail": "一次问一两句，用你的原话", "wait": "chat" },
+      { "title": "沉淀职能提示词并给你过目", "skill": "sub-agents", "detail": "第二人称写给它自己看：它是谁、负责什么、怎么做、边界", "wait": "chat" },
+      { "title": "出形象：无脸地表图，眼睛与星环由代码画", "skill": "sub-agents", "detail": "有出图工具时按「行星造物」的做法出一张；没有就先用默认球，面板标「待出图」" },
+      { "title": "create_sub_agent 落盘，右栏「星系设计」停在新行星上", "skill": "sub-agents", "detail": "轨道和质量由你在面板里设，智能体不替你选位置", "output": "planet/agents/<id>/agent.json" },
+      { "title": "以后派活时指名交给它", "skill": "sub-agents", "detail": "delegate 带 subAgentId：它的职能进子会话的系统提示，侧栏显示它在干活" }
+    ]
+  }
+}

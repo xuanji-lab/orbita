@@ -10,47 +10,27 @@ import { flattenRenderUnits, groupToolUnits, groupTurnsByTurn, toolCallSummary, 
 import { firstLine, processLive } from "./turn-process.ts";
 
 /**
- * 首页会话卡的选卡与行位规则（纯函数，ChatView 首页唯一消费者）。
+ * 首页记录的选行与「此刻在干什么」那一句（纯函数，ChatView 首页唯一消费者）。
  *
  * 规则：
- * - **候选与现状同一排除**：已归档、从未发过消息（无标题）的会话不进卡——归档是用户明确说「别翻出来」。
- * - **遗留事项不再让位**（2026-10-30 推翻 2026-09-22 的「有 open carryover 的会话优先占卡、行位换成遗留标题」）：
- *   用户说遗留没人用、太多、占首页卡，界面要「信息呈现得更高效，而不是更多」。遗留 / 以后再做只在
- *   那条任务的进度面板与侧栏的跨任务索引里，首页卡只讲「此刻在干什么」与最近提问。
+ * - **候选**：已归档、从未发过消息（无标题）的会话不进——归档是用户明确说「别翻出来」；
+ *   子会话也不进（子会话 PR4c，2.3）：`session.sessions` 是全量列表，首页与左栏一样只列根会话，
+ *   子会话唯一的入口是母会话的右栏 Sub-sessions 面板。
+ * - **只列要你注意的**：等你（含出错）与进行中。闲置的、跑完的会话不上首页（2026-11-22 删掉「最近」组：
+ *   侧栏已经按最近活跃列了一遍会话，首页再列一遍是重复；跑完没看的靠侧栏的未读标记）。
  *
- * - **要你注意的先占卡**（2026-10-30，原型 `function home()`「只放需要你注意的三条：等你 >
- *   出错 > 在跑 > 最近」）：给了 `stateOf` 时，等你 / 出错 / 在跑的会话先按这个顺序占卡，
- *   其余照上面两轮补齐。卡上说的是「此刻在干什么」（homeCardLine），在跑的会话没上卡，
- *   这一句就说不出来。
- *
- * 前置条件：`sessions` 已按 `sortSessions` 排序（ChatView 吃的
- * `session.sessions` 由主进程 `list()` 排好）。函数不再排一次——排法必须
- * 只有 `sortSessions` 一份，这里重排迟早漂移。
- *
- * **子会话不进首页会话卡**（子会话 PR4c，2.3）：`session.sessions` 是全量列表
- * （含子会话），首页卡与左栏、辅助对话选择器一样只列根会话——子会话唯一的入口
- * 是母会话的右栏 Sub-sessions 面板。node --test 直接加载本文件，`rootSessions`
- * 这个值导入因此走相对路径带 `.ts` 后缀（`@shared` 别名只在构建期由
- * electron-vite 解析），其余仍是 type import。
+ * 前置条件：`sessions` 已按 `sortSessions` 排序（ChatView 吃的 `session.sessions` 由主进程 `list()`
+ * 排好）。函数不再排一次——排法必须只有 `sortSessions` 一份，这里重排迟早漂移。
+ * node --test 直接加载本文件，`rootSessions` 这个值导入因此走相对路径带 `.ts` 后缀。
  */
-
-/** 普通卡的行位上限（现状三槽，recentQueries 本身就最多 3 条） */
-export const HOME_CARD_QUERY_ROWS = 3;
-
-/** 首页卡总数（现状恒三） */
-const HOME_CARD_COUNT = 3;
-
-/** 要你注意的先占卡，按这个顺序（与铃铛清单、折叠组头的汇总同序，跑完没看算「最近」） */
-const ATTENTION_ORDER: readonly Exclude<SessionRunState, null>[] = ["waiting", "failed", "running"];
 
 /**
- * 首页「记录」的三组上限（2026-11-07 方向 N：首页从三张等重的卡改成按状态分组的记录行）。
- * 等你 / 进行中各留 4 行：多于此说明同时在跑的活已经超出一眼能读的量，再多只是堆；最近 5 行。
- * 合计最多 13 行，一屏放得下（行高 32）。
+ * 首页「记录」的两组上限：等你 / 进行中各留 4 行——多于此说明同时在跑的活已经超出一眼能读的量，再多只是堆。
+ * 原来还有第三组「最近」（5 行，含跑完没看的），2026-11-22 用户裁决删掉。
  */
-const HOME_LOG_LIMITS = { waiting: 4, running: 4, recent: 5 } as const;
+const HOME_LOG_LIMITS = { waiting: 4, running: 4 } as const;
 
-/** 首页记录的三个组：等你（含出错——它也在等你处置）> 进行中 > 最近（含跑完没看的） */
+/** 首页记录的两个组：等你（含出错——它也在等你处置）> 进行中 */
 export type HomeLogGroupId = keyof typeof HOME_LOG_LIMITS;
 
 /** 记录里的一行：只给会话 id 与标题，其余（状态 / 那一句 / 时间）由调用方按槽里的实况现算 */
@@ -65,11 +45,10 @@ export interface HomeLogGroup {
 }
 
 /**
- * 首页记录的选行与分组（取代 selectHomeCards 在非纸面主题下的位置；纸面两档仍是三张卡，
- * 它们的版式是田字格 / 打字稿的整套，不套 N）。
+ * 首页记录的选行与分组。
  *
- * 候选与卡同一排除（子会话、归档、无标题）。顺序沿用列表序（sortSessions：置顶优先 + 最近活跃）。
- * 分组按运行态：waiting / failed → 「等你」，running → 「进行中」，其余（没在跑、跑完没看）→ 「最近」。
+ * 候选排除子会话、归档、无标题。顺序沿用列表序（sortSessions：置顶优先 + 最近活跃）。
+ * 分组按运行态：waiting / failed → 「等你」，running → 「进行中」；其余（没在跑、跑完没看）不进首页。
  * 没有行的组不返回——空组只会在边栏里留一个无所指的组名。
  */
 export function selectHomeLog(
@@ -77,15 +56,15 @@ export function selectHomeLog(
   stateOf: (meta: SessionMeta) => SessionRunState,
 ): HomeLogGroup[] {
   const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
-  const buckets: Record<HomeLogGroupId, HomeLogRow[]> = { waiting: [], running: [], recent: [] };
+  const buckets: Record<HomeLogGroupId, HomeLogRow[]> = { waiting: [], running: [] };
   for (const meta of eligible) {
     const state = stateOf(meta);
-    const group: HomeLogGroupId =
-      state === "waiting" || state === "failed" ? "waiting" : state === "running" ? "running" : "recent";
-    if (buckets[group].length >= HOME_LOG_LIMITS[group]) continue;
+    const group: HomeLogGroupId | null =
+      state === "waiting" || state === "failed" ? "waiting" : state === "running" ? "running" : null;
+    if (group === null || buckets[group].length >= HOME_LOG_LIMITS[group]) continue;
     buckets[group].push({ sessionId: meta.id, title: meta.title });
   }
-  return (["waiting", "running", "recent"] as const)
+  return (["waiting", "running"] as const)
     .filter((group) => buckets[group].length > 0)
     .map((group) => ({ group, rows: buckets[group] }));
 }
@@ -111,72 +90,18 @@ const WRAPPER_TAGS = [
 const WRAPPER_BLOCK = new RegExp(`<(${WRAPPER_TAGS.join("|")})\\b[^>]*>[\\s\\S]*?</\\1>`, "g");
 const WRAPPER_SELF_CLOSING = new RegExp(`<(?:${WRAPPER_TAGS.join("|")})\\b[^>]*/>`, "g");
 
+/** 被截断在标签中间的残片（最近提问存的是前若干字，句中展开的 <referenced_task … /> 常被切断）：吞到结尾 */
+const WRAPPER_TRUNCATED = new RegExp(`<(?:${WRAPPER_TAGS.join("|")})\\b[^>]*$`);
+
 export function visibleAsk(text: string): string {
   return withoutQuotes(text)
     .replace(WRAPPER_BLOCK, "")
     .replace(WRAPPER_SELF_CLOSING, "")
+    .replace(WRAPPER_TRUNCATED, "")
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<!--[\s\S]*$/, "")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-/** 卡内一行的数据：最近提问，纯文本 */
-export interface HomeCardRow {
-  text: string;
-}
-
-/** 首页一张会话卡的完整数据 */
-export interface HomeCard {
-  sessionId: string;
-  title: string;
-  /** 行位吃 recentQueries（最多 3 条） */
-  rows: HomeCardRow[];
-}
-
-/**
- * 按上述规则选出首页的 3 张卡。
- */
-export function selectHomeCards(
-  sessions: readonly SessionMeta[],
-  /** 会话运行态（runStateOf）；不给 = 不按运行态排（旧口径） */
-  stateOf?: (meta: SessionMeta) => SessionRunState,
-): HomeCard[] {
-  // 候选与现状同一排除：子会话（子会话 PR4c 2.3）、归档、无标题。列表已按
-  // sortSessions 排序，相对顺序即「置顶优先 + 最近活跃」，两个轮次直接按序扫
-  const eligible = rootSessions(sessions).filter((m) => !m.archived && m.title !== "");
-
-  const cards: HomeCard[] = [];
-  const picked = new Set<string>();
-  const take = (meta: SessionMeta): void => {
-    cards.push(cardFor(meta));
-    picked.add(meta.id);
-  };
-  // 第零轮：要你注意的（等你 > 出错 > 在跑），同档内保持列表序
-  if (stateOf !== undefined) {
-    for (const want of ATTENTION_ORDER) {
-      for (const meta of eligible) {
-        if (cards.length >= HOME_CARD_COUNT) break;
-        if (!picked.has(meta.id) && stateOf(meta) === want) take(meta);
-      }
-    }
-  }
-  // 第一轮：剩余槽位按「最近活跃」补齐
-  for (const meta of eligible) {
-    if (cards.length >= HOME_CARD_COUNT) break;
-    if (picked.has(meta.id)) continue;
-    take(meta);
-  }
-  return cards;
-}
-
-/** 一张卡的行位数据：recentQueries 截断到 3 */
-function cardFor(meta: SessionMeta): HomeCard {
-  return {
-    sessionId: meta.id,
-    title: meta.title,
-    rows: meta.recentQueries.slice(0, HOME_CARD_QUERY_ROWS).map((text): HomeCardRow => ({ text })),
-  };
 }
 
 /** 卡上那一句要用到的文案（ChatView 从 t.homeCard / t.chat 拼好传进来；纯函数不碰语言表） */
@@ -184,9 +109,8 @@ export interface HomeCardLineText {
   thinking: string;
   /** 计划里在做的那一步 + 此刻的一句 */
   doing: (step: string, now: string) => string;
-  /** 挂着的审批：要做什么（动词 + 对象） */
-  approve: (what: string) => string;
-  childWaiting: string;
+  /** 计划等你确认 / 子会话在问：等你回复 */
+  waitingReply: string;
   failed: string;
   done: string;
   /** 最近一次提问剥完系统包装后什么都没剩（整条是系统文字） */
@@ -201,8 +125,6 @@ export interface HomeCardLineInput {
   state: SessionRunState;
   /** 这条会话槽里的记录（selectTranscript 的结果）；槽没载过 = null */
   records: readonly TranscriptRecord[] | null;
-  /** 挂着的第一个工具审批；没有 = null */
-  approval: { toolName: string; input: unknown } | null;
   turnError: string | null;
   /** 最近一次提问（meta.recentQueries[0]） */
   lastAsk: string | null;
@@ -214,7 +136,7 @@ export interface HomeCardLineInput {
  * - 在跑：这一轮的当前章节（agent 刚说的话，没说话取最近一段思考）；没有章节就是正在跑的那个
  *   工具（动词 + 对象），都没有是「在想」。有计划且有一步在做时，前面带上那一步：
  *   「跑一遍检查：路径不对，换成 src」——计划说做到哪了，章节说此刻在干嘛。
- * - 等你：挂着的那个审批要做什么；自己没有审批（是子会话在等）就说子会话在等你批准。
+ * - 等你：计划确认 / 子会话提问，说等你回复。
  * - 出错：这一轮的错误原文第一行；槽没载过（重启后只剩未读标记）说「出错停下了」。
  * - 跑完没看：最后一段正文的第一行（结果）；槽没载过说「跑完了」。
  * - 没在跑：最近一次提问（只取用户看得见的文字，剥掉系统包装，见 visibleAsk）——这条任务最后在说什么。要写「agent 最后一句话」得读它的整份
@@ -225,10 +147,7 @@ export interface HomeCardLineInput {
 export function homeCardLine(input: HomeCardLineInput, text: HomeCardLineText): string | null {
   const records = input.records;
   if (input.state === "waiting") {
-    if (input.approval === null) return text.childWaiting;
-    const summary = toolCallSummary(input.approval.toolName, input.approval.input);
-    const verb = text.verb(input.approval.toolName, input.approval.input);
-    return text.approve(summary === null ? verb : `${verb} ${summary}`);
+    return text.waitingReply;
   }
   if (input.state === "failed") {
     return (input.turnError === null ? null : firstLine(input.turnError)) ?? text.failed;
