@@ -434,8 +434,10 @@ export interface ComputerUseShotMask {
   framesChecked: number;
   /** 注入脚本跑成了几个帧（哪怕那一帧一个字段都没命中） */
   framesCovered: number;
-  /** 没遮到的帧，逐条 "url — 原因"；全遮住时是空数组 */
+  /** 没遮到的帧，逐条 "url — 原因"；全遮住时是空数组。**最多 8 条**（见 missingTotal） */
   missing: string[];
+  /** 没遮到的帧**总数**；大于 missing.length 就说明清单被截断（正文会说「还有 N 条未列」） */
+  missingTotal: number;
   /** 整体原因（预算不足 / 枚举失败 / 连接中断…），最多 200 字。全好时没有这个键 */
   error?: string;
 }
@@ -453,18 +455,19 @@ export function computerUseShotMask(resp: Record<string, unknown>): ComputerUseS
   const count = (value: unknown): number =>
     typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
   const rawMissing = resp["maskMissing"];
-  const missing = Array.isArray(rawMissing)
-    ? rawMissing
-        .filter((item): item is string => typeof item === "string" && item.trim() !== "")
-        .map((item) => item.trim().slice(0, 160))
-        .slice(0, 8)
+  const items = Array.isArray(rawMissing)
+    ? rawMissing.filter((item): item is string => typeof item === "string" && item.trim() !== "")
     : [];
+  const missing = items.map((item) => item.trim().slice(0, 160)).slice(0, 8);
+  // 总数以桥给的为准；老一点的桥没这个字段时按数组长度兜底——但至少不能小于列出来的条数
+  const stated = count(resp["maskMissingTotal"]);
   const error = resp["maskError"];
   return {
     fieldsCovered: Math.round(fieldsCovered),
     framesChecked: count(resp["maskFramesChecked"]),
     framesCovered: count(resp["maskFramesCovered"]),
     missing,
+    missingTotal: Math.max(stated, missing.length),
     ...(typeof error === "string" && error.trim() !== "" ? { error: error.slice(0, 200) } : {}),
   };
 }
@@ -477,16 +480,23 @@ export function computerUseShotMaskNote(mask: ComputerUseShotMask | undefined): 
   if (mask === undefined) return "";
   const frames = `${mask.framesChecked} frame${mask.framesChecked === 1 ? "" : "s"}`;
   const fields = `${mask.fieldsCovered} password field${mask.fieldsCovered === 1 ? "" : "s"}`;
+  // 一帧都没检查（预算闸 / 枚举失败）时**不许**说「没有密码字段」：那是「检查过且干净」的意思，
+  // 而事实是这张图根本没被检查过。两句话说的不是一件事，模型据此决定要不要信这张图。
   const base =
-    mask.fieldsCovered === 0
-      ? ` Before the capture it checked ${frames} and found no password field to cover.`
-      : ` Before the capture it checked ${frames} and covered ${fields} with an opaque overlay.`;
+    mask.framesChecked === 0
+      ? " Before the capture it skipped the password-field check; this image has not been checked for password fields."
+      : mask.fieldsCovered === 0 && mask.missing.length === 0
+        ? ` Before the capture it checked ${frames} and found no password field to cover.`
+        : mask.fieldsCovered === 0
+          ? ` Before the capture it checked ${frames} and covered no password field.`
+          : ` Before the capture it checked ${frames} and covered ${fields} with an opaque overlay.`;
+  const hidden = mask.missingTotal - mask.missing.length;
   const missing =
     mask.missing.length === 0
       ? ""
       : ` Frames it could not reach (everything visible inside them is visible in this image): ${mask.missing.join(
           "; ",
-        )}.`;
+        )}${hidden > 0 ? `; and ${hidden} more not listed` : ""}.`;
   const error = mask.error === undefined ? "" : ` The bridge said: ${mask.error}`;
   return base + missing + error;
 }

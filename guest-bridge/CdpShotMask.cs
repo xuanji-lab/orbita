@@ -149,12 +149,27 @@ internal sealed class ShotMaskReport
         else if (Error.Length < 160) Error = Error + "；" + reason;
     }
 
+    /** 没遮到的帧数（含被截断掉的那几条：宿主靠它说「还有 N 条未列」） */
+    internal int MissingTotal
+    {
+        get
+        {
+            int total = 0;
+            for (int i = 0; i < Frames.Count; i++)
+            {
+                if (!Frames[i].Injected) total++;
+            }
+            return total;
+        }
+    }
+
     /**
      * 回执字段（宿主按名字取值）：
      *   maskFieldsCovered  盖住几个字段
-     *   maskFramesChecked  检查了几个帧
+     *   maskFramesChecked  检查了几个帧（0 = 这一轮根本没检查，宿主不许说「没有密码字段」）
      *   maskFramesCovered  几个帧注入成功
-     *   maskMissing        没遮到的帧（"url — 原因"），逐条；全遮住时是空数组
+     *   maskMissing        没遮到的帧（"url — 原因"），**最多 8 条**；全遮住时是空数组
+     *   maskMissingTotal   没遮到的帧**总数**（> maskMissing 条数即表示清单被截断）
      *   maskError          整体原因（预算不足 / 枚举失败 / 连接中断…），可缺
      */
     internal void AppendTo(JObj o)
@@ -162,26 +177,47 @@ internal sealed class ShotMaskReport
         o.Num("maskFieldsCovered", FieldsCovered)
             .Num("maskFramesChecked", FramesChecked)
             .Num("maskFramesCovered", FramesCovered)
-            .Raw("maskMissing", MissingJson());
+            .Raw("maskMissing", MissingJson())
+            .Num("maskMissingTotal", MissingTotal);
         if (Error != null) o.Str("maskError", Error);
     }
 
-    /** 没遮到的帧逐条列出来（"url — 原因"）。这是「不许只给一个布尔」的那张清单 */
+    /** 回执里最多列几条（resp 是一整读整写的文件，清单不能无限长） */
+    internal const int MissingListMax = 8;
+    /** 单条的长度上限（url + 原因） */
+    internal const int MissingEntryMax = 160;
+
+    /**
+     * 没遮到的帧逐条列出来（"url — 原因"）。这是「不许只给一个布尔」的那张清单。
+     * 超过 8 条只列前 8 条——但 `maskMissingTotal` 会带上总数，宿主据此说「还有 N 条未列」，
+     * 读者不会以为列全了。单条截到 160 字，长 url / 长原因不撑爆一行。
+     */
     internal string MissingJson()
     {
         StringBuilder sb = new StringBuilder("[");
-        bool first = true;
-        for (int i = 0; i < Frames.Count; i++)
+        int listed = 0;
+        for (int i = 0; i < Frames.Count && listed < MissingListMax; i++)
         {
             MaskFrameOutcome f = Frames[i];
             if (f.Injected) continue;
-            if (!first) sb.Append(",");
-            first = false;
+            if (listed > 0) sb.Append(",");
+            listed++;
             string label = f.Url == null || f.Url.Length == 0 ? "(未知帧)" : f.Url;
             string reason = f.Error == null || f.Error.Length == 0 ? "没有遮上" : f.Error;
-            sb.Append(Program.JsonQuote(label + " — " + reason));
+            string entry = label + " — " + reason;
+            if (entry.Length > MissingEntryMax) entry = entry.Substring(0, MissingEntryMax) + "…";
+            sb.Append(Program.JsonQuote(entry));
         }
         return sb.Append("]").ToString();
+    }
+
+    /** 一条「知道它存在、但这一轮没遮到」的帧（轮数上限 / 预算闸 / 挂不上都走这里） */
+    internal void AddMissing(string url, string reason)
+    {
+        MaskFrameOutcome outcome = new MaskFrameOutcome();
+        outcome.Url = url == null ? "" : url;
+        outcome.Error = reason == null || reason.Length == 0 ? "没有遮上" : reason;
+        Frames.Add(outcome);
     }
 }
 
@@ -744,6 +780,25 @@ internal static class ShotMask
         CheckTrue(failures, ref cases, "整轮没跑也要写 maskError", noneFields.IndexOf("\"maskError\":") >= 0);
         CheckTrue(failures, ref cases, "整轮没跑时 maskMissing 为空（没有逐条可报的帧）",
             noneFields.IndexOf("\"maskMissing\":[]") >= 0);
+        CheckTrue(failures, ref cases, "整轮没跑时 maskMissingTotal 是 0",
+            noneFields.IndexOf("\"maskMissingTotal\":0") >= 0);
+
+        // 清单截断：只列 8 条，但总数照实报（宿主据此说「还有 N 条未列」）
+        ShotMaskReport many = new ShotMaskReport();
+        for (int i = 0; i < 11; i++) many.AddMissing("https://f" + i + "/login", "attach 失败");
+        JObj manyJson = new JObj();
+        many.AppendTo(manyJson);
+        string manyFields = manyJson.ToString();
+        CheckInt(failures, ref cases, "清单最多列 8 条", 8, CountEntries(many.MissingJson()));
+        CheckTrue(failures, ref cases, "被截断时要给出总数（11）",
+            manyFields.IndexOf("\"maskMissingTotal\":11") >= 0);
+        CheckInt(failures, ref cases, "检查帧数把没到的也算上（11）", 11, many.FramesChecked);
+
+        ShotMaskReport longEntry = new ShotMaskReport();
+        longEntry.AddMissing("https://x/" + new string('a', 400), new string('b', 200));
+        string longJson = longEntry.MissingJson();
+        CheckTrue(failures, ref cases, "单条截到 160 字 + 省略号",
+            longJson.Length < 200 && longJson.IndexOf("…") > 0);
 
         // ⑩ 脚本回执：异常 / CDP error / hits
         CheckTrue(failures, ref cases, "脚本异常被认出",
@@ -771,6 +826,17 @@ internal static class ShotMask
         info.Url = url;
         info.ParentFrameId = parentFrameId;
         return info;
+    }
+
+    private static int CountEntries(string jsonArray)
+    {
+        if (jsonArray == null || jsonArray.Length < 4) return 0;
+        int count = 0;
+        for (int i = 0; i < jsonArray.Length; i++)
+        {
+            if (jsonArray[i] == '\u2014') count++; // 每条 "url — 原因" 里只有一个破折号
+        }
+        return count;
     }
 
     private static MaskContext Context(int id, string frameId, string origin, string sessionId)

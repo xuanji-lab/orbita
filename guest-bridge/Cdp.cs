@@ -2910,6 +2910,10 @@ internal sealed class CdpSession
                 // 时宁可少遮几个并如实报，也不能把 captureScreenshot 的时间啃掉
                 if (RemainingMs() < MaskMinBudgetMs)
                 {
+                    // 没走到的那几个也要进「没遮到」清单：只写一句 note 的话，读者会以为
+                    // 清单是完整的（与上一轮 P1 同类：说了「没遮到的都列出来了」，其实没有）
+                    for (int j = i; j < batch.Count; j++)
+                        report.AddMissing(batch[j].Url, "时间预算不足，这一轮没遮");
                     report.Note("时间预算不足，剩下的 iframe 没遮（" + (batch.Count - i) + " 个）");
                     SettleAndLogMask(report);
                     return;
@@ -2932,6 +2936,15 @@ internal sealed class CdpSession
             }
         }
 
+        // 轮数用尽时更深的 OOPIF 既没遮也不在清单里——病态页面也要诚实：逐个补进清单。
+        // 正常收敛（batch 空而 break）时这里一定是空的。
+        List<TargetInfo> leftover = ShotMask.PickIframeTargets(targets, known);
+        for (int i = 0; i < leftover.Count; i++)
+        {
+            if (HasString(visited, leftover[i].Id)) continue;
+            report.AddMissing(leftover[i].Url,
+                "嵌套层数超过 " + MaskMaxIframeRounds + " 轮上限，这一层没遮");
+        }
         SettleAndLogMask(report);
     }
 

@@ -424,6 +424,39 @@ describe("sandbox_* 回执翻成人话", () => {
     assert.match(text, /attachToTarget/);
   });
 
+  test("screenshot：一帧没检查时明说「没检查过」，不说「没有密码字段」", async () => {
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpShot]: () => ({
+          ok: true,
+          jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+          resp: {
+            ok: true,
+            width: 1000,
+            height: 600,
+            nativeWidth: 1366,
+            nativeHeight: 820,
+            url: "https://bank.example/login",
+            title: "Sign in",
+            maskFieldsCovered: 0,
+            maskFramesChecked: 0,
+            maskFramesCovered: 0,
+            maskMissing: [],
+            maskMissingTotal: 0,
+            maskError: "时间预算不足（剩 3000ms），这张没遮",
+          },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.match(text, /skipped the password-field check/);
+    assert.doesNotMatch(text, /found no password field/);
+  });
+
   test("screenshot：老桥（没有遮罩字段）不添任何遮罩的话", async () => {
     const { guest } = fakeGuest({ running: true });
     const cdp = new CdpSession(guest, tempOutDir());

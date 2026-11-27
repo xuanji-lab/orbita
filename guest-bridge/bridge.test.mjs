@@ -1476,6 +1476,8 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
   assert.match(mask, /maskFieldsCovered/);
   assert.match(mask, /maskFramesChecked/);
   assert.match(mask, /maskMissing/);
+  // 清单会被截断（8 条）：必须同时给总数，宿主才能说「还有 N 条未列」
+  assert.match(mask, /maskMissingTotal/);
   assert.doesNotMatch(mask, /maskCoverage/, "曾经的 main+iframes / main-only 枚举已被两组数字取代");
   // 一个 session 要注入几个 document 由计划算（不是「一个 target 一个上下文」）
   assert.match(mask, /PlanSessionInjections/);
