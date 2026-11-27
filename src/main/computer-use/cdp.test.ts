@@ -356,6 +356,79 @@ describe("sandbox_* 回执翻成人话", () => {
     assert.equal(outcome.ok, false);
     assert.match(outcome.ok ? "" : outcome.error, /缺尺寸字段/);
   });
+
+  test("screenshot：桥报了遮罩就添一句人话（几块 / 几帧 / 盖到哪一层）", async () => {
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpShot]: () => ({
+          ok: true,
+          jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+          resp: {
+            ok: true,
+            width: 1000,
+            height: 600,
+            nativeWidth: 1366,
+            nativeHeight: 820,
+            url: "https://bank.example/login",
+            title: "Sign in",
+            maskedRegions: 2,
+            maskFrames: 3,
+            maskCoverage: "main+iframes",
+          },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.match(text, /covered 2 password fields/);
+    assert.match(text, /main document and every iframe/);
+    // 原有的换道指引不能被挤掉
+    assert.match(text, /sandbox_observe/);
+  });
+
+  test("screenshot：main-only 时明说跨源 iframe 未遮（不许装作已遮）", async () => {
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpShot]: () => ({
+          ok: true,
+          jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+          resp: {
+            ok: true,
+            width: 1000,
+            height: 600,
+            nativeWidth: 1366,
+            nativeHeight: 820,
+            url: "https://bank.example/login",
+            title: "Sign in",
+            maskedRegions: 1,
+            maskFrames: 1,
+            maskCoverage: "main-only",
+            maskError: "iframe 未遮：attachToTarget 没有回 sessionId",
+          },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.match(text, /only in the main document/);
+    assert.match(text, /cross-origin iframes were NOT masked/);
+  });
+
+  test("screenshot：老桥（没有遮罩字段）不添任何遮罩的话", async () => {
+    const { guest } = fakeGuest({ running: true });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.doesNotMatch(text, /password field/);
+    assert.doesNotMatch(text, /masked/);
+  });
 });
 
 describe("上传 / 下载：宿主侧的文件搬运", () => {

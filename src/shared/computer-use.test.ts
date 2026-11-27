@@ -20,6 +20,8 @@ import {
   captureNote,
   computerUseAudit,
   computerUseChannels,
+  computerUseShotMask,
+  computerUseShotMaskNote,
   computerUseUiaErrors,
   isUiaFocusRequest,
   isUiaRequest,
@@ -34,6 +36,7 @@ import {
   type ComputerUseEvidence,
   type ComputerUseToolRequest,
   type ComputerUseCaptureInfo,
+  type ComputerUseShotMask,
 } from "./computer-use.ts";
 
 /** 回图 1280×720，物理屏 2560×1440（长边缩一半的常见情形） */
@@ -422,6 +425,69 @@ describe("captureNote（截图回执里那句「遮了 / 没遮」）", () => {
 
   test("过期线与桥的 CacheMaxAgeMs 同一个数（C# 与 TS 各一份，改了这里会红）", () => {
     assert.equal(COMPUTER_USE_MASK_CACHE_MAX_AGE_MS, 30_000);
+  });
+});
+
+/** 一张「主文档与所有 iframe 都遮住了」的基准回执（各用例只改关心的那个字段） */
+const shotMasked: ComputerUseShotMask = { maskedRegions: 2, maskFrames: 3, maskCoverage: "main+iframes" };
+
+describe("computerUseShotMask（网页截图遮罩回执的解析）", () => {
+  test("老桥没有这几个字段 → undefined（不能说遮了，也不能说没遮）", () => {
+    assert.equal(computerUseShotMask({ ok: true, width: 1 }), undefined);
+  });
+
+  test("门槛字段是 maskedRegions：负数 / 非数字都不认", () => {
+    assert.equal(computerUseShotMask({ maskedRegions: -1 }), undefined);
+    assert.equal(computerUseShotMask({ maskedRegions: "2" }), undefined);
+  });
+
+  test("缺 maskCoverage 时按 main-only 处理（宁可把话说重）", () => {
+    assert.equal(computerUseShotMask({ maskedRegions: 1 })?.maskCoverage, "main-only");
+    assert.equal(computerUseShotMask({ maskedRegions: 1, maskCoverage: "whatever" })?.maskCoverage, "main-only");
+  });
+
+  test("字段原样取回；maskError 空白时不带这个键", () => {
+    assert.deepEqual(computerUseShotMask({ ...shotMasked }), shotMasked);
+    assert.deepEqual(computerUseShotMask({ ...shotMasked, maskError: "  " }), shotMasked);
+    assert.match(computerUseShotMask({ ...shotMasked, maskCoverage: "main-only", maskError: "attach 失败" })?.error ?? "", /attach/);
+  });
+});
+
+describe("computerUseShotMaskNote（给模型的那一句实话）", () => {
+  test("主文档 + iframe 都遮了：说清几块、几帧、盖到哪一层", () => {
+    const note = computerUseShotMaskNote(shotMasked);
+    assert.match(note, /covered 2 password fields/);
+    assert.match(note, /across 3 frames/);
+    assert.match(note, /main document and every iframe/);
+    assert.doesNotMatch(note, /NOT masked/);
+  });
+
+  test("一块都没有且都检查过：不吓人，也不声称遮了", () => {
+    const note = computerUseShotMaskNote({ maskedRegions: 0, maskFrames: 1, maskCoverage: "main+iframes" });
+    assert.match(note, /No password field needed covering/);
+    assert.match(note, /every iframe were checked/);
+  });
+
+  test("main-only：**必须写明跨源 iframe 没遮**，并带上桥给的原因", () => {
+    const note = computerUseShotMaskNote({
+      maskedRegions: 1,
+      maskFrames: 1,
+      maskCoverage: "main-only",
+      error: "iframe 未遮：attachToTarget 没有回 sessionId",
+    });
+    assert.match(note, /only in the main document/);
+    assert.match(note, /cross-origin iframes were NOT masked/);
+    assert.match(note, /attachToTarget/);
+  });
+
+  test("main-only 且一块没遮（预算是够不上）：明说到底没遮", () => {
+    const note = computerUseShotMaskNote({ maskedRegions: 0, maskFrames: 0, maskCoverage: "main-only" });
+    assert.match(note, /No password field was covered/);
+    assert.match(note, /NOT masked/);
+  });
+
+  test("老桥（undefined）一个字都不添", () => {
+    assert.equal(computerUseShotMaskNote(undefined), "");
   });
 });
 

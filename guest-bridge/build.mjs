@@ -76,6 +76,8 @@ const args = [
   path.join(scriptDir, "InputHook.cs"),
   // 密码框遮罩（0.12.0）：uia-list 记下的密码框矩形 + 截图出图前涂黑的纯函数与缓存
   path.join(scriptDir, "Mask.cs"),
+  // 网页截图遮罩：按帧注入 overlay（含 OOPIF）+ 选择器 / 帧与上下文挑选 / 回执字段的纯函数
+  path.join(scriptDir, "CdpShotMask.cs"),
 ];
 
 console.log(`[build] csc: ${csc}`);

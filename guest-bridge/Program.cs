@@ -270,6 +270,9 @@ internal static class Program
             // 密码框遮罩的纯函数自测（平移 / 裁剪 / DPI 不换算 / 过期策略 / 缓存）。
             // **不碰桌面、不碰 Bitmap**：遮罩算法是纯整数运算，在宿主上就能验完。
             if (args[i] == "--selftest-mask") return Mask.RunSelfTest();
+            // 浏览器截图遮罩的纯函数自测（选择器 / 注入脚本 / 帧树与上下文挑选 / 回执字段）。
+            // **不启 Edge、不碰桌面**：这里验的是「注入什么、命中哪些、怎么报」。
+            if (args[i] == "--selftest-shotmask") return ShotMask.RunSelfTest();
             // 像素注入的 partial 规划自测（哪几个按下事件卡住了 / 补发顺序 / 文案条数上限）。
             // **纯函数：不调 SendInput、不碰桌面**——在宿主上真注入是红线。
             if (args[i] == "--selftest-input") return RunInputSelfTest();

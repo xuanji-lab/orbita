@@ -415,6 +415,75 @@ export const COMPUTER_USE_SHOT_MAX_WIDTH = 1280;
  */
 export const COMPUTER_USE_MASK_CACHE_MAX_AGE_MS = 30_000;
 
+// ── 网页截图的遮罩回执（cdp-shot，桥 0.16.0）────────────────────────
+
+/**
+ * 一张**网页**截图（sandbox_screenshot）出图前遮了多少密码框、盖到了哪一层。
+ *
+ * 与 `ComputerUseCaptureInfo` 不是一回事：那份是**像素车道**（整桌面 / 按窗口截图，靠 UIA
+ * 记下的控件矩形涂黑）；网页里的密码框是 DOM，UIA 看不见，只能进页面自己盖一层 overlay。
+ * 两边都叫 maskedRegions 但一个是「涂黑的矩形」、一个是「盖住的 overlay」，不要混。
+ */
+export interface ComputerUseShotMask {
+  /** 盖了几块 overlay（跨帧求和；0 = 屏幕上没有需要遮的密码框，或没遮成） */
+  maskedRegions: number;
+  /** 注入成功的帧数（主帧 + 同进程子帧 + 跨进程 iframe） */
+  maskFrames: number;
+  /**
+   * `main+iframes` = 枚举到的每个帧都注入成功；`main-only` = 至少一帧没遮上
+   * （attach 不上 / 没有可用上下文 / 脚本报错 / 预算不足）。没有第三档。
+   */
+  maskCoverage: "main+iframes" | "main-only";
+  /** 降级时的原因（桥的原话，最多 200 字）。全遮住时没有这个键 */
+  error?: string;
+}
+
+/**
+ * 从 cdp-shot 的回执里取遮罩信息。**老桥（没有这几个字段）回 undefined**：
+ * 那时既不能说「遮了」也不能说「没遮」，两条都是谎话，所以正文里一个字都不添。
+ *
+ * `maskedRegions` 是唯一的门槛字段（它在，其余几个才可信）；缺 `maskCoverage` 时
+ * 按 `main-only` 处理——宁可把话说重，不可声称跨源帧已遮。
+ */
+export function computerUseShotMask(resp: Record<string, unknown>): ComputerUseShotMask | undefined {
+  const maskedRegions = resp["maskedRegions"];
+  if (typeof maskedRegions !== "number" || !Number.isFinite(maskedRegions) || maskedRegions < 0) return undefined;
+  const maskFrames = resp["maskFrames"];
+  const error = resp["maskError"];
+  return {
+    maskedRegions: Math.round(maskedRegions),
+    maskFrames:
+      typeof maskFrames === "number" && Number.isFinite(maskFrames) && maskFrames >= 0 ? Math.round(maskFrames) : 0,
+    maskCoverage: resp["maskCoverage"] === "main+iframes" ? "main+iframes" : "main-only",
+    ...(typeof error === "string" && error.trim() !== "" ? { error: error.slice(0, 200) } : {}),
+  };
+}
+
+/**
+ * 给模型的那**一句话**：遮了多少、盖到哪一层；`main-only` 时必须写明跨源 iframe 没遮
+ * （不能装作已遮——模型会据此以为图里的明文不可见）。老桥（mask === undefined）回空串。
+ */
+export function computerUseShotMaskNote(mask: ComputerUseShotMask | undefined): string {
+  if (mask === undefined) return "";
+  const fields = `${mask.maskedRegions} password field${mask.maskedRegions === 1 ? "" : "s"}`;
+  if (mask.maskCoverage === "main+iframes") {
+    if (mask.maskedRegions === 0) {
+      return " No password field needed covering before this capture (the main document and every iframe were checked).";
+    }
+    const frames = `${mask.maskFrames} frame${mask.maskFrames === 1 ? "" : "s"}`;
+    return ` Before the capture it covered ${fields} with an opaque overlay across ${frames} (the main document and every iframe).`;
+  }
+  const covered =
+    mask.maskedRegions === 0
+      ? "No password field was covered"
+      : `It covered ${fields}, but only in the main document`;
+  const reason = mask.error === undefined ? "" : ` The bridge said: ${mask.error}`;
+  return (
+    ` ${covered} — cross-origin iframes were NOT masked, so everything visible inside a frame is visible in this image.` +
+    reason
+  );
+}
+
 /**
  * 沙箱是否允许出网的**缺省值**（= 允许）。**全栈唯一来源**：
  * `shared/settings.ts` 的 `effectiveAllowNetwork`（读设置时的兜底）、主进程控制器
