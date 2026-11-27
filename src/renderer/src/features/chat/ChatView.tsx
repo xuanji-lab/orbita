@@ -230,6 +230,14 @@ import { RevertPreviewBar } from "./RevertPreviewBar";
 import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
+import {
+  ComputerUseConsentAskFallback,
+  ComputerUseConsentContext,
+  ComputerUseConsentStatusLine,
+  ComputerUseConsentTail,
+  type ComputerUseConsentContextValue,
+} from "./ComputerUseConsent";
+import { firstComputerUseToolCallId, runningComputerUseToolCallId } from "./computer-consent.ts";
 import { AutomationRunBar } from "../automation/AutomationRunBar";
 import { AutomationToolLine } from "../automation/AutomationToolLine";
 import { AutomationWakeLine } from "../automation/AutomationWakeLine";
@@ -1683,6 +1691,38 @@ function ChatViewBody(props: {
       />
     );
 
+  /**
+   * 电脑使用授权（甲 / 乙 两张 UI 的共享上下文，2026-11-27）。
+   * 挂点从转录派生（computer-consent.ts 的纯函数）：确认行挂正在跑的那条电脑工具调用，
+   * 记录行挂本会话第一处电脑工具调用。context 只在这一层建一次——工具行是 memo 化的，
+   * 逐帧新建对象会打穿整列。
+   */
+  const consent = session.computerUseConsent;
+  const consentAsk = session.computerUseConsentAsk;
+  const consentTriggerToolId = useMemo(() => firstComputerUseToolCallId(session.transcript), [session.transcript]);
+  const consentAskToolId = useMemo(
+    () => (consentAsk === null ? null : runningComputerUseToolCallId(session.transcript)),
+    [consentAsk, session.transcript],
+  );
+  const consentCtx = useMemo<ComputerUseConsentContextValue>(
+    () => ({
+      consent,
+      ask: consentAsk,
+      triggerToolCallId: consentTriggerToolId,
+      askToolCallId: consentAskToolId,
+      onAnswer: session.answerComputerUseConsent,
+      onRevoke: session.revokeComputerUseConsent,
+    }),
+    [
+      consent,
+      consentAsk,
+      consentTriggerToolId,
+      consentAskToolId,
+      session.answerComputerUseConsent,
+      session.revokeComputerUseConsent,
+    ],
+  );
+
   const composer = (
     <Composer
       value={session.draft}
@@ -2047,6 +2087,9 @@ function ChatViewBody(props: {
 
   return (
     <>
+      {/* 电脑使用授权：确认行 / 记录行（流内）与状态行（输入框上方）都从这里取状态与回调；
+          context 包住整个 Pane——页脚的状态行与转录里的工具行是两棵子树 */}
+      <ComputerUseConsentContext.Provider value={consentCtx}>
       <Pane
         title={session.opened?.title || (sessionTitle(session.transcript) ?? t.common.newTask)}
         badge={openId.slice(0, 6)}
@@ -2114,6 +2157,12 @@ function ChatViewBody(props: {
             */}
             {hideComposer !== true && (
               <>
+                {/* 电脑使用授权（乙，2026-11-27）：已允许时输入框上方一条低对比状态行，撤销永远在手边；
+                    未授权不出现（那一条由流里的确认行负责，不两处同时喊） */}
+                <ComputerUseConsentStatusLine />
+                {/* 确认行的兜底位：转录里找不到在跑的电脑工具调用时（重开 / 工具行已折走），
+                    让用户仍然答得上——否则主进程要等到 120s 超时才按拒绝收口 */}
+                <ComputerUseConsentAskFallback />
                 {/* 子会话交回了 N 件：先攒在这里、不替用户开一轮（channel-hold.ts）；与排队条同一层 */}
                 {openId !== "" && <ChannelHoldBar sessionId={openId} onOpenPanel={props.onOpenSubSessionsList} />}
                 {/* 通话条：输入框正上方，与排队条同一配方；不在通话也没问题要说时不占位 */}
@@ -2174,6 +2223,7 @@ function ChatViewBody(props: {
         />
         </RevertPreviewContext.Provider>
       </Pane>
+      </ComputerUseConsentContext.Provider>
     </>
   );
 }
@@ -6734,6 +6784,10 @@ function ToolLine(props: {
           images={toolImages}
         />
       )}
+      {/* 电脑使用授权（甲，2026-11-27）：这条工具行若是“正在等授权的那条”，下面长出确认行；
+          若是“本会话第一处电脑工具调用”，答完之后下面留一条记录（已允许 / 已拒绝 + 撤销）。
+          挂在 ToolLine 里而不是另开一种条目：行的折叠 / 分组 / 缩进一个字都不用改。 */}
+      <ComputerUseConsentTail toolCallId={props.toolCallId} running={active} />
     </div>
   );
 }

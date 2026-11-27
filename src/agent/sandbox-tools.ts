@@ -28,6 +28,8 @@ import {
   COMPUTER_USE_BROWSER_IDLE_MS,
   COMPUTER_USE_BROWSER_MAX,
   COMPUTER_USE_CDP_TIMEOUT_MS,
+  COMPUTER_USE_CONSENT_TIMEOUT_MS,
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE,
   computerUseAudit,
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
@@ -55,8 +57,10 @@ export const SANDBOX_BROWSER_TOOL_NAMES = [
  * 70s）更长，否则主进程还在等（映射目录黑窗 + guest 里 40s 的 worker 杀线），agent 先把真成功
  * 判成「主进程失联」——模型看到失败会重做同一个动作（computer-tools.ts 同款考量，那边踩过一轮）。
  * 取主进程线 + 15s 余量：主进程自己的超时会回带人话的错误，broker 这条只兑「主进程失联」。
+ * 再加一段授权等待（2026-11-27）：第一次电脑操作会先在主进程等用户回答确认行
+ * （COMPUTER_USE_CONSENT_TIMEOUT_MS），不等它就重现「用户点了允许、agent 已判失联」的错觉。
  */
-const BROKER_TIMEOUT_MS = COMPUTER_USE_CDP_TIMEOUT_MS + 15_000;
+const BROKER_TIMEOUT_MS = COMPUTER_USE_CONSENT_TIMEOUT_MS + COMPUTER_USE_CDP_TIMEOUT_MS + 15_000;
 
 /**
  * 导航要给两次 guest 命令留余量：先 cdp-start（冷启动实测 2.5s，最坏 25s 超时切 no-sandbox 重试）
@@ -90,7 +94,8 @@ const ELEMENT_PARAM = {
 const SCOPE =
   "Operates the sandbox's browser (Edge by default; configurable in Settings › Computer use) **inside the isolated " +
   "Windows sandbox** (DOM level, via CDP) — not the user's own " +
-  "browser and not Orbita's built-in browser tab. ";
+  "browser and not Orbita's built-in browser tab. " +
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE + " ";
 
 /**
  * 每会话自己的浏览器：**不排队**。只有像素工具共享那块唯一的桌面。

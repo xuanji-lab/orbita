@@ -18,7 +18,10 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_NO_EVIDENCE_HINT,
   COMPUTER_USE_UIA_TIMEOUT_MS,
+  COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
+  COMPUTER_USE_UNATTENDED_TEXT,
   captureNote,
+  computerUseBlockedReason,
   backendNetworkControl,
   computerUseAudit,
   computerUseBackendChoices,
@@ -658,5 +661,34 @@ describe("backendNetworkControl（这只后端能不能真的断网）", () => {
     for (const backend of ["wsb", "isolation-session", "qemu"] as const) {
       assert.ok(["enforced", "not-enforceable"].includes(backendNetworkControl(backend)), backend);
     }
+  });
+});
+
+/**
+ * 电脑使用的唯一判据（2026-11-27 验收后）：这一条会话、这一轮，用户能不能看到并回答
+ * 那个授权提问。两件事一起判——会话身份（子会话 / 幕后 / 未 promoted 的自动化会话）
+ * 与这一轮是谁发起的（this_session 自动化会把一轮投回用户的会话）。
+ */
+describe("computerUseBlockedReason —— 用户此刻能不能看到并回答", () => {
+  test("普通会话 + 用户手点：能问（null）", () => {
+    assert.equal(computerUseBlockedReason({}, "user"), null);
+  });
+
+  test("子会话 / 幕后会话：主会话专用（身份那条先挡）", () => {
+    assert.equal(computerUseBlockedReason({ parentId: "p" }, "user"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+    assert.equal(computerUseBlockedReason({ backstage: "avatar" }, "channel"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+  });
+
+  test("自动化新开的会话（automationId）不 promoted：主会话专用；用户点了转成普通会话（promoted）：按普通会话问", () => {
+    assert.equal(computerUseBlockedReason({ automationId: "au1" }, "user"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+    assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "user"), null);
+  });
+
+  test("主会话但这一轮是自动化发起的（this_session）：不弹提问，说清「请在主会话里手动发起」", () => {
+    assert.equal(computerUseBlockedReason({}, "automation"), COMPUTER_USE_UNATTENDED_TEXT);
+    // promoted 的自动化会话也一样：会话看得见，但这一轮不是用户发起的
+    assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "automation"), COMPUTER_USE_UNATTENDED_TEXT);
+    // 编排投递同理（子会话在身份那条已经挡了，这里只是不为 machine-origin 开口子）
+    assert.equal(computerUseBlockedReason({}, "channel"), COMPUTER_USE_UNATTENDED_TEXT);
   });
 });

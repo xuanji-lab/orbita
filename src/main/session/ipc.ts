@@ -31,6 +31,7 @@ import type { ProviderStore } from "../provider/store.ts";
 import { isSessionId, type SessionStore } from "./store.ts";
 import type { StatusDigestStore } from "./status-digest.ts";
 import type { StatusDigestState } from "../../shared/status-digest.ts";
+import { broadcastAgentEvent } from "../agent/ipc.ts";
 
 export function registerSessionIpc(
   store: SessionStore,
@@ -142,6 +143,18 @@ export function registerSessionIpc(
     // 载荷在入口就洗：只认布尔，坏形状拒绝（不裸存进 meta）
     typeof enabled === "boolean" ? store.setAutoCompact(id, enabled) : Promise.reject(new Error("autoCompact 只认布尔")),
   );
+  /**
+   * 电脑使用的会话授权（2026-11-27）：界面只用它**撤销**（写回 unset）。
+   *
+   * 为什么只收 unset：allowed / denied 的真相只有主进程闸门知道（用户在哪一张确认行上
+   * 点的、有没有超时），renderer 这条通路故意不能把字段写成 allowed——它只是
+   * 「我不想要这个授权了」的收回口。坏载荷当 unset（撤销总是安全的：下一次会重新问）。
+   * 落盘后广播状态，所有窗口的确认行 / 状态行同步。
+   */
+  ipcMain.handle(ipcChannels.sessionSetComputerUseConsent, async (_event, id: string, _raw: unknown): Promise<void> => {
+    await store.setComputerUseConsent(id, "unset");
+    broadcastAgentEvent({ type: "computerUseConsentState", sessionId: id, state: "unset", source: "revoked" });
+  });
   ipcMain.handle(ipcChannels.sessionUnread, (_event, id: string, unread: unknown) =>
     // 载荷在入口就洗：坏形状当已读（null）写回，不裸存进 meta
     store.setUnread(id, parseSessionUnread(unread)),

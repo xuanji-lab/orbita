@@ -46,7 +46,7 @@ import { memoryBuildEligible } from "../memory/turn-tracker.ts";
 import { effectiveIntentSettings, type AppSettings } from "../../shared/settings.ts";
 import { INTENT_MODELS_BY_CHANNEL } from "../../shared/intent-lab.ts";
 import type { ComputerUseTurnContext, IntentTurnContext } from "../../shared/agent-ipc.ts";
-import type { ComputerUseRunningFacts } from "../../shared/computer-use.ts";
+import type { ComputerUseRunningFacts, ComputerUseTurnOrigin } from "../../shared/computer-use.ts";
 import {
   mergeMcpConfigs,
   resolveServersForWorkspace,
@@ -162,7 +162,18 @@ export function registerAgentIpc(
    * undefined = 老夹具不传（按设置值算）。
    */
   runningComputerUse?: () => Promise<ComputerUseRunningFacts | null>,
-): { submitTurn(input: SubmitAgentInput): Promise<void> } {
+  /**
+   * 所在会话的上一轮被放弃时调（submit / interrupt / abort）——**包括不发 idle 的抢跑**
+   * （runtime 的 preempt）。电脑使用授权挂起的提问靠它作废：不然新 submit 抢跑旧轮后，
+   * 旧轮那个提问会活到新一轮里，用户点「允许」会让一个已不存在的动作真的下发。
+   */
+  onTurnAbandoned: (sessionId: string) => void = () => undefined,
+  /**
+   * 记「这一轮是谁发起的」（闸门据此判用户此刻能不能回答授权提问）。
+   * `submitTurn` / `interrupt` / `compact` 三处开轮都会写；闸门只读。
+   */
+  setTurnOrigin: (sessionId: string, origin: ComputerUseTurnOrigin) => void = () => undefined,
+): { submitTurn(input: SubmitAgentInput, origin?: ComputerUseTurnOrigin): Promise<void> } {
   /**
    * 某条会话所属的工作区。找不到（工作区被删了）就当作没有工作区：白名单与工作区
    * 变量都按 Home 处理，**不拦开轮**（同「一台坏的 MCP server 不该把会话堵死」）。
@@ -561,8 +572,21 @@ export function registerAgentIpc(
    * 也要开同一种轮——`applyDelegate` / `deliverToChild`（channel/requests.ts）
    * 拿的就是这个函数，不重新拼一遍 turnFields/readDirectories 那一整套装配）。
    */
-  async function submitTurn(input: SubmitAgentInput): Promise<void> {
+  async function submitTurn(
+    input: SubmitAgentInput,
+    /**
+     * 这一轮是谁发起的。默认 `user`（renderer 手点发出去的）；自动化在 `deliverAutomationRun` /
+     * `launchAutomationRun` 里传 `automation`——`this_session` 会把一轮投回用户的会话，那条会话
+     * 本身是主会话，但它不是用户发起的，电脑使用不能为它弹一个看不见的授权。
+     */
+    origin: ComputerUseTurnOrigin = "user",
+  ): Promise<void> {
     const provider = await resolveForTurn(input.providerId);
+    // 解析成功之后才动旧轮：resolveForTurn 失败时旧轮其实还在跑，提前 cancel 会让
+    // 那个工具回一句「这一轮已停止」——说了没发生的事（2026-11-27 验收建议）。
+    // 记发起者与作废旧轮在同一拍：两者描述的都是「这一轮要换了」。
+    setTurnOrigin(input.sessionId, origin);
+    onTurnAbandoned(input.sessionId);
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
     // 意图系统（实验）：开关开着才装配（intent / backfill）与存档（ingest）。
     // 返回空对象时命令与 main 一字不差
@@ -613,10 +637,19 @@ export function registerAgentIpc(
   }
 
   ipcMain.handle(ipcChannels.agentSubmit, (_e, input: SubmitAgentInput): Promise<void> => submitTurn(input));
-  ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => host.abort(sessionId));
+  ipcMain.handle(ipcChannels.agentAbort, (_e, sessionId: string) => {
+    // 停止：挂起的电脑授权提问随这一轮作废（cancelled，不写 meta；见 consent.ts）
+    onTurnAbandoned(sessionId);
+    return host.abort(sessionId);
+  });
   ipcMain.handle(ipcChannels.agentLivePhases, (): LiveSessionPhases => livePhases());
   ipcMain.handle(ipcChannels.agentInterrupt, async (_e, input: SubmitAgentInput): Promise<void> => {
+    // interrupt：旧轮按抢跑结束（**不发 idle**），挂起的授权提问同样要作废。
+    // 仍是用户发起的（输入框里手点“立即发送”），发起者记 `user`。
     const provider = await resolveForTurn(input.providerId);
+    // 同 submitTurn：provider 解析失败时旧轮还在跑，不能先说完“已停止”
+    setTurnOrigin(input.sessionId, "user");
+    onTurnAbandoned(input.sessionId);
     // interrupt 是排队消息的「立即发送」分支（会话还忙碌时）：与 submit 同一份组装，
     // 否则 /skill: 在这条路径以字面文本喂给模型
     const text = await prependInvocationDirectives(input.text, input.workspaceId);
@@ -630,6 +663,10 @@ export function registerAgentIpc(
   });
   ipcMain.handle(ipcChannels.agentCompact, async (_e, input: CompactAgentInput): Promise<void> => {
     const provider = await resolveForTurn(input.providerId);
+    // 手动压缩先抢跑旧轮（同样不发 idle）：旧轮挂起的授权提问一并作废。
+    // 压缩轮不跑工具，发起者仍记 `user`（同一处规则，不按调用点各写一份）。
+    setTurnOrigin(input.sessionId, "user");
+    onTurnAbandoned(input.sessionId);
     const capabilities = await readCapabilities(input.workspaceId);
     const piSessionFile = await host.compact({ type: "compact", ...(input.instructions !== undefined ? { instructions: input.instructions } : {}), ...turnFields(input, provider, piSessionDir, attachmentDirOf(input.sessionId), protectedPaths, { skillsDirs: capabilities.skillsDirs, directories: await readDirectories(input), mcpServers: capabilities.mcpServers, compaction: await readCompaction(input.sessionId), gitAttribution: await readGitAttribution(), attributionLanguage: await readAttributionLanguage(), workspaceName: await workspaceNameOf(input.workspaceId), computerUse: await readComputerUse(), planFirst: await readPlanFirst(), pluginTools: true }) });
     if (piSessionFile !== null) await sessions.setPiSessionFile(input.sessionId, piSessionFile);

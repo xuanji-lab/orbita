@@ -153,9 +153,14 @@ import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
   computerUseBackendChoices,
+  computerUseBlockedReason,
   computerUseGuestCommands,
   devBackendsEnabled,
+  parseComputerUseConsent,
+  type ComputerUseTurnOrigin,
 } from "../shared/computer-use.ts";
+import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
+
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
 import { IsolationSessionController } from "./computer-use/isolation-session.ts";
@@ -500,6 +505,43 @@ void app.whenReady().then(async () => {
     onLogSeeded: (id, records, logBytes) => statusDigests.seed(id, records, logBytes),
     onRemoved: (id) => void statusDigests.remove(id),
   });
+  /**
+   * 电脑使用的会话授权（2026-11-27）：提问表 + 栅门。位置在 sessions 之后、窗口接线之前——
+   * 栅门读写会话 meta，而主窗口全关时要先把挂起的提问按拒绝结掉（onLastClosed，下面）。
+   * 提问走 `agent:event` 的同一条广播通道（与 intentAsk / 急停一致），回答走
+   * `computer-use:consent-answer`（registerComputerUseIpc 注册）。
+   */
+  /**
+   * 每条会话**当前这一轮**是谁发起的（2026-11-27 验收后）。值只由开轮处写（registerAgentIpc 的
+   * submitTurn / interrupt），闸门只读——发起者是主进程本来就知道的事实，不需要另开一条 IPC。
+   * 缺席按 `user` 算：用户手点的轮是默认路径，自动化会在开轮时显式写 `automation`。
+   */
+  const computerUseTurnOrigins = new Map<string, ComputerUseTurnOrigin>();
+  const computerUseConsentWaiter = new ComputerUseConsentWaiter({
+    send: (event) => broadcastAgentEvent(event),
+    // 本轮结束 / 会话删除：把确认行从界面上撤下（不是拒绝，没有写 meta）
+    notifyCancelled: (event) => broadcastAgentEvent(event),
+  });
+  const computerUseConsentGate = createComputerUseConsentGate({
+    // 一次读盘拿齐「授权值 + 用户能不能看到并回答」：后者由 shared 的唯一判据
+    // computerUseBlockedReason(会话身份, 这一轮的发起者) 算。发起者由开轮处记在
+    // computerUseTurnOrigins（见 registerAgentIpc 的 setTurnOrigin）。
+    read: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      if (meta === null) return null;
+      return {
+        consent: parseComputerUseConsent(meta.computerUseConsent),
+        blockedReason: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
+      };
+    },
+    // write 回「真的落下了没」：`update` 对已删会话静默 no-op，不能把它当成功
+    write: (sessionId, consent) => sessions.setComputerUseConsent(sessionId, consent),
+    ask: (sessionId, action) => computerUseConsentWaiter.ask(sessionId, action),
+    // 没人能回答就不问：窗口全关 / 只剩无界面的自动化时提问只会等到 120s 超时，
+    // 不如当场按拒绝落库（fail closed 的结果一样，代价更小）。
+    canAsk: () => mainWindows.list().length > 0,
+    notify: (event) => broadcastAgentEvent(event),
+  });
   // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
@@ -584,7 +626,13 @@ void app.whenReady().then(async () => {
     appVersion: app.getVersion(),
   });
   registerBrowserIpc(browserSandbox, settings, configDir);
-  mainWindows.onLastClosed(() => browserSandbox.dispose());
+  mainWindows.onLastClosed(() => {
+    // 窗口全关 = 没有人能回答授权提问：按**拒绝**结掉（与「本轮结束」不同，这条路上
+    // 「没人能答」本身就是拒绝）。紧接着应用会退出，这次写可能是 best-effort——
+    // 退不掉也是 fail closed（下次启动仍是 unset，会重新问一次）。
+    computerUseConsentWaiter.abandonAll();
+    browserSandbox.dispose();
+  });
 
   /*
    * computer use v1（PR1 主进程部分）：Windows 沙箱生命周期 + 手动「看一眼」截图。
@@ -959,10 +1007,12 @@ void app.whenReady().then(async () => {
    * Orbita 的停止按钮，这个热键必须真的能注册上——注册失败（被别的应用占用）时
    * 设置页会如实显示「不可用」，不假装保护存在。
    *
-   * 按下后两件事（顺序即语义）：
+   * 按下后三件事（顺序即语义）：
    *   1. 正在跑的会话逐个中止（给 agent 发 abort，与「停止」同一条链）；
-   *   2. 广播给 renderer 显示「已急停」。
-   * （2026-11-16「只留放行」后没有授权可撤：急停的全部语义就是停轮。）
+   *   2. **撕掉电脑使用授权**：所有非 unset 的会话 `computerUseConsent` 复位成 unset；
+   *      挂起中的授权提问按 **cancelled** 结掉（不写盘——用户没有表态，不是拒绝）。
+   *      （不是 PermissionMode，只是本会话的桌面许可）
+   *   3. 广播给 renderer 显示「已急停」。
    * **不关沙箱**：现场留给用户看，关沙箱是设置页里另一个动作。
    *
    * `phases` / `agentHost` 在本行下面才声明——onTrigger 只在按键时执行，那时已初始化
@@ -984,6 +1034,24 @@ void app.whenReady().then(async () => {
         .filter(([, phase]) => phase !== "idle")
         .map(([id]) => id);
       for (const sessionId of runningSessions) agentHost.abortIfRunning(sessionId);
+      /*
+       * 急停要**彻底撕掉电脑使用授权**（2026-11-27；验收后修正）：
+       *   1. 挂起的提问先按 **cancelled** 结掉（不写 meta）——把 cancel 放在 reset 之后写、
+       *      或者让 cancel 写 denied，会让最终值变成 denied（"以后不再问"），与急停相反；
+       *   2. **所有**非 unset 的会话复位成 unset：急停是全局按钮，它的语义是「我不想再让
+       *      这台桌面被动」——只复位在跑的会话会留下一个刚点过允许、正空闲的会话，下一轮
+       *      直接用、不再问（E 段验收指出的差距）。
+       * 两道写都在各自的 meta 写链上，但 canceled 的那支**不写**，所以最终值只可能是
+       * reset 写的 unset。
+       */
+      computerUseConsentWaiter.cancelAll();
+      void (async () => {
+        const all = await sessions.list().catch(() => []);
+        for (const meta of all) {
+          if (parseComputerUseConsent(meta.computerUseConsent) === "unset") continue;
+          await computerUseConsentGate.reset(meta.id, "emergency-stop");
+        }
+      })();
       broadcastAgentEvent({ type: "computerUseEmergencyStop", at, sessionIds: runningSessions });
     },
   });
@@ -1001,6 +1069,8 @@ void app.whenReady().then(async () => {
     },
     emergencyStop,
     computerUseLease,
+    // 确认行 / 状态行的回答：只有 allowed / denied 两种，由 IPC 入口洗过再进来
+    { answer: (requestId, decision) => computerUseConsentWaiter.answer(requestId, decision === "allowed") },
   );
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
@@ -1225,6 +1295,13 @@ void app.whenReady().then(async () => {
     if (event.type === "phase" && event.phase === "idle") {
       browserSandbox.cancelSessionHandoff(event.sessionId);
       /*
+       * 电脑使用授权挂起的提问一并作废（2026-11-27 验收 P1）：这一轮已经结束，
+       * 那个提问不可能再被回答。**按 cancelled 结，不按 denied**——用户没有表态；
+       * 按 denied 结会让停轮之后迟迟点在确认行上的「允许」真的执行一个已不存在的
+       * 动作，并会在 120s 后把从没拒绝过的会话永久写成 denied。
+       */
+      computerUseConsentWaiter.cancel(event.sessionId);
+      /*
        * 沙箱资源也一并让出来：轮次结束 = 这一轮不再需要它们了。abort 与急停走的都是这里
        * （abortCycle 的收尾最终发 idle，非 preempt 的预抢跑才不发），所以不需要在三条
        * 路径上各接一次。桌面键与这个会话的浏览器键一起放：不主动放的话，下一个会话要白白
@@ -1236,6 +1313,8 @@ void app.whenReady().then(async () => {
       // agent 进程整个没了：所有租约持有者与等待者都不存在了（工具调用已随进程消失），
       // 留着只会让下一个会话排满 30 秒再报一句「被某个会话占着」
       computerUseLease.revoke("agent 进程退出");
+      // 挂起的授权提问也没人再回答了：按 cancelled 结掉（不写 meta），renderer 收行
+      computerUseConsentWaiter.cancelAll();
       closeChannelsForLostProcess();
     }
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
@@ -1302,8 +1381,17 @@ void app.whenReady().then(async () => {
     // 人话给模型——它看不见 UI，不会自己想到「另一个会话占着」。
     // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去。
     if (event.type === "computerUseRequest") {
-      void computerUseDispatch
-        .dispatch(event.sessionId, event.request)
+      // 授权栅门（2026-11-27）：**所有**电脑工具（computer_* 像素/UIA + sandbox_* 浏览器）
+      // 下发前先过会话授权——包括只读截图（它把用户沙箱桌面上的画面交给模型）。
+      // unset → 问一次并挂起；denied → 当场回那句固定文本，不执行；没人能回答按 denied 落库。
+      // 栅门只做裁决，真的拒绝文案在 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT（唯一来源）。
+      void computerUseConsentGate
+        .ensure(event.sessionId, event.request.action)
+        .then((verdict) =>
+          verdict.ok
+            ? computerUseDispatch.dispatch(event.sessionId, event.request)
+            : ({ ok: false, error: verdict.error } as const),
+        )
         .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerComputerUse(event.requestId, {
@@ -1691,6 +1779,9 @@ void app.whenReady().then(async () => {
       agentHost.disposeSession(id);
       // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
       browserSandbox.closeSessionTab(id);
+      // 正在等授权的提问也跟着作废（按 cancelled 结，不写 meta——会话都没了）
+      computerUseConsentWaiter.cancel(id);
+      computerUseTurnOrigins.delete(id);
       // 沙箱资源：它是持有者就让出来，还在排队就把位置撤掉（否则队列名额白白被占了）；
       // 桌面键与这个会话的浏览器键一起放。硬上限标记也一并忘掉。
       computerUseLease.releaseSession(id);
@@ -1899,6 +1990,16 @@ void app.whenReady().then(async () => {
     // 出网那对值要看**正在跑的那只**（后端与开关都是下次启动才生效）：设置里选 wsb、
     // 实际跑着 L2b 时，按设置算会告诉模型「你没有出网」——而它就在本机的网络上。
     () => computerUse.runningFacts(),
+    /**
+     * 上一轮被放弃时（停止 / interrupt 抢跑 / 新 submit 抢跑）的通知。
+     * **抢跑不发 idle**（runtime 的 preempt 语义），所以只等 phase idle 会漏掉 interrupt
+     * 这条路——挂起的授权提问会活到新一轮里，用户点“允许”就能让一个已经不存在的动作
+     * 真的下发（2026-11-27 验收 P1）。这里与会话删除同一条语义：按 cancelled 结掉。
+     */
+    (sessionId) => computerUseConsentWaiter.cancel(sessionId),
+    // 这一轮是谁发起的（闸门据此判「用户此刻能不能回答」）：自动化开轮时写 automation，
+    // 其余（renderer 手点 submit / interrupt / compact）写 user。
+    (sessionId, origin) => computerUseTurnOrigins.set(sessionId, origin),
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
@@ -1926,7 +2027,9 @@ void app.whenReady().then(async () => {
         providers: await providers.list(),
       });
     },
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 幕后 / 编排投递的轮次：会话身份（backstage / parentId）已经把它们挡在闸门外，
+    // 这里仍标 channel——发起者是机器，不写成 user（免得以后判据变严时漏挡）
+    submitTurn: (input) => agentIpc.submitTurn(input, "channel"),
     abort: (sessionId) => agentHost.abort(sessionId),
     runScript: execPluginScript,
     loadImage: loadSurface,
@@ -1940,7 +2043,9 @@ void app.whenReady().then(async () => {
     channels,
     providers,
     settings,
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 幕后 / 编排投递的轮次：会话身份（backstage / parentId）已经把它们挡在闸门外，
+    // 这里仍标 channel——发起者是机器，不写成 user（免得以后判据变严时漏挡）
+    submitTurn: (input) => agentIpc.submitTurn(input, "channel"),
     steer: (sessionId, text, delivery) => agentHost.steer(sessionId, text, delivery),
     abort: (sessionId) => agentHost.abort(sessionId),
     cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
@@ -1984,7 +2089,8 @@ void app.whenReady().then(async () => {
     providers,
     settings,
     workspaces,
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 自动化发起的轮次（含 this_session 投回用户会话）：电脑使用闸门据此不弹看不见的授权
+    submitTurn: (input) => agentIpc.submitTurn(input, "automation"),
   };
   const automationScheduler = new AutomationScheduler({
     store: automationStore,

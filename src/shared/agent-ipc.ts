@@ -21,7 +21,12 @@ import type { ReplyLang } from "./reply-language.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "./computer-use.ts";
-import type { EmergencyStopBroadcast } from "./computer-use.ts";
+import type {
+  ComputerUseConsentAskCancelledEvent,
+  ComputerUseConsentAskEvent,
+  ComputerUseConsentStateEvent,
+  EmergencyStopBroadcast,
+} from "./computer-use.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
@@ -216,6 +221,13 @@ export const ipcChannels = {
    * 用量环菜单里「为这条会话打开 / 关闭自动压缩」用。
    */
   sessionSetAutoCompact: "session:set-auto-compact",
+  /**
+   * 电脑使用的会话授权（2026-11-27）：载荷 (sessionId, 任意) —— **只写回 `"unset"`（撤销）**，
+   * 第二个参数只为占位（handler 不读它）。落 meta（computerUseConsent）。
+   * allowed / denied 只由主进程闸门在用户回答后自己落盘（那一刻只有主进程知道真的发生了
+   * 什么）；这条通道故意不能把字段写成 allowed——界面没有授予权。
+   */
+  sessionSetComputerUseConsent: "session:set-computer-use-consent",
   /**
    * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
    * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
@@ -1850,10 +1862,30 @@ export type AgentEvent =
     }
   /**
    * 急停（`Control+Alt+Shift+Escape`）：主进程广播，不是 agent 进程发的（`skillsChanged`
-   * 同款：主进程借同一条广播通道）。2026-11-16「只留放行」后没有授权可撤：急停的全部
-   * 语义 = 停轮 + 放租约（agent 进程与主进程各自接住）。**沙箱不关**——现场留着给用户看。
+   * 同款：主进程借同一条广播通道）。
+   *
+   * 语义 = 停轮 + **撤销电脑使用授权**（2026-11-27 起：所有非 unset 的会话 `computerUseConsent`
+   * 复位成 `unset`，下一次电脑操作会重新问一次用户；挂起中的提问按 **cancelled** 结掉——
+   * 不写盘，用户没有表态，那不是拒绝）。
+   * **沙箱不关**——现场留着给用户看。
    */
   | ({ type: "computerUseEmergencyStop" } & EmergencyStopBroadcast)
+  /* ---------- 电脑使用的会话授权（2026-11-27）：提问与状态两条广播 ---------- */
+  /**
+   * 主进程 → renderer：电脑工具被授权闸门挡住，等用户回答。挂起态不落盘；
+   * 回答走 `computer-use:consent-answer`，状态变化由 `computerUseConsentState` 跟上。
+   */
+  | ComputerUseConsentAskEvent
+  /**
+   * 主进程 → renderer：这一轮结束了，挂起的提问作废（**不是拒绝**，没有写 meta）。
+   * 界面上把确认行撤掉；用户之后再也没机会回答它。
+   */
+  | ComputerUseConsentAskCancelledEvent
+  /**
+   * 主进程 → renderer：某条会话的授权状态变了（回答 / 超时按拒绝 / 撤销 / 急停复位）。
+   * 带着 requestId 时，renderer 按它清掉那张挂起的确认行。
+   */
+  | ComputerUseConsentStateEvent
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

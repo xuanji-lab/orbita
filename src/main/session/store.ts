@@ -27,6 +27,7 @@ import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
+import type { ComputerUseConsent } from "../../shared/computer-use.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
 
@@ -673,17 +674,34 @@ export class SessionStore {
   /**
    * 改 meta 上的字段。**六处「读 → 改一个字段 → 原子写回」收成这一个**——
    * meta 不在就悄悄不做：会话可能刚被别处删掉，为此抛错没有意义。
+   * 需要知道「到底写没写」的调用方用 `updateExisting`。
    */
   private update(
     id: string,
     changes: Partial<SessionMeta> | ((meta: SessionMeta) => Partial<SessionMeta> | null),
   ): Promise<void> {
+    return this.updateExisting(id, changes).then(() => undefined);
+  }
+
+  /**
+   * 与 `update` 同一条写链，但**回一句到底有没有落下**：true = 读到 meta 并原子写成功了；
+   * false = 会话不在（或变更函数说不动）。
+   *
+   * 为什么需要它：`update` 对不存在的会话是静默 no-op，调用方只 await 不抛错就会把
+   * 「没写」当成「写成功」。电脑使用授权的闸门就踩过这个：会话在提问挂起期间被删 →
+   * 写 allowed「成功」→ 动作真的下发（不存在的会话本该 fail closed）。
+   */
+  private updateExisting(
+    id: string,
+    changes: Partial<SessionMeta> | ((meta: SessionMeta) => Partial<SessionMeta> | null),
+  ): Promise<boolean> {
     return this.queueMeta(id, async () => {
       const meta = await this.readMeta(id);
-      if (meta === null) return;
+      if (meta === null) return false;
       const patch = typeof changes === "function" ? changes(meta) : changes;
-      if (patch === null) return;
+      if (patch === null) return false;
       await this.writeMeta({ ...meta, ...patch });
+      return true;
     });
   }
 
@@ -774,6 +792,16 @@ export class SessionStore {
   /** 会话级自动压缩开关：只落 meta，下一轮开轮现读（sessionCompaction 与全局偏好合并） */
   setAutoCompact(id: string, enabled: boolean): Promise<void> {
     return this.update(id, { autoCompact: enabled });
+  }
+
+  /**
+   * 电脑使用的会话授权（2026-11-27）：只落 meta，闸门在下一条电脑工具执行前现读。
+   * 消费者有两处：主进程闸门（回答 / 超时 / 急停之后写）与 renderer 的撤销（写回 unset）。
+   * 两者共用 `updateExisting` 的读-改-写链，不会把同一条 meta 上的其它字段冲掉。
+   * **返回是否真的写下了**（false = 会话不在）——闸门据此把「写不进去」收成拒绝。
+   */
+  setComputerUseConsent(id: string, consent: ComputerUseConsent): Promise<boolean> {
+    return this.updateExisting(id, { computerUseConsent: consent });
   }
 
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */

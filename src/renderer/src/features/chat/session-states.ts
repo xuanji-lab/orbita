@@ -33,6 +33,7 @@ import {
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { QuotaExhaustedHint } from "@shared/quota";
 import type { TranscriptRecord } from "@shared/session";
+import type { ComputerUseConsent } from "@shared/computer-use";
 import type { Messages } from "../../messages-en.ts";
 
 /**
@@ -202,6 +203,20 @@ export interface SessionEntry {
   intentRecalls: readonly IntentRecallRecord[];
   /** 挂起的回答前确认（intentAsk 事件；应答 / 取消后清空）。ephemeral */
   intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
+  /* ---------- 电脑使用的会话授权（2026-11-27） ---------- */
+  /**
+   * 挂起的授权确认（computerUseConsentAsk 事件）：电脑工具被栅门挡住、等用户点头。
+   * 对应 `computerUseConsentState` 带着同一个 requestId 到达时清空（回答 / 超时 / 取消都走它）。
+   * 纯 ephemeral，不落盘。
+   */
+  computerUseConsentAsk: Extract<AgentEvent, { type: "computerUseConsentAsk" }> | null;
+  /**
+   * 授权状态的实时镜像（computerUseConsentState 事件）。**null = 还没有事件**——
+   * 此时回落到会话 meta 上的持久值（useChatSession 的 derive）。
+   * 为什么要这一层：撤销 / 回答 / 急停之后，盘上的 meta 变了，但 renderer 手里那份
+   * `opened` 是打开时的快照；靠广播把最新值推到正在看的那一槽，状态行才会当场改口。
+   */
+  computerUseConsent: ComputerUseConsent | null;
   /**
    * 最近一次系统提示注入清单（contextInventory 事件，上下文面板「规则与说明」
    * 组的数据源）。**纯 ephemeral，不落盘**：规则每轮重注入、永不被压缩，最新一份
@@ -275,6 +290,8 @@ export const EMPTY_ENTRY: SessionEntry = {
   intentRun: null,
   intentRecalls: [],
   intentAsk: null,
+  computerUseConsentAsk: null,
+  computerUseConsent: null,
   rules: null,
   pendingEcho: null,
 };
@@ -387,6 +404,36 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
   }
   if (event.type === "intentAsk") {
     return update(states, event.sessionId, (entry) => ({ ...entry, intentAsk: event }));
+  }
+  /**
+   * 电脑使用授权：提问进挂起槽，状态变化进镜像；两者用 requestId 对上时清掉挂起槽。
+   * 状态事件可能先于 slot 存在（renderer 重载后刚开的会话）：update 会就地建槽，
+   * 与 intentAsk / failed 同一条纪律。
+   */
+  if (event.type === "computerUseConsentAsk") {
+    return update(states, event.sessionId, (entry) => ({ ...entry, computerUseConsentAsk: event }));
+  }
+  /**
+   * 这一轮结束了（停止 / 抢跑 / 会话删除 / 进程退出）：挂起的确认行作废。
+   * **不是拒绝**——主进程没写 meta，所以 computerUseConsent 一个字节都不动。
+   */
+  if (event.type === "computerUseConsentAskCancelled") {
+    return update(states, event.sessionId, (entry) =>
+      entry.computerUseConsentAsk?.requestId === event.requestId ? { ...entry, computerUseConsentAsk: null } : entry,
+    );
+  }
+  if (event.type === "computerUseConsentState") {
+    return update(states, event.sessionId, (entry) => ({
+      ...entry,
+      computerUseConsent: event.state,
+      // 按 requestId 清：别的会话 / 上一轮的提问不受影响（陈旧应答不串台）
+      ...(event.requestId !== undefined && entry.computerUseConsentAsk?.requestId === event.requestId
+        ? { computerUseConsentAsk: null }
+        : {}),
+      // 无 requestId 的状态变化（撤销 / 急停复位）说明该会话的授权被整体改写：
+      // 把残留的确认行一并收掉（那时主进程也已经把挂起的提问取消了）。
+      ...(event.requestId === undefined ? { computerUseConsentAsk: null } : {}),
+    }));
   }
   if (event.type === "failed") {
     // runtime 整个没了：所有槽归位；单条失败只归位那条（不存在的槽不凭空造）
@@ -564,6 +611,9 @@ export function seedFromDisk(
     intentRecalls: dedupeRecalls(intentRecalls),
     intentRun: null,
     intentAsk: null,
+    // 授权的挂起提问与实时镜像都不落盘：种盘即清，回落到 meta 上的持久值
+    computerUseConsentAsk: null,
+    computerUseConsent: null,
     // 注入清单不落盘：种盘即清（见字段注释），下一次开轮的推送会再填上
     rules: null,
     pendingEcho: null,
@@ -807,6 +857,17 @@ export function compactionBoundaryStatus(record: CompactedRecord, t: Messages): 
     return t.chat.tokensApprox(before);
   }
   return t.chat.tokensArrow(before, record.tokensAfter.toLocaleString("en-US"));
+}
+
+/** 按 requestId 跳槽摘掉挂起的授权提问。没有匹配就原样返回（同一引用）。 */
+export function removeComputerUseConsentAsk(states: SessionStates, requestId: string): SessionStates {
+  for (const [sessionId, entry] of states) {
+    if (entry.computerUseConsentAsk?.requestId !== requestId) continue;
+    const next = new Map(states);
+    next.set(sessionId, { ...entry, computerUseConsentAsk: null });
+    return next;
+  }
+  return states;
 }
 
 /** 按 requestId 跨槽摘掉挂起的意图确认请示。没有匹配就原样返回（同一引用）。 */

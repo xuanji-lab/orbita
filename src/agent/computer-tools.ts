@@ -24,6 +24,8 @@ import {
   COMPUTER_USE_DELIVERIES,
   COMPUTER_USE_DELIVERY_HINTS,
   COMPUTER_USE_SHOT_MAX_WIDTH,
+  COMPUTER_USE_CONSENT_TIMEOUT_MS,
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE,
   computerUseAudit,
   GUEST_COMMAND_TIMEOUT_MS,
   computerUseUiaErrors,
@@ -115,7 +117,8 @@ const DELIVERY_VERIFY_HINT = `This tool is how you check: ${COMPUTER_USE_DELIVER
 const SCOPE =
   "Use this for **desktop GUI tasks** on the sandbox desktop. For web pages prefer the sandbox_* tools (DOM " +
   "level, they drive the sandbox's browser) or the host browser_* tools — they are faster and steadier than " +
-  "pixels. ";
+  "pixels. " +
+  COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE + " ";
 
 const BUSY =
   "The sandbox desktop belongs to **one session at a time** (pixel tools share the single screen and the " +
@@ -136,8 +139,13 @@ const NEEDS_SCREENSHOT =
  * 的动作判成失败——模型看到失败会重做同一个动作（browser-tools.ts 导航同款考量）。
  * 取主进程线 + 15s 余量：主进程自己的超时会回带人话的错误，broker 这条只兑「主进程
  * 失联」。常量在 shared/computer-use.ts（agent 进程不能 import 主进程模块）。
+ *
+ * **再加一段授权等待**（2026-11-27）：第一次电脑操作可能先停在「允许本会话 / 拒绝」
+ * 那行确认上——主进程栅门在那条请求里等用户回答（上限 COMPUTER_USE_CONSENT_TIMEOUT_MS，
+ * 120s）。broker 不等这一段的话，用户看着确认行点了允许，agent 那边已经先判「主进程没回执」
+ * 了。与 guest 命令自己的超时无关：那一条从真正下发那一刻才开始算。
  */
-const BROKER_TIMEOUT_MS = GUEST_COMMAND_TIMEOUT_MS + 15_000;
+const BROKER_TIMEOUT_MS = COMPUTER_USE_CONSENT_TIMEOUT_MS + GUEST_COMMAND_TIMEOUT_MS + 15_000;
 
 export function createComputerUseTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
   /**
