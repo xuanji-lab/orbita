@@ -18,6 +18,8 @@
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
+import type { ComputerUseTurnContext } from "../shared/agent-ipc.ts";
+import { computerUseToolsActive } from "../shared/computer-use-platform.ts";
 import {
   COMPUTER_USE_DELIVERIES,
   COMPUTER_USE_DELIVERY_HINTS,
@@ -46,6 +48,33 @@ export const COMPUTER_USE_TOOL_NAMES = [
   "computer_scroll",
   "computer_uia",
 ] as const;
+
+/**
+ * 这一轮电脑使用要装配什么——**开轮装配的唯一判定点**（纯函数，runtime 只负责接上）。
+ *
+ * 为什么单独成函数：runtime 里有四处（调用预算、提示词工具名单、两组工具注册）原来各写一遍
+ * `command.computerUse?.enabled === true`，而真正关键的条件是「开关 **且** Windows」。任何一处
+ * 改回只认开关，非 Windows 上就会重新给出一组点了必失败的工具，且没有测试会红
+ * （2026-11-27 独立验收：把注册点改回旧写法，全部测试仍绿）。所以判定收成一个返回值，
+ * 四处都读它，四种组合由 computer-tools.test.ts 钉住。
+ *
+ * `tools` 同时管**两件事**：注册 computer_* + sandbox_* 两组工具（它们操作同一个沙箱，只给半套
+ * 只会让模型以为自己少了一半能力），以及讲「沙箱出网」「每轮动作预算」那两段系统提示词
+ * ——工具没注册却讲它怎么用、能不能上网，同样是假话。
+ */
+export interface ComputerUseTurnPlan {
+  /** 这一轮注册这两组工具，并讲那两段提示词（同一个判定：工具不在，就不讲它们） */
+  tools: boolean;
+  /** 沙箱这次是否允许出网：只在 tools 为 true 时有意义；缺省允许，与主进程 effectiveAllowNetwork 同缺省 */
+  allowNetwork: boolean;
+}
+
+export function computerUseTurnPlan(computerUse: ComputerUseTurnContext | undefined): ComputerUseTurnPlan {
+  return {
+    tools: computerUseToolsActive(computerUse),
+    allowNetwork: computerUse?.allowNetwork ?? true,
+  };
+}
 
 /** 交互类工具共同的底线：沙箱里也是用户的环境，别替用户做不可逆的事 */
 const CONSEQUENCES =

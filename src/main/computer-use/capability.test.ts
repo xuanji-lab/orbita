@@ -97,13 +97,16 @@ describe("能力探测解析", () => {
     assert.equal(parseHypervisorPresent("1"), "unknown");
   });
 
-  test("platformGuidance：macOS 给浏览器档的出路（真话：browser_* 可用，sandbox_* 要等 L3）", () => {
+  test("platformGuidance：macOS 给浏览器档的出路（真话：browser_* 可用，sandbox_* 没有——所有隔离后端都建在 Windows 宿主上）", () => {
     const mac = platformGuidance("darwin");
     assert.ok(mac.includes("macOS"), mac);
     // 「不是没实现，是平台不提供」这层意思必须说出来，否则 macOS 用户会一直等
     assert.ok(mac.includes("不是 Orbita 还没做"), mac);
     assert.ok(mac.includes("browser_navigate"), mac);
-    assert.ok(mac.includes("L3"), mac);
+    // 不能说「要等 L3」：L3 已经做了，只是同样只在 Windows 上（2026-11-27）
+    assert.ok(!mac.includes("路线图"), mac);
+    assert.ok(!mac.includes("要等"), mac);
+    assert.ok(mac.includes("Windows 宿主"), mac);
     // 不能把 sandbox_* 说成 macOS 能用：它每条命令都走 Windows 沙箱里的 guest 桥
     assert.ok(!mac.includes("sandbox_* 可用"), mac);
     // Linux 等其它平台：短一句，同样说明只在 Windows 上提供

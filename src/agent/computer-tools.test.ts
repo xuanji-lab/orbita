@@ -9,7 +9,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { RequestBroker } from "./request-broker.ts";
-import { COMPUTER_USE_TOOL_NAMES, createComputerUseTools } from "./computer-tools.ts";
+import { COMPUTER_USE_TOOL_NAMES, computerUseTurnPlan, createComputerUseTools } from "./computer-tools.ts";
 import { COMPUTER_USE_READ_TOOLS } from "../shared/permission.ts";
 import { GUEST_COMMAND_TIMEOUT_MS, COMPUTER_USE_DELIVERIES, COMPUTER_USE_DELIVERY_HINTS, type ComputerUseShot, type ComputerUseToolOutcome } from "../shared/computer-use.ts";
 
@@ -506,5 +506,40 @@ describe("computer_* 的审计归属（inputOrigin / maskedRegions / userTypingA
     assert.equal(audit.action, "uia-act");
     assert.equal(audit.inputOrigin, "agent");
     assert.deepEqual(audit.args, { action: "invoke", ref: "g12:r3", window: 4321 });
+  });
+});
+
+/**
+ * 开轮装配的唯一判定点（computerUseTurnPlan）：runtime 的四处都读它，所以这四条组合就是
+ * 「非 Windows 不注册 computer_* / sandbox_*」那条改动的守护测试。
+ * 2026-11-27 独立验收发现：把 runtime 的注册点改回旧的 `command.computerUse?.enabled === true`，
+ * 全部测试仍绿——因为判定当时散在四处、没有可测的入口。把判定收成一个纯函数之后，
+ * 「改回只认 enabled」会让下面第三条当场变红。
+ */
+describe("computerUseTurnPlan（这一轮装配什么）", () => {
+  test("enabled=false：不注册工具、也不讲那两段提示词（allowNetwork 如实带着）", () => {
+    assert.deepEqual(computerUseTurnPlan({ enabled: false, platformSupported: true, allowNetwork: false }), {
+      tools: false,
+      allowNetwork: false,
+    });
+  });
+
+  test("enabled=true + win32：注册工具、讲提示词，出网按设置", () => {
+    assert.deepEqual(computerUseTurnPlan({ enabled: true, platformSupported: true, allowNetwork: true }), {
+      tools: true,
+      allowNetwork: true,
+    });
+    assert.equal(computerUseTurnPlan({ enabled: true, platformSupported: true, allowNetwork: false }).allowNetwork, false);
+  });
+
+  test("enabled=true + darwin：开关开着也不注册（这就是改回只认 enabled 会红的那一条）", () => {
+    assert.deepEqual(computerUseTurnPlan({ enabled: true, platformSupported: false, allowNetwork: true }), {
+      tools: false,
+      allowNetwork: true,
+    });
+  });
+
+  test("computerUse 缺席（旧命令形状 / 开关从没打开）：不注册，出网按缺省允许", () => {
+    assert.deepEqual(computerUseTurnPlan(undefined), { tools: false, allowNetwork: true });
   });
 });

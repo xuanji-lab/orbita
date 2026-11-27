@@ -1143,6 +1143,24 @@ export const en = {
 
   /** 设置 › 电脑使用（computer-use-view.ts 是它的纯派生层） */
   computerUse: {
+    /* Shown instead of the controls on platforms that cannot run computer use (2026-11-27):
+       nothing here can start a sandbox, and every control that would try is a guaranteed failure */
+    platformUnsupported: {
+      title: "Computer use can't run on this computer",
+      body: {
+        macos:
+          "Computer use runs inside a Windows Sandbox, and macOS doesn't have one. What does work on macOS is the built-in browser's tool group (browser_navigate / browser_extract / browser_click / browser_screenshot): web tasks still go ahead, just not on an isolated desktop.",
+        linux:
+          "Computer use runs inside a Windows Sandbox, and Linux doesn't have one — nor a replacement isolated desktop.",
+        other: "Computer use is only available on Windows; this platform can't run it.",
+      },
+      requirement:
+        "To use it on Windows you need Pro / Enterprise / Education (Home has no Windows Sandbox feature) and the Windows Sandbox optional feature turned on.",
+      // Platform value unknown (preload bridge missing → api.platform is an empty string): neither
+      // controls nor the unsupported card — blaming the platform here would misattribute a startup failure
+      unknown:
+        "The interface isn't connected to the main process yet, so it can't tell whether this computer supports computer use. Restart the app and check this page again.",
+    },
     capabilityGroup: "Capability check",
     sandboxFeature: "Windows Sandbox",
     sandboxFeatureInfo:
@@ -1156,7 +1174,7 @@ export const en = {
     /** 隔离档位（IsolationTier）：只回答「这台机器现在能到哪一档」，到不了更高的原因在 guidance */
     isolationTier: "Isolation level",
     isolationTierInfo:
-      "How far this machine can go. L1 Browser: web automation in the built-in browser — every platform has it. L2 Windows Sandbox: mouse, keyboard and the browser inside the sandbox — needs Windows Pro / Enterprise / Education with Windows Sandbox enabled and virtualisation on. L2b Multi-session isolation: one OS session per agent, invisible to each other (and to the host's EnumWindows) — but it has no real pointer or keyboard, so clicks and typing go through UIA / CDP instead; works on Windows Home too. The next level, a Linux microVM, is still on the roadmap.",
+      "How far this machine can go. L1 Browser: web automation in the built-in browser — every platform has it. L2 Windows Sandbox: mouse, keyboard and the browser inside the sandbox — needs Windows Pro / Enterprise / Education with Windows Sandbox enabled and virtualisation on. L2b Multi-session isolation: one OS session per agent, invisible to each other (and to the host's EnumWindows) — but it has no real pointer or keyboard, so clicks and typing go through UIA / CDP instead; works on Windows Home too. L3, a Linux desktop VM, is Windows-only as well (its host side runs on Windows virtualisation).",
     tierFallback: "Why it can't go higher is in the steps above",
     tiers: {
       l1: "L1 · Browser",

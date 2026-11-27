@@ -784,6 +784,42 @@ a.exp-pr:hover {
   padding-bottom: 0;
 }
 
+/* 非 Windows 上的整页说明卡（SettingsView 的 ComputerUseUnsupported，2026-11-27）：
+   配方同 .cu-shot（面板色 + 发丝框 + 大圆角）——它是一整块内容，不是设置行，不套第二张卡。
+   图标按警示语义取 danger 变量（不写裸色）；文字只用两档字号（标题 lg / 正文 sm）。 */
+.cu-unsupported {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-panel);
+}
+
+.cu-unsupported-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+}
+
+.cu-unsupported-title svg {
+  color: var(--color-danger);
+  flex: none;
+}
+
+.cu-unsupported-body {
+  margin: 0;
+  max-width: 52ch;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+}
+
 /* 行底的一句常驻说明（SettingRow 的 below 那一格）：跨完两列，紧贴上面一行。
    用在「改动什么时候生效」这类会被误读的时机上——不能只靠 info 的 hover 说清。
    负外边距抵消一部分行间距：它是上一行的补句，不该与控件再隔一整格 */

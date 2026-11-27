@@ -24,6 +24,7 @@ import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, ElevenlabsVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
 import type { ComputerUseLeaseStatus, ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
 import { COMPUTER_USE_BACKEND_CHOICES, COMPUTER_USE_BROWSER_CHOICES, type ComputerUseBrowser } from "@shared/computer-use";
+import type { ComputerUsePlatformSupport } from "@shared/computer-use-platform";
 import { playSpeech } from "../voice/speech-playback.ts";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
@@ -36,6 +37,7 @@ import {
   browserChoice,
   browserLabel,
   browserPatch,
+  computerUsePage,
   probeBlocksStart,
   probeVisual,
   sandboxControl,
@@ -136,6 +138,8 @@ export function SettingsView(props: {
    *  正常操作进不到这个门：App 的 settingsTab 只由侧栏导航行改写，导航行已过滤。
    *  这里再拦一道是兼容盘上手改 settings.json 的情形——页头与内容各自退回通用页。 */
   const computerUse = props.settings.experimentalFeatures?.["computer-use"] === true;
+  /** 这一页画控件还是警示卡：平台判定读 shared 的同一个谓词（与主进程 / agent 工具注册同源） */
+  const cuPage = computerUsePage(api.platform);
   const active =
     SETTINGS_TABS.find((tab) => tab.id === props.tab && (tab.id !== "computer-use" || computerUse)) ??
     SETTINGS_TABS[0];
@@ -196,8 +200,22 @@ export function SettingsView(props: {
         </div>
       ) : props.tab === "computer-use" && computerUse ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
-          {/* 出网开关读写同一份设置（App 的 changeSettings → api.settings.set），不另开通道 */}
-          <ComputerUseView settings={props.settings} onChange={props.onSettingsChange} />
+          {/* 平台闸门（2026-11-27）：非 Windows 上整页换说明卡，一个启动按钮都不画——
+              那些按钮在那边点了必然失败（主进程 start() 与 agent 工具注册读同一个谓词）。
+              入口不藏：藏掉会让用户以为页面坏了。平台值不明（preload 桥没就绪）时
+              两样都不给，只留一句中性提示：这时候报「平台不支持」是错误归因 */}
+          {cuPage.kind === "unknown" ? (
+            <div className="set-page">
+              <p className="set-row-hint" role="status">
+                {t.computerUse.platformUnsupported.unknown}
+              </p>
+            </div>
+          ) : cuPage.kind === "unsupported" ? (
+            <ComputerUseUnsupported support={cuPage.support} />
+          ) : (
+            /* 出网开关读写同一份设置（App 的 changeSettings → api.settings.set），不另开通道 */
+            <ComputerUseView settings={props.settings} onChange={props.onSettingsChange} />
+          )}
         </div>
       ) : props.tab === "guide" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -1947,6 +1965,32 @@ function ChatStatusToggle() {
 
 // ── 电脑使用视图（自 cu/full 移植，见「设置 › 电脑使用」说明） ──
 // ── 设置 › 电脑使用 ──────────────────────────────────────────────────────
+
+/**
+ * 非 Windows 上的整页说明（2026-11-27）。
+ *
+ * 为什么整页换掉而不是把控件置灰：那边的主进程 start() 一律拒（先报平台那条），agent
+ * 也不再拿到 computer_* / sandbox_*——一组点了必然失败的按钮会把「不支持」误写成「坏了」。
+ * 为什么不把入口藏掉：藏掉同样像坏了，用户会一遍遍找；说明 + 今天你能用什么才诚实。
+ * 正文按 reasonKey 取（平台枚举与文案表的对应由 computer-use-view.test.ts 钉住）。
+ */
+function ComputerUseUnsupported(props: { support: ComputerUsePlatformSupport }) {
+  const t = useT();
+  // reasonKey 为 null 只可能发生在 Windows（supported），这里兜一层 other，不让正文空着
+  const reason = props.support.reasonKey ?? "other";
+  return (
+    <div className="set-page">
+      <section className="cu-unsupported">
+        <h2 className="cu-unsupported-title">
+          <Icon name="triangle-alert" size={16} strokeWidth={1.8} />
+          {t.computerUse.platformUnsupported.title}
+        </h2>
+        <p className="cu-unsupported-body">{t.computerUse.platformUnsupported.body[reason]}</p>
+        <p className="cu-unsupported-body">{t.computerUse.platformUnsupported.requirement}</p>
+      </section>
+    </div>
+  );
+}
 
 /**
  * 设置 › 电脑使用（PR1）：能力检测、沙箱启停、手动「看一眼」。单独一页而不是

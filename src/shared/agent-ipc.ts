@@ -856,6 +856,13 @@ export interface ComputerUseTurnContext {
   /** 实验开关 settings.experimentalFeatures["computer-use"]：开着才注册沙箱工具组 */
   enabled: boolean;
   /**
+   * 这台机器是不是 Windows（`computerUsePlatformSupport(process.platform).supported`，
+   * 唯一的平台判定在 shared/computer-use-platform.ts）。非 Windows 上**工具组不注册**：
+   * 拒绝文案在那里只能给出「去设置里启动沙箱」，一句永远做不到的建议，模型会反复重试。
+   * 与 enabled 分开两个字段：设置页仍要保留入口与说明（它读的是同一个谓词）。
+   */
+  platformSupported: boolean;
+  /**
    * 沙箱是否允许出网（`effectiveAllowNetwork`，**缺席即允许**）。false = 宿主渲染的 .wsb
    * 带 `<Networking>Disable</Networking>`，网页打不开是设置造成的，不是网站的问题。
    * 只在 enabled 为 true 时有意义（开关关着时沙箱工具根本不注册）。

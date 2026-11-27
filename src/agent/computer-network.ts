@@ -16,6 +16,7 @@
  * computer-network.test.ts 钉着。
  */
 import type { ComputerUseTurnContext } from "../shared/agent-ipc.ts";
+import { computerUseToolsActive } from "../shared/computer-use-platform.ts";
 import {
   COMPUTER_USE_HARD_LIMIT,
   COMPUTER_USE_SOFT_LIMIT,
@@ -60,8 +61,8 @@ export function sandboxNetworkNote(allowNetwork: boolean): string {
  * 先讲一次纪律——还没调工具就决定「换个地址再试」的模型，看不到失败文案也看得到它。
  */
 export function computerUseNetworkGuideline(computerUse: ComputerUseTurnContext | undefined): string {
-  // 开关关着时沙箱工具根本没注册，讲出网是废话；缺席（旧夹具）= 什么都不讲
-  if (computerUse === undefined || !computerUse.enabled) return "";
+  // 工具组没注册（开关关着 / 不是 Windows）：讲出网是废话；缺席（旧夹具）= 什么都不讲
+  if (computerUse === undefined || !computerUseToolsActive(computerUse)) return "";
   if (computerUse.allowNetwork) return "";
   return [
     "<orbita-sandbox-network>",
