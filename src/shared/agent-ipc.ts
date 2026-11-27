@@ -193,6 +193,13 @@ export const ipcChannels = {
   sessionLoad: "session:load",
   /** 拉更早的一页（滚动触顶）：载荷 (id, before 记录 id, limit)，回 SessionOlderPage */
   sessionLoadOlder: "session:load-older",
+  /**
+   * 状态卡摘要（2026-11-27）：载荷会话 id 数组（主会话 + 全部子会话一批），回
+   * `Record<string, StatusDigestState | null>`（null = 会话已删）。主进程把每条会话的
+   * 记录 fold 成摘要（sessions/<id>.status.json），renderer 取回后只把尾窗里比摘要新的
+   * 记录用同一个 fold 叠上去——打开大会话不再逐页拉全量历史。
+   */
+  sessionStatusDigests: "session:status-digests",
   sessionRename: "session:rename",
   sessionPin: "session:pin",
   /** 星标：价值标记，不参与排序（排序只认 pinned）；消费者是侧栏标识与筛选 chip */

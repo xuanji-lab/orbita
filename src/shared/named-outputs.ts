@@ -7,7 +7,7 @@
  * 点名与否由用户读到的话决定，不靠猜哪个是「最终的」。工具声明的产物（slides_* / doc_open / 导出 / show_image）
  * 本身就是声明，不走这里（process-rows.ts 的 turnOutputs）。
  */
-import type { MediaArtifact } from "../../../../shared/revert.ts";
+import type { MediaArtifact } from "./revert.ts";
 
 function norm(text: string): string {
   return text.replace(/\\/g, "/").toLowerCase();

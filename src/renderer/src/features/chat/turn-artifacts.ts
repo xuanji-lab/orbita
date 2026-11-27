@@ -11,7 +11,7 @@
  */
 import { isWebArtifactFile } from "../../../../shared/files.ts";
 import type { MediaArtifact } from "../../../../shared/revert.ts";
-import { namedMedia, namedPaths } from "./named-outputs.ts";
+import { namedMedia, namedPaths } from "../../../../shared/named-outputs.ts";
 import type { RenderEntry } from "./tool-results.ts";
 
 const DOC_FILE = /\.(?:md|markdown|txt)$/i;

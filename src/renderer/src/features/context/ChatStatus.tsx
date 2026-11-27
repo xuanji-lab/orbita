@@ -17,7 +17,7 @@ import { useParentChannels } from "../chat/useChannelMessages";
 import { channelHold, useChannelHold } from "../chat/channel-hold-store.ts";
 import { Switch } from "../settings/SettingControls";
 import type { ChatFileScope } from "../chat/chat-file-scope.ts";
-import { formatDuration } from "../chat/named-outputs.ts";
+import { formatDuration } from "../../../../shared/named-outputs.ts";
 import { useMemorySession } from "../memory/useMemory.ts";
 import { useProgressDigest } from "./TaskProgress";
 import { useGoalLedger } from "./useGoalLedger.ts";
