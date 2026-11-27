@@ -5,6 +5,7 @@ import {
   COMPUTER_USE_BROWSER_CHOICES,
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_DEFAULT_BROWSER,
+  computerUseBackendChoices,
 } from "../../../../shared/computer-use.ts";
 import type { AppSettings } from "../../../../shared/settings.ts";
 import { en } from "../../messages-en.ts";
@@ -12,6 +13,9 @@ import { zh } from "../../messages-zh.ts";
 import {
   allowNetworkEnabled,
   allowNetworkPatch,
+  backendChoice,
+  backendChoicesView,
+  backendPatch,
   browserChoice,
   browserLabel,
   browserPatch,
@@ -306,6 +310,59 @@ describe("电脑使用 · 平台闸门（这一页画控件还是警示卡）", 
     for (const table of [zh, en]) {
       assert.ok(table.computerUse.platformUnsupported.title.length > 0);
       assert.ok(table.computerUse.platformUnsupported.requirement.length > 0);
+    }
+  });
+});
+
+/**
+ * 开发者后端的门在设置页这一侧的表现：列表来自主进程（`api.computerUse.backends()`），
+ * 这里只验纯派生层——三档 / 两档、以及「已存 qemu 但开关关」时的保留选中 + 警示。
+ */
+describe("设置页 · 隔离后端（开发者门）", () => {
+  test("开关开：三档都列出，只有 qemu 带实验标记（文字标记，不靠颜色）", () => {
+    const view = backendChoicesView("wsb", computerUseBackendChoices(true));
+    assert.deepEqual(
+      view.options.map((option) => option.id),
+      ["wsb", "isolation-session", "qemu"],
+    );
+    assert.deepEqual(
+      view.options.map((option) => option.experimental),
+      [false, false, true],
+    );
+    assert.deepEqual(
+      view.options.map((option) => option.locked),
+      [false, false, false],
+    );
+    assert.equal(view.devBlocked, false);
+  });
+
+  test("开关关：只有两档，qemu 连出现都不出现", () => {
+    const view = backendChoicesView("wsb", computerUseBackendChoices(false));
+    assert.deepEqual(
+      view.options.map((option) => option.id),
+      ["wsb", "isolation-session"],
+    );
+    assert.equal(view.devBlocked, false);
+  });
+
+  test("已存 qemu + 开关关：**保留选中**（画成锁住的一档）+ devBlocked（行下警示与启动置灰的依据）", () => {
+    const view = backendChoicesView("qemu", computerUseBackendChoices(false));
+    assert.deepEqual(
+      view.options.map((option) => `${option.id}:${option.locked}:${option.experimental}`),
+      ["wsb:false:false", "isolation-session:false:false", "qemu:true:true"],
+    );
+    assert.equal(view.devBlocked, true);
+    // 设置的读取本身不被改写——主进程序列化时存进去的还是 qemu（backendChoice 只读不归一）
+    assert.equal(backendChoice({ computerUse: { backend: "qemu" } } as AppSettings), "qemu");
+  });
+
+  test("已存两档时开关关也照常可选（不把普通后端误锁）", () => {
+    for (const saved of ["wsb", "isolation-session"] as const) {
+      const view = backendChoicesView(saved, computerUseBackendChoices(false));
+      assert.equal(view.devBlocked, false);
+      assert.equal(view.options.some((option) => option.locked), false);
+      // 换后端的补丁只发 backend 一个键，不碰 allowNetwork / browser
+      assert.deepEqual(backendPatch(saved), { computerUse: { backend: saved } });
     }
   });
 });

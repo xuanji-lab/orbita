@@ -22,6 +22,8 @@
  */
 import {
   COMPUTER_USE_DESKTOP_KEY,
+  computerUseDevBackendRefusal,
+  devBackendsEnabled,
   type ComputerUseBackend,
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
@@ -55,6 +57,11 @@ export interface ComputerUseRuntimeDeps {
   isolation: IsolationSessionController;
   /** 当前设置选的后端（每次 start 现读，改设置下一次启动生效） */
   backend: () => ComputerUseBackend | Promise<ComputerUseBackend>;
+  /**
+   * 开发者后端（qemu）是否放行。缺省读 `ORBITA_CU_DEV_BACKENDS`（缺席 = 关）。
+   * 单测注入一个常量，**不要**在测试里改进程环境。
+   */
+  devBackends?: () => boolean;
   /** L3 的后端（QEMU）。不传就用默认配置自己造一个——单测与不关心镜像路径的调用方不必给 */
   qemu?: SandboxProvider;
   /** 能力探测里的 L2b 依赖检查 */
@@ -113,6 +120,17 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    */
   const start = async (): Promise<ComputerUseStartResult> => {
     const wanted = await deps.backend();
+    /**
+     * 开发者后端的门（**真闸门，不是只藏 UI**）。
+     *
+     * 位置要在「停别的后端」之前：一个本来就不允许启动的档位，不该先把正在跑的
+     * 沙箱拆掉再说不行——用户点一次「启动」就丢掉手上正在用的桌面，比拒绝本身更糟。
+     * 文案是给人看的整句（含自备镜像与环境变量），不是错误码：设置页原样显示它。
+     */
+    const devAllowed = deps.devBackends ?? (() => devBackendsEnabled(process.env));
+    if (wanted === "qemu" && !devAllowed()) {
+      return { ok: false, error: computerUseDevBackendRefusal() };
+    }
     // 三个后端各自一份整机资源（WSB 的 VM / MXC 的 OS 会话 / QEMU 的 VM），同时起两只是
     // 两份隔离同时在跑：设置页说不清现在用的是哪个，租约也说不对。所以先停别的。
     const others = providers.filter((provider) => provider.id !== wanted && provider.status().state !== "off");

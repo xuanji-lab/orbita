@@ -152,7 +152,9 @@ import { sendGuestCommand } from "./computer-use/bridge-client.ts";
 import {
   BRIDGE_INFO_FILE,
   COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
+  computerUseBackendChoices,
   computerUseGuestCommands,
+  devBackendsEnabled,
 } from "../shared/computer-use.ts";
 import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
 import { SandboxController } from "./computer-use/sandbox.ts";
@@ -860,10 +862,17 @@ void app.whenReady().then(async () => {
       broadcastComputerUseStatus(status);
     },
   });
+  /**
+   * 开发者后端（qemu）的开关：默认关，只有以 ORBITA_CU_DEV_BACKENDS=1 启动应用才开。
+   * 启动时读一次：它在本次运行里不会变（环境变量不热更新）。两处消费同一个值——
+   * 运行时门面的 start 闸门与设置页拿到的可选列表，不能一处开一处关。
+   */
+  const computerUseDevBackends = devBackendsEnabled(process.env);
   const computerUse = createComputerUseRuntime({
     wsb: wsbComputerUse,
     isolation: computerUseIsolation,
     backend: async () => effectiveComputerUseBackend(await settings.read()),
+    devBackends: () => computerUseDevBackends,
     probeIsolation: () => computerUseIsolation.probe(),
   });
   /**
@@ -976,7 +985,17 @@ void app.whenReady().then(async () => {
   // 里面的浏览器逐个会话停掉（best effort、不等待：不能用一串浏览器命令拖住停沙箱按钮；
   // 桥已经死了就算了，VM 销毁会带走整个进程树）。
   // 租约也交给它：设置页「沙箱归属」一行读的是 dispatch 拿锁用的同一份桌面租约。
-  registerComputerUseIpc(computerUse, { beforeStop: () => { void cdp.stopAll(); } }, emergencyStop, computerUseLease);
+  registerComputerUseIpc(
+    computerUse,
+    {
+      beforeStop: () => {
+        void cdp.stopAll();
+      },
+      backends: () => computerUseBackendChoices(computerUseDevBackends),
+    },
+    emergencyStop,
+    computerUseLease,
+  );
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
