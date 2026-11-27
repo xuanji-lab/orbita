@@ -24,6 +24,26 @@ const ALLOWED_LATIN = new Set([
   "GitHub",
   // Chrome DevTools Protocol：电脑使用的浏览器通道就靠它（computerUse.browserInfo 讲「启动到 CDP 就绪」）
   "CDP",
+  // 电脑使用（cu/full）的专名：档位名与微软 / Windows 组件名
+  "L1",
+  "L2",
+  "L2b",
+  "L3",
+  "OS",
+  "UIA",
+  "Win11",
+  "MXC",
+  "IsolationSession",
+  "IsoSession",
+  "EnumWindows",
+  "Node",
+  "RDP",
+  "NoVNC",
+  "VNC",
+  "QEMU",
+  "WHPX",
+  "Hyper-V",
+  "guest",
   // 设置 › 语音：通话的语音合成厂商（2026-11-24）
   "ElevenLabs",
   // 协议 / 格式 / 技术名
