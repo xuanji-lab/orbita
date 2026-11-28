@@ -162,6 +162,7 @@ import {
   parseComputerUseConsent,
   parseComputerUseConsentSource,
   type ComputerUseTurnOrigin,
+  type SandboxStatus,
 } from "../shared/computer-use.ts";
 import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
 
@@ -842,21 +843,18 @@ void app.whenReady().then(async () => {
     closeSandboxWindow,
     // 首选：让 guest 自己关机（VM 停了窗口自然消失，不碰确认框）
     requestGuestShutdown,
-    onStatus: (status) => {
-      /*
-       * 沙箱没了（用户停 / 启动失败 / 运行中崩了），手上那把「桌面归谁」的租约一并作废：
-       * 持有者与排队者都是等着用同一个已经不存在的东西，留着只会让排队的会话排满
-       * 30 秒后收到一句「被某个会话占着」——那是一个不成立的原因。
-       * 这一顿用 ComputerUseLease（定义在 computer-use/lease.ts）。浏览器键也一起作废——
-       * 浏览器在沙箱里，沙箱没了它们就不存在了。
-       */
-      if (status.state === "off" || status.state === "error") {
-        computerUseLease.revoke(
-          status.state === "off" ? cuTexts().leaseReasonSandboxStopped : cuTexts().leaseReasonSandboxError,
-        );
-      }
-      broadcastComputerUseStatus(status);
-    },
+    /*
+     * 沙箱没了（用户停 / 启动失败 / 运行中崩了），手上那把「桌面归谁」的租约一并作废：
+     * 持有者与排队者都是等着用同一个已经不存在的东西，留着只会让排队的会话排满
+     * 30 秒后收到一句「被某个会话占着」——那是一个不成立的原因。
+     * 这一顿用 ComputerUseLease（定义在 computer-use/lease.ts）。浏览器键也一起作废——
+     * 浏览器在沙箱里，沙箱没了它们就不存在了。
+     */
+    onStatus: (status) =>
+      announceComputerUseStatus(status, {
+        stopped: cuTexts().leaseReasonSandboxStopped,
+        errored: cuTexts().leaseReasonSandboxError,
+      }),
   });
   /**
    * 沙箱里的资源归谁：一块桌面归一个会话（理由与状态机见 computer-use/lease.ts），
@@ -898,6 +896,26 @@ void app.whenReady().then(async () => {
     },
   });
   /**
+   * 三个隔离后端的**状态迁移唯一出口**：作废桌面租约 + 广播给所有窗口。
+   *
+   * 抽出来是因为 P0 就是这样漏掉的：WSB、L2b 各接了一份，QEMU 那一份谁也没接——
+   * VM 起来了设置页还显示「未启动」，「关闭」是灰的，用户在界面上停不掉机器。
+   * 从现在起三个后端（第三个经运行时门面转手）都走这一个函数，少接一处就会在
+   * runtime/qemu 的测试与真机验收里显形。
+   *
+   * 租约作废的语气按后端分开（沙箱 / 隔离会话）：排队者收到的「为什么没了」要说得对。
+   */
+  const announceComputerUseStatus = (
+    status: SandboxStatus,
+    reasons: { stopped: string; errored: string },
+  ): void => {
+    if (status.state === "off" || status.state === "error") {
+      computerUseLease.revoke(status.state === "off" ? reasons.stopped : reasons.errored);
+    }
+    broadcastComputerUseStatus(status);
+  };
+
+  /**
    * 运行时门面：两个隔离后端（L2 Windows 沙箱 / L2b 多会话隔离）选一个。
    *
    * L2b 的依赖（MXC 的 IsolationSession）是**可选**的：它的 SDK 会加载一个原生 DLL，
@@ -915,15 +933,12 @@ void app.whenReady().then(async () => {
     // 清理验证要判「agent 账号真的没了」：工作区之外，profile 目录也必须消失
     usersRoot: join(process.env.SystemDrive ?? "C:", "Users"),
     allowedApps: async () => effectiveGuestAllowExe(await settings.read()),
-    onStatus: (status) => {
-      // 与 L2 同一条纪律：隔离环境没了，桌面租约一并作废（排队者等的是一个不存在的东西）
-      if (status.state === "off" || status.state === "error") {
-        computerUseLease.revoke(
-          status.state === "off" ? cuTexts().leaseReasonIsolationStopped : cuTexts().leaseReasonIsolationError,
-        );
-      }
-      broadcastComputerUseStatus(status);
-    },
+    // 与 L2 同一条纪律：隔离环境没了，桌面租约一并作废（排队者等的是一个不存在的东西）
+    onStatus: (status) =>
+      announceComputerUseStatus(status, {
+        stopped: cuTexts().leaseReasonIsolationStopped,
+        errored: cuTexts().leaseReasonIsolationError,
+      }),
   });
   /**
    * 开发者后端（qemu）的开关：默认关，只有以 ORBITA_CU_DEV_BACKENDS=1 启动应用才开。
@@ -942,6 +957,16 @@ void app.whenReady().then(async () => {
      * 提示词也因此不会对它说「你没网」。
      */
     allowNetwork: async () => effectiveAllowNetwork(await settings.read()),
+    /**
+     * QEMU（L3）的状态迁移也走同一个出口。**以前这一行不存在**：VM 起来了设置页还显示
+     * 「未启动」、「关闭」还是灰的 —— 真机上用户停不掉那台 VM（P0）。
+     * 租约语气沿用「沙箱」（L3 也是一台沙箱 VM）。
+     */
+    onStatus: (status) =>
+      announceComputerUseStatus(status, {
+        stopped: cuTexts().leaseReasonSandboxStopped,
+        errored: cuTexts().leaseReasonSandboxError,
+      }),
     probeIsolation: () => computerUseIsolation.probe(),
   });
   /**

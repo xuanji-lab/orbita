@@ -17,6 +17,7 @@ import {
   type ComputerUseProbeResult,
   type ComputerUseScreenshotResult,
   type SandboxState,
+  type SandboxStatus,
 } from "../../../../shared/computer-use.ts";
 import type { AppSettings, SettingsPatch } from "../../../../shared/settings.ts";
 import { computerUsePlatformSupport, type ComputerUsePlatformSupport } from "../../../../shared/computer-use-platform.ts";
@@ -66,6 +67,48 @@ export function sandboxControl(state: SandboxState, pending: SandboxActionPendin
     canStop: (state === "starting" || state === "running" || state === "error") && pending !== "stop",
     canScreenshot: state === "running",
   };
+}
+
+/**
+ * 状态兜底轮询：**事件不是唯一真相**。
+ *
+ * 真机 P0（2026-11-28）：QEMU 后端起起来了（进程在、端口在、截图是桌面），但主进程一条
+ * `computer-use:status` 都没推——设置页一直「未启动」，「关闭」还是灰的，用户在界面上
+ * 停不掉那台 VM。事件那一处已经补上（qemu.ts 每次迁移都发），但「漏一条就把用户锁死」
+ * 这件事不能只靠事件：任何非稳态（启动中 / 运行中 / 关闭中）都可能在下一秒变，界面
+ * 必须自己问一次主进程。
+ *
+ * 周期按「现在最可能发生什么」定：
+ *   非稳态 / 刚点完动作 → 1.5 s（本来就在等状态变，慢一拍就难看）；
+ *   off / error      → 5 s（稳定态，但**不是不轮询**：漏事件的现场恰恰是「界面说 off、
+ *                        实际在跑」，若不轮询，用户永远等不到「关闭」变可点）。
+ */
+export const SANDBOX_STATUS_POLL_BUSY_MS = 1_500;
+export const SANDBOX_STATUS_POLL_IDLE_MS = 5_000;
+
+export function sandboxStatusPollMs(state: SandboxState, pending: boolean): number {
+  if (pending) return SANDBOX_STATUS_POLL_BUSY_MS;
+  return state === "starting" || state === "running" || state === "stopping"
+    ? SANDBOX_STATUS_POLL_BUSY_MS
+    : SANDBOX_STATUS_POLL_IDLE_MS;
+}
+
+/**
+ * 两次拉到的状态是否等价（相等就不 setState，免得每 1.5–5 秒白重渲染整页）。
+ * 只比这套状态机真有的字段：五个分支的并集（message / startedAt / bridgeVersion /
+ * backend / agentUserName）；off 与 stopping 没有额外字段。
+ */
+export function sameSandboxStatus(a: SandboxStatus, b: SandboxStatus): boolean {
+  if (a.state !== b.state) return false;
+  const left = a as { message?: string; startedAt?: number; bridgeVersion?: string; backend?: string; agentUserName?: string };
+  const right = b as typeof left;
+  return (
+    left.message === right.message &&
+    left.startedAt === right.startedAt &&
+    left.bridgeVersion === right.bridgeVersion &&
+    left.backend === right.backend &&
+    left.agentUserName === right.agentUserName
+  );
 }
 
 export interface StatusVisual {

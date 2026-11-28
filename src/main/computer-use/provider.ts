@@ -106,6 +106,15 @@ export interface SandboxProvider extends ComputerUseGuest {
   guestCommandReply(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestCommandReply>;
   /** 带 JPEG 兄弟文件的命令（cdp-shot / 像素截图共用） */
   guestShot(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestShotReply>;
+  /**
+   * **可选**：状态迁移的推送。实现了的后端自己发，门面（runtime.ts）把它接到
+   * deps.onStatus（= index.ts 的 broadcastComputerUseStatus）。
+   *
+   * 为什么是可选而不是人人必备：WSB / L2b 不是门面造的，它们在 index.ts 里各自接了
+   * 自己的 onStatus；只有门面亲手造的 QEMU 需要这条接线。**没有实现 ≠ 不用推**：
+   * 谁在别处推了，就在那边推完整（P0 就是「三个后端里有一个谁也没接」）。
+   */
+  subscribeStatus?(listener: (status: SandboxStatus) => void): void;
   /** 应用退出时的总清理（WSB 是同步的、其余是异步的，所以两边都允许） */
   dispose(): void | Promise<void>;
 }
