@@ -1295,7 +1295,7 @@ export const en = {
     emergencyGroup: "Safety",
     emergencyHotkey: "Emergency stop hotkey",
     emergencyHotkeyInfo:
-      "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. **It does not close the sandbox** — the screen stays for you to look at. Re-authorize to use computer use again.",
+      "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. It does not close the sandbox — the screen stays for you to look at. Re-authorize to use computer use again.",
     emergencyRegistered: "Registered and available",
     /** 主选被占用、降级到候选键位时说清「现在生效的是哪一个」（2026-11-28 验收 P2-2） */
     emergencyFallback: (preferred: string, active: string) =>

@@ -140,10 +140,8 @@ export async function applyComputerUseRequest(
         return {
           ok: true,
           text:
-            `Screenshot of the sandbox desktop: the image is ${shot.width}×${shot.height}, the physical screen is ` +
-            `${shot.nativeWidth}×${shot.nativeHeight}. Coordinates you pass to computer_click / computer_scroll are ` +
-            "pixels of this image. Take a fresh screenshot after every action to see what changed." +
-            captureNote(shot.capture),
+            cuTexts().rcptDesktopShot(shot.width, shot.height, shot.nativeWidth, shot.nativeHeight) +
+            captureNote(shot.capture, cuTexts()),
           shot: {
             width: shot.width,
             height: shot.height,
@@ -170,7 +168,7 @@ export async function applyComputerUseRequest(
           ok: true,
           delivery,
           text:
-            `Sent a ${kind} at (${request.x}, ${request.y}) on the sandbox desktop. ` +
+            cuTexts().rcptClickSent(kind, request.x, request.y) + " " +
             deliveryNote(delivery, evidence) +
             guestNote(reply.resp) +
             admissionNote(reply.admission, sessionId) +
@@ -185,7 +183,7 @@ export async function applyComputerUseRequest(
           ok: true,
           delivery,
           text:
-            `Typed ${request.text.length} characters into the focused window on the sandbox desktop. ` +
+            cuTexts().rcptTypedChars(request.text.length) + " " +
             deliveryNote(delivery, evidence) + guestNote(reply.resp) + deferredNote(reply),
         };
       }
@@ -196,7 +194,7 @@ export async function applyComputerUseRequest(
         return {
           ok: true,
           delivery,
-          text: `Pressed ${request.key} on the sandbox desktop. ` + deliveryNote(delivery, evidence) +
+          text: cuTexts().rcptKeyPressed(request.key) + " " + deliveryNote(delivery, evidence) +
             guestNote(reply.resp) + deferredNote(reply),
         };
       }
@@ -212,8 +210,8 @@ export async function applyComputerUseRequest(
           ok: true,
           delivery,
           text:
-            `Scrolled by ${request.deltaY} wheel notch(es) at (${request.x}, ${request.y}) on the sandbox desktop ` +
-            `(positive = down). ${deliveryNote(delivery, evidence)}` + guestNote(reply.resp) +
+            `${cuTexts().rcptScrolled(request.deltaY, request.x, request.y)} ${deliveryNote(delivery, evidence)}` +
+            guestNote(reply.resp) +
             admissionNote(reply.admission, sessionId) +
             deferredNote(reply),
         };
@@ -391,13 +389,7 @@ function failedReply(
  */
 function deferredNote(reply: GuestCommandReply): string {
   if (reply.ok !== true || reply.yielded !== true) return "";
-  const waited = reply.waitedMs === undefined ? 0 : reply.waitedMs;
-  return (
-    ` It was held back for ${waited}ms first: a person was typing or clicking in the sandbox, and a real ` +
-    "user's input takes priority over the agent's, so the action waited until the desktop went quiet. If the " +
-    "user keeps working, expect further delays — prefer the lanes that do not take over the desktop " +
-    "(sandbox_* browser commands, computer_uia on controls, screenshots of a single window)."
-  );
+  return cuTexts().rcptDeferred(reply.waitedMs ?? 0);
 }
 
 /**
@@ -422,19 +414,14 @@ async function windowShot(
     const candidates = typeof target === "string" ? await candidateLine(controller) : "";
     return { ok: false, error: shot.error + candidates };
   }
-  const restored = shot.restoredFromMinimized
-    ? " It had been minimized and has been restored (without taking focus)."
-    : "";
+  const texts = cuTexts();
   return {
     ok: true,
     text:
-      `Screenshot of the window "${shot.title}" (hwnd ${shot.hwnd}) in the sandbox: the image is ` +
-      `${shot.width}×${shot.height}, the window itself is ${shot.nativeWidth}×${shot.nativeHeight} physical pixels. ` +
-      "It is captured from the window's own surface, so other windows covering it do not matter." +
-      restored +
-      " Coordinates from THIS image are window pixels, not desktop pixels: do not pass them to " +
-      "computer_click — take a normal computer_screenshot (without a window) before clicking." +
-      captureNote(shot.capture),
+      texts.rcptWindowShot(shot.title, shot.hwnd, shot.width, shot.height, shot.nativeWidth, shot.nativeHeight) +
+      (shot.restoredFromMinimized ? texts.rcptWindowRestored : "") +
+      ` ${texts.rcptWindowShotFooter}` +
+      captureNote(shot.capture, texts),
     shot: {
       width: shot.width,
       height: shot.height,
@@ -451,17 +438,14 @@ async function windowShot(
 async function candidateLine(controller: ComputerUseGuest): Promise<string> {
   const list = await controller.listWindows(WINDOW_LIST_TIMEOUT_MS).catch(() => null);
   if (list === null || !list.ok) return "";
+  const minimized = cuTexts().rcptWindowMinimized;
   const rows = list.windows.slice(0, 12).map((window) => {
     const process = window.process === "" ? "" : ` (${window.process})`;
-    const state = window.minimized ? ", minimized" : "";
+    const state = window.minimized ? minimized : "";
     return `hwnd ${window.hwnd} "${window.title}"${process}${state}`;
   });
   if (rows.length === 0) return "";
-  return (
-    "\n\nWindows you can capture right now: " +
-    rows.join("; ") +
-    ". Pass one of these hwnds, or part of one of these titles, as window."
-  );
+  return cuTexts().rcptCandidates(rows.join("; "));
 }
 
 /**
@@ -518,50 +502,35 @@ function uiaListText(reply: {
   editFields: number;
   note?: string;
 }): string {
-  const title = reply.window.title === "" ? "(no title)" : reply.window.title;
-  const head = `UI Automation controls in window "${title}" (hwnd ${reply.hwnd}, generation ${reply.generation})`;
-  const truncatedNote = reply.truncated ? " (there are more — raise maxItems to see them)" : "";
+  const texts = cuTexts();
+  const title = reply.window.title === "" ? texts.rcptUiaNoTitle : reply.window.title;
+  const body =
+    reply.mode === "diff" ? uiaDiffBody(reply) : reply.items.map(uiaItemLine).join(String.fromCharCode(10));
+  const bodyText =
+    body === "" ? (reply.mode === "diff" ? texts.rcptUiaNothingChanged : texts.rcptUiaNoControls) : body;
+  const head =
+    reply.mode === "diff"
+      ? texts.rcptUiaDiffHead(
+          title,
+          reply.hwnd,
+          reply.generation,
+          reply.items.length,
+          reply.removed.length,
+          reply.unchanged,
+          reply.rectMoved,
+          String(reply.since ?? "?"),
+          reply.truncated,
+        )
+      : texts.rcptUiaListHead(title, reply.hwnd, reply.generation, reply.items.length, reply.truncated);
+  const noteLine = reply.note === undefined ? "" : texts.rcptUiaNoteLine(reply.note);
+  const tail = texts.rcptUiaTail(reply.generation, reply.mode === "diff");
   const passwordNote =
     reply.passwordFields > 0
-      ? `. ${reply.passwordFields} password field(s) are in this window: never put a secret in them and do not ` +
-        "try to read them. Their positions are remembered, so screenshots of this window will black them out"
+      ? texts.rcptUiaPasswordNote(reply.passwordFields)
       : reply.editFields > 0
-        ? `. This window has ${reply.editFields} input field(s) but no password field was recognised: if this ` +
-          "is a login page that just opened, its control tree may still be growing — list again a moment " +
-          "later before screenshotting, or the password box will not be blacked out yet"
+        ? texts.rcptUiaEditNote(reply.editFields)
         : "";
-  const noteLine = reply.note === undefined ? "" : `\nNote: ${reply.note}`;
-  const body =
-    reply.mode === "diff" ? uiaDiffBody(reply) : reply.items.map(uiaItemLine).join("\n");
-  const bodyText =
-    body === ""
-      ? reply.mode === "diff"
-        ? "Nothing changed since that list."
-        : "No actionable controls were found in this window."
-      : body;
-  // rectMoved 只在 diff 里出现：那批控件只是位置挪了（名字 / 状态都没变），不逐条列。
-  // 模型要按坐标点它们时看截图比看数字准；这里有这个计数它就够了。
-  const movedNote = reply.mode === "diff" && reply.rectMoved > 0 ? `, ${reply.rectMoved} moved only` : "";
-  const listLine =
-    reply.mode === "diff"
-      ? `${head}: ${reply.items.length} changed, ${reply.removed.length} gone, ${reply.unchanged} unchanged` +
-        `${movedNote} since generation ${reply.since ?? "?"}${truncatedNote}. Only the changes are listed.`
-      : `${head}: ${reply.items.length} listed${truncatedNote}. Lines are: ref · control type "name" · ` +
-        "supported patterns · position/size · automationId.";
-  const tail =
-    "Act on one with computer_uia (action invoke / setValue / selection, and ref or name). " +
-    "These actions go straight into the control: the window does not need the foreground, so the sandbox " +
-    "desktop is not taken over and another session can keep using it. There is no \"focus\" action: to move " +
-    "the keyboard focus, click the target with computer_click (pixels), or just use invoke (it usually " +
-    "focuses too) / setValue (it does not need focus). " +
-    `Refs belong to the list they came from (this one is generation ${reply.generation}); a ref from an older ` +
-    "list is rejected, so re-list after the window changes. " +
-    (reply.mode === "diff"
-      ? "A control that did not change is not listed here: act on it by name, or list again without since to " +
-        "get its current ref. "
-      : `Next time, pass since=${reply.generation} to get only what changed. `) +
-    "Controls that support no pattern above can only be driven through computer_click / computer_type (pixels).";
-  return `${listLine}${noteLine}\n${bodyText}\n\n${tail}${passwordNote}`;
+  return `${head}${noteLine}${String.fromCharCode(10)}${bodyText}${String.fromCharCode(10)}${String.fromCharCode(10)}${tail}${passwordNote}`;
 }
 
 /** 一条控件的正文行（全量与 diff 共用；diff 只在前面加 change 标签） */
@@ -581,23 +550,24 @@ function uiaItemLine(item: {
   change?: "added" | "changed";
   changed?: readonly string[];
 }): string {
-  const name = item.name === "" ? `(automationId ${item.automationId})` : `"${item.name}"`;
-  const patterns = item.patterns.length === 0 ? "no pattern (pixels only)" : item.patterns.join("/");
+  const texts = cuTexts();
+  const name = item.name === "" ? texts.rcptUiaItemUnnamed(item.automationId) : `"${item.name}"`;
+  const patterns = item.patterns.length === 0 ? texts.rcptUiaItemNoPattern : item.patterns.join("/");
   const flags: string[] = [];
-  if (item.isPassword) flags.push("password");
-  if (!item.enabled) flags.push("disabled");
-  if (item.offscreen) flags.push("offscreen");
+  if (item.isPassword) flags.push(texts.rcptUiaFlagPassword);
+  if (!item.enabled) flags.push(texts.rcptUiaFlagDisabled);
+  if (item.offscreen) flags.push(texts.rcptUiaFlagOffscreen);
   const id = item.automationId === "" ? "" : ` id=${item.automationId}`;
-  const state = flags.length === 0 ? "" : `, ${flags.join(", ")}`;
+  const state = flags.length === 0 ? "" : `${texts.rcptUiaStateSeparator}${flags.join(texts.rcptUiaFlagJoiner)}`;
   const change =
     item.change === "added"
-      ? "new · "
+      ? texts.rcptUiaChangeNew
       : item.change === "changed"
-        ? `changed (${(item.changed ?? []).join("/")}) · `
+        ? texts.rcptUiaChangeChanged((item.changed ?? []).join("/"))
         : "";
   return (
-    `${change}${item.ref} · ${item.controlType} ${name} · supports ${patterns}${state} · ` +
-    `at ${item.x},${item.y} ${item.w}×${item.h}${id}`
+    `${change}${item.ref} · ${item.controlType} ${name} · ${texts.rcptUiaItemSupports} ${patterns}${state} · ` +
+    `${texts.rcptUiaItemAt} ${item.x},${item.y} ${item.w}×${item.h}${id}`
   );
 }
 
@@ -645,13 +615,14 @@ function admissionNote(admission: ComputerUseAdmission | undefined, sessionId: s
     `[computer-use] ${sessionId} admission=${admission.admission} targetExe=${target}` +
       (admission.targetPid === undefined ? "" : ` pid=${admission.targetPid}`),
   );
+  const texts = cuTexts();
   const tail =
     admission.admission === "bypassed"
-      ? "the target is outside the sandbox session's own process tree; this turn only observes and logs it (nothing is blocked)"
+      ? texts.rcptAdmissionBypassed
       : admission.admission === "unknown"
-        ? "no target window could be resolved at that point"
-        : "the target belongs to the sandbox session's own browser / process tree";
-  return ` Admission (guest-side): "admission":"${admission.admission}","targetExe":"${target}" — ${tail}.`;
+        ? texts.rcptAdmissionUnknown
+        : texts.rcptAdmissionOwned;
+  return texts.rcptAdmission(admission.admission, target, tail);
 }
 
 /** uia-act 成功回执 → 给模型读的文本（含 AutoSetFocus 降级时的抢焦点警告与读回档位） */
@@ -670,23 +641,21 @@ function uiaActText(
   delivery: ComputerUseDelivery | undefined = undefined,
   evidence: EvidenceLevel | null = null,
 ): string {
-  const name = reply.name === "" ? "(unnamed control)" : `"${reply.name}"`;
+  const texts = cuTexts();
+  const name = reply.name === "" ? texts.rcptUiaActUnnamed : `"${reply.name}"`;
   const verb =
-    reply.action === "setValue" ? "Set the text of" : reply.action === "selection" ? "Selected" : "Invoked";
+    reply.action === "setValue"
+      ? texts.rcptUiaVerbSetValue
+      : reply.action === "selection"
+        ? texts.rcptUiaVerbSelection
+        : texts.rcptUiaVerbInvoke;
   const head =
-    `${verb} ${name} (${reply.controlType}) in window hwnd ${reply.hwnd} ` +
-    `through UI Automation (pattern ${reply.usedPattern}, ${reply.elapsedMs}ms). ` +
-    "The window did not need the foreground, so the sandbox desktop was not taken over. " +
-    "To move the keyboard focus, click the target with computer_click. " +
-    "Take a computer_screenshot (window " +
-    reply.hwnd +
-    ") to see what changed." +
+    texts.rcptUiaActHead(verb, name, reply.controlType, reply.hwnd, reply.usedPattern, reply.elapsedMs) +
+    texts.rcptUiaActFooter(reply.hwnd) +
     // setValue 的读回档位（桥 0.15.0）：桥没说就一个字都不加（老桥 / invoke / selection）
     (delivery === undefined ? "" : ` ${deliveryNote(delivery, evidence)}`) +
     admissionNote(reply.admission, "uia-act");
   if (reply.autoSetFocus) return head;
-  const warning =
-    reply.autoSetFocusWarning ??
-    "AutoSetFocus could not be turned off on this system, so this action may have brought the window to the foreground.";
-  return `${head}\n\nWarning: ${warning}`;
+  const warning = reply.autoSetFocusWarning ?? texts.rcptUiaActAutoFocusDefault;
+  return `${head}\n\n${texts.rcptUiaActWarningLabel}${warning}`;
 }

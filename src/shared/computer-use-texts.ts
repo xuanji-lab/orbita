@@ -30,6 +30,7 @@ import {
   computerUseLeaseErrors,
   computerUseUiaErrors,
 } from "./computer-use.ts";
+import { computerUseReceiptTexts, type ComputerUseReceiptTexts } from "./computer-use-receipt-texts.ts";
 
 /**
  * 「哪个动作」——`…没有在运行，X 不可用` 这类句子里要填的那个名词。
@@ -45,7 +46,7 @@ export type ComputerUseUiAction =
   | "pixels"
   | "browser";
 
-export interface ComputerUseUiTexts {
+export interface ComputerUseUiTexts extends ComputerUseReceiptTexts {
   // ── 动作名词（拼进「没有在运行」那类句子）──────────────────────────────
   /** 「…不可用」里的那个动作（`screenshot` → 截图 / take a screenshot） */
   actionName(action: ComputerUseUiAction): string;
@@ -278,7 +279,10 @@ const ACTION_EN: Record<ComputerUseUiAction, string> = {
   browser: "drive the sandbox browser",
 };
 
-const ZH: ComputerUseUiTexts = {
+/** 非回执的那一半（回执正文在 computer-use-receipt-texts.ts） */
+type ComputerUseBaseTexts = Omit<ComputerUseUiTexts, keyof ComputerUseReceiptTexts>;
+
+const ZH: ComputerUseBaseTexts = {
   actionName: (action) => ACTION_ZH[action],
 
   guidancePlatformDarwin:
@@ -324,7 +328,7 @@ const ZH: ComputerUseUiTexts = {
   sandboxAlreadyRunning: "沙箱已经在运行",
   sandboxAlreadyStopping: "沙箱正在关闭，等它关完再启动",
   sandboxNotRunning: (what, state) =>
-    `沙箱没有在运行（当前状态：${state}），${ACTION_ZH[what]}不可用——先在「设置 › 实验功能 › 电脑使用」里启动沙箱`,
+    `沙箱没有在运行（当前状态：${state}），${ACTION_ZH[what]}不可用——先在「设置 › 电脑使用」里启动沙箱`,
   anotherSandboxRunning: (names) =>
     `已经有一只 Windows 沙箱在运行（Windows 同时只允许一只）：${names}。` +
     "如果那是上一只没退干净的，等它自己退（通常 10–20 秒）；一直不退就在任务管理器里结束 " +
@@ -334,7 +338,7 @@ const ZH: ComputerUseUiTexts = {
     `找不到 ${path}——Windows 沙箱功能可能未启用，先「检测能力」看开启指引`,
   bridgeReadyTimeout: (seconds) =>
     `${seconds} 秒内没等到 guest 桥就绪（bridge.json 未出现）——` +
-    "沙箱可能还在启动，或桥启动失败。**如果之前有一只沙箱没退干净，就会一直卡在这里**" +
+    "沙箱可能还在启动，或桥启动失败。如果之前有一只沙箱没退干净，就会一直卡在这里" +
     "（Windows 同时只允许一只沙箱，旧的那只占着位置、新的一只永远起不来）：" +
     "去任务管理器结束 WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox，" +
     "或等它们自己退出（通常 10–20 秒），然后再点一次启动。",
@@ -348,13 +352,13 @@ const ZH: ComputerUseUiTexts = {
     "确认干净后再点一次「停止」复位这个状态。",
   unknownPids: "（观测不到具体 PID）",
 
-  sandboxNotRunningHint: "隔离桌面没有在运行——先在「设置 › 实验功能 › 电脑使用」里启动它",
+  sandboxNotRunningHint: "隔离桌面没有在运行——先在「设置 › 电脑使用」里启动它",
   sandboxStartingHint:
     "隔离桌面还在启动，桥还没有就绪——这次命令没有执行。等设置页显示「运行中」再试" +
     "（首次启动要一两分钟；超时可以点停止再启动）",
   sandboxStoppingHint: "隔离桌面正在关闭，这次命令没有执行。等它关完再启动后再试",
   sandboxErrorStateHint:
-    "隔离桌面处于错误状态、没有在运行——这次命令没有执行。先去「设置 › 实验功能 › 电脑使用」里" +
+    "隔离桌面处于错误状态、没有在运行——这次命令没有执行。先去「设置 › 电脑使用」里" +
     "点停止复位、再启动；起不来时看设置页那几行提示",
   sandboxNotImplemented: "这个隔离后端还没接上（P3-2 才实现）",
 
@@ -526,7 +530,7 @@ const ZH: ComputerUseUiTexts = {
   guestErrorGenericCode: (code) => `沙箱报了一个错误（${code}），细节见应用日志。`,
 };
 
-const EN: ComputerUseUiTexts = {
+const EN: ComputerUseBaseTexts = {
   actionName: (action) => ACTION_EN[action],
 
   guidancePlatformDarwin:
@@ -581,7 +585,7 @@ const EN: ComputerUseUiTexts = {
   sandboxAlreadyStopping: "The sandbox is shutting down; start it again once it has closed",
   sandboxNotRunning: (what, state) =>
     `The sandbox is not running (current state: ${state}), so you cannot ${ACTION_EN[what]} — start it in ` +
-    "Settings › Experimental features › Computer use first",
+    "Settings › Computer use first",
   anotherSandboxRunning: (names) =>
     `Another Windows Sandbox is already running (Windows allows one at a time): ${names}. If that is an earlier ` +
     "sandbox that never shut down, give it 10–20 seconds to exit on its own; if it never does, end " +
@@ -592,7 +596,7 @@ const EN: ComputerUseUiTexts = {
     "setup instructions",
   bridgeReadyTimeout: (seconds) =>
     `The guest bridge did not become ready within ${seconds} seconds (bridge.json never appeared). The sandbox may ` +
-    "still be starting, or the bridge failed to start. **If an earlier sandbox never shut down, it will hang " +
+    "still be starting, or the bridge failed to start. If an earlier sandbox never shut down, it will hang " +
     "here forever** (Windows allows one sandbox at a time: the old one holds the slot and a new one can never " +
     "boot). End WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox in Task Manager, or wait for them to " +
     "exit on their own (usually 10–20 seconds), then press Start again.",
@@ -607,7 +611,7 @@ const EN: ComputerUseUiTexts = {
     "their own or after a reboot. Once it is clean, press Stop once to reset this state.",
   unknownPids: "(no PID could be observed)",
 
-  sandboxNotRunningHint: "The isolated desktop is not running — start it in Settings › Experimental features › Computer use",
+  sandboxNotRunningHint: "The isolated desktop is not running — start it in Settings › Computer use",
   sandboxStartingHint:
     "The isolated desktop is still starting and its bridge is not ready yet, so this command did not run. Wait " +
     "until Settings shows it as running (the first start takes a minute or two; if it times out, press Stop and " +
@@ -616,8 +620,8 @@ const EN: ComputerUseUiTexts = {
     "The isolated desktop is shutting down, so this command did not run. Start it again once it has finished closing",
   sandboxErrorStateHint:
     "The isolated desktop is in an error state and is not running, so this command did not run. Go to Settings › " +
-    "Experimental features › Computer use, press Stop to reset it, then start it again; if it will not start, read " +
-    "the notes on that settings page",
+    "Computer use, press Stop to reset it, then start it again; if it will not start, read the notes on that " +
+    "settings page",
   sandboxNotImplemented: "This isolation backend is not connected yet (it lands in P3-2)",
 
   isolationStartingOrStopping: "The isolated session is starting or stopping; try again once it has finished",
@@ -807,7 +811,7 @@ const EN: ComputerUseUiTexts = {
     "drives the sandbox next if the work should continue.",
   leaseRevoked: (reason) =>
     `The sandbox was closed (${reason}), so all control was revoked and this command was not sent. Do not retry: ` +
-    "restart the sandbox in Settings › Experimental features › Computer use, then start over.",
+    "restart the sandbox in Settings › Computer use, then start over.",
   leaseBusy: (title) =>
     `This channel is now held by another session${holderSuffixEn(title)}; this operation does not queue, so the ` +
     "command was not sent. Do not retry: wait until that session's turn ends.",
@@ -857,5 +861,6 @@ const EN: ComputerUseUiTexts = {
  * `settings.language` 决定（见 main/computer-use/ui-language.ts）。
  */
 export function computerUseUiTexts(language: string | undefined): ComputerUseUiTexts {
-  return language === "zh" ? ZH : EN;
+  // 回执正文那一大块在 computer-use-receipt-texts.ts（同一张表，分成两个文件是为了读得下去）
+  return { ...(language === "zh" ? ZH : EN), ...computerUseReceiptTexts(language) };
 }

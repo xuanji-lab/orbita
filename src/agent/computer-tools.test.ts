@@ -351,8 +351,8 @@ describe("computer_* 的审计载荷（details.computerUse）", () => {
     answer(sent.length - 1, { ok: true, text: "typed" });
     const typedAudit = ((await typed).details as { computerUse: { action: string; args: Record<string, unknown> } }).computerUse;
     assert.equal(typedAudit.action, "type");
-    // 明文留在 details 与转录里（renderer 默认折叠显示）
-    assert.deepEqual(typedAudit.args, { text: "hello" });
+    // 正文**不进 details**（它会被写进会话 JSONL，登录页上这段就是密码）：只留字符数
+    assert.deepEqual(typedAudit.args, { textChars: 5 });
 
     const key = run("computer_key", { key: "ctrl+a" });
     answer(sent.length - 1, { ok: true, text: "pressed" });

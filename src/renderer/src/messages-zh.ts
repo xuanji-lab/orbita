@@ -1093,7 +1093,7 @@ export const zh: Messages = {
     // guidance——同一张卡里逐条列在探针行下面，这里只给徽标与一句指路
     isolationTier: "隔离档位",
     isolationTierInfo:
-      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但**没有真实的鼠标键盘**——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3 Linux 桌面虚拟机同样只在 Windows 上（宿主侧走 Windows 的虚拟化）。",
+      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但没有真实的鼠标键盘——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3 Linux 桌面虚拟机同样只在 Windows 上（宿主侧走 Windows 的虚拟化）。",
     tierFallback: "到不了更高档，原因见上方几条",
     tiers: {
       l1: "L1 浏览器档",
@@ -1214,7 +1214,7 @@ export const zh: Messages = {
     emergencyGroup: "安全",
     emergencyHotkey: "急停热键",
     emergencyHotkeyInfo:
-      "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。**不关闭沙箱**——现场留着给你看。要再用需要重新授权。",
+      "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。不关闭沙箱——现场留着给你看。要再用需要重新授权。",
     emergencyRegistered: "已注册，随时可用",
     /** 主选被占用、降级到候选键位时说清「现在生效的是哪一个」（2026-11-28 验收 P2-2） */
     emergencyFallback: (preferred: string, active: string) =>

@@ -17,7 +17,7 @@ import {
 } from "../shared/computer-use.ts";
 
 /** 夹具：两个事实成对传（与 createSandboxBrowserTools 的入参同一个形状） */
-const setup = (allowNetwork = true, networkControlled = true) => {
+const setup = (allowNetwork = true, networkControlled = true, uiLanguage: "zh" | "en" = "en") => {
   const sent: Record<string, unknown>[] = [];
   const timeouts: Array<number | undefined> = [];
   const broker = new RequestBroker((event) => sent.push(event as Record<string, unknown>));
@@ -29,7 +29,10 @@ const setup = (allowNetwork = true, networkControlled = true) => {
   }) as typeof broker.request;
 
   const tools = new Map(
-    createSandboxBrowserTools(broker, "session-1", { allowNetwork, networkControlled }).map((tool) => [tool.name, tool]),
+    createSandboxBrowserTools(broker, "session-1", { allowNetwork, networkControlled }, uiLanguage).map((tool) => [
+    tool.name,
+    tool,
+  ]),
   );
   const answer = (index: number, outcome: ComputerUseToolOutcome): void =>
     broker.resolve(String(sent[index]?.["requestId"]), outcome);
@@ -275,7 +278,8 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
     const { tools } = setup(false);
     for (const [name, tool] of tools) {
       assert.match(tool.description, /no outbound network/, name);
-      assert.match(tool.description, /Settings › Experimental features › Computer use/, name);
+      // 设置里的实际位置是一级页签「电脑使用」，不是实验功能下面（2026-11-28 真机验收 P3）
+      assert.match(tool.description, /Settings › Computer use/, name);
       assert.match(tool.description, /\"Allow network access\" is off/, name);
       assert.match(tool.description, /Do not retry the navigation/, name);
       // 描述的第一句仍是「这是哪个浏览器」：拼在末尾，不能打乱原有的开场
@@ -307,7 +311,7 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
 
   test("关掉出网 + 网络类错误：补上确定句，并保留 guest 的原话（不吞码）", async () => {
     for (const code of ["ERR_INTERNET_DISCONNECTED", "ERR_NAME_NOT_RESOLVED", "ERR_CONNECTION_REFUSED"]) {
-      const { runWith } = setup(false);
+      const { runWith } = setup(false, true, "zh");
       const message = await rejection(
         runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: `页面没有加载：${code}（原因不明）` }),
       );
@@ -318,8 +322,18 @@ describe("沙箱出网开关（allowNetwork）——设置→模型这条链的�
     }
   });
 
+  test("英文界面：关掉出网 + 网络类错误 → 英文结论，不含 CJK", async () => {
+    const { runWith } = setup(false, true, "en");
+    const message = await rejection(
+      runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: "The page did not load: ERR_INTERNET_DISCONNECTED" }),
+    );
+    assert.match(message, /ERR_INTERNET_DISCONNECTED/);
+    assert.match(message, /Allow network access is off/);
+    assert.doesNotMatch(message, /[一-鿿]/);
+  });
+
   test("关掉出网 + 网络类错误的事件：确定句接在原话后面，且误导的「确认方式」整句被摘掉", async () => {
-    const { runWith } = setup(false);
+    const { runWith } = setup(false, true, "zh");
     const message = await rejection(runWith("sandbox_navigate", { url: "example.com" }, { ok: false, error: NET_ERROR }));
     // 前半句（含错误码）与结尾那句像素工具的替代路径原样保留
     assert.ok(message.startsWith("页面没有加载：ERR_INTERNET_DISCONNECTED"), "错误码必须还在");
@@ -366,8 +380,12 @@ describe("sandbox_* 写件的审计归属（inputOrigin）", () => {
       .computerUse;
     assert.equal(typeAudit.action, "sandbox-type");
     assert.equal(typeAudit.inputOrigin, "agent");
-    // 明文留在 details（JSONL 保留明文，与 computer_type 同一条纪律）
-    assert.equal(typeAudit.args["text"], "orbita");
+    // 正文不进 details：只留字符数（它会被写进会话 JSONL，登录页上这段就是密码）
+    assert.equal(typeAudit.args["text"], undefined);
+    assert.equal(typeAudit.args["textChars"], "orbita".length);
+    assert.equal(typeAudit.args["selector"], "#q");
+    // 整份 details 序列化后不许出现输入原文（它会随工具结果写进会话 JSONL）
+    assert.equal(JSON.stringify(typed.details).includes("orbita"), false);
 
     const uploaded = await runWith("sandbox_upload", { selector: "input[file]", path: "C:\tmp\a.pdf" });
     const uploadAudit = (

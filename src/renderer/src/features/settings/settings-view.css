@@ -117,9 +117,17 @@
 .set-inline {
   display: inline-flex;
   align-items: center;
+  /* 急停热键那种「一个长组合 + 一句说明」：放不下时说明折到下一行，不要一起被挤成竖排窄条 */
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--space-2);
   min-width: 0;
   max-width: 100%;
+}
+
+/* 组合本身不折行（Control+Alt+Shift+Escape 从中间断开就读不出来了） */
+.set-inline code {
+  white-space: nowrap;
 }
 
 /* ===== Commit & PR attribution 的效果预览（AttributionPreview） =====

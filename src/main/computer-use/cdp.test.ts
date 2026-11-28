@@ -9,7 +9,7 @@
  *   - 上传把文件拷进映射目录、下载把不可信文件名翻成宿主路径；
  *   - 失败文案带「可以退回像素工具」的降级指引（模型只有这句话能换道）。
  */
-import { test, describe } from "node:test";
+import { beforeEach, test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -24,6 +24,10 @@ import {
   type ComputerUseGuestCommand,
   type ComputerUseToolRequest,
 } from "../../shared/computer-use.ts";
+import { setComputerUseUiLanguage } from "./ui-language.ts";
+
+/** 这些用例写的是英文回执（改动前的样子）：先把界面语言固定成 en；中文那一套另有专门的用例 */
+beforeEach(() => setComputerUseUiLanguage("en"));
 
 interface Call {
   command: string;
@@ -402,7 +406,7 @@ describe("sandbox_* 回执翻成人话", () => {
     const cdp = new CdpSession(guest, tempOutDir());
     const outcome = await run(cdp, { action: "sandbox-screenshot" });
     assert.equal(outcome.ok, false);
-    assert.match(outcome.ok ? "" : outcome.error, /缺尺寸字段/);
+    assert.match(outcome.ok ? "" : outcome.error, /missing size fields/);
   });
 
   test("screenshot：overlay 的标签由宿主按界面语言给（zh→已遮罩 / en→Masked）", async () => {
@@ -620,7 +624,11 @@ describe("上传 / 下载：宿主侧的文件搬运", () => {
       for (const source of [path.join(outDir, "missing.pdf"), dirSource, empty]) {
         const outcome = await run(cdp, { action: "sandbox-upload", selector: "#file", path: source });
         assert.equal(outcome.ok, false, source);
-        assert.match(outcome.ok ? "" : outcome.error, /不是(一个)?文件|找不到|空的|文件名不可用/, source);
+        assert.match(
+          outcome.ok ? "" : outcome.error,
+          /not a file|was not found|is empty|file name is unusable/,
+          source,
+        );
       }
       assert.equal(calls.some((call) => call.command === computerUseGuestCommands.cdpUpload), false);
     } finally {
@@ -811,7 +819,7 @@ describe("失败文案", () => {
     const cdp = new CdpSession(guest, tempOutDir());
     const outcome = await run(cdp, { action: "click", x: 1, y: 2 });
     assert.equal(outcome.ok, false);
-    assert.match(outcome.ok ? "" : outcome.error, /内部错误/);
+    assert.match(outcome.ok ? "" : outcome.error, /Internal error/);
     assert.deepEqual(calls, []);
   });
 });
@@ -924,8 +932,8 @@ describe("每会话一个浏览器", () => {
     const fifth = await run(cdp, { action: "sandbox-navigate", url: "https://s5.example/" }, "s5");
     assert.equal(fifth.ok, false);
     const error = fifth.ok ? "" : fifth.error;
-    assert.match(error, /最多 4 个/, error);
-    assert.match(error, /cdp-stop 一个/, "要告诉模型下一步做什么");
+    assert.match(error, /at most 4 browsers/, error);
+    assert.match(error, /stop one with cdp-stop/, "要告诉模型下一步做什么");
     assert.equal(bridge.live.size, COMPUTER_USE_BROWSER_MAX, "第 5 个不许挤掉已经在跑的实例");
     assert.equal(
       bridge.calls.some((call) => call.command === computerUseGuestCommands.cdpStart && call.fields["session"] === "s5"),
@@ -1183,5 +1191,104 @@ describe("浏览器回退说一次 + 正文不写死 Edge", () => {
     const text = outcome.ok ? outcome.text : "";
     assert.doesNotMatch(text, /Edge window/);
     assert.match(text, /browser window/);
+  });
+});
+
+// ── 回执正文的双语（2026-11-28 真机验收 P1）───────────────────────────────
+
+/** 英文虚词只属于英文句子；专名（Edge / CDP / sandbox_observe）不受影响 */
+const ENGLISH_PROSE = [" the ", " and ", " is ", " are ", " to ", " of ", " you ", " this ", " with ", " not "];
+
+function assertNoEnglishProse(text: string, where: string): void {
+  for (const word of ENGLISH_PROSE) {
+    assert.equal(text.includes(word), false, `${where} 里有英文虚词「${word.trim()}」：${text.slice(0, 200)}`);
+  }
+  assert.match(text, /[一-鿿]/, `${where} 里一个汉字都没有：${text.slice(0, 200)}`);
+}
+
+describe("浏览器回执跟界面语言走（中文界面不许出现整句英文）", () => {
+  const replies: Record<string, () => Reply> = {
+    [computerUseGuestCommands.cdpNav]: () => ({
+      ok: true,
+      resp: { ok: true, url: "https://example.com/", title: "Example Domain", ms: 187 },
+    }),
+    [computerUseGuestCommands.cdpObserve]: () => ({
+      ok: true,
+      resp: {
+        ok: true,
+        url: "https://example.com/",
+        title: "Example Domain",
+        text: "Example Domain",
+        elements: [{ selector: "#a", tag: "a", text: "More information", x: 10, y: 20, role: "", editable: false }],
+      },
+    }),
+    [computerUseGuestCommands.cdpClick]: () => ({
+      ok: true,
+      resp: { ok: true, tag: "a", text: "More", x: 10, y: 20, url: "https://example.com/next" },
+    }),
+    [computerUseGuestCommands.cdpType]: () => ({ ok: true, resp: { ok: true, chars: 5, fieldChars: 5, submitted: false } }),
+    [computerUseGuestCommands.cdpWait]: () => ({ ok: true, resp: { ok: true, appeared: true, waitedMs: 120 } }),
+    [computerUseGuestCommands.cdpShot]: () => ({
+      ok: true,
+      jpeg: new Uint8Array([0xff, 0xd8]),
+      resp: {
+        ok: true,
+        width: 1280,
+        height: 771,
+        nativeWidth: 1280,
+        nativeHeight: 771,
+        url: "https://example.com/",
+        title: "",
+      },
+    }),
+    [computerUseGuestCommands.cdpTabs]: () => ({ ok: true, resp: { ok: true, tabs: [], active: 0 } }),
+  };
+
+  test("中文界面：navigate / observe / click / type / wait / screenshot / tabs 都不含整句英文", async () => {
+    setComputerUseUiLanguage("zh");
+    try {
+      const cases: Array<[string, ComputerUseToolRequest]> = [
+        ["navigate", { action: "sandbox-navigate", url: "example.com" }],
+        ["observe", { action: "sandbox-observe" }],
+        ["click", { action: "sandbox-click", selector: "#a" }],
+        ["type", { action: "sandbox-type", selector: "#q", text: "abcde" }],
+        ["wait", { action: "sandbox-wait", selector: "#a" }],
+        ["screenshot", { action: "sandbox-screenshot" }],
+        ["tabs", { action: "sandbox-tabs" }],
+      ];
+      for (const [name, request] of cases) {
+        const { guest } = fakeGuest({ running: true, replies });
+        const outcome = await run(new CdpSession(guest, tempOutDir()), request);
+        assert.equal(outcome.ok, true, `${name}：${outcome.ok ? "" : outcome.error}`);
+        if (outcome.ok) assertNoEnglishProse(outcome.text, name);
+      }
+    } finally {
+      setComputerUseUiLanguage("en");
+    }
+  });
+
+  test("英文界面：同一条 navigate 的回执不含 CJK（两面都守）", async () => {
+    setComputerUseUiLanguage("en");
+    const { guest } = fakeGuest({ running: true, replies });
+    const outcome = await run(new CdpSession(guest, tempOutDir()), { action: "sandbox-navigate", url: "example.com" });
+    assert.equal(outcome.ok, true);
+    if (outcome.ok) assert.doesNotMatch(outcome.text, /[一-鿿]/);
+  });
+
+  test("失败时的降级指引也是中文（FALLBACK_HINT 不再中英混排）", async () => {
+    setComputerUseUiLanguage("zh");
+    try {
+      const { guest } = fakeGuest({
+        running: true,
+        replies: { [computerUseGuestCommands.cdpNav]: () => ({ ok: false, error: "沙箱里的 Edge 没有在运行" }) },
+      });
+      const outcome = await run(new CdpSession(guest, tempOutDir()), { action: "sandbox-navigate", url: "example.com" });
+      assert.equal(outcome.ok, false);
+      const text = outcome.ok ? "" : outcome.error;
+      assertNoEnglishProse(text, "navigate 失败");
+      assert.match(text, /computer_screenshot/); // 换道指引里的工具名两种语言都保留
+    } finally {
+      setComputerUseUiLanguage("en");
+    }
   });
 });

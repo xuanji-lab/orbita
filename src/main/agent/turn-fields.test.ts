@@ -41,7 +41,13 @@ const environment = {
   compaction: { enabled: true } as CompactionSetting,
   gitAttribution: true,
   attributionLanguage: "en" as const,
-  computerUse: { enabled: true, platformSupported: true, allowNetwork: true, networkControlled: true },
+  computerUse: {
+    enabled: true,
+    platformSupported: true,
+    allowNetwork: true,
+    networkControlled: true,
+    uiLanguage: "en" as const,
+  },
   planFirst: false,
   pluginTools: false,
 };
@@ -105,13 +111,20 @@ describe("turnFields", () => {
     const fields = turnFields(input, provider, "/pi", "/sessions/s1.attachments", [], {
       ...environment,
       // L2b 的那一对：用户关了出网，但这个后端断不了——两个事实必须各自到达 agent
-      computerUse: { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: false },
+      computerUse: {
+        enabled: true,
+        platformSupported: true,
+        allowNetwork: false,
+        networkControlled: false,
+        uiLanguage: "en",
+      },
     });
     assert.deepEqual(fields.computerUse, {
       enabled: true,
       platformSupported: true,
       allowNetwork: false,
       networkControlled: false,
+      uiLanguage: "en",
     });
   });
 });
@@ -136,7 +149,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
         settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: true } }),
         "win32",
       ),
-      { enabled: true, platformSupported: true, allowNetwork: true, networkControlled: true },
+      { enabled: true, platformSupported: true, allowNetwork: true, networkControlled: true, uiLanguage: "en" },
     );
   });
 
@@ -147,6 +160,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       platformSupported: false,
       allowNetwork: true,
       networkControlled: true,
+      uiLanguage: "en",
     });
     assert.equal(computerUseTurnContext(on, "linux").platformSupported, false);
     assert.equal(computerUseTurnContext(on, "freebsd").platformSupported, false);
@@ -159,7 +173,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
           settings({ experimentalFeatures: { "computer-use": true }, computerUse: { allowNetwork: false, backend } }),
           "win32",
         ),
-        { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: true },
+        { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: true, uiLanguage: "en" },
         backend,
       );
     }
@@ -174,7 +188,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
         }),
         "win32",
       ),
-      { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: false },
+      { enabled: true, platformSupported: true, allowNetwork: false, networkControlled: false, uiLanguage: "en" },
     );
     // 开着的时候它当然也「能出网」——两格各自如实，跟 allowNetwork 不合并
     assert.equal(
@@ -192,6 +206,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       platformSupported: true,
       allowNetwork: false,
       networkControlled: true,
+      uiLanguage: "en",
     });
     // 其它实验开关开着不算「电脑使用开着」
     assert.deepEqual(computerUseTurnContext(settings({ experimentalFeatures: { "pdf-citations": true } }), "win32"), {
@@ -199,6 +214,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       platformSupported: true,
       allowNetwork: true,
       networkControlled: true,
+      uiLanguage: "en",
     });
   });
 
@@ -208,12 +224,14 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       platformSupported: true,
       allowNetwork: true,
       networkControlled: true,
+      uiLanguage: "en",
     });
     assert.deepEqual(computerUseTurnContext(settings({}), "win32"), {
       enabled: false,
       platformSupported: true,
       allowNetwork: true,
       networkControlled: true,
+      uiLanguage: "en",
     });
     // 整份设置都读不到（store 空 / 坏文件被兜成 undefined）也不能变成「禁出网」
     assert.deepEqual(computerUseTurnContext(undefined, "win32"), {
@@ -221,6 +239,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       platformSupported: true,
       allowNetwork: true,
       networkControlled: true,
+      uiLanguage: "en",
     });
   });
 
@@ -241,6 +260,7 @@ describe("computerUseTurnContext（设置 → 命令）", () => {
       platformSupported: true,
       allowNetwork: false,
       networkControlled: false,
+      uiLanguage: "en",
     });
   });
 });
