@@ -25,8 +25,6 @@
  * 遮了比不遮更坏（它会放心地读图）。
  */
 import {
-  COMPUTER_USE_DELIVERY_HINTS,
-  COMPUTER_USE_NO_EVIDENCE_HINT,
   captureNote,
   computerUseGuestCommands,
   parseComputerUseDelivery,
@@ -46,6 +44,7 @@ import {
 } from "../../shared/computer-use.ts";
 import type { GuestCommandReply } from "./sandbox.ts";
 import type { SandboxCapabilities } from "./provider.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /**
  * 这一层真正要的那几个能力。**收窄成接口而不是直接吃 SandboxController**：
@@ -260,7 +259,7 @@ export async function applyComputerUseRequest(
       default:
         return {
           ok: false,
-          error: `内部错误：${request.action} 应该走 CDP 通道（sandbox_*），不该进像素命令这一层。`,
+          error: cuTexts().internalWrongLane(request.action, "pixel"),
         };
     }
   } catch (cause: unknown) {
@@ -341,15 +340,28 @@ function guestNote(resp: Record<string, unknown>): string {
 }
 
 /**
- * 成功回执后面跟的那句交付说明。文案**只从 shared 的 COMPUTER_USE_DELIVERY_HINTS 取**：
- * 工具描述与回执正文同源，模型不会从两处读到两种说法。
+ * 成功回执后面跟的那句交付说明（2026-11-28 起跟界面语言走）。
  *
- * `evidence: "none"` 的后端再追加 COMPUTER_USE_NO_EVIDENCE_HINT（单一来源也在 shared）：
- * 五档那句话讲的是「这一次」，而这类后端是**永远**拿不到读回——不说死，模型会一直等一个
- * 不会来的确认，或者以为「再点一次也许就能确认」。
+ * 为什么另取一份而不直接用 `COMPUTER_USE_DELIVERY_HINTS`：那个常量的另一头是**工具描述**
+ * （agent/computer-tools.ts 拼进去），工具描述不随界面语言变；回执正文要跟着界面走，
+ * 两件事从此分开。内容仍是同一套五档口径（zh 那半边与常量逐字一致）。
+ *
+ * `evidence: "none"` 的后端再追加一句「永远拿不到读回」：五档那句话讲的是「这一次」，
+ * 而这类后端是**永远**拿不到——不说死，模型会一直等一个不会来的确认。
  */
 function deliveryNote(delivery: ComputerUseDelivery, evidence: EvidenceLevel | null): string {
-  return COMPUTER_USE_DELIVERY_HINTS[delivery] + (evidence === "none" ? COMPUTER_USE_NO_EVIDENCE_HINT : "");
+  const texts = cuTexts();
+  const hint =
+    delivery === "confirmed"
+      ? texts.deliveryConfirmed
+      : delivery === "partial"
+        ? texts.deliveryPartial
+        : delivery === "unverifiable"
+          ? texts.deliveryUnverifiable
+          : delivery === "suspected_noop"
+            ? texts.deliverySuspectedNoop
+            : texts.deliveryRefused;
+  return hint + (evidence === "none" ? texts.noEvidenceHint : "");
 }
 
 /**

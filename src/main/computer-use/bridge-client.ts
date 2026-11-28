@@ -44,6 +44,7 @@ import {
   type GuestTcpChannel,
 } from "../../shared/computer-use.ts";
 import { parseBridgeInfo } from "./bridge-ready.ts";
+import { cuTexts } from "./ui-language.ts";
 
 export interface GuestScreenshot {
   jpeg: Uint8Array;
@@ -131,9 +132,7 @@ export async function fetchGuestWindowShot(
     hwnd <= 0 ||
     typeof title !== "string"
   ) {
-    throw new Error(
-      "guest 桥的窗口截图响应缺字段（width / height / nativeWidth / nativeHeight / hwnd / title / jpeg）",
-    );
+    throw new Error(cuTexts().bridgeWindowShotShape);
   }
   const capture = captureFrom(resp);
   return {
@@ -160,7 +159,7 @@ export async function fetchGuestWindowList(
   const resp = await sendGuestCommand(outDir, computerUseGuestCommands.winList, {}, timeoutMs);
   const list = resp.windows;
   if (!Array.isArray(list)) {
-    throw new Error("guest 桥的窗口列表响应缺 windows 数组");
+    throw new Error(cuTexts().bridgeWindowListShape);
   }
   const windows: ComputerUseWindowInfo[] = [];
   for (const item of list) {
@@ -209,7 +208,7 @@ export async function fetchGuestUiaList(
   const resp = await sendGuestCommand(outDir, computerUseGuestCommands.uiaList, fields, timeoutMs);
   const hwnd = resp.hwnd;
   if (typeof hwnd !== "number" || hwnd <= 0) {
-    throw new Error("guest 桥的 UIA 控件列表响应缺 hwnd");
+    throw new Error(cuTexts().bridgeUiaListHwnd);
   }
   const windowRaw = resp.window;
   const window =
@@ -221,12 +220,12 @@ export async function fetchGuestUiaList(
       : { title: "", className: "" };
   const list = resp.items;
   if (!Array.isArray(list)) {
-    throw new Error("guest 桥的 UIA 控件列表响应缺 items 数组");
+    throw new Error(cuTexts().bridgeUiaListItems);
   }
   // generation 在这里而不是在最前面判：缺 items / hwnd 是「响应形状不对」，先说更具体的那一条
   const generation = resp.generation;
   if (typeof generation !== "number" || !Number.isInteger(generation) || generation <= 0) {
-    throw new Error("guest 桥的 UIA 控件列表响应缺 generation（桥低于 0.14.0？ref 没有代次就没法判断旧 ref）");
+    throw new Error(cuTexts().bridgeUiaListGeneration);
   }
   const items: ComputerUseUiaItem[] = [];
   for (const entry of list) {
@@ -331,12 +330,12 @@ export async function fetchGuestUiaAct(
   const hwnd = resp.hwnd;
   const action = resp.action;
   const usedPattern = resp.usedPattern;
-  if (typeof hwnd !== "number" || hwnd <= 0) throw new Error("guest 桥的 UIA 动作响应缺 hwnd");
+  if (typeof hwnd !== "number" || hwnd <= 0) throw new Error(cuTexts().bridgeUiaActHwnd);
   if (typeof action !== "string" || !UIA_ACTIONS.includes(action)) {
-    throw new Error("guest 桥的 UIA 动作响应缺 action（或动作名不认识）");
+    throw new Error(cuTexts().bridgeUiaActAction);
   }
   if (typeof usedPattern !== "string" || usedPattern === "") {
-    throw new Error("guest 桥的 UIA 动作响应缺 usedPattern");
+    throw new Error(cuTexts().bridgeUiaActPattern);
   }
   const reply: ComputerUseUiaActReply = {
     hwnd,
@@ -497,8 +496,8 @@ class GuestTcpLink {
     this.socket = socket;
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => this.onData(chunk));
-    socket.on("error", (cause: Error) => this.fail(`连接出错：${cause.message}`));
-    socket.on("close", () => this.fail("连接被关"));
+    socket.on("error", (cause: Error) => this.fail(cuTexts().tcpConnectError(cause.message)));
+    socket.on("close", () => this.fail(cuTexts().tcpClosed));
   }
 
   /** 首行 hello + token，等桥回 hello-ok；失败一律算「没发出去」（此时还没有命令在飞） */
@@ -515,7 +514,7 @@ class GuestTcpLink {
     if (type === bridgeTcpHello.ok) return;
     throw new TcpFailure(
       "undispatched",
-      type === bridgeTcpHello.fail ? "桥回 hello-fail（令牌不符）" : `桥的握手回执异常：${String(type)}`,
+      type === bridgeTcpHello.fail ? cuTexts().tcpHelloFail : cuTexts().tcpHelloUnexpected(String(type)),
     );
   }
 
@@ -530,8 +529,8 @@ class GuestTcpLink {
       const timer = setTimeout(() => {
         // 读超时：连接已经不可信，扭断它；这条命令**不重放**
         this.pending.delete(id);
-        reject(new TcpFailure("timeout", `读回执超时（${timeoutMs}ms）`));
-        this.destroy(`读回执超时 ${timeoutMs}ms`);
+        reject(new TcpFailure("timeout", cuTexts().tcpReadTimeout(timeoutMs)));
+        this.destroy(cuTexts().tcpReadTimeout(timeoutMs));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
@@ -540,20 +539,20 @@ class GuestTcpLink {
         this.pending.delete(id);
         clearTimeout(timer);
         reject(new TcpFailure("undispatched", cause instanceof Error ? cause.message : String(cause)));
-        this.destroy("写入失败");
+        this.destroy(cuTexts().tcpWriteFailed);
       }
     });
   }
 
   close(): void {
-    this.destroy("客户端关闭连接");
+    this.destroy(cuTexts().tcpClientClosed);
   }
 
   private waitForHello(timeoutMs: number): Promise<Record<string, unknown>> {
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.helloWaiter = null;
-        reject(new TcpFailure("undispatched", `握手超时（${timeoutMs}ms）`));
+        reject(new TcpFailure("undispatched", cuTexts().tcpHelloTimeout(timeoutMs)));
       }, timeoutMs);
       this.helloWaiter = { resolve, reject, timer };
     });
@@ -569,7 +568,7 @@ class GuestTcpLink {
       if (line !== "") this.onLine(line);
     }
     // 单帧上限：被换掉的 guest 不该能把宿主的主进程内存吃掉
-    if (this.buffer.length > 16 * 1024 * 1024) this.destroy("单帧超过 16MB");
+    if (this.buffer.length > 16 * 1024 * 1024) this.destroy(cuTexts().tcpFrameTooLarge);
   }
 
   private onLine(line: string): void {
@@ -903,7 +902,7 @@ function connectOnce(address: string, port: number, timeoutMs: number): Promise<
     };
     const onError = (cause: Error): void => {
       const code = (cause as Error & { code?: string }).code;
-      finish({ ok: false, reason: `连接失败：${code ?? cause.message}` });
+      finish({ ok: false, reason: cuTexts().tcpConnectFailed(code ?? cause.message) });
     };
     socket.once("error", onError);
     socket.once("connect", () => {
@@ -911,7 +910,7 @@ function connectOnce(address: string, port: number, timeoutMs: number): Promise<
       socket.on("error", () => {});
       finish({ ok: true, socket });
     });
-    timer = setTimeout(() => finish({ ok: false, reason: `连接超时（${timeoutMs}ms）` }), timeoutMs);
+    timer = setTimeout(() => finish({ ok: false, reason: cuTexts().tcpConnectTimeout(timeoutMs) }), timeoutMs);
     timer.unref();
   });
 }
@@ -934,10 +933,10 @@ async function connectTcpLink(
     } catch (cause) {
       link.close();
       const why = cause instanceof Error ? cause.message : String(cause);
-      reasons.push(`${address}:${channel.port} 握手失败：${why}`);
+      reasons.push(cuTexts().tcpHandshakeFailed(`${address}:${channel.port}`, why));
     }
   }
-  return { reason: reasons.length === 0 ? "bridge.json 的 ipv4 是空的" : reasons.join("；") };
+  return { reason: reasons.length === 0 ? cuTexts().tcpNoAddresses : reasons.join("；") };
 }
 
 function parseTcpResp(value: unknown): Resp | null {
@@ -997,10 +996,7 @@ function failChannel(state: TcpChannelState): void {
  */
 export function tcpChannelFailureMessage(command: string, failure: TcpFailure, timeoutMs: number): string {
   if (failure.kind === "timeout") return guestTimeoutMessage(command, timeoutMs);
-  return (
-    `沙箱的命令通道中断了（${command} 走 TCP 时${failure.message}）——` +
-    "下一条命令起会自动走文件通道；可以直接重试，或先用 computer_screenshot 确认桌面还在不在"
-  );
+  return cuTexts().tcpChannelBroke(command, failure.message);
 }
 
 /**
@@ -1066,7 +1062,7 @@ async function sendGuestCommandOverTcp(
   try {
     const message = await link.request(command, fields, timeoutMs);
     const resp = parseTcpResp(message["resp"]);
-    if (resp === null) throw new TcpFailure("closed", "回执缺 resp 或 ok 字段");
+    if (resp === null) throw new TcpFailure("closed", cuTexts().tcpReplyMalformed);
     const jpegInline = decodeJpegInline(message["jpegBase64"]);
     return { kind: "reply", resp, ...(jpegInline === undefined ? {} : { jpegInline }) };
   } catch (cause) {
@@ -1113,7 +1109,7 @@ async function sendGuestCommandRaw(
   if (attempt.kind === "failed") throw attempt.error;
   if (attempt.kind === "reply") {
     if (attempt.resp.ok === false) {
-      const message = typeof attempt.resp.error === "string" ? attempt.resp.error : "guest 桥执行失败（没给原因）";
+      const message = typeof attempt.resp.error === "string" ? attempt.resp.error : cuTexts().bridgeNoReason;
       throw new GuestCommandRejected(message, parseComputerUseDelivery(attempt.resp["delivery"]));
     }
     return {
@@ -1156,7 +1152,7 @@ async function sendGuestCommandRaw(
       const resp = parseResp(raw);
       if (resp !== null) {
         if (resp.ok === false) {
-          const message = typeof resp.error === "string" ? resp.error : "guest 桥执行失败（没给原因）";
+          const message = typeof resp.error === "string" ? resp.error : cuTexts().bridgeNoReason;
           await cleanup();
           throw new GuestCommandRejected(message, parseComputerUseDelivery(resp["delivery"]));
         }
@@ -1182,15 +1178,9 @@ export function guestTimeoutMessage(command: string, timeoutMs: number): string 
   // 测试里会传 300ms 这种值：不足一秒就按毫秒说，别把预算写成「超时 0s」
   const budget = timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
   if (command.startsWith("cdp-")) {
-    return (
-      `沙箱里的浏览器没有响应（${command} 超时 ${budget}）——可能是浏览器卡住了：` +
-      "用 cdp-status 确认会话状态，或改用 computer_screenshot / computer_click 像素工具"
-    );
+    return cuTexts().guestBrowserTimeout(command, budget);
   }
-  return (
-    `沙箱里的桌面没有响应（${command} 超时 ${budget}）——也许是沙箱卡住了或正在重置：` +
-    "先用 computer_screenshot 确认桌面状态，必要时重启沙箱"
-  );
+  return cuTexts().guestDesktopTimeout(command, budget);
 }
 
 /**
@@ -1223,7 +1213,7 @@ export async function sendGuestCommand(
  */
 export async function pingGuest(outDir: string, timeoutMs: number): Promise<void> {
   const resp = await sendGuestCommand(outDir, computerUseGuestCommands.ping, {}, timeoutMs);
-  if (resp.ok !== true) throw new Error("guest 桥的 ping 响应畸形");
+  if (resp.ok !== true) throw new Error(cuTexts().bridgePingShape);
 }
 
 /**
@@ -1257,7 +1247,7 @@ export async function fetchGuestScreenshot(
     width <= 0 ||
     height <= 0
   ) {
-    throw new Error("guest 桥的截图响应缺字段（width / height / nativeWidth / nativeHeight / jpeg）");
+    throw new Error(cuTexts().bridgeShotShape);
   }
 
   const capture = captureFrom(shot.resp);
@@ -1287,18 +1277,18 @@ export async function fetchGuestShot(
   // TCP：JPEG 已经在回执里（回程 64KB 只要 2–6ms），映射目录里没有也不需要任何文件
   if (reply.jpegInline !== undefined) return { jpeg: reply.jpegInline, resp: reply.resp };
   if (reply.file === null) {
-    throw new Error(`guest 桥的 ${command} 响应缺 jpeg（TCP 回执里也没有 jpegBase64）`);
+    throw new Error(cuTexts().bridgeJpegMissing(command));
   }
 
   const { cmdDir, baseName } = reply.file;
   const resp = reply.resp;
   const jpegName = resp.jpeg;
   if (typeof jpegName !== "string" || jpegName === "") {
-    throw new Error(`guest 桥的 ${command} 响应缺 jpeg 字段（应是兄弟文件名）`);
+    throw new Error(cuTexts().bridgeJpegFieldMissing(command));
   }
   // 路径穿越闸门：读盘之前先卡死（理由见 isPlainScreenshotFileName）
   if (!isPlainScreenshotFileName(jpegName)) {
-    throw new Error(`guest 桥回了非法的截图文件名：${jpegName}`);
+    throw new Error(cuTexts().bridgeJpegNameInvalid(jpegName));
   }
 
   // resp 里引用的 jpg 先于 resp 落盘（桥的顺序保证），读不到就是同步抖动，重读一次
@@ -1311,7 +1301,7 @@ export async function fetchGuestShot(
     try {
       jpeg = await readFile(jpgPath);
     } catch {
-      throw new Error("guest 桥的响应引用的 JPEG 文件不存在");
+      throw new Error(cuTexts().bridgeJpegFileMissing);
     }
   }
 

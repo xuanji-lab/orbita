@@ -26,6 +26,8 @@
  * 的话用户以为自己有保护，其实没有。
  */
 
+import { cuTexts } from "./ui-language.ts";
+
 /**
  * 候选键位，按顺序尝试。选型原则：**三条都是「三个修饰键 + 一个不常用的键」**——
  * 与常见桌面快捷键错开（Alt+F4 / Ctrl+Shift+Esc / Win 系全部排除），也不跟输入法
@@ -100,7 +102,7 @@ export function createEmergencyStop(deps: EmergencyStopDeps): EmergencyStopContr
   if (active === null && error === null) {
     // 全失败且没有抛错：说清试过哪些组合、下一步能做什么（用户没有换键入口，
     // 唯一能做的是腾出键位再重启）
-    error = `急停快捷键 ${attempts.join(" / ")} 都被其它应用占用，急停不可用——请关掉占用这些组合的应用后重启本应用`;
+    error = cuTexts().emergencyHotkeyTaken(attempts.join(" / "));
   }
 
   return {

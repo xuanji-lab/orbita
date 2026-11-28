@@ -20,6 +20,7 @@ import {
   type ComputerUseLeaseStatus,
 } from "../../shared/computer-use.ts";
 import { EMERGENCY_STOP_ACCELERATOR, type EmergencyStopController } from "./emergency-stop.ts";
+import { cuTexts } from "./ui-language.ts";
 import { desktopLeaseStatus, type ComputerUseLease } from "./lease.ts";
 
 /**
@@ -111,7 +112,7 @@ export function registerComputerUseIpc(
         accelerator: EMERGENCY_STOP_ACCELERATOR,
         preferred: EMERGENCY_STOP_ACCELERATOR,
         registered: false,
-        error: "急停没有接线（主进程未注册热键）",
+        error: cuTexts().emergencyNotWired,
       },
   );
   /**

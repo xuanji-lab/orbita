@@ -13,7 +13,7 @@ import http from "node:http";
 import { after, before, describe, it } from "node:test";
 import { deflateSync } from "node:zlib";
 import { computerUseGuestCommands, COMPUTER_USE_DESKTOP_KEY } from "../../shared/computer-use.ts";
-import { SANDBOX_NOT_RUNNING } from "./provider.ts";
+import { sandboxNotRunningText } from "./provider.ts";
 import { QEMU_CAPABILITIES, QEMU_REFUSALS, QemuSandboxProvider } from "./qemu.ts";
 import { qemuAccelSpec, qemuNetdevSpec, qemuVmArgs } from "./qemu-vm.ts";
 import type { QemuVmHandle, QemuVmOptions, QemuVmPorts } from "./qemu-vm.ts";
@@ -189,10 +189,10 @@ describe("QemuSandboxProvider：L3 的命令映射与能力降级", () => {
     const provider = fakeProvider();
     const shot = await provider.screenshot();
     assert.equal(shot.ok, false);
-    assert.equal(shot.ok === false ? shot.error : "", SANDBOX_NOT_RUNNING);
+    assert.equal(shot.ok === false ? shot.error : "", sandboxNotRunningText());
     const click = await provider.guestCommand(computerUseGuestCommands.click, { x: 1, y: 2 });
     assert.equal(click.ok, false);
-    assert.equal(click.ok === false ? click.error : "", SANDBOX_NOT_RUNNING);
+    assert.equal(click.ok === false ? click.error : "", sandboxNotRunningText());
     assert.deepEqual(provider.status(), { state: "off" });
   });
 

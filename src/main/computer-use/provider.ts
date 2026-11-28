@@ -22,6 +22,7 @@ import type {
 } from "../../shared/computer-use.ts";
 import type { ComputerUseGuest } from "./agent-requests.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /**
  * 后端 id。`wsb` / `isolation-session` 是设置页可选的两个（shared 的 ComputerUseBackend）；
@@ -110,7 +111,9 @@ export interface SandboxProvider extends ComputerUseGuest {
 }
 
 /** 一个后端都没在跑时，车道方法回给用户/模型的话（三个后端同源，别各写一份） */
-export const SANDBOX_NOT_RUNNING = "隔离桌面没有在运行——先在「设置 › 实验功能 › 电脑使用」里启动它";
+export function sandboxNotRunningText(): string {
+  return cuTexts().sandboxNotRunningHint;
+}
 
 /**
  * 后端**在跑/在起，但还没就绪**时回给模型的话（2026-11-28 验收 P3-2）。
@@ -124,23 +127,14 @@ export const SANDBOX_NOT_RUNNING = "隔离桌面没有在运行——先在「�
  * 在错误前提下才成立的建议。
  */
 export function sandboxReadinessError(state: SandboxStatus["state"]): string {
-  if (state === "starting") {
-    return (
-      "隔离桌面还在启动，桥还没有就绪——这次命令没有执行。等设置页显示「运行中」再试" +
-      "（首次启动要一两分钟；超时可以点停止再启动）"
-    );
-  }
-  if (state === "stopping") {
-    return "隔离桌面正在关闭，这次命令没有执行。等它关完再启动后再试";
-  }
-  if (state === "error") {
-    return (
-      "隔离桌面处于错误状态、没有在运行——这次命令没有执行。先去「设置 › 实验功能 › 电脑使用」里" +
-      "点停止复位、再启动；起不来时看设置页那几行提示"
-    );
-  }
-  return SANDBOX_NOT_RUNNING;
+  const texts = cuTexts();
+  if (state === "starting") return texts.sandboxStartingHint;
+  if (state === "stopping") return texts.sandboxStoppingHint;
+  if (state === "error") return texts.sandboxErrorStateHint;
+  return texts.sandboxNotRunningHint;
 }
 
 /** 未实现的后端（P3 的 QEMU 空位）统一用这句话，接上实现时删掉 */
-export const SANDBOX_NOT_IMPLEMENTED = "这个隔离后端还没接上（P3-2 才实现）";
+export function sandboxNotImplementedText(): string {
+  return cuTexts().sandboxNotImplemented;
+}

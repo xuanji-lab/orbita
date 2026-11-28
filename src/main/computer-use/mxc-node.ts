@@ -8,6 +8,8 @@
  * `>=24.21.0 <25 || >=26.8.0`。这个闸门**在 provision 之后才会炸**，错误码
  * `backend_unavailable`，很容易被误判成「会话起不来」——所以要在启动前先判。
  */
+
+import { cuTexts } from "./ui-language.ts";
 export function nodeSupportsNativeStdio(version: string): boolean {
   const parts = version.trim().replace(/^v/, "").split(".");
   const major = Number.parseInt(parts[0] ?? "", 10);
@@ -22,8 +24,5 @@ export function nodeSupportsNativeStdio(version: string): boolean {
 
 /** 版本不够时给用户看的话（`nodeOk:false` 时由它解释，而不是一句「不可用」） */
 export function nodeTooOldReason(version: string): string {
-  return (
-    `当前 Node ${version} 太旧：MXC 的 native stdio 要求 Node 24.21 以上（或 26.8 以上）。` +
-    "Electron 43 自带 24.21.0，够用；开发时把 Electron 降级就会撞上这条。"
-  );
+  return cuTexts().nodeTooOld(version);
 }

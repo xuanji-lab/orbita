@@ -21,6 +21,7 @@ import {
   type SandboxDeps,
   type SandboxProcess,
 } from "./sandbox.ts";
+import { setComputerUseUiLanguage } from "./ui-language.ts";
 
 // ── 假沙箱进程：只实现状态机用到的 on / kill，exit / error 由测试手动发射 ─────────
 
@@ -2214,5 +2215,33 @@ describe("能力声明：证据级别与实现同源（L2 / WSB）", () => {
     // provider.ts 的一致性规则：uia ⇒ value；否则 windows ⇒ window；否则 none
     const implied = WSB_CAPABILITIES.uia ? "value" : WSB_CAPABILITIES.windows ? "window" : "none";
     assert.equal(WSB_CAPABILITIES.evidence, implied, "声明得比实现高就是伪造证据");
+  });
+});
+
+// ── 双语：车道闸门的拒绝文案跟界面语言走（2026-11-28）──────────────────────
+
+describe("车道闸门文案：双语", () => {
+  test("英文界面下「没有在运行」那句是英文，中文界面下是中文原文", async () => {
+    setComputerUseUiLanguage("en");
+    const english = await makeHarness();
+    try {
+      const shot = await english.controller.screenshot();
+      assert.equal(shot.ok, false);
+      const message = shot.ok === false ? shot.error : "";
+      assert.doesNotMatch(message, /[一-鿿]/);
+      // 英文句子要能指路（设置页的位置在两种语言里都得说清）
+      assert.match(message, /Settings/);
+    } finally {
+      await english.close();
+    }
+
+    setComputerUseUiLanguage("zh");
+    const chinese = await makeHarness();
+    try {
+      const shot = await chinese.controller.screenshot();
+      assert.ok(shot.ok === false && /没有在运行/.test(shot.error));
+    } finally {
+      await chinese.close();
+    }
   });
 });

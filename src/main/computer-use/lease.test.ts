@@ -8,6 +8,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createComputerUseLease, desktopLeaseStatus, runWithLease, type LeaseClock, type LeaseEvent } from "./lease.ts";
+import { setComputerUseUiLanguage } from "./ui-language.ts";
 import {
   COMPUTER_USE_DESKTOP_KEY,
   COMPUTER_USE_LEASE,
@@ -600,5 +601,45 @@ describe("桌面归属（设置页「正在被谁使用」）", () => {
     const { lease, clock } = setup();
     await lease.acquire(browserKey("B"), "B", "任务乙");
     assert.equal(desktopLeaseStatus(lease, clock.now()), null);
+  });
+});
+
+// ── 双语：租约拒绝文案（回执原文，2026-11-28）─────────────────────────────
+
+describe("租约拒绝文案：双语", () => {
+  test("英文界面下等超时的那句是英文，且无 CJK", async () => {
+    setComputerUseUiLanguage("en");
+    try {
+      const { lease, clock } = setup();
+      await lease.acquire(DESKTOP, "A", "Invoices");
+      const waiting = lease.acquire(DESKTOP, "B", "Task B");
+      clock.advance(COMPUTER_USE_LEASE.waitMs);
+      const result = await waiting;
+      assert.equal(result.ok, false);
+      if (result.ok) return;
+      assert.doesNotMatch(result.error, /[一-鿿]/);
+      assert.match(result.error, /Invoices/);
+      assert.match(result.error, /Do not retry/);
+    } finally {
+      setComputerUseUiLanguage("zh");
+    }
+  });
+
+  test("队列满 / 硬上限 / 撤销也分语言（同一份表，不是各写一份）", async () => {
+    setComputerUseUiLanguage("en");
+    try {
+      const { lease } = setup();
+      await lease.acquire(DESKTOP, "A", "Invoices");
+      for (let i = 0; i < COMPUTER_USE_LEASE.queueLimit; i += 1) {
+        void lease.acquire(DESKTOP, `Q${i}`, `queued ${i}`);
+      }
+      const full = await lease.acquire(DESKTOP, "Z", "late");
+      assert.equal(full.ok, false);
+      if (full.ok) return;
+      assert.doesNotMatch(full.error, /[一-鿿]/);
+      assert.match(full.error, /queue waiting for it has reached its limit/);
+    } finally {
+      setComputerUseUiLanguage("zh");
+    }
   });
 });
