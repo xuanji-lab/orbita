@@ -16,6 +16,7 @@
  * 再按 label 筛一遍会被筛掉——`fig/pl` 命中 `figures/plot.pdf` 的那条就活不下来。
  */
 import type { LatexLabelRef, LatexProjectIndex } from "../../../../shared/latex.ts";
+import type { Messages } from "../../messages-en.ts";
 import {
   LATEX_COMMAND_DATA,
   LATEX_ENVIRONMENT_DATA,
@@ -49,6 +50,17 @@ export interface LatexSuggestion {
 
 /** 一次最多给几条：弹层只渲染 24 行，再长就该多打两个字 */
 export const LATEX_SUGGEST_LIMIT = 60;
+
+/**
+ * 候选行里的说明文字。
+ *
+ * 这个模块是**纯函数**（不依赖 React，`node --test` 直接跑），所以不能自己读 `useT()`——
+ * 文案由调用方（latex-completion.ts ← TexEditorPane）传进来。类型直接取英文表的
+ * `latexSuggest` 段：两张表的形状由 `Messages` 管着，这里多写一个键就 typecheck 不过。
+ *
+ * **必选参数而不是默认值**：漏传就编不过，语言不会静默地退回写死的英文。
+ */
+export type LatexSuggestTexts = Messages["latexSuggest"];
 
 /**
  * 会接 `{...}` 的引用命令（natbib / biblatex / hyperref / cleveref 的常见写法）。
@@ -214,20 +226,21 @@ const lower = (value: string): string => value.toLowerCase();
 export function suggestLatex(
   context: LatexContext,
   index: LatexProjectIndex | null,
+  texts: LatexSuggestTexts,
   limit: number = LATEX_SUGGEST_LIMIT,
   packages: PackageCandidates = EMPTY_PACKAGES,
 ): LatexSuggestion[] {
   switch (context.kind) {
     case "command":
-      return suggestCommands(context.query, index, limit);
+      return suggestCommands(context.query, index, limit, texts);
     case "environment":
-      return suggestEnvironments(context, index, limit);
+      return suggestEnvironments(context, index, limit, texts);
     case "reference":
-      return suggestReferences(context.query, index, limit);
+      return suggestReferences(context.query, index, limit, texts);
     case "package":
-      return suggestPackages(context.query, packages, limit);
+      return suggestPackages(context.query, packages, limit, texts);
     case "path":
-      return suggestPaths(context.query, context.mode, index, limit);
+      return suggestPaths(context.query, context.mode, index, limit, texts);
     case "snippet":
       return suggestSnippets(context.query, limit);
   }
@@ -248,7 +261,12 @@ export interface PackageCandidates {
 
 const EMPTY_PACKAGES: PackageCandidates = { installed: [], loaded: [] };
 
-function suggestPackages(query: string, packages: PackageCandidates, limit: number): LatexSuggestion[] {
+function suggestPackages(
+  query: string,
+  packages: PackageCandidates,
+  limit: number,
+  texts: LatexSuggestTexts,
+): LatexSuggestion[] {
   const needle = lower(query.trim());
   const seen = new Set<string>();
   const rows: LatexSuggestion[] = [];
@@ -258,7 +276,7 @@ function suggestPackages(query: string, packages: PackageCandidates, limit: numb
     seen.add(name);
     rows.push({ kind: "package", label: name, detail, info: null, insert: "plain", text: name });
   };
-  for (const name of packages.loaded) push(name, "已加载");
+  for (const name of packages.loaded) push(name, texts.loaded);
   for (const name of packages.installed) push(name, null);
   return rows.slice(0, limit);
 }
@@ -285,7 +303,12 @@ export function loadedPackageNames(text: string): string[] {
   return out;
 }
 
-function suggestCommands(query: string, index: LatexProjectIndex | null, limit: number): LatexSuggestion[] {
+function suggestCommands(
+  query: string,
+  index: LatexProjectIndex | null,
+  limit: number,
+  texts: LatexSuggestTexts,
+): LatexSuggestion[] {
   const needle = lower(query);
   const rows: { suggestion: LatexSuggestion; rank: number }[] = [];
   const push = (data: LatexCommandData, projectDefined: boolean): void => {
@@ -296,7 +319,7 @@ function suggestCommands(query: string, index: LatexProjectIndex | null, limit: 
       suggestion: {
         kind: "command",
         label: data.name,
-        detail: projectDefined ? "本项目定义" : data.detail,
+        detail: projectDefined ? texts.projectDefined : data.detail,
         info: data.doc,
         insert: "snippet",
         text: data.snippet,
@@ -308,7 +331,7 @@ function suggestCommands(query: string, index: LatexProjectIndex | null, limit: 
   const known = new Set(LATEX_COMMAND_DATA.map((data) => data.name));
   for (const name of index?.commands ?? []) {
     if (known.has(name)) continue;
-    push({ name, snippet: name, detail: "本项目定义", doc: null }, true);
+    push({ name, snippet: name, detail: texts.projectDefined, doc: null }, true);
   }
   rows.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : compareLabels(a.suggestion.label, b.suggestion.label)));
   return rows.slice(0, limit).map((row) => row.suggestion);
@@ -318,6 +341,7 @@ function suggestEnvironments(
   context: { mode: "begin" | "end"; query: string },
   index: LatexProjectIndex | null,
   limit: number,
+  texts: LatexSuggestTexts,
 ): LatexSuggestion[] {
   const needle = lower(context.query);
   const rows: LatexSuggestion[] = [];
@@ -339,7 +363,7 @@ function suggestEnvironments(
     rows.push({
       kind: "environment",
       label: name,
-      detail: "本项目定义",
+      detail: texts.projectDefined,
       info: null,
       insert: "snippet",
       text: environmentInsertion(context.mode, name, "\n\t${0}"),
@@ -358,19 +382,24 @@ export function environmentInsertion(mode: "begin" | "end", name: string, body: 
   return `${name}}${body}\n\\end{${name}}`;
 }
 
-function suggestReferences(query: string, index: LatexProjectIndex | null, limit: number): LatexSuggestion[] {
+function suggestReferences(
+  query: string,
+  index: LatexProjectIndex | null,
+  limit: number,
+  texts: LatexSuggestTexts,
+): LatexSuggestion[] {
   const labels: LatexLabelRef[] = index?.labels ?? [];
   const duplicate = new Set(index?.duplicateLabels ?? []);
   const needle = lower(query);
   const rows: LatexSuggestion[] = [];
   for (const label of labels) {
     if (needle !== "" && !lower(label.name).includes(needle)) continue;
-    const note = duplicate.has(label.name) ? " · 同名 label 出现多次" : "";
+    const note = duplicate.has(label.name) ? texts.dupLabel : "";
     rows.push({
       kind: "reference",
       label: label.name,
       detail: `${label.file}:${label.line}${note}`,
-      info: duplicate.has(label.name) ? `多处定义，引用编号可能指错：${label.file}:${label.line}` : `${label.file}:${label.line}`,
+      info: duplicate.has(label.name) ? texts.dupLabelInfo(label.file, label.line) : `${label.file}:${label.line}`,
       insert: "plain",
       // 引用命令的参数多半是 `\ref{...}`：接受候选时补上 `}`（编辑器没有 closeBrackets）
       text: `${label.name}}`,
@@ -388,6 +417,7 @@ function suggestPaths(
   mode: "tex" | "graphics" | "bib",
   index: LatexProjectIndex | null,
   limit: number,
+  texts: LatexSuggestTexts,
 ): LatexSuggestion[] {
   const files = index?.files ?? [];
   const needle = lower(query);
@@ -404,7 +434,7 @@ function suggestPaths(
     rows.push({
       kind: "path",
       label: path,
-      detail: isDir ? "目录" : null,
+      detail: isDir ? texts.directory : null,
       info: null,
       insert: "plain",
       // 目录补全到 `/`；文件补全到名字末尾（`}` 由用户自己打——有些命令后面还有参数）

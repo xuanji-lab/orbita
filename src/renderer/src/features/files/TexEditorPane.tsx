@@ -227,6 +227,12 @@ export function TexEditorPane(props: {
   /** 宏包名表同样可能比编辑器晚到（主进程要扫一次 TeX 树） */
   const packageNamesRef = useRef<readonly string[]>(NO_PACKAGE_NAMES);
   packageNamesRef.current = props.packageNames ?? NO_PACKAGE_NAMES;
+  /**
+   * 补全弹层的说明文字（`已加载` / `本项目定义` / `目录` …）。与上面几个 ref 同一理由：
+   * 编辑器只挂载一次，而语言可能随时切——每次渲染把当前语言的文案写进去，弹层现读。
+   */
+  const suggestTextsRef = useRef(t.latexSuggest);
+  suggestTextsRef.current = t.latexSuggest;
   /** Ctrl/Cmd+单击 `\input{…}` 的处理函数：编辑器挂载只一次，闭包每轮渲染换新 */
   const includeClickRef = useRef<((at: { line: number; column: number }) => boolean) | null>(null);
   /** 基线：最后一次从盘上读到 / 成功写下去的文本指纹（按磁盘格式） */
@@ -480,6 +486,7 @@ export function TexEditorPane(props: {
             cite: () => citeRef.current,
             index: () => indexRef.current,
             packages: () => packageNamesRef.current,
+            texts: () => suggestTextsRef.current,
           }),
           EditorView.contentAttributes.of({ "aria-label": t.editor.aria, spellcheck: "false" }),
         ],
@@ -1199,10 +1206,10 @@ export function TexEditorPane(props: {
                         <button
                           type="button"
                           className="quiet-control"
-                          title="看源码与 PDF 的双 diff 对照"
+                          title={t.editor.diffOpenTip}
                           onClick={() => setReviewHunk(hunk)}
                         >
-                          对照
+                          {t.editor.diffOpen}
                         </button>
                       )}
                       {stale ? (

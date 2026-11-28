@@ -395,7 +395,7 @@ export function PdfView(props: {
           setFind({ query: trimmed, counts, active, busy: false, failed: false });
         } catch (cause) {
           if (!alive) return;
-          console.error("[pdf] 搜索语料抽取失败", cause);
+          console.error("[pdf] search corpus extraction failed", cause);
           setFind({ query: trimmed, counts: [], active: -1, busy: false, failed: true });
         }
       })();
@@ -933,7 +933,7 @@ function PdfPage(props: {
     })().catch((cause: unknown) => {
       if (cause instanceof RenderingCancelledException || cancelled) return;
       // 单页渲染失败不掀翻整份预览：这一页留白，其余页照常
-      console.error(`[pdf] 第 ${number} 页渲染失败`, cause);
+      console.error(`[pdf] page ${number} failed to render`, cause);
     });
     return () => {
       cancelled = true;
@@ -1165,7 +1165,7 @@ function PdfThumb(props: {
       await renderTask.promise;
     })().catch((cause: unknown) => {
       if (cause instanceof RenderingCancelledException || cancelled) return;
-      console.error(`[pdf] 第 ${props.number} 页缩略图失败`, cause);
+      console.error(`[pdf] page ${props.number} failed to render its thumbnail`, cause);
     });
     return () => {
       cancelled = true;

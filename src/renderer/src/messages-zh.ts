@@ -3362,6 +3362,26 @@ export const zh: Messages = {
     cleaned: (n) => `已清理 ${n} 个辅助文件`,
     cleanedNothing: "没有可清理的东西：产物目录里只剩 PDF 了",
     cleanFailed: (message) => `清理失败：${message}`,
+    /* ---------- 双 diff 对照（改动块的「对照」，见 PdfDiffReview.tsx） ---------- */
+    diff: {
+      titleSrc: "TeX 源码（红 = 改前、绿 = 改后）",
+      titleBefore: "改前 PDF（红）",
+      titleAfter: "改后 PDF（绿）",
+      comment: "评论",
+      commentPreset: "这一处还没想好，先别动",
+      backupFailed: "备份失败",
+      compileFailed: "重编失败",
+    },
+  },
+
+  /* ---------- LaTeX 补全弹层的说明（latex-suggest.ts 是纯函数，文案由调用方传） ---------- */
+  latexSuggest: {
+    loaded: "已加载",
+    projectDefined: "本项目定义",
+    /** 引用候选右侧附注：重名 label 的短标记（前面带分隔点，拼在「文件:行」后面） */
+    dupLabel: " · 同名 label 出现多次",
+    dupLabelInfo: (file, line) => `多处定义，引用编号可能指错：${file}:${line}`,
+    directory: "目录",
   },
 
   /* ---------- 设置 › LaTeX 论文（preflight 自查） ---------- */
@@ -3535,6 +3555,9 @@ export const zh: Messages = {
     hunkEdited: "已被改动，不可撤销",
     hunksShow: "展开改动块",
     hunksHide: "收起改动块",
+    /* 改动块行尾的「对照」：源码对照 + 改前 / 改后两版 PDF 并排 */
+    diffOpen: "对照",
+    diffOpenTip: "看源码与 PDF 的双 diff 对照",
     /* 大纲抽屉（章节树） */
     outline: "大纲",
     outlineTip: "这份文件的章节——点击跳转",

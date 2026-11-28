@@ -1,5 +1,8 @@
 import { deepStrictEqual, doesNotMatch, match, ok } from "node:assert/strict";
 import { describe, test } from "node:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { en } from "./messages-en.ts";
 import { zh } from "./messages-zh.ts";
 
@@ -149,6 +152,9 @@ const ALLOWED_LATIN = new Set([
   "cite",
   // LaTeX 的 label 是源码里的字面量（`\label{…}`），中文文案里保留原名便于对照
   "label",
+  // 「双 diff 对照」里的 diff（2026-11-28，editor.diffOpenTip）：这句中文是双 diff 面板决策时的原文，
+  // 搬进 messages 不能改一字；中文写作里「diff」也已经是这个功能的名字。
+  "diff",
   // 缺宏包安装：MiKTeX 的包管理器与提权命令（用户照抄进终端的字面量）
   "mpm",
   "MiKTeX",
@@ -376,5 +382,62 @@ describe("「和智能体一起做一个」的预填首句", () => {
     // 中文界面预填中文、英文界面预填英文（语言信号跟着用户走，不是整条英文包装）
     match(zh.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
     doesNotMatch(en.plugins.makeWithAgentDraft, /[\u4e00-\u9fff]/);
+  });
+});
+
+/* ---------------- LaTeX 组件里不许写死的中文 ---------------- */
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+// HERE = <repo>/src/renderer/src —— 扫的相对路径从仓库根算，失败信息里的路径会更好读
+const REPO_ROOT = join(HERE, "..", "..", "..");
+const FILES_DIR = join(HERE, "features", "files");
+const CJK = /[\u4e00-\u9fff]/;
+
+/**
+ * 剥掉块注释（含 JSX 的 `{/* … *}{@code /}`），**保持行号**：换行留着，其余字换成空格。
+ * 与 `design-tokens.test.ts` 的 `stripBlockComments` 同一手法。
+ */
+function stripBlockComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "));
+}
+
+/**
+ * 剥掉 `//` 行注释。不能见 `//` 就切——字符串里的 `https://` 不是注释，
+ * 所以 `//` 前一个字符是 `:` 时不算起点（本仓实际写法都覆盖到了）。
+ */
+function stripLineComments(text: string): string {
+  return text.replace(/(^|[^:])\/\/[^\n]*/gm, "$1");
+}
+
+/** 仓库相对路径，统一正斜杠（Windows 下 `relative()` 给反斜杠） */
+function relPath(path: string): string {
+  return relative(REPO_ROOT, path).split(sep).join("/");
+}
+
+/**
+ * LaTeX 相关组件里，**用户可见的文字必须从 `t`（messages 表）来**：写死的中文在英文
+ * 界面里会原样露出来（2026-11-28 的真实事故：双 diff 对照面板整块只有中文）。
+ *
+ * 规则：剥掉注释后，字符串字面量、模板串、JSX 文本节点里出现汉字就失败。
+ * 日志（`console.warn("[pdf] …")`）不豁免：它们是开发侧的字符串，不属于产品文案。
+ *
+ * 这个守卫只拦「没走 messages」，**不评价中文该怎么写**：修法是把原中文搬进
+ * `messages-zh.ts`（措辞不变），再把英文写进 `messages-en.ts`。
+ */
+describe("LaTeX 组件的文案走 messages（英文界面不露中文）", () => {
+  test("features/files/*.tsx、latex-suggest.ts、LatexSettings.tsx 里没有写死的中文", () => {
+    const tsxFiles = readdirSync(FILES_DIR)
+      .filter((name) => name.endsWith(".tsx") && !name.endsWith(".test.tsx"))
+      .sort()
+      .map((name) => join(FILES_DIR, name));
+    const scanned = [...tsxFiles, join(FILES_DIR, "latex-suggest.ts"), join(HERE, "features", "settings", "LatexSettings.tsx")];
+    const offenders: string[] = [];
+    for (const file of scanned) {
+      const text = stripLineComments(stripBlockComments(readFileSync(file, "utf8")));
+      text.split(/\r?\n/).forEach((line, index) => {
+        if (CJK.test(line)) offenders.push(`${relPath(file)}:${index + 1}: ${line.trim()}`);
+      });
+    }
+    deepStrictEqual(offenders, []);
   });
 });
