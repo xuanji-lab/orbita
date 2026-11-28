@@ -281,3 +281,43 @@ describe("动作名词", () => {
     }
   });
 });
+
+describe("点击 / 按键回执：按钮与键名也要本地化", () => {
+  const zh = computerUseUiTexts("zh");
+  const en = computerUseUiTexts("en");
+
+  test("中文：左/右/中键 × 单/双击都写成中文，不夹英文单词", () => {
+    assert.equal(zh.rcptClickSent("left", false, 887, 1087), "已在沙箱桌面上左键单击，位置 (887, 1087)。");
+    assert.equal(zh.rcptClickSent("right", true, 1, 2), "已在沙箱桌面上右键双击，位置 (1, 2)。");
+    assert.equal(zh.rcptClickSent("middle", false, 3, 4), "已在沙箱桌面上中键单击，位置 (3, 4)。");
+    // 认不出的按钮名原样带上（不丢信息），但也不拼出英文句子
+    assert.match(zh.rcptClickSent("back", false, 5, 6), /back 键单击/);
+    for (const text of [zh.rcptClickSent("left", false, 1, 1), zh.rcptClickSent("left", true, 1, 1)]) {
+      // 专名之外不许有英文虚词（left / click 这类按钮词不该出现在中文句里）
+      assert.doesNotMatch(text, /left|right|middle|click|double/i, text);
+    }
+  });
+
+  test("英文：保持 left click / double left click（改动前的原样）", () => {
+    assert.equal(en.rcptClickSent("left", false, 887, 1087), "Sent a left click at (887, 1087) on the sandbox desktop.");
+    assert.equal(
+      en.rcptClickSent("right", true, 1, 2),
+      "Sent a double right click at (1, 2) on the sandbox desktop.",
+    );
+  });
+
+  test("中文：常见键名给中文/通用写法，认不出的原样保留", () => {
+    assert.equal(zh.rcptKeyPressed("enter"), "已在沙箱桌面上按下回车。");
+    assert.equal(zh.rcptKeyPressed("escape"), "已在沙箱桌面上按下 Esc。");
+    assert.equal(zh.rcptKeyPressed("space"), "已在沙箱桌面上按下空格。");
+    assert.equal(zh.rcptKeyPressed("ctrl+a"), "已在沙箱桌面上按下 Ctrl+A。");
+    assert.equal(zh.rcptKeyPressed("pageup"), "已在沙箱桌面上按下 PageUp。");
+    // 认不出的键名是模型下次要复用的标识：原样留着，不改写
+    assert.equal(zh.rcptKeyPressed("f5"), "已在沙箱桌面上按下 f5。");
+  });
+
+  test("英文：键名原样（协议名就是它要复用的那个）", () => {
+    assert.equal(en.rcptKeyPressed("ctrl+a"), "Pressed ctrl+a on the sandbox desktop.");
+    assert.equal(en.rcptKeyPressed("enter"), "Pressed enter on the sandbox desktop.");
+  });
+});

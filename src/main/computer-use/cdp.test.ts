@@ -1292,3 +1292,45 @@ describe("浏览器回执跟界面语言走（中文界面不许出现整句英�
     }
   });
 });
+
+describe("失败回执的句末标点（中文「。」与英文「.」都认）", () => {
+  const failureWith = (error: string) =>
+    fakeGuest({
+      running: true,
+      replies: { [computerUseGuestCommands.cdpNav]: () => ({ ok: false, error }) },
+    });
+
+  test("中文句以「。」结尾：只加一个空格，不补半角句号", async () => {
+    setComputerUseUiLanguage("zh");
+    try {
+      const { guest } = failureWith("沙箱里的 Edge 没有在运行。");
+      const outcome = await run(new CdpSession(guest, tempOutDir()), { action: "sandbox-navigate", url: "example.com" });
+      const text = outcome.ok ? "" : outcome.error;
+      assert.doesNotMatch(text, /。。|\. /, text);
+      assert.match(text, /没有在运行。 如果 CDP 一直失败/, text);
+    } finally {
+      setComputerUseUiLanguage("en");
+    }
+  });
+
+  test("英文句以「.」结尾：同样不重复", async () => {
+    setComputerUseUiLanguage("en");
+    const { guest } = failureWith("The browser is not running.");
+    const outcome = await run(new CdpSession(guest, tempOutDir()), { action: "sandbox-navigate", url: "example.com" });
+    const text = outcome.ok ? "" : outcome.error;
+    assert.doesNotMatch(text, /\.\./, text);
+    assert.match(text, /not running\. If CDP keeps failing/, text);
+  });
+
+  test("没有句末标点的句子：照旧补一个英文句号（两种语言都是）", async () => {
+    setComputerUseUiLanguage("zh");
+    try {
+      const { guest } = failureWith("沙箱没在运行");
+      const outcome = await run(new CdpSession(guest, tempOutDir()), { action: "sandbox-navigate", url: "example.com" });
+      const text = outcome.ok ? "" : outcome.error;
+      assert.match(text, /沙箱没在运行\. 如果 CDP 一直失败/, text);
+    } finally {
+      setComputerUseUiLanguage("en");
+    }
+  });
+});
