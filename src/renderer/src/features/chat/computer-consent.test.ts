@@ -80,15 +80,25 @@ test("正在等授权的调用：最后一条还没有结果的（确认行的�
 });
 
 test("记录行：只在第一处电脑调用下面画，且 unset（撤销后）整行消失", () => {
-  assert.equal(consentRecordKind("allowed", "t1", "t1"), "allowed");
-  assert.equal(consentRecordKind("denied", "t1", "t1"), "denied");
+  assert.equal(consentRecordKind("allowed", "answered", "t1", "t1"), "allowed");
+  assert.equal(consentRecordKind("denied", "answered", "t1", "t1"), "denied");
   // 不是挂点：别的工具行（哪怕也是电脑工具）下面不重复画
-  assert.equal(consentRecordKind("allowed", "t2", "t1"), null);
-  assert.equal(consentRecordKind("allowed", "t0", "t1"), null);
+  assert.equal(consentRecordKind("allowed", "answered", "t2", "t1"), null);
+  assert.equal(consentRecordKind("allowed", "answered", "t0", "t1"), null);
   // 撤销 / 从没问过：没有记录可画
-  assert.equal(consentRecordKind("unset", "t1", "t1"), null);
+  assert.equal(consentRecordKind("unset", "revoked", "t1", "t1"), null);
   // 转录里还没有电脑工具：没有挂点
-  assert.equal(consentRecordKind("allowed", "t1", null), null);
+  assert.equal(consentRecordKind("allowed", "answered", "t1", null), null);
+});
+
+test("记录行分「你拒绝了」与「没人回答」（2026-11-28 验收 P3-1）", () => {
+  // 用户亲手点拒绝
+  assert.equal(consentRecordKind("denied", "answered", "t1", "t1"), "denied");
+  // 120s 没人答 / 窗口全关没人可问：不是用户拒绝
+  assert.equal(consentRecordKind("denied", "timeout", "t1", "t1"), "unanswered");
+  assert.equal(consentRecordKind("denied", "unavailable", "t1", "t1"), "unanswered");
+  // 重开后的会话分不出来（source 缺席）：按「已拒绝」画，不编原因
+  assert.equal(consentRecordKind("denied", null, "t1", "t1"), "denied");
 });
 
 test("乙的状态行：只有已允许才出现（未授权交给甲，拒绝不常驻打扰）", () => {

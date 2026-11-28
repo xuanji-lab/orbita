@@ -13,7 +13,7 @@
  * 纯函数、只吃转录与状态：node --test 直接加载（同 tool-results.ts 的纪律）。
  */
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
-import type { ComputerUseConsent } from "@shared/computer-use";
+import type { ComputerUseConsent, ComputerUseConsentSource } from "@shared/computer-use";
 
 /** 电脑使用两组工具的名字前缀：`computer_*`（像素 / UIA）与 `sandbox_*`（沙箱内浏览器） */
 const COMPUTER_TOOL_PREFIXES = ["computer_", "sandbox_"] as const;
@@ -103,17 +103,27 @@ export function groupHoldsPendingAsk(
 }
 
 /**
- * 记录行该不该画、画哪一种。只有「本会话第一处电脑工具调用」那一行下面画，
- * 且授权状态不是 unset（撤销之后整行消失，下一次电脑操作会重新问）。
+ * 记录行的形态：允许 / 用户拒绝 / 没人回答。
+ *
+ * 只有「本会话第一处电脑工具调用」那一行下面画，且授权状态不是 unset（撤销之后整行消失，
+ * 下一次电脑操作会重新问）。
+ *
+ * `denied` 有两种来源（2026-11-28 验收 P3-1）：用户亲手点了「拒绝」（source = answered），
+ * 与 120s 没人回答、或窗口全关没人可问（timeout / unavailable）——后者不能对用户说
+ * 「你拒绝了」。**来源缺席**（重开后的会话：盘上只有 denied）按「已拒绝」画，不编原因。
  */
+export type ConsentRecordKind = "allowed" | "denied" | "unanswered";
+
 export function consentRecordKind(
   consent: ComputerUseConsent,
+  source: ComputerUseConsentSource | null,
   toolCallId: string,
   triggerToolCallId: string | null,
-): "allowed" | "denied" | null {
+): ConsentRecordKind | null {
   if (consent === "unset") return null;
   if (triggerToolCallId === null || toolCallId !== triggerToolCallId) return null;
-  return consent;
+  if (consent === "allowed") return "allowed";
+  return source === "timeout" || source === "unavailable" ? "unanswered" : "denied";
 }
 
 /**

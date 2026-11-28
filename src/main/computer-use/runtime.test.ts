@@ -272,6 +272,31 @@ describe("运行时门面", () => {
     assert.equal(cmd.ok, false);
   });
 
+  it("后端在 starting / stopping / error：先回「没就绪」的原因，不发命令、不提窗口名（P3-2）", async () => {
+    for (const state of ["starting", "error"] as const) {
+      const wsb = fakeController("wsb", state);
+      const iso = fakeController("iso");
+      const runtime = createComputerUseRuntime({
+        wsb: { ...wsb.controller, probe: async () => probeResult() },
+        isolation: iso.controller as unknown as IsolationSessionController,
+        backend: () => "wsb",
+        probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+      });
+      const uia = await runtime.uiaList({ title: "记事本" });
+      assert.equal(uia.ok, false, state);
+      const message = uia.ok === false ? uia.error : "";
+      // 第一句就是原因：没有在启动 / 出错，而不是「没找到标题包含…的窗口」
+      assert.match(message, state === "starting" ? /还在启动/ : /错误状态/, state);
+      assert.doesNotMatch(message, /没找到标题包含/, state);
+      // 命令没有下发到那个后端
+      assert.deepEqual(wsb.calls, [], state);
+      // 截图同一个口径
+      const shot = await runtime.screenshot();
+      assert.equal(shot.ok, false, state);
+      assert.match(shot.ok === false ? shot.error : "", state === "starting" ? /还在启动/ : /错误状态/, state);
+    }
+  });
+
   it("车道方法委托给正在跑的那只（不多发一份）", async () => {
     const wsb = fakeController("wsb");
     const iso = fakeController("iso", "running");

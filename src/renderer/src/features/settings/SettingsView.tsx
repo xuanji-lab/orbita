@@ -2366,7 +2366,15 @@ function GuardGroup() {
               {state?.accelerator ?? "Control+Alt+Shift+Escape"}
             </code>
           </span>
-          {state?.registered === true && <span className="set-row-hint">{t.computerUse.emergencyRegistered}</span>}
+          {state?.registered === true && (
+            <span className="set-row-hint">
+              {/* 生效的组合就是上面那个 code；主选被占用时补一句「已改用哪一个」——
+                  用户没有换键入口，至少要一眼看出该记哪个组合（2026-11-28 验收 P2-2） */}
+              {state.accelerator === state.preferred
+                ? t.computerUse.emergencyRegistered
+                : t.computerUse.emergencyFallback(state.preferred, state.accelerator)}
+            </span>
+          )}
         </span>
       </SettingRow>
     </SettingGroup>

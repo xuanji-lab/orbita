@@ -43,6 +43,7 @@ import type { IsolationSessionController, IsolationSessionProbe } from "./isolat
 import { QemuSandboxProvider } from "./qemu.ts";
 import {
   SANDBOX_NOT_RUNNING,
+  sandboxReadinessError,
   type SandboxCapabilities,
   type SandboxProvider,
 } from "./provider.ts";
@@ -216,6 +217,22 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
     ({ ok: false, error }) as unknown as Extract<T, { ok: false }>;
 
   /**
+   * 车道方法的入口：后端既要**存在**，也要**running**（2026-11-28 验收 P3-2）。
+   *
+   * 以前只判「存在」（`running()` 把 state !== "off" 的都算「在跑」），于是 starting /
+   * stopping / error 三态都会把命令发给一个还没有桥的控制器——回执变成「没找到标题包含…
+   * 的窗口」，模型读到的是窗口名而不是真原因，接着换个窗口名重试。现在这三种状态直接回
+   * 「没就绪 + 原因 + 下一步」（sandboxReadinessError），一句话说完。
+   */
+  const lane = (): { provider: SandboxProvider } | { error: string } => {
+    const provider = runningProvider();
+    if (provider === null) return { error: SANDBOX_NOT_RUNNING };
+    const state = provider.status().state;
+    if (state !== "running") return { error: sandboxReadinessError(state) };
+    return { provider };
+  };
+
+  /**
    * 启动时读一次出网开关。读不到按缺省（允许）——与 WSB 控制器「读超时就按缺省并留日志」
    * 同一条纪律：一次读设置失败不该让沙箱起不来。
    */
@@ -260,24 +277,24 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       return provider.desktopKey(sessionId);
     },
     screenshot: async (maxWidth?: number): Promise<ComputerUseScreenshotResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseScreenshotResult>();
-      return controllerOf(backend).screenshot(maxWidth);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseScreenshotResult>(target.error);
+      return target.provider.screenshot(maxWidth);
     },
     windowShot: async (options): Promise<ComputerUseWindowShotResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseWindowShotResult>();
-      return controllerOf(backend).windowShot(options);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseWindowShotResult>(target.error);
+      return target.provider.windowShot(options);
     },
     listWindows: async (timeoutMs?: number): Promise<ComputerUseWindowListResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseWindowListResult>();
-      return controllerOf(backend).listWindows(timeoutMs);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseWindowListResult>(target.error);
+      return target.provider.listWindows(timeoutMs);
     },
     uiaList: async (options): Promise<ComputerUseUiaListResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseUiaListResult>();
-      return controllerOf(backend).uiaList(options);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseUiaListResult>(target.error);
+      return target.provider.uiaList(options);
     },
     uiaAct: async (options: {
       hwnd?: number;
@@ -288,24 +305,24 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       value?: string;
       timeoutMs?: number;
     }): Promise<ComputerUseUiaActResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseUiaActResult>();
-      return controllerOf(backend).uiaAct(options);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseUiaActResult>(target.error);
+      return target.provider.uiaAct(options);
     },
     guestCommand: async (command, fields) => {
-      const backend = running();
-      if (backend === null) return notRunning<GuestCommandReply>();
-      return controllerOf(backend).guestCommand(command, fields);
+      const target = lane();
+      if ("error" in target) return notRunning<GuestCommandReply>(target.error);
+      return target.provider.guestCommand(command, fields);
     },
     guestCommandReply: async (command, fields) => {
-      const backend = running();
-      if (backend === null) return notRunning<GuestCommandReply>();
-      return controllerOf(backend).guestCommandReply(command, fields);
+      const target = lane();
+      if ("error" in target) return notRunning<GuestCommandReply>(target.error);
+      return target.provider.guestCommandReply(command, fields);
     },
     guestShot: async (command, fields) => {
-      const backend = running();
-      if (backend === null) return notRunning<GuestShotReply>();
-      return controllerOf(backend).guestShot(command, fields);
+      const target = lane();
+      if ("error" in target) return notRunning<GuestShotReply>(target.error);
+      return target.provider.guestShot(command, fields);
     },
     dispose: async (): Promise<void> => {
       // 全部都收：一只可能停在 error（资源还在），另一只可能是上一局残留

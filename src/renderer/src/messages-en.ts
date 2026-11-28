@@ -1278,7 +1278,7 @@ export const en = {
     /*
      * Session consent (2026-11-27): one ask in the conversation (row A), then a record in the
      * flow plus a quiet status line above the composer (row B). The refusal text itself comes
-     * from COMPUTER_USE_CONSENT_DENIED_TEXT (shared) — same sentence the model receives.
+     * from computerUseConsentTexts (shared, by UI language) — the same sentence the model receives.
      */
     consentAsk: "Allow the agent to control the sandbox desktop?",
     consentWhy:
@@ -1287,6 +1287,7 @@ export const en = {
     consentDeny: "Deny",
     consentAllowedRecord: "Allowed for this session — no further prompts",
     consentDeniedRecord: "Denied — no computer actions this session",
+    consentUnansweredRecord: "Nobody answered, so it was treated as denied — allow again when you need it",
     consentRevoke: "Revoke",
     consentToldModel: (text: string) => `Told the model: ${text}`,
     consentStatusAllowed: "Sandbox desktop: allowed for this session",
@@ -1296,6 +1297,9 @@ export const en = {
     emergencyHotkeyInfo:
       "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. **It does not close the sandbox** — the screen stays for you to look at. Re-authorize to use computer use again.",
     emergencyRegistered: "Registered and available",
+    /** 主选被占用、降级到候选键位时说清「现在生效的是哪一个」（2026-11-28 验收 P2-2） */
+    emergencyFallback: (preferred: string, active: string) =>
+      `The main shortcut ${preferred} is taken by another app; using ${active} instead`,
     emergencyUnavailable: (error: string) => `Unavailable: ${error}. Close the app holding this shortcut and restart Orbita.`,
     emergencyStopped:
       "Emergency stop: this turn was stopped and this session's computer-use grant was revoked. The sandbox is still open.",

@@ -880,8 +880,10 @@ export interface ComputerUseLeaseKeyStats {
  * （「快捷键被占用」），不能只在控制台留一行。
  */
 export interface EmergencyStopStatus {
-  /** 键位字符串（设置页展示） */
+  /** **实际生效**的键位（全失败时回主选）：设置页显示它 */
   accelerator: string;
+  /** 主选键位（2026-11-28 验收 P2-2）：与 accelerator 不同 = 主选被占用、已降级到候选 */
+  preferred: string;
   registered: boolean;
   error: string | null;
 }
@@ -1840,7 +1842,7 @@ export const COMPUTER_USE_NO_EVIDENCE_HINT =
  * - `unset`：还没问过（也含撤销 / 急停之后）——下一次电脑操作会问一次用户；
  * - `allowed`：用户点了「允许本会话」——本会话内所有电脑操作直接放行；
  * - `denied`：用户拒绝 / 没人能回答（超时、窗口已关、会话已删）——工具当场失败，
- *   回一句固定文本给模型（`COMPUTER_USE_CONSENT_DENIED_TEXT`）。
+ *   回一句固定文本给模型（`computerUseConsentTexts(language).denied`，按界面语言取）。
  *
  * **授权只能来自用户回答或这条持久记录**：模型没有任何通路把 unset 写成 allowed。
  * **fail closed**：没人能回答时一律落到 denied，绝不静默放行。
@@ -1854,19 +1856,57 @@ export type ComputerUseConsent = "unset" | "allowed" | "denied";
 export const COMPUTER_USE_CONSENT_TIMEOUT_MS = 120_000;
 
 /**
- * 拒绝时回给模型的**固定**文本（也是界面上「已告知模型」那一行显示的原文）。
- * 单一来源：闸门、记录行、测试都从这里取——三处各写一句就会漂成三种说法。
+ * 授权线**给模型看、又可能显示在界面上**的那几句话（2026-11-28 验收 P2-1）。
+ *
+ * 为什么要按语言分岔：拒绝文本会原样出现在界面的「已告知模型：…」那一行里；一个中文常量
+ * 在英文界面下就是夹生字。**单一来源**仍是这里——闸门按界面语言取一份，renderer 用同一个
+ * 函数取同一份，两处不可能漂。
+ *
+ * 语言取值来自 `effectiveLanguage(settings.language)`：zh → 中文，其余（含缺省）→ 英文，
+ * 与界面语言（locale.ts 的 LocaleContext 缺省 en）同一套兜底。
+ *
+ * **工具描述不在这里**：那是写给模型的英文协议面（COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE），
+ * 不随界面语言变。
  */
-export const COMPUTER_USE_CONSENT_DENIED_TEXT = "用户拒绝了电脑操作，本会话不要再请求";
+export interface ComputerUseConsentTexts {
+  /** 用户拒绝（或没人能回答、按拒绝收口）—— 与记录行的「已告知模型」同一句 */
+  denied: string;
+  /** 本轮被停掉：不是拒绝，没有写盘 */
+  stopped: string;
+  /** 子会话 / 幕后 / 未 promoted 的自动化会话 */
+  mainSessionOnly: string;
+  /** 自动化发起的轮次（this_session 投回用户会话） */
+  unattended: string;
+}
 
-/**
- * 本轮被停掉时回给模型的文本（2026-11-27 验收 P1）：用户按了停止 / 抢跑 / 会话被删，
- * 挂起的提问被取消。**这不是拒绝**——用户没有表态，不写 meta，下一次电脑操作会重新问。
- * 为什么必须与拒绝分开说：模型看到「用户拒绝」会记住「本会话不能碰桌面」，而用户只是
- * 停了一下这一轮；下次它就不敢再请求了。
- */
-export const COMPUTER_USE_CONSENT_STOPPED_TEXT =
-  "这一轮已停止，电脑操作没有执行。这不是拒绝：本会话没有记录任何决定，下次需要时会重新询问用户。";
+const CONSENT_TEXTS_ZH: ComputerUseConsentTexts = {
+  denied: "用户拒绝了电脑操作，本会话不要再请求",
+  stopped:
+    "这一轮已停止，电脑操作没有执行。这不是拒绝：本会话没有记录任何决定，下次需要时会重新询问用户。",
+  mainSessionOnly:
+    "电脑使用只在主会话里可用：子会话 / 自动化任务看不到授权确认行，因此不能操作沙箱桌面。需要的话，把这一步交回给主会话来做。",
+  unattended:
+    "这一轮不是你手动发起的（自动化 / 定时任务），电脑使用不会为它弹授权。要操作沙箱桌面，请在主会话里手动发起。",
+};
+
+const CONSENT_TEXTS_EN: ComputerUseConsentTexts = {
+  denied: "The user denied computer actions. Do not request them again in this session.",
+  stopped:
+    "This turn was stopped, so the computer action did not run. This is not a denial: nothing was recorded " +
+    "for this session, and the user will be asked again the next time it is needed.",
+  mainSessionOnly:
+    "Computer use is only available in the main session: a delegated sub-session or an automation run has no " +
+    "consent prompt the user can see, so it cannot drive the sandbox desktop. Hand this step back to the main " +
+    "conversation instead.",
+  unattended:
+    "This turn was not started by the user (an automation or scheduled run), so computer use will not ask for " +
+    "consent on it. To drive the sandbox desktop, start the step manually from the main conversation.",
+};
+
+/** 语言 → 那一份固定文本。认不出的语言按英文（与界面缺省一致） */
+export function computerUseConsentTexts(language: string | undefined): ComputerUseConsentTexts {
+  return language === "zh" ? CONSENT_TEXTS_ZH : CONSENT_TEXTS_EN;
+}
 
 /**
  * 电脑使用**只在主会话里可用**（2026-11-27 验收 P3 裁决）。
@@ -1876,10 +1916,8 @@ export const COMPUTER_USE_CONSENT_STOPPED_TEXT =
  * `SYSTEM_INPUT_UNAVAILABLE`、ZCode 的「Main agent only. Never delegate Computer Use to a
  * subagent.」——同一个结论。子会话 / 自动化在闸门处**立刻**收到这句，不要白等 120s。
  *
- * 下面英文那句进工具描述（描述面是英文，口径相同）。
+ * 中文原文在 `computerUseConsentTexts` 里（按界面语言取）；下面英文那句进工具描述。
  */
-export const COMPUTER_USE_MAIN_SESSION_ONLY_TEXT =
-  "电脑使用只在主会话里可用：子会话 / 自动化任务看不到授权确认行，因此不能操作沙箱桌面。需要的话，把这一步交回给主会话来做。";
 export const COMPUTER_USE_MAIN_SESSION_ONLY_SCOPE =
   "**Main session only**: a delegated sub-session or an automation run cannot use computer use (its consent " +
   "prompt would be invisible to the user) — hand this step back to the main conversation instead.";
@@ -1902,16 +1940,12 @@ export interface ComputerUseSessionShape {
   promoted?: boolean;
 }
 
-/**
- * 自动化发起的轮次里，电脑使用不弹授权（用户不在看，问不到就是 120s 超时→永久 denied）。
- * 与“子会话”那句不同：这条会话本身是用户的，只是这一轮不是他发起的。
- */
-export const COMPUTER_USE_UNATTENDED_TEXT =
-  "这一轮不是你手动发起的（自动化 / 定时任务），电脑使用不会为它弹授权。要操作沙箱桌面，请在主会话里手动发起。";
+/** 闸门判出的「用户看不到」的缘故；具体文案由 `computerUseConsentTexts` 按语言给 */
+export type ComputerUseBlockedKind = "main-session-only" | "unattended";
 
 /**
  * 电脑使用的**唯一判据**：这一条会话、这一轮，用户能不能看到并回答那个授权提问。
- * null = 能，可以提问；否则就是回给模型的那句拒绝文本（当场拒，不白等 120s）。
+ * null = 能，可以提问；否则就是**缘故**（不是文案：文案跟界面语言走）。
  *
  * 两件事一起判，**不拆成两套口径**：
  *   1. **会话身份**：子会话（parentId）/ 幕后会话（backstage）/ 自动化新开的会话（automationId，
@@ -1926,13 +1960,13 @@ export const COMPUTER_USE_UNATTENDED_TEXT =
 export function computerUseBlockedReason(
   session: ComputerUseSessionShape,
   origin: ComputerUseTurnOrigin,
-): string | null {
+): ComputerUseBlockedKind | null {
   const userFacing =
     session.parentId === undefined &&
     session.backstage === undefined &&
     (session.automationId === undefined || session.promoted === true);
-  if (!userFacing) return COMPUTER_USE_MAIN_SESSION_ONLY_TEXT;
-  if (origin !== "user") return COMPUTER_USE_UNATTENDED_TEXT;
+  if (!userFacing) return "main-session-only";
+  if (origin !== "user") return "unattended";
   return null;
 }
 
