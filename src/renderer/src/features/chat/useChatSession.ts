@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { selectTranscript } from "@earendil-works/pi-coding-agent/client";
 import { planAwaitingIn } from "../context/plan-timeline.ts";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
+import { flushAllDocx, flushAllDocxForLeave } from "../docx/docx-flush.ts";
 import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
@@ -2407,7 +2408,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
    * **槽已经在就只取 meta、不再读整份转录**（转录本来就不会重种，见 open-session.ts）；
    * **连点两条时后点的赢**：晚到的旧票只种它自己的槽，不动视图。
    */
-  const openSession = useCallback(
+  const openSessionNow = useCallback(
     (id: string): Promise<boolean> => {
       if (id === sessionRef.current) {
         // 点回已经绑着的活会话：不读盘，但还在路上的上一次打开要作废——最后点的是它
@@ -2510,6 +2511,18 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [engine, openWins],
   );
+  /**
+   * 切会话 = 把两栏整片换掉，打开着的 docx 会随之卸载。先让它们把待存改动落盘；
+   * 任何一份失败（要确认整份重排 / 磁盘被外部改过 / 写盘失败）就**不切走**——
+   * 提示由 docx 视图自己挂出来（2026-10-24 评审：切会话会丢字）。没切走回 false。
+   */
+  const openSession = useCallback(
+    (id: string): Promise<boolean> => {
+      if (id === sessionRef.current) return openSessionNow(id);
+      return flushAllDocx().then((outcome) => (outcome.ok ? openSessionNow(id) : false));
+    },
+    [openSessionNow],
+  );
   openSessionRef.current = openSession;
 
   /**
@@ -2561,19 +2574,30 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
 
 
-  /** 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底 */
+  /**
+   * 不属于任何工作区的新任务：清掉归属与 cwd，落在兜底。
+   * **清槽 = 右栏文件面板整片换掉**，打开着的 docx 随之卸载：先让它的待存改动
+   * 落盘，失败就不清槽（提示在 docx 视图里）。评审 2b：这条不走 openSession，
+   * 原来直接 reset() 就把字丢了。
+   */
   const newTask = useCallback(() => {
-    reset();
-    setCwd(null);
-    setWorkspaceId(null);
+    void flushAllDocxForLeave().then((outcome) => {
+      if (!outcome.ok) return;
+      reset();
+      setCwd(null);
+      setWorkspaceId(null);
+    });
   }, [reset]);
 
-  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次 */
+  /** 这个工作区里的新任务：路径与归属一起填好，用户不用再点一次。闸门同 newTask */
   const newTaskIn = useCallback(
     (workspace: Workspace) => {
-      reset();
-      setCwd(workspace.path);
-      setWorkspaceId(workspace.id);
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        reset();
+        setCwd(workspace.path);
+        setWorkspaceId(workspace.id);
+      });
     },
     [reset],
   );
@@ -2599,10 +2623,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   );
   const startTaskWithDraft = useCallback(
     (workspace: Workspace | null, text: string) => {
-      reset();
-      setCwd(workspace === null ? null : workspace.path);
-      setWorkspaceId(workspace === null ? null : workspace.id);
-      writeDraft(`home:${key}`, text);
+      // 同 newTask：reset 掉右栏面板前先让打开着的 docx 落盘（失败就不走，提示在 docx 视图里）
+      void flushAllDocxForLeave().then((outcome) => {
+        if (!outcome.ok) return;
+        reset();
+        setCwd(workspace === null ? null : workspace.path);
+        setWorkspaceId(workspace === null ? null : workspace.id);
+        writeDraft(`home:${key}`, text);
+      });
     },
     [reset, writeDraft, key],
   );

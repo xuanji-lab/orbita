@@ -94,6 +94,25 @@ import type { CiteFocusRequest } from "./features/files/cite-focus.ts";
 import { CitationOpenContext } from "./features/chat/citation-context.ts";
 import type { PdfCitation } from "@shared/pdf-quote";
 import { FilesPanel } from "./features/files/FilesPanel";
+import {
+  autoSplitPanelWidth,
+  effectivePaperLayout,
+  nextPaperLayout,
+  PAPER_CHAT_WIDTH,
+  PAPER_LAYOUT_DEFAULT,
+  recallPaperLayout,
+  rememberPaperLayout,
+  shouldSplitPaper,
+  type PaperLayout,
+} from "./features/files/paper-layout.ts";
+import { SplitHandle } from "./shell/SplitHandle.tsx";
+import {
+  clampPaperChatWidth,
+  PAPER_SOURCE_MIN_WIDTH,
+  PAPER_SPLIT_MIN_TOTAL,
+} from "./shell/split-limits.ts";
+import { PAPER_CHAT_WIDTH_RANGE } from "@shared/settings";
+
 import { TerminalPanel } from "./features/terminal/TerminalPanel";
 import { ReviewPanel } from "./features/review/ReviewPanel";
 import { DocsPanel } from "./features/doc-panel/DocsPanel";
@@ -117,6 +136,7 @@ import {
   type NoticeTier,
 } from "./features/notify/completion-notice.ts";
 import { playCompletionChime } from "./features/notify/chime.ts";
+import { flushAllDocxForLeave } from "./features/docx/docx-flush.ts";
 import { MemoryLibraryView } from "./features/memory/MemoryLibraryView";
 import { PluginsView } from "./features/plugins/PluginsView.tsx";
 import type { MemoryEntryView } from "@shared/memory";
@@ -149,7 +169,27 @@ export function App() {
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [chatStatusOn] = useChatStatusFlag();
   /** 右侧分屏面板开哪个；两个面板互斥，同一时刻至多一个 */
-  const [rightPanel, setRightPanel] = useState<RightPanelKind | null>(null);
+  const [rightPanel, setRightPanelRaw] = useState<RightPanelKind | null>(null);
+  /**
+   * 右栏切换（含收起）的唯一入口。**离开「文件」面板 = FilesPanel 卸载 = 打开着的
+   * docx 编辑器卸载**：先把待存改动落盘；失败就**不切**（评审 2a：「打字后点审查改动」
+   * 曾经把字和视图一起丢掉，零提示）。提示由 docx 视图自己挂出来。
+   * 没有待存改动时 `flushAllDocxForLeave` 同步放行，普通切面板不会变慢。
+   */
+  const setRightPanel = useCallback(
+    (next: RightPanelKind | null | ((current: RightPanelKind | null) => RightPanelKind | null)): void => {
+      const target = typeof next === "function" ? next(rightPanel) : next;
+      if (target === "files" || target === rightPanel) {
+        setRightPanelRaw(target);
+        return;
+      }
+      void flushAllDocxForLeave().then((outcome) => {
+        if (outcome.ok) setRightPanelRaw(target);
+      });
+    },
+    [rightPanel],
+  );
+
   /** 星系设计面板（原型）在设计哪个工作区：DIY 键定它，主槽换工作区时跟过去（design.ts 的 designerFollow） */
   const [galaxyTarget, setGalaxyTarget] = useState<string | null>(null);
   // 设计面板要停在哪颗天体（星系上点了主星 / 行星）：nonce 每点一次 +1
@@ -516,6 +556,157 @@ export function App() {
     window.addEventListener("resize", sync);
     return () => window.removeEventListener("resize", sync);
   }, []);
+
+  // ── 论文工作台的两种布局（features/files/paper-layout.ts）──────────────
+  /**
+   * 布局偏好（每个会话各自记着，**只存内存**——与右栏宽度同一条纪律，本 PR 不新增
+   * 落盘协议）。真正生效的档位由窗口宽与「文件面板是否打开」裁决：窄窗 / 工作台没开
+   * 时退回对话为主，但不清掉偏好——窗口宽回来、工作台重新打开时 B 自己回来。
+   */
+  const [paperLayout, setPaperLayout] = useState<PaperLayout>(PAPER_LAYOUT_DEFAULT);
+  const paperMemoryRef = useRef<Map<string, PaperLayout>>(new Map());
+  const paperSessionKeyRef = useRef<string | null>(null);
+
+  const workbenchOpen = rightPanel === "files";
+  const paperColumn = effectivePaperLayout({ wanted: paperLayout, windowWidth, workbenchOpen });
+  const paperMode = paperColumn === "paper";
+  /**
+   * 布局 B 的对话栏宽（settings.paperChatWidth，默认沿用 paper-layout.ts 的 340）。
+   * **上限是动态的**（2026-11-25 用户裁决）：容器宽的一半，且要给稿件区留下
+   * tex / pdf 的最小宽。存的是「上次拖到的 px」，读取 / 应用 / 拖动时都按当前
+   * 容器再夹一次——换个窄窗口打开不会超出一半。拖动中只改本地，松手才落盘。
+   */
+  const [paperChatWidth, setPaperChatWidth] = useState(
+    settings.paperChatWidth ?? PAPER_CHAT_WIDTH,
+  );
+  useEffect(() => {
+    setPaperChatWidth(settings.paperChatWidth ?? PAPER_CHAT_WIDTH);
+  }, [settings.paperChatWidth]);
+  /**
+   * 夹取**放在 CSS 里**（`min(clamp(280px, 存值, 50%), calc(100% - 稿件区最小宽))`），
+   * 不用 ResizeObserver 量容器：窗口被遮挡 / 后台时渲染帧会停，观察器回调跟着停，
+   * 量出来的宽会陈旧（真机复现：侧栏展开后对话栏仍按旧容器算，越过分界线）。
+   * CSS 的百分比在每次布局时现算，永远不会旧。拖动 / 键盘这些需要像素换算的场合
+   * 才在事件里现量。
+   */
+  const paneRef = useRef<HTMLElement | null>(null);
+  const chatRef = useRef<HTMLDivElement | null>(null);
+  /** 稿件区此刻是不是并排（tex | pdf）：并排时对话栏要给它留下两块的最小宽 */
+  const [paperSplit, setPaperSplit] = useState(false);
+  const paperChatReserved = paperSplit ? PAPER_SPLIT_MIN_TOTAL : PAPER_SOURCE_MIN_WIDTH;
+  const paperChatCss = `min(clamp(${PAPER_CHAT_WIDTH_RANGE.min}px, ${Math.round(paperChatWidth)}px, 50%), calc(100% - ${paperChatReserved}px))`;
+  /** 事件时现量：容器宽（`.pane`）与对话栏此刻渲染宽 */
+  const measureChat = (): { pane: number; chat: number } => ({
+    pane: paneRef.current?.getBoundingClientRect().width ?? 0,
+    chat: chatRef.current?.getBoundingClientRect().width ?? 0,
+  });
+  const clampChat = (width: number, pane: number): number =>
+    clampPaperChatWidth(width, pane, paperChatReserved);
+  /** 对话栏拖动起点（px）：对话在右，指针左移 = 变宽 */
+  const paperChatDragFrom = useRef<{ width: number; pane: number }>({ width: paperChatWidth, pane: 0 });
+  const commitPaperChatWidth = (width: number, pane: number): void => {
+    const next = clampChat(width, pane);
+    setPaperChatWidth(next);
+    changeSettings({ paperChatWidth: next });
+  };
+  /**
+   * 文件面板里真有带 PDF 的 LaTeX 项目（由 FilesPanel 上报）。布局 A 的自动并排与
+   * 「并排前把右栏拉宽」都要先知道这一点，而项目事实住在面板里。
+   */
+  const [paperReady, setPaperReady] = useState(false);
+  useEffect(() => {
+    if (rightPanel !== "files") setPaperReady(false);
+  }, [rightPanel]);
+  /** 布局 A 的大屏自动并排：窗口 ≥1800 且项目有 PDF（窗口窄回去就自动回到单栏） */
+  const autoSplit =
+    paperColumn === "chat" &&
+    shouldSplitPaper({ layout: "chat", windowWidth, hasPdf: paperReady, workbenchOpen });
+  const autoSplitWidth = autoSplitPanelWidth({
+    layout: paperColumn,
+    windowWidth,
+    hasPdf: paperReady,
+    workbenchOpen,
+  });
+  /** 自动加宽之前的宽度（effect 里读的那一拍值，不把 panelWidth 加进依赖） */
+  const panelWidthRef = useRef(panelWidth);
+  panelWidthRef.current = panelWidth;
+  /**
+   * 自动并排那一刻把右栏拉宽一次：默认 320 里并排两块，每块 160——那就是原型里被
+   * 否掉的形态。只在**进入**并排时纠正一次（用户之后把面板拖窄照常生效——持续夹取会
+   * 让「拖窄」这个动作失效）；离开并排（窗口缩回 1800 以下）时把它收回去。
+   *
+   * 为什么要收回：这个宽度是本地 state，不收回就会带进后续所有的「窄窗口」形态；
+   * 窗口再缩到 1000 时面板宽远大于 pane，而右栏的夹取又是按「自己 + 对话区」量出来的
+   * （对话区被挤成 0 之后就自洽地停在原宽），结果对话区被整块盖掉。收回让这一刀不制造
+   * 那个形态；**用户自己拖动**造成的同样局面是另一回事（既有的夹取自洽问题，不在这里改）。
+   */
+  const panelBeforeAutoSplitRef = useRef<{ before: number; widened: number } | null>(null);
+  useEffect(() => {
+    if (autoSplitWidth > 0) {
+      if (panelBeforeAutoSplitRef.current === null) {
+        const before = panelWidthRef.current;
+        panelBeforeAutoSplitRef.current = { before, widened: Math.max(before, autoSplitWidth) };
+        setPanelWidth(panelBeforeAutoSplitRef.current.widened);
+      }
+      return;
+    }
+    const pending = panelBeforeAutoSplitRef.current;
+    if (pending === null) return;
+    panelBeforeAutoSplitRef.current = null;
+    // 用户在并排期间自己拖过就保留他的；没动过才回到进并排前的宽度
+    setPanelWidth((width) => (width === pending.widened ? pending.before : width));
+    // 只跟「并排开关」走：panelWidth 在闭包里只用于「进并排前是多少」这一个快照
+  }, [autoSplitWidth]);
+
+  /**
+   * 布局 B 自动收起左侧栏，退出时恢复**进 B 之前**的折叠态（不恢复宽度：宽度本来
+   * 就没被改过，B 只改折叠）。窄于 960 时退出不展开——那是既有的自动收起断点。
+   */
+  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  sidebarCollapsedRef.current = sidebarCollapsed;
+  const sidebarBeforePaperRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (paperMode) {
+      if (sidebarBeforePaperRef.current === null) {
+        sidebarBeforePaperRef.current = sidebarCollapsedRef.current;
+      }
+      setSidebarCollapsed(true);
+      return;
+    }
+    const before = sidebarBeforePaperRef.current;
+    if (before === null) return;
+    sidebarBeforePaperRef.current = null;
+    setSidebarCollapsed(before || window.innerWidth < COLLAPSE_BREAKPOINT);
+  }, [paperMode]);
+
+  /**
+   * 切换布局（页头最右那颗键与 Ctrl+\\ 同一个入口）。工作台没开时切换无处落脚：
+   * 布局 B 的主位就是稿件工作台，所以只有文件面板开着（或已经在 B 里）才动作。
+   */
+  const togglePaperLayout = useCallback((): void => {
+    if (!paperMode && rightPanel !== "files") return;
+    setPaperLayout((current) => nextPaperLayout(current));
+  }, [paperMode, rightPanel]);
+
+  // Ctrl+\\ / ⌘+\\：两种布局的快捷键（原型）。终端与输入框里放过——那里有自己的
+  // 语义；源码编辑器里接（CodeMirror 没有 Ctrl+\\ 的默认绑定）。
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
+      if (event.key !== "\\") return;
+      const target = event.target;
+      if (target instanceof Element && target.closest(".xterm") !== null) return;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (target.isContentEditable && target.closest(".tex-editor") === null) return;
+      }
+      event.preventDefault();
+      togglePaperLayout();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [togglePaperLayout]);
   /** 右栏胶囊的宿主（Toolbar 挂好回填；各面板的页头内容 portal 进来） */
   const [panelSlot, setPanelSlot] = useState<HTMLDivElement | null>(null);
   /** 抽屉槽：与主槽共用引擎的第二个「正在看」。辅助对话就是普通 task（Q2 裁决）。 */
@@ -529,6 +720,21 @@ export function App() {
    */
   const mainOpenId = session.sessionId ?? session.opened?.id ?? "";
   const mainOpenMeta = session.sessions.find((m) => m.id === mainOpenId) ?? session.opened;
+
+  // 切会话那一拍：把离开会话此刻的布局记下，再恢复目标会话的（没记过 = 对话为主）。
+  // paperLayout 进依赖是为了让「离开时」读到当前值；同会话内布局变化时下面早退
+  useEffect(() => {
+    const key = mainOpenId === "" ? null : mainOpenId;
+    const previous = paperSessionKeyRef.current;
+    paperSessionKeyRef.current = key;
+    if (previous === key) return;
+    if (previous !== null) {
+      paperMemoryRef.current = rememberPaperLayout(paperMemoryRef.current, previous, paperLayout);
+    }
+    setPaperLayout(
+      key === null ? PAPER_LAYOUT_DEFAULT : recallPaperLayout(paperMemoryRef.current, key),
+    );
+  }, [mainOpenId, paperLayout]);
   const channelParentId =
     overlay !== null || mainOpenId === "" || mainOpenMeta?.parentId !== undefined ? null : mainOpenId;
   const channelParentTitle = mainOpenMeta?.title ?? "";
@@ -777,6 +983,30 @@ export function App() {
    * 信号是一次性的，TerminalPanel 消费完就清。
    */
   const [pendingTerminal, setPendingTerminal] = useState<string | null>(null);
+  /**
+   * 文件面板「在终端安装」：把一条命令**填进可见终端**（以粘贴方式进 xterm，
+   * 不回车）。缺宏包的 tlmgr 可能要 sudo / 管理员密码，回车与提权都留给用户。
+   * token 单调递增：同一命令连点两次也重新粘贴一次。
+   */
+  const [pendingTerminalInput, setPendingTerminalInput] = useState<{ text: string; token: number } | null>(null);
+  const terminalInputTokenRef = useRef(0);
+  /**
+   * 缺宏包「在终端安装」之后的提示（文件面板顶部一行）。住在 App 而不是文件面板：点安装
+   * 会把右栏切到终端，文件面板随之卸载——提示放面板里会正好在最该出现时丢掉。
+   * 下一次编译开始时清掉（装没装好，编译那一下会说明）。
+   */
+  const [latexInstallNotice, setLatexInstallNotice] = useState(false);
+  // 换会话 / 换工作区就不再是「刚在这个项目里装了包」——提示跟着那一次编译走
+  const latexNoticeScope = `${session.sessionId ?? ""}|${session.workspaceId ?? ""}`;
+  useEffect(() => {
+    setLatexInstallNotice(false);
+  }, [latexNoticeScope]);
+
+  const runInTerminal = useCallback((text: string): void => {
+    terminalInputTokenRef.current += 1;
+    setPendingTerminalInput({ text, token: terminalInputTokenRef.current });
+    setRightPanel("terminal");
+  }, []);
   useEffect(
     () =>
       api.terminal.onEvent((event) => {
@@ -1681,6 +1911,7 @@ export function App() {
           panelOpen={rightPanel !== null}
           panelWidth={panelRenderedWidth}
           narrow={docPanelOpen ? panelOverlay : narrow || panelOverlay}
+          paper={paperMode}
           sessionSlot={sessionSlot}
           onPanelSlot={setPanelSlot}
           onToggleDrawer={() => setRightPanel(rightPanel === null ? "drawer" : null)}
@@ -1721,8 +1952,57 @@ export function App() {
           onOpenFile={focus.openFile}
         />
 
-        <main className="pane">
-          <div className="pane-main">
+        <main
+          ref={paneRef}
+          className="pane"
+          data-layout={paperMode ? "paper" : "chat"}
+          // 布局 B：对话栏宽由设置注入（CSS 只读变量；默认值仍是 paper-layout.ts 的 340）
+          style={
+            paperMode
+              ? ({ "--paper-chat-w": paperChatCss } as React.CSSProperties)
+              : undefined
+          }
+        >
+          <div className="pane-main" ref={chatRef}>
+            {/* 稿件区 ↔ 对话栏的拆分条：布局 B 才有（对话在右，拖它改对话栏宽）。
+                绝对定位骑在对话卡片左缘的竖线上，不吃对话栏的 7px */}
+            {paperMode && (
+              <SplitHandle
+                orientation="vertical"
+                className="paper-chat-handle"
+                label={t.paper.chatHandle}
+                onDragStart={() => {
+                  const now = measureChat();
+                  paperChatDragFrom.current = { width: now.chat, pane: now.pane };
+                }}
+                onDrag={(delta) =>
+                  setPaperChatWidth(
+                    clampChat(paperChatDragFrom.current.width - delta, paperChatDragFrom.current.pane),
+                  )
+                }
+                onDragEnd={(delta) =>
+                  commitPaperChatWidth(
+                    paperChatDragFrom.current.width - delta,
+                    paperChatDragFrom.current.pane,
+                  )
+                }
+                onStep={(delta) => {
+                  const now = measureChat();
+                  commitPaperChatWidth(now.chat - delta, now.pane);
+                }}
+                onEdge={(edge) => {
+                  const now = measureChat();
+                  commitPaperChatWidth(
+                    edge === "min" ? PAPER_CHAT_WIDTH_RANGE.min : Number.MAX_SAFE_INTEGER,
+                    now.pane,
+                  );
+                }}
+                onReset={() => {
+                  const now = measureChat();
+                  commitPaperChatWidth(PAPER_CHAT_WIDTH, now.pane);
+                }}
+              />
+            )}
             {/* 主槽内的弹出宿主（完成提醒卡 / 铃铛清单）：卡片属于内容面这一层，
                 与主槽边框隔一条血线；右栏面板开着时停在主槽这一侧 */}
             <div className="pane-pop-host" ref={setPopHost} />
@@ -1823,6 +2103,7 @@ export function App() {
             width={isDocPanel ? docPanelWidth : panelWidth}
             {...(isDocPanel ? { resolveLayout: docPanelLayout } : {})}
             narrow={narrow}
+            fill={paperMode}
             onOverlay={setPanelOverlay}
             onTight={setPanelTight}
             onWidthChange={isDocPanel ? setDocPanelWidth : setPanelWidth}
@@ -1851,6 +2132,17 @@ export function App() {
                 focusWorkspaceId={focusFilesView?.workspaceId ?? null}
                 focusDone={focus.status.kind === "done"}
                 fileOpen={fileOpenRequest}
+                onRunInTerminal={runInTerminal}
+                onPackageInstalled={() => setLatexInstallNotice(true)}
+                onCompileRun={() => setLatexInstallNotice(false)}
+                installNotice={latexInstallNotice}
+                paperLayout={paperMode}
+                settings={settings}
+                onSettingsChange={changeSettings}
+                onPaperSplit={setPaperSplit}
+                autoSplit={autoSplit}
+                onTogglePaperLayout={togglePaperLayout}
+                onPaperReady={setPaperReady}
                 onDocShown={setFilesShowsDoc}
               />
               ) : shownPanel === "docs" || shownPanel === "slides" ? (
@@ -1902,6 +2194,8 @@ export function App() {
                   cwd={session.cwd}
                   activateId={pendingTerminal}
                   onActivated={() => setPendingTerminal(null)}
+                  pendingInput={pendingTerminalInput}
+                  onInputDone={() => setPendingTerminalInput(null)}
                 />
               ) : shownPanel === "drawer" ? (
                 <Drawer

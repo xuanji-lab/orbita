@@ -9,10 +9,15 @@ import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
 import { channelApi } from "./api/channel.ts";
 import { chatEmbedApi } from "./api/chat-embed.ts";
+import { citeApi } from "./api/cite.ts";
+import { docxApi } from "./api/docx.ts";
+import { docxExportApi } from "./api/docx-export.ts";
 import { docsApi } from "./api/docs.ts";
 import { excerptApi } from "./api/excerpt.ts";
 import { filesApi } from "./api/files.ts";
 import { focusApi } from "./api/focus.ts";
+import { latexApi } from "./api/latex.ts";
+import { officeApi } from "./api/office.ts";
 import { powerApi } from "./api/power.ts";
 import { importApi } from "./api/import.ts";
 import { intentApi } from "./api/intent.ts";
@@ -54,11 +59,16 @@ const api = {
   window: windowApi,
   workspace: workspaceApi,
   files: filesApi,
+  docx: docxApi,
+  docxExport: docxExportApi,
   docs: docsApi,
   focus: focusApi,
   power: powerApi,
   notify: notifyApi,
   terminal: terminalApi,
+  latex: latexApi,
+  office: officeApi,
+  cite: citeApi,
   usage: usageApi,
   updater: updaterApi,
   import: importApi,

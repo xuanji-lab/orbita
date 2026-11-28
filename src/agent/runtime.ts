@@ -97,6 +97,9 @@ import { createMemoryTools, MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { createTaskTools } from "./task-tools.ts";
 import { createBrowserTools } from "./browser-tools.ts";
 import { createTerminalTools, TERMINAL_TOOL_NAMES } from "./terminal-tools.ts";
+import { createLatexTools, LATEX_TOOL_NAMES } from "./latex-tools.ts";
+import { createOfficeTools, OFFICE_TOOL_NAMES } from "./office-tools.ts";
+import { createDocxExportTools, DOCX_EXPORT_TOOL_NAMES } from "./docx-export-tools.ts";
 import {
   applyRecallEvent,
   composeAttachmentPrompt,
@@ -772,6 +775,11 @@ function extraToolNames(
     "add_mcp_server",
     "read_task",
     ...TERMINAL_TOOL_NAMES,
+    // LaTeX 编译：同样逐档判——plan 档下编译（会写 build/）被拒，manual 档下要问
+    ...LATEX_TOOL_NAMES,
+    ...OFFICE_TOOL_NAMES,
+    // Word 导出会写目标 .docx，同样逐档判（plan 拒 / manual 问）
+    ...DOCX_EXPORT_TOOL_NAMES,
     ...(role === "root" ? ["delegate", "reply_subsession", "model_costs"] : ["report_to_parent"]),
     ...(memoryTools ? MEMORY_TOOL_NAMES : []),
     ...(automationTools ? AUTOMATION_TOOL_NAMES : []),
@@ -1312,8 +1320,12 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
     // read_pdf 不过 broker：附件副本与工作区 PDF 都在 agent read 边界内，直读（./pdf-tools.ts）
     // cite_pdf 与 read_pdf 同台常驻（2026-11-22 PDF 引用转正）
     ...createPdfTools(command.cwd),
-    // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片
-    ...createDocxTools(command.cwd),
+    // read_docx 同样直读（./docx-tools.ts）：word 文档的结构化提取，块号轴分片。
+    // edit_docx 走 broker：写进 renderer 里活着的 docx 编辑器（agent 不碰磁盘）
+    ...createDocxTools(requestBroker, command.sessionId, command.cwd, {
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+      workspaceId: command.workspaceId,
+    }),
     // show_image 同样直读展示（./image-tools.ts）：模型「把图给用户看」的显式动作
     // 白名单外的图（如 /tmp）先拷进会话工作台的 shots/，回答里嵌的路径界面才读得到（2026-11-23）
     ...createImageTools(command.cwd, {
@@ -1355,6 +1367,18 @@ async function openTurn(command: OpenInput, isCompactionTurn: boolean): Promise<
       // 授权目录与开轮目录清单同源：prompt 里说「你可以去这些目录」，这里就认这些
       authorizedDirs: [command.cwd, ...(command.directories?.attached ?? [])],
     }),
+    // agent 的 LaTeX 工具（PR1）：compile_latex。latexmk 与 .log 解析在主进程
+    // （main/latex/），这里只翻译参数；目录授权在主进程按会话名单硬校验
+    ...createLatexTools(requestBroker, command.sessionId, {
+      cwd: command.cwd,
+      writeRoots: [command.cwd, ...(command.directories?.attached ?? [])],
+    }),
+    // Office（./office-tools.ts）：read_office / edit_office。OfficeCLI 子进程、备份与
+    // 改动清单在主进程（office/service.ts）；这一层只翻译参数
+    ...createOfficeTools(requestBroker, command.sessionId, { cwd: command.cwd }),
+    // Word 导出：export_docx。pandoc / 模板体检 / OOXML 后处理 / 原子写都在主进程
+    // （main/docx-export/），这里只翻译参数与把产物交给右栏打开
+    ...createDocxExportTools(requestBroker, command.sessionId, { cwd: command.cwd }),
     // 派发 / 回信时把此刻用户的语言交给主进程（写进通道消息的 lang）。session 在工具之后才创建，
     // 所以用延迟读：工具被调用时 sessionForLang 已经就位
     ...createChannelTools(requestBroker, command.sessionId, role, () =>
@@ -2253,14 +2277,24 @@ async function handle(command: AgentCommand): Promise<void> {
     );
     return;
   }
-  if (command.type === "slidesResult" || command.type === "docResult") {
-    // 演示文稿 / 文档导出的回执：形状即契约（ok 双分支），原样结掉在途 promise
+  if (command.type === "slidesResult" || command.type === "docResult" || command.type === "docxEditResult") {
+    // 演示文稿 / 文档导出 / docx 修订的回执：形状即契约（ok 双分支），原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }
   if (command.type === "terminalResult") {
     // 终端工具的回执：形状即契约（ok 双分支），原样结掉在途 promise。
     // 主进程那边任何路径都回执（agent-requests.ts），这里不做二次加工
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "latexResult" || command.type === "officeResult" || command.type === "latexPackageResult") {
+    // LaTeX / Office / 缺包反查的回执（terminalResult 同款）：形状即契约，原样结掉在途 promise
+    requestBroker.resolve(command.requestId, command);
+    return;
+  }
+  if (command.type === "docxExportResult") {
+    // Word 导出的回执（latexResult 同款）：形状即契约，原样结掉在途 promise
     requestBroker.resolve(command.requestId, command);
     return;
   }

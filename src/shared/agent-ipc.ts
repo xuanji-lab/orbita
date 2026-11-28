@@ -22,7 +22,11 @@ import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
+import type { DocxAgentEditRequest, DocxEditOutcome } from "./docx.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
+import type { LatexCompileRequest, LatexPackageOutcome, LatexRunOutcome } from "./latex.ts";
+import type { OfficeAgentOutcome, OfficeAgentRequest } from "./office.ts";
+import type { DocxExportOutcome, DocxExportRequest } from "./docx-export.ts";
 import type {
   ChannelDelivery,
   ChannelKey,
@@ -285,10 +289,36 @@ export const ipcChannels = {
    */
   fsRead: "fs:read",
   /**
+   * 读一份 `.xlsx` 给面板的结构化预览（同 root/dir 白名单，且 realpath 后须是 `.xlsx`）。
+   * 回 `XlsxPreview`（xlsx.ts）：整表计数 + 裁剪到 2000 行 × 50 列的值、合并区间、冻结行列。
+   * 解析跑在 worker 线程（main/xlsx/service.ts）：大工作簿的同步解析不能占主进程的事件循环
+   */
+  fsReadXlsx: "fs:read-xlsx",
+  /**
+   * 把一批单元格改动写回一份 `.xlsx`（同 root/dir 白名单，且 realpath 后须是 `.xlsx`）。
+   * 回 `XlsxWriteResult`（xlsx.ts）：ok / conflict / out-of-window / too-large / unreadable /
+   * shared-formula / failed——每种拒绝都是结构化结论，界面按它说人话。
+   * 只改目标格的 XML（其它 zip 部件一个字节不动），临时文件 + rename 原子写，写盘跑在同一个
+   * worker 线程里（main/xlsx/service.ts）。人的改动会落进与 `edit_office` 同一份改动清单。
+   */
+  fsWriteXlsx: "fs:write-xlsx",
+  /**
+   * 读一份 `.pptx` 的只读大纲（同 root/dir 白名单，且 realpath 后须是 `.pptx`）。
+   * 回 `PptxPreview`（pptx.ts）：页序、版式名、标题、正文层级、表格、备注——不渲染、
+   * 不做缩略图。解析是 jszip 解包 + 自写 XML 读器，只读文本
+   */
+  fsReadPptx: "fs:read-pptx",
+  /**
    * 读一个 PDF 的字节给预览面板渲染（同 root/dir 白名单，回 `PdfFile`，files.ts）。
    * 与 fs:read 分开：fs:read 对二进制只回 kind，不读内容；PDF 要整份字节
    */
   fsReadPdf: "fs:read-pdf",
+  /**
+   * 编辑器写回一个文本文件（同 root/dir 白名单，回 `FileWriteResult`，files.ts）。
+   * 请求带 `expectedHash`：写前重读比对，盘上被外部改过就回 conflict、不动盘——
+   * renderer 不能用一个迟到的编辑器覆盖 agent / 用户刚写下的内容。
+   */
+  fsWrite: "fs:write",
   /**
    * 给音 / 视频文件要一个播放地址（同 root/dir 白名单，且须是媒体扩展名，回 `FileMediaUrl`，files.ts）。
    * 不读字节：主进程发一个映射到 realpath 的随机 token，renderer 的 <audio> / <video> 经
@@ -339,6 +369,26 @@ export const ipcChannels = {
    * 同时 openFile + openDirectory，文件与文件夹只能分两个入口（文件仍走隐藏 input）。
    */
   fsPickFolders: "fs:pick-folders",
+  /**
+   * 打开 .docx 给应用内分页编辑器（契约在 `docx.ts`，白名单与 fs:read 同一道）。
+   * 超过 DOCX_MAX_BYTES 回 too-large，加密 / 非 zip / 缺正文回 invalid——
+   * 解析全在 renderer 的引擎里，主进程只负责判大小、判完整性与读字节。
+   */
+  docxOpen: "docx:open",
+  /**
+   * 把引擎序列化出的整份 docx 写回磁盘（同 root/dir 白名单）。expectedHash 与磁盘
+   * 现状不一致就回 conflict、一个字节都不写；写入走原子写 + 同路径串行，覆盖前把
+   * 上一版复制进应用数据目录的 docx-backups。
+   */
+  docxSave: "docx:save",
+  /**
+   * agent 的 `edit_docx`：主进程把请求转给 renderer 里**活的** docx 编辑器（`docx.ts` 的
+   * `DocxEditRequestMessage`），由它按锚点写 tracked-changes 修订。renderer 用
+   * `docxEditReply` 回执——写入口只能是一个（活的编辑器），agent 不碰磁盘。
+   */
+  docxEditRequest: "docx:edit-request",
+  /** renderer 对 docxEditRequest 的回执（`DocxEditReplyMessage`） */
+  docxEditReply: "docx:edit-reply",
   /** 文档 / 演示文稿面板（契约在 `doc.ts`）：读一份 .md，回内容 + 摘要。白名单同文件面板，只认 .md */
   docRead: "doc:read",
   /** 写回（原子写）：带 expectedHash，盘上已被改过就不写、回盘上的现状（比较后交换） */
@@ -353,6 +403,20 @@ export const ipcChannels = {
   docUnwatch: "doc:unwatch",
   /** 主进程 → renderer 推送（`DocChangedEvent`）：被监听的文档在盘上变了（含自己刚写的，renderer 按摘要去回声） */
   docChanged: "doc:changed",
+  /**
+   * Office「指哪打哪」（契约在 `office.ts`）：
+   *   - officeStatus：OfficeCLI 是否可用（定位 + 验活，主进程缓存）；
+   *   - officeRender：`view html` 的自包含 HTML（sandbox iframe 用）；
+   *   - officeChanges / officeRevert：这一批改动清单与整批回退；
+   *   - officeCapture：把预览区截成位图放进剪贴板（Electron capturePage，不用外部浏览器）；
+   *   - officeChanged：主进程 → renderer 推送，agent 改完一份文件后让面板重新渲染。
+   */
+  officeStatus: "office:status",
+  officeRender: "office:render",
+  officeChanges: "office:changes",
+  officeRevert: "office:revert",
+  officeCapture: "office:capture",
+  officeChanged: "office:changed",
   /** 另存为：把当前文字存成新文件（先弹保存对话框）；原文件只读 / 被删时的出路 */
   docSaveAs: "doc:save-as",
   /** 导出：演示文稿 → PDF（先弹保存对话框） */
@@ -1239,8 +1303,21 @@ export type AgentCommand =
   | ({ type: "slidesResult"; requestId: string } & SlidesOutcome)
   /** 文档导出：主进程对 docRequest 的回执（browserResult 同款 ok 双分支） */
   | ({ type: "docResult"; requestId: string } & DocOutcome)
+  /**
+   * docx 指哪打哪：主进程对 docxEditRequest 的回执。**经 renderer 的活编辑器**写入，
+   * 所以这里多一层值型失败（不在应用内打开 / 选中的字已被改 / 编辑器没就绪）。
+   */
+  | ({ type: "docxEditResult"; requestId: string } & DocxEditOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
+  /** LaTeX：主进程对 latexRequest 的回执（terminalResult 同款） */
+  | ({ type: "latexResult"; requestId: string } & LatexRunOutcome)
+  /** LaTeX：主进程对 latexPackageRequest 的回执（缺包反查，ok 双分支） */
+  | ({ type: "latexPackageResult"; requestId: string } & LatexPackageOutcome)
+  /** Office：主进程对 officeRequest 的回执（ok 双分支，形状见 shared/office.ts） */
+  | ({ type: "officeResult"; requestId: string } & OfficeAgentOutcome)
+  /** Word 导出：主进程对 docxExportRequest 的回执（ok 双分支，形状见 shared/docx-export.ts） */
+  | ({ type: "docxExportResult"; requestId: string } & DocxExportOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
@@ -1545,10 +1622,47 @@ export type AgentEvent =
    */
   | { type: "terminalRequest"; requestId: string; sessionId: string; request: TerminalToolRequest }
   /**
+   * LaTeX：agent 的 compile_latex 请求（形状见 shared/latex.ts 的 LatexCompileRequest）。
+   * **编译在主进程**（latex/run.ts，terminalRequest 同一条边界）：latexmk 是外部进程、
+   * 产物落在项目目录、并发状态按项目记账——这些都只该有一份，在 agent 进程里再做一遍
+   * 就是第二个真源。回 latexResult
+   */
+  | { type: "latexRequest"; requestId: string; sessionId: string; request: LatexCompileRequest }
+  /**
+   * LaTeX：agent 的 latex_packages 请求（缺的文件名 → 发行版包名 → 安装命令）。
+   * **反查在主进程**（latex/packages.ts，起 kpsewhich / tlmgr / mpm）：renderer 没有起
+   * 外部进程的授权，agent 进程也不该自己拼一条装包命令。回 latexPackageResult。
+   */
+  | { type: "latexPackageRequest"; requestId: string; sessionId: string; missing: string[] }
+  /**
+   * Office：agent 的 read_office / edit_office 请求（形状见 shared/office.ts 的
+   * OfficeAgentRequest）。**OfficeCLI 子进程、备份与改动清单都在主进程**（terminalRequest
+   * 同一条边界）：二进制路径 / 验活缓存 / 会话工作台的备份目录都只该有一份。回 officeResult。
+   */
+  | { type: "officeRequest"; requestId: string; sessionId: string; request: OfficeAgentRequest }
+  /**
+   * Word 导出：agent 的 export_docx 请求（形状见 shared/docx-export.ts）。
+   * pandoc 进程、模板体检、OOXML 后处理与原子写都在主进程（latexRequest 同一条边界：
+   * 外部进程 + 机器级模板 + 文件授权只该有一份）。回 docxExportResult。
+   */
+  | { type: "docxExportRequest"; requestId: string; sessionId: string; request: DocxExportRequest }
+  /**
    * 文档导出：agent 的 `doc_export` 请求（形状见 shared/doc.ts 的 DocAgentRequest）。
    * 导出在主进程（PDF 要隐藏窗口，agent 进程不碰 electron）；路径白名单按会话的根现算。回 docResult。
    */
   | { type: "docRequest"; requestId: string; sessionId: string; workspaceId: string | null; request: DocAgentRequest }
+  /**
+   * docx 指哪打哪：agent 的 `edit_docx` 请求（形状见 shared/docx.ts 的 DocxAgentEditRequest）。
+   * **写入必须经过 renderer 里活的编辑器**（applyAIEditOperations）：agent 直接改磁盘会
+   * 撞 #308 的 hash 冲突并丢用户未存的改动。主进程只做白名单、找窗口与回执中转。
+   */
+  | {
+      type: "docxEditRequest";
+      requestId: string;
+      sessionId: string;
+      workspaceId: string | null;
+      request: DocxAgentEditRequest;
+    }
   /**
    * 子会话：父模型的 delegate 工具请求。**建会话在主进程**（agent 进程不碰
    * userData，readTaskRequest 同一条边界）：主进程建子会话（parentId = sessionId、

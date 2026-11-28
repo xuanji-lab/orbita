@@ -8081,3 +8081,2495 @@ button.galaxy-spill-row:hover {
   text-underline-offset: 2px;
   cursor: pointer;
 }
+
+/*
+ * ============================================================
+ * 以下为同步 main（2026-11-28）时并入的本分支新增样式：
+ * 布局 B（稿件为主）、LaTeX 工作台（编译条 / 源码编辑器 / 诊断 / 引用）、
+ * 论文并排、Office 指哪打哪、docx 轻编辑、xlsx / pptx 预览、引用搜索等。
+ * 这些选择器与 main 这次的设计重写没有交集（逐条比对过），所以整块接在
+ * main 的样式之后；出现同名选择器时以本段为准（分支侧的新值）。
+ * ============================================================
+ */
+
+/*
+ * ===== 布局 B「稿件为主」（features/files/paper-layout.ts） =====
+ * 对话卡的位置换成稿件工作台：DOM 顺序不变（主槽 = 对话、右栏位 = 文件面板），
+ * 用 row-reverse 把两者**视觉上对调**——组件实例留在原地，切布局时不重挂编辑器
+ * 与对话（未保存的输入、滚动位置都还在）。分栏线从面板左缘改到对话卡的左缘。
+ * 对话栏宽由 App 注入 --paper-chat-w（常量在 paper-layout.ts）。
+ */
+.pane[data-layout="paper"] {
+  flex-direction: row-reverse;
+}
+.pane[data-layout="paper"] .pane-main {
+  flex: 0 0 var(--paper-chat-w, 340px);
+  width: var(--paper-chat-w, 340px);
+  min-width: 0;
+  border-left: 1px solid var(--color-border-default);
+}
+.pane[data-layout="paper"] .right-panel-slot.open {
+  flex: 1 1 auto;
+  width: auto;
+  border-left: 0;
+}
+.pane[data-layout="paper"] .right-panel-slot .right-panel-slot-inner {
+  width: 100%;
+}
+
+/* 页头画在卡里（RightPanelFrame 的 inline，布局 B）：内容与工具栏胶囊同款配方，
+ * 高度对齐全站胶囊；下面是编译条 / 文件内容 */
+.panel-inline-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  height: var(--titlebar-capsule);
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  box-sizing: border-box;
+}
+.panel-inline-head button {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  padding: 0;
+}
+.panel-inline-head .cap-pt {
+  padding: 0 var(--space-2) 0 var(--space-0-5);
+}
+.panel-inline-head .cap-tab {
+  padding: 0 var(--space-2);
+  width: auto;
+}
+
+/*
+ * 拆分条（shell/SplitHandle.tsx）：论文工作台的几处边界共用。
+ * 竖条 = 左右分栏，横条 = 上下分栏。把手本体吃 7px，分界线是居中的 1px
+ * （发丝线的颜色交给设计 token，悬停 / 键盘聚焦时加深）。拖动逻辑走
+ * pointer-drag.ts（iframe 收尾在那一层处理）；这里只管几何与焦点环。
+ */
+.split-handle {
+  position: relative;
+  flex: 0 0 7px;
+  align-self: stretch;
+  touch-action: none;
+  user-select: none;
+  background: transparent;
+  z-index: var(--z-float);
+}
+.split-handle::before {
+  content: "";
+  position: absolute;
+  background: var(--color-border-subtle);
+  transition: background var(--duration-instant) var(--ease-standard);
+}
+.split-handle[data-orientation="vertical"] {
+  cursor: col-resize;
+  /* 显式宽：抽屉那种父级不是 flex 的场合，flex-basis 不生效 */
+  width: 7px;
+  min-width: 7px;
+}
+.split-handle[data-orientation="vertical"]::before {
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+}
+.split-handle[data-orientation="horizontal"] {
+  cursor: row-resize;
+  height: 7px;
+  min-height: 7px;
+}
+.split-handle[data-orientation="horizontal"]::before {
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 1px;
+}
+.split-handle:hover::before,
+.split-handle:focus-visible::before {
+  background: var(--color-border-strong);
+}
+.split-handle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 布局 B 的对话栏把手：不是 flex 子项（对话栏宽写死，吃 7px 会把它挤窄），
+ * 绝对定位骑在对话卡片左缘的竖线上 */
+.split-handle.paper-chat-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  transform: translateX(-50%);
+}
+
+/*
+ * 稿件区：单标签（一块）与「源码 + PDF 并排」（两块）。左块在两种形态下都是
+ * **同一个组件位置**（外面这层容器只是从「撑满」变成「两块对分」），切布局不会
+ * 让编辑器重挂。并排的两块各拿一半，中间一条发丝线。
+ */
+.files-panel-panes {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.files-panel-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.files-panel-panes.split .files-panel-pane {
+  /* 并排的两块守自己的最小宽（比例夹取在 split-limits.ts 现算，这里只是兜底）：
+   * 源码 320、PDF 280。分界线由中间的拆分条画，不再靠右块的 border-left */
+  min-width: 0;
+}
+.files-panel-panes.split .files-panel-pane[data-pane="source"] {
+  min-width: 320px;
+}
+.files-panel-panes.split .files-panel-pane[data-pane="pdf"] {
+  min-width: 280px;
+}
+/* 窄面板点 PDF 标签：不拆成两栏，PDF 占满整个面板。左块只藏不卸（display:none，
+ * 不是条件渲染）——编辑器保住未保存的字与滚动位置，点回文件标签立刻回到原处。 */
+.files-panel-panes.pdf-solo .files-panel-pane:first-child {
+  display: none;
+}
+
+/* ---------- 论文工作台：编译条 + 问题抽屉（LaTeX 项目） ----------
+ * 面板内容变成「编译条 / 文件内容 / 问题抽屉」三段的纵向 flex：
+ * 编译条与抽屉都不滚（抽屉自己的列表滚），中间的文件内容吃剩余高度。
+ * 非 LaTeX 文件只有中间一段，几何与改动前一致。 */
+.files-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.files-workbench > .files-panel-body {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.latex-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* 编译键：安静态是文字按钮，dirty 态换成 accent 主按钮（.btn-accent）。
+   几何独立于两种配方：24 高、内边距 8，与胶囊里的 chip 齐平 */
+.latex-compile {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.latex-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1-5);
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-status-note {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+/* 配方菜单里的「推荐」小字：一行末尾的事实标签，不染色（推荐不是警告） */
+.latex-recipe-badge {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* 抽屉：默认一行；展开后列表自己有上限，不把文件内容挤没 */
+.latex-problems {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--color-border-subtle);
+}
+/* 被拖出高度时：整块吃下这个高度（头部 + 列表），列表改成吃剩余高度并自己滚。
+ * 上界 70vh 在这里再兜一次——落盘的值可能是在更高的窗口上拖的 */
+.latex-problems[data-fixed="true"] {
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  overflow: hidden;
+}
+.latex-problems[data-fixed="true"] .latex-problem-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+.latex-problems-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0;
+  font-size: var(--font-size-sm);
+  text-align: left;
+}
+.latex-problems-head:disabled {
+  cursor: default;
+}
+.latex-problem-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-tertiary);
+}
+.latex-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.latex-count.err {
+  color: var(--color-danger);
+}
+.latex-count.warn {
+  color: var(--color-warning);
+}
+.latex-problem-list {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+/* 引文核验一块：头部是一行「查了几条 / 一共几条 + 核验」，下面只列需要人看的结果。
+   与编译问题的分组靠一道发丝线分开——它不是编译失败，不该混进错误里 */
+.latex-verify {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  padding: var(--space-2) 0;
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.latex-verify-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+}
+.latex-verify-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.latex-verify-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.latex-problem {
+  display: flex;
+  /* 窄面板（右栏 340）里动作组挤不下就换到下一行、靠右钉住（.row-trailing 的 margin-left
+     在换行后仍然生效）；不换行的话消息列只剩一百来像素，包名会被拆成三行 */
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.latex-problem:hover {
+  background: var(--option-hover-bg);
+}
+/* 可点击的问题主体（文件:行 + 消息）：按钮只负责点击与布局，视觉与父行一致 */
+.latex-problem-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.latex-problem-main:hover .latex-problem-loc,
+.latex-problem-main:hover .latex-problem-msg > span:first-child {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.latex-problem[data-level="layout"] {
+  color: var(--color-text-secondary);
+}
+.latex-problem-loc {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.latex-problem-msg {
+  display: flex;
+  /* 基线 160：包名（ctexart.cls）+ 「缺少宏包」四个字在最窄的面板里也占不到两行 */
+  flex: 1 1 160px;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 缺包行的第二行：反查进度 / 未知包 / 本机已有——弱一档的小字，不抢主行 */
+.latex-problem-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 点过「在终端安装」后的提示条：住在文件面板体顶部（编译条只在有打开的标签时出现，
+   而切到终端再回来标签已经重置——提示不能跟着它一起消失） */
+.latex-install-notice {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+}
+.latex-problem-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.latex-problem-act {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 22px;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.latex-error {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+/* 编译条的项目动作菜单：行内小图标键，与编译键同高（24），不占行尾（状态行才是尾元素） */
+.latex-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+
+/* 动作回执（目前只有清理辅助文件）：一行、贴着编译条下方，几秒后自己消失。
+   它不是错误条——需要处理的问题走 .latex-error */
+.latex-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 「没有 latexmk」引导卡：标题 + 说明 + 找过的位置（可展开）+ 三个动作。
+   它是说明不是报错——panel 底 + 细边框，红色只给标题那颗图标 */
+.latex-setup {
+  flex: 0 0 auto;
+  margin: var(--space-2) var(--space-3) 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-setup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.latex-setup-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.latex-setup-body {
+  margin: var(--space-1) 0 0;
+  line-height: var(--line-height-ui);
+}
+.latex-setup-paths-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.latex-setup-paths {
+  max-height: 132px;
+  overflow: auto;
+  margin: var(--space-1) 0 0;
+  padding: 0 var(--space-2);
+  list-style: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.latex-setup-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.latex-setup-invalid {
+  margin: var(--space-1) 0 0;
+  color: var(--color-danger);
+  word-break: break-all;
+}
+.latex-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.latex-setup-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+a.latex-setup-action {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+/* ---------- 源码编辑器（.tex 标签，PR4） ----------
+ * 编辑器吃满预览体：body 让出内边距与滚动（滚动在 CodeMirror 的 .cm-scroller 里，
+ * 行号槽跟着滚）；上下是冲突/错误条与状态行，都不随正文滚。
+ * 语法着色只引用 token——五个变量在这里声明，深浅主题、纸面主题自动跟随；
+ * accent 保留给主操作，所以命令靠字重而不是颜色区分。 */
+.file-preview-body[data-kind="tex"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.tex-editor {
+  --tex-cmd: var(--color-text-primary);
+  --tex-argument: var(--color-text-secondary);
+  --tex-math: var(--color-info);
+  --tex-number: var(--color-text-secondary);
+  --tex-comment: var(--color-text-tertiary);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--color-bg-panel);
+}
+/* 正文区 = 编辑器 + 可选的大纲抽屉（并排，不浮层：右栏本来就窄，浮层会盖住源码） */
+.tex-editor-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.tex-editor-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.tex-editor-host .cm-editor {
+  height: 100%;
+}
+/* 公式悬浮预览（latex-math-hover.ts）。浮层是唯一允许用阴影的地方（elevation.css）：
+   实底 panel + 发丝边 + popover 阴影，与补全弹层同一配方；深浅 / 纸面主题都只走变量。
+   底色与边框由 CodeMirror 的 .cm-tooltip 主题给，这里只管内容区的留白与宽度。 */
+.tex-math-hover {
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-ui);
+  max-width: min(560px, 92vw);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.tex-math-hover .katex-display {
+  margin: var(--space-1) 0;
+}
+.tex-editor-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-secondary);
+}
+.tex-editor-status[data-phase="dirty"] .tex-editor-save-state {
+  color: var(--color-warning);
+}
+.tex-editor-status[data-phase="conflict"] .tex-editor-save-state,
+.tex-editor-status[data-phase="error"] .tex-editor-save-state {
+  color: var(--color-danger);
+}
+/* 保存中的转圈：CSS 转，不引图标组件（状态行只有 11px） */
+.tex-editor-spinner {
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--color-border-strong);
+  border-top-color: var(--color-text-secondary);
+  border-radius: 50%;
+  animation: tex-editor-spin 0.8s linear infinite;
+}
+@keyframes tex-editor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* 冲突 / 保存失败条：颜色只是第二信号，图标与文字已在说同一件事 */
+.tex-editor-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+.tex-editor-banner[data-tone="warning"] .tex-editor-banner-icon {
+  color: var(--color-warning);
+}
+.tex-editor-banner[data-tone="danger"] .tex-editor-banner-icon {
+  color: var(--color-danger);
+}
+/* info = 「agent 正在写，先别动」：不是错误，一个锁形图标已经说完了，不着色 */
+.tex-editor-banner[data-tone="info"] .tex-editor-banner-icon {
+  color: var(--color-text-secondary);
+}
+.tex-editor-banner-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tex-editor-banner-detail {
+  display: block;
+  margin-top: var(--space-0-5);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  overflow-wrap: anywhere;
+}
+.tex-editor-banner-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.tex-editor-banner-acts .quiet-control {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+/* agent 本轮的改动块（可单块撤 / 整轮撤）：住在编辑器与状态行之间，可滚 */
+.tex-editor-hunks {
+  flex: 0 0 auto;
+  max-height: 40%;
+  overflow-y: auto;
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+  font-size: var(--font-size-sm);
+}
+.tex-editor-hunks-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-secondary);
+}
+.tex-editor-hunks-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+.tex-editor-hunks-title {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.tex-editor-hunks-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.tex-editor-hunks-acts .quiet-control {
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+.tex-editor-hunks-toggle {
+  padding: 0 var(--space-1-5);
+}
+.tex-editor-hunk-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  list-style: none;
+}
+.tex-editor-hunk {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 26px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.tex-editor-hunk:hover {
+  background: var(--color-bg-hover);
+}
+.tex-editor-hunk[data-stale="true"] .tex-editor-hunk-preview,
+.tex-editor-hunk[data-stale="true"] .tex-editor-hunk-delta {
+  color: var(--color-text-tertiary);
+}
+.tex-editor-hunk-goto {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tex-editor-hunk-delta {
+  display: inline-flex;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+.tex-editor-hunk-add {
+  color: var(--color-success);
+}
+.tex-editor-hunk-del {
+  color: var(--color-danger);
+}
+.tex-editor-hunk-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.tex-editor-hunk-stale {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-hunk .quiet-control {
+  height: 22px;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+}
+
+/* 大纲抽屉：与正文并排（不浮层）。层级靠缩进，不靠字号——一张卡至多三档 */
+.tex-editor-outline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 20px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-editor-outline-toggle[aria-expanded="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-bg-active);
+}
+.tex-outline {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  width: min(240px, 55%);
+  min-height: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+}
+.tex-outline-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.tex-outline-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.tex-outline-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+/* 聚合时标题右侧的根文件名：一眼看出「这是整篇，不是当前文件那一节」 */
+.tex-outline-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-outline-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+}
+.tex-outline-empty {
+  margin: 0;
+  padding: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.tex-outline-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+}
+.tex-outline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-align: left;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.tex-outline-row:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-text-primary);
+}
+.tex-outline-row[data-active="true"] {
+  background: var(--color-bg-active);
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.tex-outline-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tex-outline-line {
+  flex: 0 0 auto;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 来源文件（跨文件聚合才出现）：机器事实走等宽 + xs 档，标题那一列仍占主位 */
+.tex-outline-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 55%;
+}
+.tex-outline-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/*
+ * 「查找文献」面板（在线检索 → 追加 .bib → 光标处插入 \cite）：一张 portal 出来的
+ * 浮层，配方与右键菜单同一套（.glass-card .glass-float .menu-panel），只是内容是一行
+ * 输入 + 一列结果。行尾的来源列（Crossref / arXiv）贴右并用等宽字——它是机器事实，
+ * 与标题、作者这些「读」的内容分开。
+ */
+.cite-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  overflow-y: auto;
+}
+.cite-search-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.cite-search-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.cite-search-spinner {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+  animation: cite-search-spin 0.9s linear infinite;
+}
+@keyframes cite-search-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cite-search-form {
+  display: flex;
+  gap: var(--space-2);
+}
+.cite-search-submit {
+  flex: 0 0 auto;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.cite-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  overflow-y: auto;
+}
+.cite-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--control-height-md);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-base);
+  text-align: left;
+}
+.cite-search-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cite-search-row-title {
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cite-search-row-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cite-search-row-source {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.cite-search-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.cite-search-notice-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.cite-search-notice[data-tone="ok"] .cite-search-notice-icon {
+  color: var(--color-success);
+}
+.cite-search-notice[data-tone="warn"] .cite-search-notice-icon {
+  color: var(--color-warning);
+}
+.cite-search-notice[data-tone="error"] .cite-search-notice-icon {
+  color: var(--color-danger);
+}
+.cite-search-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 标签上的未保存圆点：与 ✕ 共用同一个 16px 槽位（CSS 负责悬停换位） */
+.files-tab-tail {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+.files-tab-tail .files-tab-close {
+  position: absolute;
+  inset: 0;
+}
+.files-tab-dirty {
+  display: grid;
+  place-items: center;
+  color: var(--color-warning);
+}
+.cap-tab:hover .files-tab-dirty {
+  display: none;
+}
+/* 脏标签默认只露圆点；✕ 悬停才出现（含当前选中的标签——否则选中的脏标签
+   永远显示 ✕，圆点等于不存在）。选择器比重与上面 .cap-tab[aria-selected] 那条对齐 */
+.cap-tab .files-tab-close.is-dirty,
+.cap-tab[aria-selected="true"] .files-tab-close.is-dirty {
+  opacity: 0;
+}
+.cap-tab:hover .files-tab-close.is-dirty,
+.cap-tab[aria-selected="true"]:hover .files-tab-close.is-dirty,
+.cap-tab:focus-within .files-tab-close.is-dirty {
+  opacity: 1;
+}
+
+/* 预览的壳：工具栏钉在上方，缩略图侧栏与滚动区并排。滚动只发生在 .pdf-view */
+.pdf-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pdf-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pdf-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+/* 工具栏里的一枚键：安静控件配方（.quiet-control）给颜色与按下态，这里只管几何 */
+.pdf-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+.pdf-tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+.pdf-zoom {
+  margin-left: auto;
+}
+.pdf-page-input {
+  width: 40px;
+  height: 22px;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  text-align: center;
+}
+.pdf-page-total,
+.pdf-zoom-percent,
+.pdf-find-count {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.pdf-zoom-percent {
+  /* 百分比按三档宽度变化（50%–400%），固定宽度免得 ± 键跟着跳 */
+  width: 42px;
+  text-align: center;
+}
+.pdf-find {
+  gap: var(--space-1);
+}
+.pdf-find-icon {
+  color: var(--color-text-tertiary);
+  flex: 0 0 auto;
+}
+.pdf-find-input {
+  width: 150px;
+  height: 22px;
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+}
+.pdf-find-count.danger {
+  color: var(--color-danger);
+}
+/*
+ * docx 轻量编辑（features/docx/DocxView.tsx，issue #273）：预览体让出滚动与内边距——
+ * 分页与滚动由引擎自己的画布承担（它按 fit-width 适配面板宽度），这一层只管高度。
+ * 工具栏是应用自己的四个按钮 + 保存，不是引擎的工具栏（showToolbar=false）：
+ * 这一刀只做改字 / 粗斜下划线 / 撤销重做，不把表格、图片、样式管理器铺出来。
+ */
+.file-preview-body[data-kind="docx"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.docx-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.docx-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-0-5);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  /* 窄面板也不换行、不溢出：真挤不下时由状态栏先缩到零宽（它有自己的省略号） */
+  overflow: hidden;
+}
+.docx-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  border-radius: var(--radius-sm);
+}
+.docx-bar-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: var(--space-3);
+  margin: 0 var(--space-1);
+  background: var(--color-border-subtle);
+}
+/* 段落样式下拉：宽栏用文字（96 够放下「标题 1」「Heading 1」），窄栏是 .docx-tool 图标 */
+.docx-style-select {
+  flex: 0 1 84px;
+  min-width: 64px;
+  max-width: 84px;
+  padding-left: var(--space-2);
+}
+.docx-style-select > .orbita-icon {
+  flex: 0 0 auto;
+}
+/*
+ * 批注输入条：选中文字后从工具栏点「批注」落在这里。形状与 .docx-note 同一套
+ * （面板底 + 发丝边），输入框不再套第二层卡。
+ */
+.docx-comment-compose {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  margin: var(--space-2) var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+}
+.docx-comment-quote {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.docx-comment-quote > .orbita-icon {
+  flex: 0 0 auto;
+}
+.docx-comment-quote > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.docx-comment-input {
+  width: 100%;
+  min-height: 0;
+  resize: vertical;
+  padding: var(--space-1-5) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+.docx-comment-input:focus {
+  outline: none;
+  border-color: var(--color-border-strong);
+}
+.docx-comment-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+/* 批注条与审阅条同住一块区域：两条都在时各自矮一点，别把页面挤没了 */
+.docx-comments {
+  max-height: 24%;
+}
+/*
+ * 保存状态贴在行的右血线上（.row-trailing 推到右缘），保存键在它之后。
+ * **窄面板里报错不能把保存键挤出工具栏**：状态是这一行唯一可伸缩的一段，
+ * 超长（原始 IPC 报错经常很长）从尾部省略，全文在 title 里；失败细节另走提示条。
+ */
+.docx-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  padding: 0 var(--space-2);
+}
+.docx-status[data-kind="failed"] {
+  color: var(--color-danger);
+}
+/* 保真闸门 / 冲突 / 超限的提示条：坐在工具栏与页面之间，不盖住正文（不用模态） */
+.docx-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  margin: var(--space-2) var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-ui);
+}
+.docx-note[data-tone="danger"] {
+  color: var(--color-text-primary);
+}
+/* 只是个告知（目录页码已对齐）：不用警告黄，与旁边的普通次要文字同色 */
+.docx-note[data-tone="info"] > .orbita-icon {
+  color: var(--color-text-tertiary);
+}
+.docx-note > svg,
+.docx-note > .orbita-icon {
+  flex: 0 0 auto;
+  margin-top: var(--space-0-5);
+  color: var(--color-warning);
+}
+.docx-note[data-tone="danger"] > .orbita-icon {
+  color: var(--color-danger);
+}
+.docx-note-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+.docx-note-button {
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+.docx-note-button[data-primary] {
+  color: var(--color-accent);
+}
+.docx-page-area {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  margin-top: var(--space-2);
+}
+.docx-page-area > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 引擎的纸张背景跟面板底色区分开：编辑面是浅灰底、纸是白的（与 PDF 预览同一读法） */
+.docx-page-area .folio-root {
+  background: var(--color-bg-muted);
+}
+/*
+ * 修订的显示（2026-11-15 验收 P1-5）：形状是第一信号、颜色是第二信号。
+ * 引擎按「作者色」给插入 / 删除上同一支红（`AUTHOR_COLORS`），并给插入画下划线、
+ * 删除画删除线——但线宽是 1px，纸面缩小时落在半像素上看不见，只剩一色红。
+ * 这里按语义重着色（增 = success、删 = danger，深浅主题都取 token），并把线加粗、
+ * 下划线抬离字身。引擎把颜色 / 装饰写在 span 的**行内 style** 上，所以要 !important。
+ */
+.docx-view .docx-insertion {
+  color: var(--color-success) !important;
+  text-decoration-color: var(--color-success) !important;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+}
+.docx-view .docx-deletion {
+  color: var(--color-danger) !important;
+  text-decoration-color: var(--color-danger) !important;
+  text-decoration-thickness: 1.5px;
+}
+/* AI 建议（folio 的 suggested）：形状仍是下划线 / 删除线，颜色沿用建议色，不抢修订语义 */
+.docx-view .docx-insertion--suggested {
+  color: var(--color-info) !important;
+  text-decoration-color: var(--color-info) !important;
+}
+/*
+ * 选区锚点（N2「指哪打哪」）：一行 chip，点一下把这一处写进输入框。
+ * 它是上下文不是主操作——颜色全用中性 token，accent 不在这里出现。
+ */
+.docx-anchor-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  min-width: 0;
+  margin: var(--space-2) var(--space-2) 0;
+}
+.docx-anchor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.docx-anchor-chip:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.docx-anchor-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docx-anchor-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--control-height-xs);
+  height: var(--control-height-xs);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+}
+/*
+ * 审阅条（N2）：坐在工具栏与正文之间，不盖住页面；行高按内容，超出则在条内滚动
+ * （长文档一次几十条修订，不能把正文挤没）。
+ */
+.docx-review {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  max-height: 32%;
+  margin: var(--space-2) var(--space-2) 0;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  overflow: hidden;
+}
+.docx-review-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.docx-review-title {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.docx-review-batch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.docx-review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.docx-review-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.docx-review-row:first-child {
+  border-top: 0;
+}
+.docx-review-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+.docx-review-what {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 改前 / 改后各一行（2026-11-15 验收 P0-3）：不做单行 ellipsis，各最多两行，
+ * 旧文删除线、新文下划线——形状先于颜色（设计系统：颜色不是唯一的状态信号） */
+.docx-review-pair {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.docx-review-old,
+.docx-review-new {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.docx-review-old {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+  text-decoration-color: var(--color-danger);
+}
+.docx-review-new {
+  color: var(--color-text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-success);
+}
+.docx-review-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.docx-review-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.docx-review-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+/* 缩略图侧栏：宽 136，每页一张小 canvas。它是阅读的辅助，不抢正文宽度 */
+.pdf-thumbs {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  width: 136px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) 0;
+  border-right: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-muted);
+}
+.pdf-thumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+.pdf-thumb-frame {
+  display: block;
+  width: 104px;
+  overflow: hidden;
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+  border-radius: 2px;
+}
+.pdf-thumb.active .pdf-thumb-frame {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+.pdf-thumb-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.pdf-thumb-number {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pdf-thumb.active .pdf-thumb-number {
+  color: var(--color-text-primary);
+}
+.pdf-view-notice {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin: 0 var(--space-3) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+}
+/* 一页：固定尺寸占位，canvas / 文本层 / 高亮覆盖层叠在里面。
+   --total-scale-factor 由 TSX 按适宽缩放写入；下面几个是 pdf.js TextLayer 排版用的变量，
+   声明默认值（pdf.js 运行时逐 span 改写），与 pdfjs-dist/web/pdf_viewer.css 的 .textLayer 同构 */
+.pdf-page {
+  --total-scale-factor: 1;
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  position: relative;
+  margin-left: auto;
+  margin-right: auto;
+  background: var(--color-bg-panel);
+  box-shadow: var(--shadow-border);
+}
+.pdf-page-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.pdf-page .textLayer {
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+}
+.pdf-page .textLayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+.pdf-page .textLayer > :not(.markedContent),
+.pdf-page .textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  z-index: 1;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.pdf-page .textLayer .markedContent {
+  display: contents;
+}
+/* 选区落在白纸上：accent 掺透明，三种 accent（蓝 / 黄 / 绿）在白底上都看得见 */
+.pdf-page .textLayer ::selection {
+  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  color: transparent;
+}
+/* 引用高亮：叠在文本层之上、不吃指针（文字照样能选），multiply 让墨色透出来 */
+.pdf-cite-mark {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 2px;
+  background: var(--color-citation-mark);
+  mix-blend-mode: multiply;
+}
+
+/* 搜索命中：同一条路（叠层、不吃指针）。当前那一处更重，其余是淡黄提示 */
+.pdf-find-mark {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-accent) 26%, transparent);
+  mix-blend-mode: multiply;
+}
+.pdf-find-mark.active {
+  background: color-mix(in srgb, var(--color-accent) 58%, transparent);
+}
+
+/*
+ * SyncTeX 落点（源码 → PDF，PdfView.tsx）：短暂出现再淡出——一次定位不该在页面上
+ * 留下一个常驻标记，下一次定位用新的 token 重新播一遍。层在引用高亮之上（3 > 2），
+ * 不吃指针，翻页 / 选中文字都不受影响。
+ */
+.pdf-sync-mark {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 60%, transparent);
+  animation: pdf-sync-flash 2.4s ease-out forwards;
+}
+
+@keyframes pdf-sync-flash {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+ * ===== .xlsx 只读预览（features/xlsx/XlsxView.tsx，契约 shared/xlsx.ts） =====
+ * 不画 Excel：列宽 / 字体 / 底色 / 条件格式读不全，照 HTML 表画出来用户会以为原文件
+ * 坏了。这里只有「结构化数据」——列标（A/B/C）+ 行号（1/2/3）当坐标系（对照原文件
+ * 定位用），数值右对齐 + 等宽数字，合并区按跨行跨列画成一个格。内容是数据不是散文，
+ * 所以用等宽面、一档 sm 字号；行高 24（与 --control-height-xs 同档）。
+ */
+.file-preview-body[data-kind="xlsx"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.xlsx-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.xlsx-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  row-gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 工作表标签：多表时横向滚动，永不把右侧的「用默认应用打开」挤出视野 */
+.xlsx-sheets {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+/* 行尾元素：右缘钉在工具行的右内边距上——用 .row-trailing 推右（组件里已挂），
+   这里只管它内部怎么排 */
+.xlsx-toolbar-actions {
+  display: flex;
+  align-items: center;
+}
+.xlsx-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+/* 容器自己不画焦点框：键盘焦点永远伴随一个选中格，可见的焦点态是那圈描边 */
+.xlsx-scroll:focus-visible {
+  outline: none;
+}
+/*
+ * 行高与行号槽宽走变量：TSX 按 ROW_HEIGHT=24 算滚动窗口、用 colgroup 按数据给每列
+ * 定宽（xlsxColumnWidths）。**行高两边必须一致**：XlsxView.tsx 的 ROW_HEIGHT 与这里
+ * 的 --xlsx-row-height 成对改。固定列宽 + table-layout: fixed 才能让「换渲染窗口」
+ * 不重算整表宽度（auto 布局下每次重排都要把首帧那笔账再付一遍）。
+ */
+.xlsx-table {
+  --xlsx-gutter-width: 52px;
+  --xlsx-row-height: 24px;
+  table-layout: fixed;
+  width: max-content;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+/* 发丝网格：只画右与下，格子自己不带外框 */
+.xlsx-table th,
+.xlsx-table td {
+  height: var(--xlsx-row-height);
+  padding: 0 var(--space-2);
+  text-align: left;
+  vertical-align: middle;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 格子要放两个角标（未保存 / 未计算）：相对定位挂它们 */
+.xlsx-table td.xlsx-cell {
+  position: relative;
+  cursor: cell;
+}
+/* 公式栏：选区坐标 + 这一格的内容（公式带 =）。行高与网格同一档，贴在网格上方 */
+.xlsx-formula-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+/* 坐标（B17）：等宽、三级文字色——它是坐标系，不是内容 */
+.xlsx-formula-ref {
+  flex: 0 0 auto;
+  min-width: 5ch;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  text-align: right;
+}
+.xlsx-formula-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--control-height-xs);
+  padding: 0 var(--space-2);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+.xlsx-formula-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: var(--focus-ring);
+}
+.xlsx-formula-input:disabled {
+  color: var(--color-text-tertiary);
+}
+/* 选中格：中性墨洗 + 一圈描边（设计系统：选区是中性的，accent 只给主操作） */
+.xlsx-table td[data-selected="true"] {
+  background: var(--color-mode-active-bg);
+  box-shadow: inset 0 0 0 2px var(--color-border-strong);
+}
+/* 列标 / 行号跟着选区亮一格：50 列的表里光看一个描边圈容易跟不上 */
+.xlsx-table thead th[data-active="true"],
+.xlsx-table th.xlsx-gutter[data-active="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-mode-active-bg);
+}
+/* 未保存的改动：右上角一个小三角（第二信号；第一信号是底部「未保存 · n 处」） */
+.xlsx-table td[data-edited="true"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-top: 5px solid var(--color-warning);
+  border-left: 5px solid transparent;
+  pointer-events: none;
+}
+/* 有公式、没有缓存值（我们不重算）：右上角一个点，文字本身已是公式原文 */
+.xlsx-table td[data-uncached="true"]::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-text-tertiary);
+  pointer-events: none;
+}
+/* 编辑中的格：输入框铺满格子，不再画角标（正在改的东西不需要「改过」的标记） */
+.xlsx-cell-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  background: var(--color-bg-panel);
+  color: var(--color-text-primary);
+  border: 0;
+  border-radius: 0;
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+/* 占位行（没画的那几百行）：只负责高度，不画边框、不吃指针 */
+.xlsx-spacer td {
+  height: auto;
+  padding: 0;
+  border: 0;
+}
+/* 值一格：超长文本截断（完整内容在 title），横向不折行——50 列并排才有表的形状 */
+.xlsx-cell-text {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xlsx-table td[data-numeric="true"] {
+  text-align: right;
+}
+/* 公式有缓存值缺失（第三方工具重算后没写 <v>）：占位符用三级文字色，不抢眼 */
+.xlsx-table td[data-uncached="true"] .xlsx-cell-text {
+  color: var(--color-text-tertiary);
+}
+/* 错误值（#DIV/0! 这类）：坏掉的公式是故障，给危险色 */
+.xlsx-table td[data-error="true"] {
+  color: var(--color-danger);
+}
+/* 公式格：格子里是缓存值，公式在 tooltip——虚线底是「这里有第二种读法」的提示，
+   不是装饰（同一格在 Excel 里点进去看到的是公式） */
+.xlsx-table td[data-formula="true"] .xlsx-cell-text {
+  text-decoration: underline dotted var(--color-text-tertiary);
+  text-underline-offset: 2px;
+}
+/* 加载落在网格区里：给一行内边距，不占满、不挤走工具栏 */
+.xlsx-view > .file-preview-loading {
+  padding: var(--space-3);
+}
+
+/* 列标 / 行号：两轴都钉住（滚动时始终看得见坐标），所以自带实色底 */
+.xlsx-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--color-bg-panel);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-medium);
+  text-align: center;
+}
+.xlsx-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-bg-panel);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  text-align: right;
+}
+.xlsx-table thead .xlsx-gutter {
+  z-index: 3;
+}
+/* 窗口化由 TSX 负责（只渲染可见的几十行 + 上下各 OVERSCAN 行，未渲染的行用占位行
+   搅住高度）。这里**不再加 content-visibility**：在 10 万格的表上它比不用还慢（实测
+   首帧 8.2s，去掉后 0.6s） */
+/* 底部提示条：裁剪 / 冻结 / 兼容模式 / 公式不重算 / 外部改过，都是「与原文件不一样」的地方 */
+.xlsx-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+/* 行尾动作：撤销 / 保存——右缘钉在面板的右内边距上 */
+.xlsx-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.xlsx-status {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-tertiary);
+}
+/* 未保存：是「你还没交代完」的状态，抬到正文色 + 加一点重量 */
+.xlsx-status[data-dirty="true"] {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-medium);
+}
+/* 保存 = 主操作：颜色与禁用态都走通用 .btn-accent（accent 只给主操作），这里只管版式 */
+.xlsx-save {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+/* 保存失败 / 冲突：一条可见的提示，冲突时带「重新加载」 */
+.xlsx-notice-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+}
+.xlsx-notice-bar > svg {
+  flex: 0 0 auto;
+  color: var(--color-warning);
+}
+.xlsx-notice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 未保存改动清单：无卡底，一行一处，逐条撤回在行尾 */
+.xlsx-pending {
+  flex: 0 0 auto;
+  max-height: 30vh;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.xlsx-pending-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+}
+.xlsx-pending-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+.xlsx-pending-list {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  list-style: none;
+  overflow-y: auto;
+}
+.xlsx-pending-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-0-5) 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.xlsx-pending-ref {
+  flex: 0 0 auto;
+  color: var(--color-text-primary);
+}
+.xlsx-pending-values {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+}
+/* 行尾的逐条撤回：悬停才显形，不占位（行尾血线：右缘钉在同一列） */
+.xlsx-pending-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+}
+.xlsx-pending-item:hover .xlsx-pending-remove,
+.xlsx-pending-remove:focus-visible {
+  opacity: 1;
+}
+.xlsx-pending-remove:hover {
+  color: var(--color-text-primary);
+  background: var(--color-mode-active-bg);
+}
+.xlsx-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+/* 需要人动手的提示（公式不重算 / 外部改过）：图标与字走 warning，别混进一排灰字里 */
+.xlsx-notice[data-tone="warning"] {
+  color: var(--color-warning);
+}
+.xlsx-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  padding: var(--space-4);
+}
+/* 读不开时的技术副行（异常原文）：读得懂的人据此判断文件是不是真坏了 */
+.xlsx-detail {
+  margin: 0;
+  max-width: 48ch;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * ===== .pptx 只读大纲（features/pptx/PptxView.tsx，契约 shared/pptx.ts） =====
+ * 不画幻灯片：版式 / 字体 / 图片读不全，照 HTML 硬画一版用户会以为原文件坏了。
+ * 这里只有大纲——左边页列表（页码 + 版式名 + 标题），右边该页的标题 / 多级要点 /
+ * 表格 / 备注。只读，没有任何输入控件。
+ */
+.file-preview-body[data-kind="pptx"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.pptx-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 窄面板（右栏最窄 ~320）把页列表叠到上方：两栏并排时正文只剩一百来像素 */
+  container-type: inline-size;
+}
+.pptx-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  row-gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pptx-toolbar-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.pptx-count {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+/* 行尾元素：右缘钉在工具行的右内边距上（设计系统「行尾血线」） */
+.pptx-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.pptx-split {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* 页列表：页码 + 版式名是定位坐标，标题是「这页在讲什么」 */
+.pptx-slide-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  /* 宽度由大纲右上角的拆分条决定（--pptx-pages-w 由 PptxView 注入，默认 184） */
+  flex: 0 0 var(--pptx-pages-w, 184px);
+  min-width: 0;
+  padding: var(--space-2);
+  overflow-y: auto;
+  border-right: 1px solid var(--color-border-subtle);
+}
+.pptx-slide-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-0-5);
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+}
+.pptx-slide-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+}
+/* 隐藏页标注：PowerPoint 的隐藏幻灯片仍列出来（页数不撒谎），但要说清它是隐藏的 */
+.pptx-slide-hidden {
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  white-space: nowrap;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.pptx-slide-row[aria-pressed="true"] .pptx-slide-label {
+  color: var(--color-text-primary);
+}
+/* 标题二级行：very weak metadata 一档；超长截断，页码坐标不被长标题挤走 */
+.pptx-slide-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-regular);
+  color: var(--color-text-tertiary);
+}
+.pptx-outline {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--space-3);
+}
+.pptx-outline-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+/* 要点：行内缩进由 TSX 按 level 给（layout 值，不是字号），符号是 4px 圆点不是字 */
+.pptx-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.pptx-line {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-primary);
+}
+.pptx-bullet {
+  flex: 0 0 auto;
+  width: 4px;
+  height: 4px;
+  margin-top: 0.72em;
+  border-radius: var(--radius-pill);
+  background: var(--color-text-tertiary);
+}
+.pptx-line-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pptx-section {
+  margin-top: var(--space-4);
+}
+/* 分区小标题：设计系统的 group label（sm / semibold / secondary） */
+.pptx-section-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-secondary);
+}
+.pptx-table-wrap {
+  overflow-x: auto;
+}
+/* 表格只还原行列与文字：边框用发丝线，不猜表头（PowerPoint 的表没有 thead 语义） */
+.pptx-table {
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-primary);
+}
+.pptx-table td {
+  max-width: 32ch;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+/* 备注是散文，按 reading leading 排；保留原稿里的换行 */
+.pptx-notes {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-reading);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* 图片 / 截断这两条是「与原稿不一样」的地方，必须说出来 */
+.pptx-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.pptx-empty-line {
+  margin: var(--space-4) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+/* 底部提示条：只读 + 页数上限；与 xlsx 的底条同一配方 */
+.pptx-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.pptx-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+/* 读不开时的技术副行（异常原文） */
+.pptx-detail {
+  margin: 0;
+  max-width: 48ch;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+@container (max-width: 420px) {
+  .pptx-split {
+    flex-direction: column;
+  }
+  .pptx-slide-list {
+    flex: 0 0 auto;
+    max-height: 38%;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+  /* 上下堆叠时没有「左右分栏」可拖：把手退场 */
+  .pptx-pages-handle {
+    display: none;
+  }
+}
+
+/* ============================================================
+ * Office「指哪打哪」：OfficeCLI 的 HTML 渲染体、点击标注条、本轮改动清单
+ *
+ * 渲染体是 sandbox iframe（脚本全禁，见 features/office/OfficePreview.tsx），
+ * 外面这层只负责「占满面板 + 底部一条标注栏」。颜色 / 字号全走 token。
+ * ============================================================ */
+.office-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+.office-preview {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* iframe 自己是一张纸：白底由 OfficeCLI 的 HTML 给，这里只给边界与高度 */
+.office-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
+  background: var(--color-bg-panel);
+}
+/* 标注栏：左半边是「点哪儿了」，右半边是动作（引用 / 复制图） */
+.office-annotate {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.office-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-tertiary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.office-annotate-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-primary);
+}
+.office-annotate-value {
+  color: var(--color-text-tertiary);
+}
+.office-annotate-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+/* 渲染失败时的技术副行（读得懂的人据此判断是不是文件 / 二进制的问题） */
+.office-detail {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* 本轮改动：默认收成一行，点开才铺清单（不占常驻高度） */
+.office-changes {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.office-changes-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.office-changes-head:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-muted);
+}
+.office-changes-body {
+  padding: 0 var(--space-3) var(--space-2);
+}
+.office-change-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.office-change {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-0-5) 0;
+  font-size: var(--font-size-xs);
+}
+.office-change-command {
+  flex: 0 0 auto;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+}
+.office-change-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-primary);
+}
+.office-change-values {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.office-changes-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.office-change-error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-danger);
+  font-size: var(--font-size-xs);
+}
+/* 未启用 Office 渲染：一行说明（不是错误条），压在网格 / 大纲的底部 */
+.office-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.office-notice-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.office-notice-detail {
+  color: var(--color-text-tertiary);
+}

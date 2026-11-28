@@ -1,0 +1,12 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2024)
+entering extended mode
+(./main.tex
+LaTeX2e <2023-11-01> patch level 1
+(/usr/share/texlive/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2023/05/17 v1.4n Standard LaTeX document class
+(/usr/share/texlive/texmf-dist/tex/latex/base/size10.clo))
+(./main.aux)
+(./chapters/long.tex
+[1{/usr/share/texlive/texmf-dist/fonts/map/pdftex/updmap/pdftex.map}]
+[2]
+[3

@@ -54,6 +54,7 @@ import fileJson2 from "../../../../design-system/assets/icons/lucide/file-json-2
 import fileSpreadsheet from "../../../../design-system/assets/icons/lucide/file-spreadsheet.svg?raw";
 import fileVideo2 from "../../../../design-system/assets/icons/lucide/file-video-2.svg?raw";
 import presentation from "../../../../design-system/assets/icons/lucide/presentation.svg?raw";
+import save from "../../../../design-system/assets/icons/lucide/save.svg?raw";
 import typeIcon from "../../../../design-system/assets/icons/lucide/type.svg?raw";
 import shapes from "../../../../design-system/assets/icons/lucide/shapes.svg?raw";
 import table from "../../../../design-system/assets/icons/lucide/table.svg?raw";
@@ -103,6 +104,7 @@ import layoutDashboard from "../../../../design-system/assets/icons/lucide/layou
 import layoutGrid from "../../../../design-system/assets/icons/lucide/layout-grid.svg?raw";
 import layers from "../../../../design-system/assets/icons/lucide/layers.svg?raw";
 import list from "../../../../design-system/assets/icons/lucide/list.svg?raw";
+import listOrdered from "../../../../design-system/assets/icons/lucide/list-ordered.svg?raw";
 import filePlus from "../../../../design-system/assets/icons/lucide/file-plus.svg?raw";
 import heading from "../../../../design-system/assets/icons/lucide/heading.svg?raw";
 import bold from "../../../../design-system/assets/icons/lucide/bold.svg?raw";
@@ -147,6 +149,7 @@ import square from "../../../../design-system/assets/icons/lucide/square.svg?raw
 import squareTerminal from "../../../../design-system/assets/icons/lucide/square-terminal.svg?raw";
 import circleHelp from "../../../../design-system/assets/icons/lucide/circle-help.svg?raw";
 import search from "../../../../design-system/assets/icons/lucide/search.svg?raw";
+import searchCheck from "../../../../design-system/assets/icons/lucide/search-check.svg?raw";
 import terminal from "../../../../design-system/assets/icons/lucide/terminal.svg?raw";
 import fileText from "../../../../design-system/assets/icons/lucide/file-text.svg?raw";
 import trash2 from "../../../../design-system/assets/icons/lucide/trash-2.svg?raw";
@@ -260,6 +263,7 @@ const ICONS = {
   lightbulb,
   "loader-circle": loaderCircle,
   list,
+  "list-ordered": listOrdered,
   "layout-dashboard": layoutDashboard,
   "layout-grid": layoutGrid,
   layers,
@@ -303,8 +307,10 @@ const ICONS = {
   "refresh-cw": refreshCw,
   shuffle,
   "rotate-ccw": rotateCcw,
+  save,
   settings,
   "shield-check": shieldCheck,
+  "search-check": searchCheck,
   waypoints,
   sliders,
   star,

@@ -509,6 +509,40 @@ describe("parseSettings 的 browserDownloadDir（受管浏览器下载目录）"
   });
 });
 
+describe("parseSettings 的 latexmkPath（显式指定的 latexmk）", () => {
+  it("绝对路径留下（两侧空白去掉）：POSIX、Windows 盘符、UNC", () => {
+    deepStrictEqual(parseSettings({ latexmkPath: "/Library/TeX/texbin/latexmk" }).latexmkPath, "/Library/TeX/texbin/latexmk");
+    deepStrictEqual(parseSettings({ latexmkPath: " D:\\texlive\\2024\\bin\\windows\\latexmk.exe " }).latexmkPath, "D:\\texlive\\2024\\bin\\windows\\latexmk.exe");
+  });
+  it("缺席、相对路径、空串、非字符串都当没设（只靠 PATH 与常见根探测）", () => {
+    deepStrictEqual(parseSettings({ theme: "dark" }).latexmkPath, undefined);
+    deepStrictEqual(parseSettings({ latexmkPath: "latexmk" }).latexmkPath, undefined);
+    deepStrictEqual(parseSettings({ latexmkPath: "  " }).latexmkPath, undefined);
+    deepStrictEqual(parseSettings({ latexmkPath: 42 }).latexmkPath, undefined);
+  });
+});
+
+describe("parseSettings 的 Word 导出配置（pandoc / 模板）", () => {
+  it("pandocPath / docxTemplatePath 只认绝对路径（两侧空白去掉）", () => {
+    deepStrictEqual(parseSettings({ pandocPath: "/usr/local/bin/pandoc" }).pandocPath, "/usr/local/bin/pandoc");
+    deepStrictEqual(parseSettings({ pandocPath: " C:\\Program Files\\Pandoc\\pandoc.exe " }).pandocPath, "C:\\Program Files\\Pandoc\\pandoc.exe");
+    deepStrictEqual(parseSettings({ docxTemplatePath: "D:\\school\\template.docx" }).docxTemplatePath, "D:\\school\\template.docx");
+  });
+
+  it("相对路径 / 空串 / 非字符串都当没设", () => {
+    deepStrictEqual(parseSettings({ pandocPath: "pandoc" }).pandocPath, undefined);
+    deepStrictEqual(parseSettings({ pandocPath: 42 }).pandocPath, undefined);
+    deepStrictEqual(parseSettings({ docxTemplatePath: "template.docx" }).docxTemplatePath, undefined);
+  });
+
+  it("模板模式只认 default / project / custom", () => {
+    deepStrictEqual(parseSettings({ docxTemplateMode: "project" }).docxTemplateMode, "project");
+    deepStrictEqual(parseSettings({ docxTemplateMode: "custom" }).docxTemplateMode, "custom");
+    deepStrictEqual(parseSettings({ docxTemplateMode: "school" }).docxTemplateMode, undefined);
+    deepStrictEqual(parseSettings({ docxTemplateMode: true }).docxTemplateMode, undefined);
+  });
+});
+
 describe("parseSettings 的 starredModels（模型星标）", () => {
   it("成对的留下，顺序照旧", () => {
     deepStrictEqual(
@@ -791,6 +825,69 @@ describe("parseSettings 的 docPaper", () => {
     deepStrictEqual(parseSettings({ docPaper: "neon" }).docPaper, undefined);
     deepStrictEqual(parseSettings({ docPaper: 3 }).docPaper, undefined);
     deepStrictEqual(parseSettings({}).docPaper, undefined);
+  });
+});
+
+describe("parseSettings 的论文工作台拆分尺寸", () => {
+  it("paperPdfRatio：0.2–0.8 内收下（不取整），越界 / 非数丢掉（缺席 = 0.5）", () => {
+    deepStrictEqual(parseSettings({ paperPdfRatio: 0.35 }).paperPdfRatio, 0.35);
+    deepStrictEqual(parseSettings({ paperPdfRatio: 0.2 }).paperPdfRatio, 0.2);
+    deepStrictEqual(parseSettings({ paperPdfRatio: 0.8 }).paperPdfRatio, 0.8);
+    deepStrictEqual(parseSettings({ paperPdfRatio: 0.19 }).paperPdfRatio, undefined);
+    deepStrictEqual(parseSettings({ paperPdfRatio: 0.81 }).paperPdfRatio, undefined);
+    deepStrictEqual(parseSettings({ paperPdfRatio: Number.NaN }).paperPdfRatio, undefined);
+    // 截断到顶点的比例值不应该被四舍五入掉（0.65 常常是夹取的结果）
+    deepStrictEqual(parseSettings({ paperPdfRatio: 0.65 }).paperPdfRatio, 0.65);
+  });
+
+  it("paperChatWidth：≥280 收下并取整（上限按容器宽现算，存储层只留硬上界）", () => {
+    deepStrictEqual(parseSettings({ paperChatWidth: 360.6 }).paperChatWidth, 361);
+    // 一半上限会超过旧的 480（1440 容器的一半是 720），存储层不能把它丢掉
+    deepStrictEqual(parseSettings({ paperChatWidth: 720 }).paperChatWidth, 720);
+    deepStrictEqual(parseSettings({ paperChatWidth: 279 }).paperChatWidth, undefined);
+    deepStrictEqual(parseSettings({ paperChatWidth: 4097 }).paperChatWidth, undefined);
+    deepStrictEqual(parseSettings({ paperChatWidth: "wide" }).paperChatWidth, undefined);
+  });
+
+  it("latexProblemsHeight：≥96 且 ≤ 硬上界才收下（缺席 = 自适应，不写默认值）", () => {
+    deepStrictEqual(parseSettings({ latexProblemsHeight: 240.4 }).latexProblemsHeight, 240);
+    deepStrictEqual(parseSettings({ latexProblemsHeight: 96 }).latexProblemsHeight, 96);
+    deepStrictEqual(parseSettings({ latexProblemsHeight: 95 }).latexProblemsHeight, undefined);
+    deepStrictEqual(parseSettings({ latexProblemsHeight: 2401 }).latexProblemsHeight, undefined);
+    deepStrictEqual(parseSettings({ latexProblemsHeight: Number.POSITIVE_INFINITY }).latexProblemsHeight, undefined);
+    // 没有默认值：设置文件里不出现这个键 = 按内容自适应
+    deepStrictEqual(parseSettings({}).latexProblemsHeight, undefined);
+  });
+
+  it("latexProblemsHeight: null（双击复位的补丁）被 parseSettings 丢掉，回到自适应", () => {
+    deepStrictEqual(parseSettings({ latexProblemsHeight: null }).latexProblemsHeight, undefined);
+  });
+
+  it("pptxPagesWidth：140–360 内收下并取整，越界丢掉（缺席 = 184）", () => {
+    deepStrictEqual(parseSettings({ pptxPagesWidth: 220.5 }).pptxPagesWidth, 221);
+    deepStrictEqual(parseSettings({ pptxPagesWidth: 139 }).pptxPagesWidth, undefined);
+    deepStrictEqual(parseSettings({ pptxPagesWidth: 361 }).pptxPagesWidth, undefined);
+    deepStrictEqual(parseSettings({ pptxPagesWidth: null }).pptxPagesWidth, undefined);
+  });
+
+  it("四个新键都被白名单带上，且不把别的设置带走", () => {
+    deepStrictEqual(
+      parseSettings({
+        theme: "graphite",
+        paperPdfRatio: 0.6,
+        paperChatWidth: 400,
+        latexProblemsHeight: 200,
+        pptxPagesWidth: 200,
+      }),
+      {
+        theme: "graphite",
+        drawer: DEFAULT_SETTINGS.drawer,
+        paperPdfRatio: 0.6,
+        paperChatWidth: 400,
+        latexProblemsHeight: 200,
+        pptxPagesWidth: 200,
+      },
+    );
   });
 });
 

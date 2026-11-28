@@ -19,7 +19,11 @@ import type { McpStatus } from "../../shared/mcp.ts";
 import type { AutomationToolOutcome } from "../../shared/automation.ts";
 import type { BrowserToolOutcome } from "../../shared/browser.ts";
 import type { DocOutcome } from "../../shared/doc.ts";
+import type { DocxEditOutcome } from "../../shared/docx.ts";
 import type { TerminalToolOutcome } from "../../shared/terminal.ts";
+import type { LatexPackageOutcome, LatexRunOutcome } from "../../shared/latex.ts";
+import type { OfficeAgentOutcome } from "../../shared/office.ts";
+import type { DocxExportOutcome } from "../../shared/docx-export.ts";
 import type { SlidesOutcome } from "../../shared/slides-export.ts";
 import type { IntentConfirmDecision } from "../../shared/intent-confirm.ts";
 import type { PluginAgentInstallOutcome, PluginAgentListOutcome, PluginAgentPreviewOutcome } from "../../shared/plugin.ts";
@@ -599,6 +603,10 @@ export class AgentHostCore {
   answerDoc(requestId: string, outcome: DocOutcome): void {
     this.child?.postMessage({ type: "docResult", requestId, ...outcome } satisfies AgentCommand);
   }
+  /** docx 指哪打哪：docxEditRequest 的回执（answerDoc 同款：不 ensure、发完即回）。 */
+  answerDocxEdit(requestId: string, outcome: DocxEditOutcome): void {
+    this.child?.postMessage({ type: "docxEditResult", requestId, ...outcome } satisfies AgentCommand);
+  }
 
   /** 终端：terminalRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
   answerTerminal(requestId: string, outcome: TerminalToolOutcome): void {
@@ -609,6 +617,33 @@ export class AgentHostCore {
         ? { ok: true as const, text: outcome.text, ...(outcome.terminal === undefined ? {} : { terminal: outcome.terminal }) }
         : { ok: false as const, error: outcome.error }),
     } satisfies AgentCommand);
+  }
+
+  /** LaTeX：latexRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。 */
+  answerLatex(requestId: string, outcome: LatexRunOutcome): void {
+    this.child?.postMessage({
+      type: "latexResult",
+      requestId,
+      ...(outcome.ok ? { ok: true as const, result: outcome.result } : { ok: false as const, error: outcome.error }),
+    } satisfies AgentCommand);
+  }
+
+  /** LaTeX：latexPackageRequest（缺包反查）的回执。形状即契约（ok 双分支），原样透传。 */
+  answerLatexPackage(requestId: string, outcome: LatexPackageOutcome): void {
+    this.child?.postMessage({ type: "latexPackageResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /**
+   * Office：officeRequest 的回执。同 answerReadTask 的理由：不 ensure、发完即回。
+   * 形状是 shared/office.ts 的 OfficeAgentOutcome（ok 双分支）。
+   */
+  answerOffice(requestId: string, outcome: OfficeAgentOutcome): void {
+    this.child?.postMessage({ type: "officeResult", requestId, ...outcome } satisfies AgentCommand);
+  }
+
+  /** Word 导出：docxExportRequest 的回执。形状即契约（ok 双分支），原样透传。 */
+  answerDocxExport(requestId: string, outcome: DocxExportOutcome): void {
+    this.child?.postMessage({ type: "docxExportResult", requestId, ...outcome } satisfies AgentCommand);
   }
 
   /** 自动化：automationRequest 的回执（delegate 同款）：不 ensure、发完即回。 */

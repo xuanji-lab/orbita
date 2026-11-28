@@ -1,0 +1,387 @@
+/**
+ * LaTeX 源码编辑器（CodeMirror 6）的语言与外观配置。
+ *
+ * **为什么用 StreamLanguage + legacy-modes/stex**：上游没有维护良好的官方 LaTeX 语言包，
+ * @codemirror/legacy-modes 的 stex 是 CodeMirror 5 的成熟词法器（命令、注释、数学模式、
+ * \begin/\end 参数都认），由官方维护者移植到 CM6，体积只有几 KB。不引入第三方
+ * 「codemirror-lang-latex」一类包（维护状态不明，且要自己带一套 Lezer grammar）。
+ *
+ * **不懒加载**：AGENTS.md 禁 inline import（`await import()`），CodeMirror 从顶层
+ * import 进来，跟着 renderer bundle 一起打包——面板第一次打开 .tex 不需要等分包。
+ *
+ * 排版默认（LaTeX 社区的通行写法，写在这里而不是散在组件里）：
+ * - 缩进 **2 个空格**（`indentUnit` + `EditorState.tabSize`），Tab 键插入缩进而不是制表符；
+ * - **软换行**开启：右栏通常只有几百像素宽，不折行会逼着横向滚动读源码；
+ * - 行号、当前行高亮、括号匹配、搜索（Ctrl/Cmd+F）。
+ */
+import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
+import {
+  Decoration,
+  drawSelection,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  highlightSpecialChars,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+  type DecorationSet,
+} from "@codemirror/view";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import {
+  bracketMatching,
+  HighlightStyle,
+  indentUnit,
+  StreamLanguage,
+  syntaxHighlighting,
+} from "@codemirror/language";
+import { search, searchKeymap } from "@codemirror/search";
+import { completionKeymap } from "@codemirror/autocomplete";
+import { lintGutter } from "@codemirror/lint";
+import { foldGutter, foldKeymap } from "@codemirror/language";
+import { latexFolding } from "./latex-fold.ts";
+import { latexMathHover } from "./latex-math-hover.ts";
+import { stex } from "@codemirror/legacy-modes/mode/stex";
+import { bibtexLanguage } from "./bibtex-language.ts";
+import { tags } from "@lezer/highlight";
+
+/** LaTeX 语言：stex 词法器（命令 / 注释 / 数学模式 / 环境名） */
+export const latexLanguage = StreamLanguage.define(stex);
+
+/** 按扩展名选语言：`.bib` 用 BibTeX 词法器，其余（.tex / .sty / .cls）都是 TeX */
+export function languageForFile(path: string): Extension {
+  return /\.bib$/i.test(path) ? bibtexLanguage : latexLanguage;
+}
+
+/**
+ * 只读开关。agent 正在写这个文件时整块关掉：`readOnly` 挡的是所有会改文档的事务
+ * （含粘贴与 Ctrl+Z），`editable(false)` 再让光标与输入框从 DOM 上消失——两者都要，
+ * 只有前者时看着还能打字、后者的拦截在拖放上又不够。
+ *
+ * 做成 Compartment 是因为「回合进行中」是个随时翻转的外部状态，
+ * 而重建编辑器会丢掉光标与撤销历史。
+ */
+export const readOnlyCompartment = new Compartment();
+
+export function readOnlyExtensions(readOnly: boolean): Extension[] {
+  return readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
+}
+
+/** 换掉「agent 改动块」的高亮范围（每次回合落定 / 每撤一块算一次） */
+const setAgentMarks = StateEffect.define<DecorationSet>();
+
+/**
+ * agent 本轮新增的行的底色。**用 StateField 而不是静态 facet**：用户继续编辑时，
+ * 底色要跟着文字走（`map(tr.changes)`），否则一次回车就把高亮错到别处去。
+ */
+const agentMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    let next = marks.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(setAgentMarks)) next = effect.value;
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** 把一组字符区间换成「agent 改动」高亮事务（区间可以不按顺序给） */
+export function agentMarkEffect(ranges: readonly { from: number; to: number }[]): StateEffect<DecorationSet> {
+  const sorted = [...ranges].filter((range) => range.to > range.from).sort((a, b) => a.from - b.from);
+  return setAgentMarks.of(
+    Decoration.set(
+      sorted.map((range) => Decoration.mark({ class: "cm-agent-hunk" }).range(range.from, range.to)),
+      true,
+    ),
+  );
+}
+
+/** 换掉「SyncTeX 定位到的那一行」的高亮范围（PDF 双击 / 右键在 PDF 中定位的结果） */
+const setSyncLine = StateEffect.define<DecorationSet>();
+
+/**
+ * 与 agentMarks 同一套 StateField（用户一打字就跟着文字走，不会错行）：
+ * **整行底色**用 line 装饰而不是 mark——定位的是「这一行」，不是某段文字。
+ */
+const syncLineMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    let next = marks.map(transaction.changes);
+    for (const effect of transaction.effects) {
+      if (effect.is(setSyncLine)) next = effect.value;
+    }
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/**
+ * 高亮一行。行装饰（Decoration.line）的区间**必须是零长**（CodeMirror 的硬约束：
+ * 传 from..to 会抛 "Line decoration ranges must be zero-length" 并掀翻整个编辑器），
+ * 只接受行的起点；1 基行号的换算在调用方。
+ */
+export function syncLineEffect(from: number): StateEffect<DecorationSet> {
+  return setSyncLine.of(Decoration.set([Decoration.line({ class: "cm-sync-line" }).range(from)], true));
+}
+
+/** 清掉定位高亮（TexEditorPane 在 2 秒后发这发，短暂停留是为了让人看见「跳到哪了」） */
+export function clearSyncLineEffect(): StateEffect<DecorationSet> {
+  return setSyncLine.of(Decoration.none);
+}
+
+/**
+ * 语法着色只写 token，不写颜色值：深浅主题、纸面主题都按同一份 CSS 变量走。
+ * 变量在 styles.css 的 `.tex-editor` 作用域里声明（见那里的说明）。
+ */
+const latexHighlight = HighlightStyle.define([
+  // \section / \cite / \begin 这类命令：字重区分，不抢 accent（accent 只给主操作）
+  { tag: tags.tagName, color: "var(--tex-cmd)", fontWeight: "600" },
+  // 命令的参数：\begin{...} 的环境名、\cite 的 key
+  { tag: tags.atom, color: "var(--tex-argument)" },
+  // BibTeX 的字段名（title / author / doi）：与命令参数同色，字重区分
+  { tag: tags.propertyName, color: "var(--tex-argument)", fontWeight: "600" },
+  { tag: tags.string, color: "var(--tex-argument)" },
+  { tag: tags.keyword, color: "var(--tex-math)" },
+  // 数学模式里的字母 / 数字
+  { tag: tags.variableName, color: "var(--tex-math)" },
+  { tag: tags.number, color: "var(--tex-number)" },
+  { tag: tags.bracket, color: "var(--color-text-secondary)" },
+  { tag: tags.brace, color: "var(--color-text-secondary)" },
+  { tag: tags.comment, color: "var(--tex-comment)", fontStyle: "italic" },
+  { tag: tags.invalid, color: "var(--color-danger)" },
+]);
+
+export interface LatexEditorOptions {
+  /**
+   * 折叠（章节块 / 环境块）。只对 .tex 开：.bib / .sty 没有章节与环境树，
+   * 给它们挂一个永远算不出折点的 foldService 只是白跑一遍扫描。
+   */
+  folding?: boolean;
+  /**
+   * 公式悬浮预览（`$…$` / `$$…$$` / `\(…\)` / `\[…\]`）。只对 .tex 开：.bib 里
+   * `$` 不是数学，换个文件类型就挂上会让人对着一堆 `$` 等一个永远不来的浮层。
+   */
+  mathHover?: boolean;
+  /** 词法器；缺省是 LaTeX（stex）。`.bib` 传 BibTeX 那个（bibtex-language.ts） */
+  language?: Extension;
+  /**
+   * Ctrl/Cmd+单击（`\input{…}` 跳转）。返回 true = 已处理：编辑器不再走默认的
+   * 鼠标行为（不挪光标、不选区）。行号 1 基、列 0 基，都是点击落点。
+   *
+   * 用 `mousedown` 而不是 `click`：CM 的 click 处理已经改过选区，早一步拦下来
+   * 才能让「点参数 = 跳转」与「点空白 = 放光标」各自干净。
+   */
+  onModClick?: (at: { line: number; column: number }) => boolean;
+}
+
+export function latexEditorExtensions(
+  onUpdate: (update: { docChanged: boolean; selectionSet: boolean; text: () => string }) => void,
+  options: LatexEditorOptions = {},
+): Extension[] {
+  return [
+    lineNumbers(),
+    highlightActiveLineGutter(),
+    highlightSpecialChars(),
+    history(),
+    drawSelection(),
+    rectangularSelection(),
+    highlightActiveLine(),
+    bracketMatching(),
+    indentUnit.of("  "),
+    EditorState.tabSize.of(2),
+    EditorView.lineWrapping,
+    options.language ?? latexLanguage,
+    syntaxHighlighting(latexHighlight),
+    readOnlyCompartment.of(readOnlyExtensions(false)),
+    agentMarks,
+    syncLineMarks,
+    search({ top: true }),
+    // completionKeymap：Ctrl/Cmd+Space 手动弹补全。LaTeX 的现场不总是「正在打字」——
+    // `\ref{` 之后想看看有哪些 label、`\begin{` 之后想挑环境，手动触发比再敲一个字自然
+    // 编译问题的行内标记：波浪线由 setDiagnostics 推进来（TexEditorPane 接线），
+    // 这里的 lintGutter 给行号旁一个可悬停的记号——长行折行后波浪线可能在视口外
+    lintGutter(),
+    ...(options.folding === true ? [foldGutter(), ...latexFolding] : []),
+    ...(options.mathHover === true ? [latexMathHover()] : []),
+    ...(options.onModClick === undefined
+      ? []
+      : [
+          EditorView.domEventHandlers({
+            mousedown(event, view): boolean {
+              const onModClick = options.onModClick;
+              if (onModClick === undefined) return false;
+              if (event.button !== 0 || !(event.ctrlKey || event.metaKey)) return false;
+              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+              if (pos === null) return false;
+              const line = view.state.doc.lineAt(pos);
+              if (!onModClick({ line: line.number, column: pos - line.from })) return false;
+              event.preventDefault();
+              return true;
+            },
+          }),
+        ]),
+    keymap.of([
+      ...completionKeymap,
+      ...(options.folding === true ? foldKeymap : []),
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...searchKeymap,
+      indentWithTab,
+    ]),
+    EditorView.updateListener.of((update) => {
+      if (!update.docChanged && !update.selectionSet) return;
+      onUpdate({
+        docChanged: update.docChanged,
+        selectionSet: update.selectionSet,
+        // 全文只在调用方真要的时候才拷（大纲抽屉开着时才需要）
+        text: () => update.state.doc.toString(),
+      });
+    }),
+    EditorView.theme({
+      "&": {
+        height: "100%",
+        fontSize: "var(--font-size-sm)",
+        backgroundColor: "transparent",
+        color: "var(--color-text-primary)",
+      },
+      "&.cm-focused": { outline: "none" },
+      ".cm-scroller": {
+        fontFamily: "var(--font-family-mono)",
+        lineHeight: "var(--line-height-code-block)",
+        overflow: "auto",
+      },
+      ".cm-content": {
+        padding: "var(--space-2) 0",
+        caretColor: "var(--color-text-primary)",
+      },
+      ".cm-gutters": {
+        backgroundColor: "transparent",
+        color: "var(--color-text-tertiary)",
+        border: "none",
+        paddingLeft: "var(--space-2)",
+      },
+      ".cm-activeLine": { backgroundColor: "var(--color-bg-muted)" },
+      ".cm-activeLineGutter": {
+        backgroundColor: "transparent",
+        color: "var(--color-text-secondary)",
+      },
+      ".cm-cursor": { borderLeftColor: "var(--color-text-primary)" },
+      // 高亮底一律走中性底：main 之后没有 --color-accent-soft（2026-11-07 方向 N 把
+      // 「选中」从 accent 淡底改成中性墨洗，accent 只留给主操作）。三档共用 bg-* 后
+      // 层级靠叠加深浅：匹配括号 / 选区 = active（墨洗），搜索命中 = muted（块底），
+      // 选中的那一条再用 active 压深一档
+      ".cm-matchingBracket": {
+        backgroundColor: "var(--color-bg-active)",
+        outline: "1px solid var(--color-border-strong)",
+      },
+      ".cm-selectionBackground, .cm-content ::selection": {
+        backgroundColor: "var(--color-bg-active)",
+      },
+      ".cm-searchMatch": {
+        backgroundColor: "var(--color-bg-muted)",
+        outline: "1px solid var(--color-border-strong)",
+      },
+      ".cm-searchMatch.cm-searchMatch-selected": {
+        backgroundColor: "var(--color-bg-active)",
+      },
+      // agent 本轮新增的行：成功色的很低一档（同一色也用于 git additions / 编辑器徽标）。
+      // 只铺新增的行，上下文行不涂——「改了哪儿」不能被涂成「改了五行」
+      ".cm-agent-hunk": {
+        backgroundColor: "var(--color-success-soft)",
+        borderRadius: "2px",
+      },
+      // PDF → 源码的落点：accent 的低一档底色，短暂停留（与 PDF 里的 .pdf-sync-mark
+      // 同色系）。main 之后已没有 --color-accent-soft（方向 N 把选中改成中性墨洗），
+      // 这里直接用 accent 掺透明——与 styles.css 的 .pdf-sync-mark 同一个配方
+      ".cm-sync-line": {
+        backgroundColor: "color-mix(in srgb, var(--color-accent) 18%, transparent)",
+      },
+      // 编译问题的波浪线：默认的红 / 琥珀直接用 token（深浅主题同一套语义）
+      ".cm-lintRange-error": {
+        backgroundImage: "none",
+        textDecoration: "underline wavy var(--color-danger)",
+        textUnderlineOffset: "3px",
+      },
+      ".cm-lintRange-warning": {
+        backgroundImage: "none",
+        textDecoration: "underline wavy var(--color-warning)",
+        textUnderlineOffset: "3px",
+      },
+      ".cm-tooltip-lint": {
+        backgroundColor: "var(--color-bg-panel)",
+        color: "var(--color-text-primary)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--shadow-popover)",
+      },
+      // `\cite{` 的候选弹层。它是**浮层**：按设计系统的规则用实底 panel + 发丝边 +
+      // popover 阴影，不套玻璃梯——浮在任意内容上，半透明会让底下的字透上来
+      ".cm-tooltip": {
+        backgroundColor: "var(--color-bg-panel)",
+        border: "1px solid var(--color-border-subtle)",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--shadow-popover)",
+        color: "var(--color-text-primary)",
+      },
+      // key 是机器事实：等宽、sm 档；列表高度封顶（再长就该多打两个字）。
+      // 宽度也封顶（评审 F2）：一条长标题曾把弹层撑到窗口边缘、后半截被硬裁在词中间。
+      // 420px 是 1440 窗口下的上限；li 的省略号来自 CM 自己的 baseTheme，
+      // 全文在补充说明（info）里给——那里不受这一行宽度的限制。
+      // **选择器要带 `.cm-tooltip`**：baseTheme 写的是 `.cm-tooltip.cm-tooltip-autocomplete > ul`
+      // （两道类 + 元素），少写一道就比它弱，max-width 与行距会被静默盖掉（实测踩过）
+      ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+        fontFamily: "var(--font-family-mono)",
+        fontSize: "var(--font-size-sm)",
+        maxHeight: "16em",
+        maxWidth: "min(420px, 92vw)",
+      },
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
+        padding: "var(--space-1) var(--space-2)",
+        lineHeight: "var(--line-height-ui)",
+      },
+      // 选中行：与列表选中同一套（淡底 + 墨色不变），不引入第四种强调色
+      ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+        backgroundColor: "var(--color-bg-active)",
+        color: "var(--color-text-primary)",
+      },
+      // 命中的那段字只加粗，不画下划线（下划线在等宽小字里挤成一团）
+      ".cm-completionMatchedText": {
+        textDecoration: "none",
+        fontWeight: "650",
+      },
+      // 标题是散文不是机器事实：换回界面字面，退到第三档墨色
+      ".cm-completionDetail": {
+        marginLeft: "var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontStyle: "normal",
+        color: "var(--color-text-tertiary)",
+      },
+      // 选中项的补充说明（作者 + 来源 .bib），两行之间要真的换行
+      ".cm-tooltip.cm-completionInfo": {
+        padding: "var(--space-1) var(--space-2)",
+        fontFamily: "var(--font-family-base)",
+        fontSize: "var(--font-size-sm)",
+        lineHeight: "var(--line-height-ui)",
+        whiteSpace: "pre-line",
+        maxWidth: "28em",
+      },
+      ".cm-panels": {
+        backgroundColor: "var(--color-bg-panel)",
+        color: "var(--color-text-primary)",
+      },
+      ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--color-border-subtle)" },
+      ".cm-textfield": {
+        backgroundColor: "var(--color-bg-app)",
+        color: "var(--color-text-primary)",
+        border: "1px solid var(--color-border-default)",
+      },
+      ".cm-button": {
+        backgroundColor: "var(--color-bg-muted)",
+        color: "var(--color-text-primary)",
+        backgroundImage: "none",
+        border: "1px solid var(--color-border-subtle)",
+      },
+    }),
+  ];
+}

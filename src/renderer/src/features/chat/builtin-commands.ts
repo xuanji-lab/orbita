@@ -219,6 +219,24 @@ export const BUILTIN_COMMANDS: Readonly<Record<string, BuiltinCommand>> = {
     },
     detail: (input, details) => exportDetail(input, details, DOC_FORMAT_NAME),
   },
+  export_docx: {
+    label: "导出 Word",
+    icon: "download",
+    summary: (input) => {
+      const source = str(input, "source");
+      const out = str(input, "out");
+      return join([source === null ? null : (source.split(/[\/]/).filter(Boolean).pop() ?? source), out === null ? null : fileLabel(out)]);
+    },
+    detail: (input, details) => {
+      const card = readCommandCard(details);
+      const out = str(input, "out");
+      return [
+        { label: "源文件", value: str(input, "source") ?? "", mono: true },
+        { label: "产物", value: card?.path ?? out ?? "", mono: true },
+        { label: "模板", value: str(input, "template") ?? "按设置（内置 / 项目内 / 学校模板）" },
+      ].filter((row) => row.value !== "");
+    },
+  },
   slides_create: {
     label: "新建演示文稿",
     icon: FEATURE_ICON.slides,

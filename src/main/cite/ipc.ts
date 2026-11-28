@@ -1,0 +1,110 @@
+/**
+ * 引用补全的 IPC 层 —— 四层契约的第 2 层（契约在 `shared/cite.ts`，preload 面在
+ * `preload/api/cite.ts`）。
+ *
+ * **不新造第二套授权**：项目目录由 `locateLatexProject` 找（与 `latex:*` 同一个函数：
+ * 白名单核 root + path，再往上找到带 `\documentclass` 的目录），所以 renderer 无法让
+ * 主进程去读一个根之外的 .bib。magic comment 改写项目根的情形也同一份事实——
+ * 编译读的是哪个目录，补全读的就是哪个目录。
+ */
+import { resolve } from "node:path";
+import { ipcMain } from "electron";
+import {
+  citeChannels,
+  type CiteFileContext,
+  type CiteLibraryOutcome,
+  type CiteSaveOutcome,
+  type CiteSaveRequest,
+  type CiteSearchOutcome,
+  type CiteSearchRequest,
+  type CiteVerifyOutcome,
+  type CiteVerifyRequest,
+} from "../../shared/cite.ts";
+import type { SessionStore } from "../session/store.ts";
+import type { WorkspaceStore } from "../workspace/store.ts";
+import { describeLatexProject } from "../latex/project.ts";
+import { locateLatexProject } from "../latex/ipc.ts";
+import { collectCiteLibrary } from "./library.ts";
+import { searchCite } from "./search.ts";
+import { writeCiteEntry } from "./save.ts";
+import { scanUnusedCitations } from "./unused.ts";
+import { verifyCiteEntries } from "./verify.ts";
+
+export function registerCiteIpc(workspaces: WorkspaceStore, sessions: SessionStore): void {
+  ipcMain.handle(
+    citeChannels.library,
+    async (_event, req: CiteFileContext): Promise<CiteLibraryOutcome> => {
+      const located = await locateLatexProject(req, workspaces, sessions);
+      if (located === null) return { found: false };
+      // 编译真正用的目录（magic root 会改写它），不是「文件所在目录」。
+      // 带上当前文件：子文件里的 `% !TEX root` 与编译走同一条解析。
+      const project = describeLatexProject(located.dir, {
+        ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
+        boundary: [located.boundary],
+      });
+      const library = collectCiteLibrary(project.dir);
+      // 「未使用的文献」只读：扫当前 root 的包含闭包（与编译 / 过期判定同一张图），
+      // 不是整个项目——附录或另一篇论文的 .tex 不该让一条文献显得被引用过。
+      const rootRelative = project.activeRoot ?? project.main;
+      const unused =
+        rootRelative === null
+          ? {
+              entries: [],
+              nociteAll: false,
+              rootFound: false,
+              texFiles: 0,
+              bibFiles: library.files.length,
+              truncated: false,
+            }
+          : scanUnusedCitations(resolve(project.dir, rootRelative), library);
+      return { found: true, library, unused };
+    },
+  );
+
+  /**
+   * 在线检索。**不查白名单**：请求里只有一个查询串，不涉及任何本地文件；能联网的
+   * 只有这一个 handler，而且只在用户点「查找」时被调用一次。查询串的长度与形状
+   * 由 `searchCite` 自己认（超长串在 URL 里会被服务端拒，不必在这里另设上限）。
+   */
+  ipcMain.handle(
+    citeChannels.search,
+    async (_event, req: CiteSearchRequest): Promise<CiteSearchOutcome> =>
+      searchCite(typeof req?.query === "string" ? req.query : ""),
+  );
+
+  /**
+   * 写 .bib。授权与 library 同一道：项目目录从「根 + 当前文件」现算，renderer 给不出
+   * 目录，也就不可能让主进程往一个白名单外的 .bib 里追加条目。
+   */
+  /**
+   * 核验项目里的条目（DOI / arXiv 号 / 标题 → Crossref / arXiv）。与 library 同一道
+   * 授权：条目由主进程自己从项目 .bib 重读，renderer 只给「根 + 当前文件」（与可选的
+   * 一批 key）。只在用户点「核验」时被调用。
+   */
+  ipcMain.handle(citeChannels.verify, async (_event, req: CiteVerifyRequest): Promise<CiteVerifyOutcome> => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { ok: false, reason: "outside-project", detail: req.path };
+    const project = describeLatexProject(located.dir, {
+      ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
+      boundary: [located.boundary],
+    });
+    try {
+      const library = collectCiteLibrary(project.dir);
+      const keys = Array.isArray(req.keys) ? req.keys.filter((key) => typeof key === "string") : null;
+      const batch = await verifyCiteEntries(library, keys);
+      return { ok: true, results: batch.results, total: batch.total };
+    } catch (cause) {
+      return { ok: false, reason: "failed", detail: cause instanceof Error ? cause.message : String(cause) };
+    }
+  });
+
+  ipcMain.handle(citeChannels.save, async (_event, req: CiteSaveRequest): Promise<CiteSaveOutcome> => {
+    const located = await locateLatexProject(req.context, workspaces, sessions);
+    if (located === null) return { ok: false, reason: "outside-project", detail: req.context.path };
+    const project = describeLatexProject(located.dir, {
+      ...(/\.tex$/i.test(located.file) ? { file: located.file } : {}),
+      boundary: [located.boundary],
+    });
+    return writeCiteEntry(project.dir, project.main, req.candidate);
+  });
+}

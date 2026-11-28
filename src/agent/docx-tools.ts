@@ -3,10 +3,21 @@ import { basename, extname, isAbsolute, join } from "node:path";
 import JSZip from "jszip";
 import mammoth from "mammoth";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { DocxAgentEditRequest, DocxAnchor, DocxAnchorTable, DocxEditOutcome } from "../shared/docx.ts";
+import type { FileRoot } from "../shared/files.ts";
+import { isInside } from "../main/path-boundary.ts";
+import type { RequestBroker } from "./request-broker.ts";
 import { imageMimeOf, shrinkIfNeeded } from "./image-tools.ts";
 
 /**
- * agent 的 Word 工具：read_docx。
+ * agent 的 Word 工具：read_docx（读）与 edit_docx（写修订）。
+ *
+ * **edit_docx 不碰磁盘**：它把请求经 requestId 问答交给主进程，主进程再转给 renderer 里
+ * 活着的那个 docx 编辑器（`applyAIEditOperations`，mode=tracked-changes）。理由见
+ * shared/docx.ts 顶注释：agent 直接改文件会撞 #308 的 hash 冲突，并把用户没保存的改动丢掉。
+ * 所以这个工具只能改「此刻在应用内打开着」的文档——没打开就如实告诉模型，别兜底写盘。
+ *
+ * read_docx 的说明见下面各段。
  *
  * docx 是 zip + OOXML：正文在 word/document.xml，pi 协议的用户块只有
  * text | image，read 读它出来是压缩二进制乱码（本仓 patch 让 read 对
@@ -477,7 +488,23 @@ async function coreTitle(buffer: Buffer): Promise<string> {
 
 // ─── 工具 ──────────────────────────────────────────────────────────────────
 
-export function createDocxTools(cwd: string): ToolDefinition[] {
+const asRecord = (value: unknown): Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+
+/** edit_docx 需要的运行环境（read_docx 只用 cwd） */
+export interface DocxToolsOptions {
+  /** 可写根：工作区 + 附加目录（路径必须落在这里面） */
+  writeRoots: readonly string[];
+  /** 会话所属工作区（主进程据此现算白名单根） */
+  workspaceId: string | null;
+}
+
+export function createDocxTools(
+  broker: RequestBroker,
+  sessionId: string,
+  cwd: string,
+  options: DocxToolsOptions = { writeRoots: [cwd], workspaceId: null },
+): ToolDefinition[] {
   const readDocx: ToolDefinition = {
     name: "read_docx",
     label: "read_docx",
@@ -650,5 +677,191 @@ export function createDocxTools(cwd: string): ToolDefinition[] {
       };
     },
   };
-  return [readDocx];
+  /**
+   * `edit_docx`：按锚点在**应用内打开着**的 docx 里写一条 tracked-changes 修订。
+   *
+   * 参数三档寻址（锚点 → 块 + 文字 → 只有文字），与 `shared/docx.ts` 的
+   * `DocxAgentEditRequest` 一致。回执里带 `revisionIds`：一次 replace 会有删除 + 插入
+   * 两个 id，审阅条按这一组裁决——工具把这一点说给模型听，免得它一条条去数。
+   */
+  const editDocx: ToolDefinition = {
+    name: "edit_docx",
+    label: "edit_docx",
+    description:
+      "Edit a Word document (.docx) that the user has open in Orbita's Word editor, as a tracked change " +
+      "(author = the user), and return the revision ids written. Pass the anchor from a <quoted_docx> block " +
+      "(path + block + start / end + hash) when the user selected a passage; otherwise pass blockId + find, " +
+      "or just find when the text is unique in the document. replace = \"\" deletes the passage. " +
+      "Never write a .docx with write / edit / shell — the open editor holds the authoritative document and " +
+      "a direct file write loses unsaved work and fails the save-time hash check. If the document is not " +
+      "open, ask the user to open it in the Files panel.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path to the .docx file (relative to the workspace or absolute)" },
+        anchor: {
+          type: "object",
+          description: "The anchor from a <quoted_docx> block (copy its attributes verbatim)",
+          properties: {
+            blockId: { type: "string", description: "Block id (the block attribute)" },
+            startOffset: { type: "number", description: "The start attribute" },
+            endOffset: { type: "number", description: "The end attribute" },
+            selectedTextHash: { type: "string", description: "The hash attribute" },
+            blockTextHash: { type: "string", description: "The block_hash attribute (optional)" },
+            quote: { type: "string", description: "The quoted text (optional; used to re-find the passage)" },
+            blockOrdinal: { type: "number", description: "The ordinal attribute (optional fallback)" },
+          },
+          required: ["blockId", "startOffset", "endOffset"],
+        },
+        blockId: { type: "string", description: "Block id when there is no anchor (from read_docx or a previous result)" },
+        find: { type: "string", description: "Text to locate when there is no usable anchor. Must be unique." },
+        replace: { type: "string", description: "The new text; an empty string deletes the anchored passage" },
+        note: { type: "string", description: "Optional one-line reason, echoed back in the result" },
+      },
+      required: ["path", "replace"],
+    } as never,
+    async execute(_toolCallId, params) {
+      const args = asRecord(params);
+      const pathRaw = typeof args["path"] === "string" ? args["path"].trim() : "";
+      if (pathRaw === "") throw new Error('edit_docx requires a "path" pointing at an open Word (.docx) file');
+      const absolute = isAbsolute(pathRaw) ? pathRaw : join(cwd, pathRaw);
+      if (!/\.docx$/i.test(absolute)) throw new Error(`Not a Word document: ${pathRaw}`);
+      if (!options.writeRoots.some((root) => isInside(root, absolute))) {
+        throw new Error(`Documents must live inside the workspace (or an attached directory): ${pathRaw}`);
+      }
+      const replace = typeof args["replace"] === "string" ? (args["replace"] as string) : null;
+      if (replace === null) throw new Error('edit_docx requires "replace" (use "" to delete the passage)');
+      const parsedAnchor = anchorOf(args["anchor"]);
+      if (parsedAnchor.kind === "invalid") throw new Error(`edit_docx: ${parsedAnchor.error}`);
+      const anchor = parsedAnchor.kind === "ok" ? parsedAnchor.anchor : null;
+      const blockId = typeof args["blockId"] === "string" ? (args["blockId"] as string).trim() : "";
+      const find = typeof args["find"] === "string" ? (args["find"] as string).trim() : "";
+      const request: DocxAgentEditRequest = {
+        sessionId,
+        workspaceId: options.workspaceId,
+        path: absolute,
+        replace,
+        ...(anchor === null ? {} : { anchor }),
+        ...(blockId === "" ? {} : { blockId }),
+        ...(find === "" ? {} : { find }),
+        ...(typeof args["note"] === "string" && (args["note"] as string).trim() !== ""
+          ? { note: (args["note"] as string).trim() }
+          : {}),
+      };
+      const outcome = await broker.request<DocxEditOutcome>(
+        { type: "docxEditRequest", sessionId, workspaceId: options.workspaceId, request },
+        60_000,
+      );
+      return { content: [{ type: "text" as const, text: describeOutcome(outcome, pathRaw) }], details: undefined };
+    },
+  };
+  return [readDocx, editDocx];
+}
+
+/** 模型给的 anchor 参数解析结果：没给 / 给了但不可用（带原因）/ 可用 */
+type AnchorParse =
+  | { kind: "none" }
+  | { kind: "invalid"; error: string }
+  | { kind: "ok"; anchor: DocxAnchor };
+
+/**
+ * 模型给的 anchor 对象 → 契约里的锚点。
+ *
+ * - 一个字段都没给 → `none`（降级到 blockId + find）；
+ * - 给了 blockId / 偏移但**两项文本佐证都缺** → `invalid`：块内偏移只对「选中那一刻」
+ *   的文档成立，盲信它就会把任意位置的文字改掉（验收复现：裸传 `{blockId,start,end}`
+ *   把「流域出」改成 X 并回 ok:true）。这一步与 renderer 的 resolveRange 双保险。
+ * - 缺 blockId / 偏移本身无效 → 也 `invalid`（说清缺什么），不让它静默降级成「改整块」。
+ */
+function anchorOf(raw: unknown): AnchorParse {
+  if (raw === undefined || raw === null) return { kind: "none" };
+  const args = asRecord(raw);
+  if (Object.keys(args).length === 0) return { kind: "none" };
+  const blockId = typeof args["blockId"] === "string" ? args["blockId"] : "";
+  const startOffset = typeof args["startOffset"] === "number" ? args["startOffset"] : NaN;
+  const endOffset = typeof args["endOffset"] === "number" ? args["endOffset"] : NaN;
+  if (blockId === "" || !Number.isInteger(startOffset) || !Number.isInteger(endOffset)) {
+    return { kind: "invalid", error: "anchor 需要 blockId + startOffset + endOffset 三个整数/字符串字段（照抄 <quoted_docx> 的属性）" };
+  }
+  if (startOffset < 0 || endOffset <= startOffset) {
+    return { kind: "invalid", error: `anchor 的偏移不成立：start=${startOffset}，end=${endOffset}` };
+  }
+  const selectedTextHash = typeof args["selectedTextHash"] === "string" ? args["selectedTextHash"] : "";
+  const quote = typeof args["quote"] === "string" ? args["quote"] : "";
+  if (selectedTextHash.trim() === "" && quote.trim() === "") {
+    return {
+      kind: "invalid",
+      error:
+        "锚点缺文本佐证：请把 <quoted_docx> 的 hash（selectedTextHash）与 block 体里的 <quoted> 原文一起带上，" +
+        "或者改用 blockId + find / 只给 find。只有块号和偏移不写——那会改到用户没选的地方。",
+    };
+  }
+  return {
+    kind: "ok",
+    anchor: {
+    v: 1,
+    // path / docHash / editSeq 由 renderer 用它自己那份核对，模型给的这几项不参与判定
+    path: "",
+    blockId,
+    blockOrdinal: typeof args["blockOrdinal"] === "number" ? args["blockOrdinal"] : 0,
+    startOffset,
+    endOffset,
+      selectedTextHash,
+      blockTextHash: typeof args["blockTextHash"] === "string" ? args["blockTextHash"] : "",
+      quote,
+      contextBefore: "",
+      contextAfter: "",
+      table: tableOf(args["table"]),
+      docHash: "",
+      editSeq: 0,
+    },
+  };
+}
+
+function tableOf(raw: unknown): DocxAnchorTable | null {
+  const table = asRecord(raw);
+  const keys = ["tableIndex", "rowIndex", "cellIndex", "paragraphIndex"] as const;
+  if (!keys.every((key) => typeof table[key] === "number")) return null;
+  return {
+    tableIndex: table["tableIndex"] as number,
+    rowIndex: table["rowIndex"] as number,
+    cellIndex: table["cellIndex"] as number,
+    paragraphIndex: table["paragraphIndex"] as number,
+  };
+}
+
+/** 回执 → 给模型看的一段话。**把「下一步该怎么办」写进来**：换锚点 / 请用户打开 / 重选 */
+function describeOutcome(outcome: DocxEditOutcome, path: string): string {
+  if (!outcome.ok) {
+    const advice =
+      outcome.reason === "not-open"
+        ? "Open the document in the Files panel first (the user may need to click it), then retry."
+        : outcome.reason === "stale"
+          ? "The passage no longer matches what was selected. Re-read it (read_docx) and use blockId + find, or ask the user to select it again."
+          : outcome.reason === "busy"
+            ? "The editor did not answer in time — try again, or tell the user what could not be written."
+            : outcome.reason === "readonly"
+              ? "The document is read-only right now."
+              : "Report this to the user instead of guessing another anchor.";
+    return `edit_docx: not written (${outcome.reason}). ${outcome.error}\n${advice}`;
+  }
+  if (outcome.groups.length === 0) {
+    return `edit_docx: nothing was written (${outcome.skipped.map((skip) => skip.reason).join(", ") || "empty"}).`;
+  }
+  const lines = outcome.groups.map(
+    (group) =>
+      `- ${JSON.stringify(group.before).slice(0, 120)} -> ${JSON.stringify(group.after).slice(0, 120)}` +
+      ` (revision ids ${group.revisionIds.join(" + ")}${group.reanchored ? ", re-anchored from context" : ""})`,
+  );
+  const skipped =
+    outcome.skipped.length === 0
+      ? ""
+      : `\nNot applied: ${outcome.skipped.map((skip) => `${skip.id}: ${skip.reason}`).join("; ")}.`;
+  return (
+    `edit_docx: ${outcome.groups.length} tracked change${outcome.groups.length === 1 ? "" : "s"} written into ${path}.\n` +
+    `${lines.join("\n")}\n` +
+    "It is a tracked revision: the user accepts or rejects it in the review bar (not you). " +
+    "Do not save the file yourself — the editor autosaves." +
+    skipped
+  );
 }

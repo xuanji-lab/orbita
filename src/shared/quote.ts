@@ -22,6 +22,9 @@
  * 最近提问时要先剥掉引用——否则侧栏标题会是一行 `<quoted_context …>`。
  */
 
+import type { DocxAnchor } from "./docx.ts";
+import type { OfficeFormat } from "./office.ts";
+
 /** 被引用的消息是谁说的。Proma 还有 system，我们的转录里没有可划选的 system 消息 */
 export type QuoteRole = "user" | "assistant";
 
@@ -44,6 +47,12 @@ export interface TextQuote {
    * 只改这一处，不靠在全文里搜一句可能出现两次的话。Proma 迁移来的块没有
    */
   lines?: { from: number; to: number };
+  /**
+   * Office 标注（N1「指哪打哪」）：xlsx 的单元格 / 区间、pptx 的元素路径，就是预览里
+   * `[data-path]` 与 `edit_office` 认的同一套 DOM path。带这个字段的引用没有「选中的文字」，
+   * `text` 只是被点元素的值预览（chip 上给人看）。
+   */
+  office?: { format: OfficeFormat; path: string };
   /** 演示文稿里第几页（1 起）；只有演示文稿的引用带 */
   slide?: number;
   /** v2 演示文稿（.slides.json）：引用的是这一页上的哪个元素（slides_read 给的 id）；整页引用没有 */
@@ -71,6 +80,13 @@ export interface TextQuote {
   /** 发送时在文件里已找不到这段原文（被用户或 agent 改掉了）：进正文，告诉模型别改 */
   missing?: true;
   /**
+   * Word（.docx）编辑器里划选的一处：**锚点**（块 id + 块内干净偏移 + 文本哈希 + 表格坐标）。
+   * 带它的引用在正文里写成 `<quoted_docx>`，模型据此调 `edit_docx`——docx 不能按行号定位
+   * （行号是渲染概念），也不能让模型去改文件本身（会撞 hash 冲突、丢用户未存的改动）。
+   * **只活在输入框里时与 filePath 并存**：filePath 给 chip 显示文件名，锚点给模型地址。
+   */
+  docx?: DocxAnchor;
+  /**
    * 划选超过上限被截过。**只活在输入框里**（chip 要如实标出「只引了前 N 字」），
    * 不进正文——发出去之后它就是一段 2000 字的引用，模型不需要知道原文更长。
    */
@@ -88,16 +104,30 @@ export const QUOTE_MAX_CHARS = 2000;
 export const QUOTE_MAX_TOTAL_CHARS = 20000;
 
 /** 判重用的那几个字段（TextQuote 的子集，测试里只要写这几项） */
-type QuoteIdentity = Pick<TextQuote, "messageId" | "text" | "filePath" | "lines">;
+type QuoteIdentity = Pick<TextQuote, "messageId" | "text" | "filePath" | "lines" | "office" | "docx">;
 
-/** 同一处：同一条消息的同一段，或同一个文件的同一段行（同样的话在文件里出现两处是两条引用） */
+/**
+ * 同一处：同一条消息的同一段，或同一个文件的同一段行（同样的话在文件里出现两处是两条引用）。
+ * docx 按锚点判（同一段里同一处才算同一条）：同一段文字选两次但偏移不同，是两处。
+ */
 function sameQuote(a: QuoteIdentity, b: QuoteIdentity): boolean {
+  if (a.docx !== undefined || b.docx !== undefined) {
+    return (
+      a.docx !== undefined &&
+      b.docx !== undefined &&
+      a.docx.path === b.docx.path &&
+      a.docx.blockId === b.docx.blockId &&
+      a.docx.startOffset === b.docx.startOffset &&
+      a.docx.endOffset === b.docx.endOffset
+    );
+  }
   return (
     a.messageId === b.messageId &&
     a.text === b.text &&
     a.filePath === b.filePath &&
     a.lines?.from === b.lines?.from &&
-    a.lines?.to === b.lines?.to
+    a.lines?.to === b.lines?.to &&
+    a.office?.path === b.office?.path
   );
 }
 
@@ -150,9 +180,35 @@ function encodeAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/**
+ * Word 引用块。只带模型真正用得上的地址（块内干净偏移 + 两个 hash 供失效判定 +
+ * 表格坐标给人看），不带 docHash / editSeq——那是宿主自己的对账，模型不需要。
+ * 块体固定是 before / quoted / after：锚点失效时模型能拿原文重找，而且这个正文就是
+ * 用户选中的那段字（和 `<quoted_file>` 的 occurrence 写法同形）。
+ */
+function docxBlock(quote: TextQuote, index: number): string {
+  const anchor = quote.docx as DocxAnchor;
+  const table =
+    anchor.table === null
+      ? ""
+      : ` table="${anchor.table.tableIndex}/${anchor.table.rowIndex}/${anchor.table.cellIndex}/${anchor.table.paragraphIndex}"`;
+  const ordinal = anchor.blockOrdinal > 0 ? ` ordinal="${anchor.blockOrdinal}"` : "";
+  return (
+    `<quoted_docx index="${index}" path="${encodeAttribute(anchor.path)}" block="${encodeAttribute(anchor.blockId)}"${ordinal}` +
+    ` start="${anchor.startOffset}" end="${anchor.endOffset}" hash="${encodeAttribute(anchor.selectedTextHash)}"` +
+    `${anchor.blockTextHash === "" ? "" : ` block_hash="${encodeAttribute(anchor.blockTextHash)}"`}${table}>\n` +
+    `<before>${sanitizeBody(anchor.contextBefore)}</before>\n<quoted>${sanitizeBody(anchor.quote)}</quoted>\n<after>${sanitizeBody(anchor.contextAfter)}</after>\n` +
+    `</quoted_docx>\n\n`
+  );
+}
+
 function quoteBlock(quote: TextQuote, index: number): string {
+  if (quote.docx !== undefined) return docxBlock(quote, index);
   if (quote.filePath !== undefined) {
     const lines = quote.lines === undefined ? "" : ` lines="${quote.lines.from}-${quote.lines.to}"`;
+    // Office 标注：`office="xlsx /Sheet1/B2:D5"`（格式 + DOM path 一格说清）
+    const office =
+      quote.office === undefined ? "" : ` office="${encodeAttribute(`${quote.office.format} ${quote.office.path}`)}"`;
     const slide = quote.slide === undefined ? "" : ` slide="${quote.slide}"${quote.element === undefined ? "" : ` element="${encodeAttribute(quote.element)}"`}`;
     const missing = quote.missing === true ? ' missing="true"' : "";
     // 同一段原文在文件里出现多次：说清是第几处，并把这一处前后的字**按原文逐字**写在块体里（不放属性：
@@ -163,7 +219,7 @@ function quoteBlock(quote: TextQuote, index: number): string {
       quote.ambiguous === undefined
         ? ""
         : ` ambiguous="true" was_line="${quote.ambiguous.was}" occurs_at_lines="${quote.ambiguous.at.join(",")}"`;
-    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${slide}${missing}${occurrenceAttr}${unsure}>\n${
+    return `<quoted_file index="${index}" path="${encodeAttribute(quote.filePath)}"${lines}${office}${slide}${missing}${occurrenceAttr}${unsure}>\n${
       several && quote.context !== undefined
         ? `<before>${sanitizeBody(quote.context.before)}</before>\n<quoted>${sanitizeBody(quote.text)}</quoted>\n<after>${sanitizeBody(quote.context.after)}</after>`
         : sanitizeBody(quote.text)
@@ -229,6 +285,10 @@ export const QUOTE_GUIDELINE = [
     'ambiguous="true" means the same text now occurs at several places (occurs_at_lines) and the app could not ' +
     "tell which one the user selected (was_line is where it was when selected): do not guess and do not edit; " +
     "list the candidate lines and ask the user which one.",
+  '<quoted_file … office="xlsx /Sheet1/B2:D5"> (or office="pptx /slide[3]/table[@id=3]") is an annotation the ' +
+    "user made by clicking a cell / shape / table in an Office preview: change exactly that node with " +
+    "edit_office (pass the path verbatim); read_office first when you need the surrounding content. Do not " +
+    "rewrite these files with write / edit / bash.",
   '<open_document path="…" kind="doc|slides"/> at the start of a message means the user has that file open ' +
     'in the document panel beside the chat; "the document", "the slides", "this page" mean it. kind=doc is ' +
     "plain Markdown. kind=slides is a Marp-style deck: optional front matter (keep `marp: true`), pages " +
@@ -237,6 +297,15 @@ export const QUOTE_GUIDELINE = [
     "Markdown separated by lines containing only `+++`, then a closing line `:::` (2–4 columns). Change the file with your normal read / edit / write tools — " +
     "the panel merges changes live, so prefer small edits to rewriting the file, and never touch pages or " +
     "paragraphs you were not asked about.",
+  'A `<quoted_docx index="n" path="…" block="…" start="a" end="b" hash="…">` block is a passage the user ' +
+    "selected in the Word (.docx) editor. Its body holds `<before>`, `<quoted>` and `<after>`: the passage " +
+    "verbatim and a little context around it. To change it, call `edit_docx` with path, anchor.blockId, " +
+    'anchor.startOffset, anchor.endOffset and anchor.selectedTextHash copied from the block, mode tracked ' +
+    'changes is the default, and `replace` set to the new text ("" deletes the passage). Never write the ' +
+    ".docx file itself with write/edit/shell — the editor holds the authoritative document and a direct " +
+    "file write loses unsaved work and fails the hash check. If `edit_docx` reports the anchored text is " +
+    "stale, re-select it with anchor.quote (or blockId + find) rather than guessing offsets; if it reports " +
+    "the document is not open, ask the user to open it in the Files panel.",
   'When the open document path ends in .slides.json it is a slide deck in the app\'s native format (a JSON list of slides, each a ' +
     "list of positioned elements) — not Marp markdown, ignore the Marp advice above for it. Never edit it with read / edit / write: " +
     "use slides_read, slides_write, slides_edit, slides_insert_image (and slides_export). A quote with slide=\"k\" is the whole " +
@@ -245,7 +314,7 @@ export const QUOTE_GUIDELINE = [
   "</orbita-quotes>",
 ].join("\n");
 
-const BLOCK = /<(quoted_context|quoted_file)\b([^>]*)>\r?\n([\s\S]*?)\r?\n<\/\1>(?:\r?\n)*/g;
+const BLOCK = /<(quoted_context|quoted_file|quoted_docx)\b([^>]*)>\r?\n([\s\S]*?)\r?\n<\/\1>(?:\r?\n)*/g;
 
 function attribute(attrs: string, name: string): string | undefined {
   const match = new RegExp(`\\b${name}="([^"]*)"`).exec(attrs);
@@ -257,6 +326,17 @@ function attribute(attrs: string, name: string): string | undefined {
  * 也不吞掉用户看不见的内容）。用户文字不含引用块时返回 `{ quotes: [], text }`，text 原样。
  */
 const OPEN_DOCUMENT = /<open_document\b([^>]*?)\/>(?:\r?\n)*/g;
+
+/** `office="xlsx /Sheet1/B2:D5"` → `{ office: { format, path } }`；格式不对返回空对象 */
+function parseOfficeAttribute(value: string | undefined): { office?: { format: OfficeFormat; path: string } } {
+  if (value === undefined) return {};
+  const space = value.indexOf(" ");
+  if (space <= 0) return {};
+  const format = value.slice(0, space);
+  const path = value.slice(space + 1).trim();
+  if ((format !== "xlsx" && format !== "pptx") || !path.startsWith("/")) return {};
+  return { office: { format, path } };
+}
 
 /** 行号范围属性 `a-b`（或单个 `a`）→ 1 起含两端的范围；格式不对返回 undefined */
 function parseLines(value: string | undefined): { from: number; to: number } | undefined {
@@ -274,6 +354,53 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
   const stripped = message.replace(OPEN_DOCUMENT, "");
   if (!stripped.includes("<quoted_")) return { quotes: [], text: stripped.trim() };
   const text = stripped.replace(BLOCK, (whole, tag: string, attrs: string, body: string) => {
+    if (tag === "quoted_docx") {
+      const path = attribute(attrs, "path");
+      const blockId = attribute(attrs, "block");
+      if (path === undefined || blockId === undefined) return whole;
+      // 正文固定是 before / quoted / after（docxBlock 的写形）；解析不出的退化为整段正文
+      const parts =
+        /^<before>([\s\S]*?)<\/before>\r?\n<quoted>([\s\S]*?)<\/quoted>\r?\n<after>([\s\S]*?)<\/after>$/.exec(body);
+      const quoteText = parts === null ? body : (parts[2] as string);
+      const ordinal = Number(attribute(attrs, "ordinal"));
+      const startOffset = Number(attribute(attrs, "start"));
+      const endOffset = Number(attribute(attrs, "end"));
+      const tableAttr = (attribute(attrs, "table") ?? "").split("/").map(Number);
+      const table =
+        tableAttr.length === 4 && tableAttr.every((n) => Number.isInteger(n) && n >= 0)
+          ? {
+              tableIndex: tableAttr[0] as number,
+              rowIndex: tableAttr[1] as number,
+              cellIndex: tableAttr[2] as number,
+              paragraphIndex: tableAttr[3] as number,
+            }
+          : null;
+      quotes.push({
+        text: quoteText,
+        messageId: "",
+        role: "user",
+        filePath: path,
+        // 发出去之后只用于显示（chip 的「第 N 段」）与跳转：docHash / editSeq 这类会话内的账
+        // 解析不回来（也没必要），留空值；模型拿到的是正文里的地址，不是这个对象。
+        docx: {
+          v: 1,
+          path,
+          blockId,
+          blockOrdinal: Number.isInteger(ordinal) ? ordinal : 0,
+          startOffset: Number.isInteger(startOffset) ? startOffset : 0,
+          endOffset: Number.isInteger(endOffset) ? endOffset : 0,
+          selectedTextHash: attribute(attrs, "hash") ?? "",
+          blockTextHash: attribute(attrs, "block_hash") ?? "",
+          quote: quoteText,
+          contextBefore: parts === null ? "" : (parts[1] as string),
+          contextAfter: parts === null ? "" : (parts[3] as string),
+          table,
+          docHash: "",
+          editSeq: 0,
+        },
+      });
+      return "";
+    }
     if (tag === "quoted_file") {
       const filePath = attribute(attrs, "path");
       if (filePath === undefined) return whole;
@@ -288,6 +415,7 @@ export function parseQuotedMessage(message: string): { quotes: TextQuote[]; text
         filePath,
         ...(lines === undefined ? {} : { lines }),
         ...(Number.isInteger(slide) && slide > 0 ? { slide } : {}),
+        ...parseOfficeAttribute(attribute(attrs, "office")),
         ...(attribute(attrs, "element") === undefined ? {} : { element: attribute(attrs, "element") as string }),
         ...(attribute(attrs, "missing") === "true" ? { missing: true as const } : {}),
         ...(attribute(attrs, "ambiguous") === "true"

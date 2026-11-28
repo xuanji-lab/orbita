@@ -43,6 +43,22 @@ export interface AgentCwdContext {
 export type AgentCwdResult = { ok: true; cwd: string } | { ok: false; error: string };
 
 /**
+ * 授权失败文案的主语与提示。终端用自己的那份（默认值，文案一字不变）；
+ * LaTeX 编译用「LaTeX build」——两处共用同一套 realpath / 越界判定，只换说法。
+ */
+export interface AgentCwdPolicy {
+  /** 文案里的名词短语（单数形）：`no <subject> can be opened there` */
+  subject: string;
+  /** 越界文案的尾句 */
+  hint: string;
+}
+
+const TERMINAL_CWD_POLICY: AgentCwdPolicy = {
+  subject: "terminal",
+  hint: " — pass no cwd to use the session's working directory.",
+};
+
+/**
  * 把 agent 给的 cwd 解析成一个**授权目录内的真实路径**。
  *
  * 缺席 / 空串 = 会话 cwd（它本身就是授权目录之一，不必再查）。相对路径按会话 cwd
@@ -56,28 +72,42 @@ export function resolveAgentTerminalCwd(
   context: AgentCwdContext,
   deps: AgentCwdDeps,
 ): AgentCwdResult {
+  return resolveAgentCwd(input, context, deps, TERMINAL_CWD_POLICY);
+}
+
+/**
+ * resolveAgentTerminalCwd 的通用形：同一条 realpath / 越界判定，失败文案按
+ * `policy` 换主语。LaTeX 编译（main/latex/ipc.ts）用的是这一条——两份授权实现
+ * 迟早会漂，而「能不能在这个目录里干活」只能有一套真相。
+ */
+export function resolveAgentCwd(
+  input: string | undefined,
+  context: AgentCwdContext,
+  deps: AgentCwdDeps,
+  policy: AgentCwdPolicy,
+): AgentCwdResult {
   const path = deps.path ?? defaultPath();
   const roots = realRoots(context.roots, deps);
   if (roots.length === 0) {
-    return { ok: false, error: "This session has no authorized directory to open a terminal in." };
+    return { ok: false, error: `This session has no authorized directory to open a ${policy.subject} in.` };
   }
   const wanted = input === undefined || input.trim() === "" ? context.defaultCwd : input.trim();
   if (wanted === "") {
-    return { ok: false, error: "This session has no working directory to open a terminal in." };
+    return { ok: false, error: `This session has no working directory to open a ${policy.subject} in.` };
   }
   const resolved = path.isAbsolute(wanted) ? wanted : path.resolve(context.defaultCwd, wanted);
   let real: string;
   try {
     real = deps.realpath(resolved);
   } catch {
-    return { ok: false, error: `"${resolved}" does not exist, so no terminal can be opened there.` };
+    return { ok: false, error: `"${resolved}" does not exist, so no ${policy.subject} can be opened there.` };
   }
   if (!roots.some((root) => withinRoot(root, real, path, deps.platform ?? process.platform))) {
     return {
       ok: false,
       error:
         `"${resolved}" is outside this session's authorized directories (${context.roots.join(", ")}). ` +
-        "Agent terminals may only be opened there — pass no cwd to use the session's working directory.",
+        `Agent ${policy.subject}s may only be opened there${policy.hint}`,
     };
   }
   if (!deps.isDirectory(real)) {

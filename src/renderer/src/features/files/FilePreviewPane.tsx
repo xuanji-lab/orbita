@@ -8,18 +8,36 @@ import { MarkdownBlock } from "../chat/MarkdownBlock";
 import { highlightBlock, highlighterReady, langFromPath } from "../chat/highlight";
 import { formatAge, formatSize } from "./tree-view";
 import { crumbSegmentsFromRoot, fileTabName } from "./panel-layout.ts";
-import { largeTextNotice, textPreviewMode, textRenderKind } from "./preview-view";
+import { isEditableLatexFile } from "./editor-state.ts";
+import { TexEditorPane, type EditorCollabView, type TexEditorHandle } from "./TexEditorPane.tsx";
+import { largeTextNotice, textPreviewMode, textRenderKind, truncatedNotice } from "./preview-view";
 import { WindowedText } from "./WindowedText";
 import { RangeTextPreview } from "./RangeTextPreview";
 import { EmptyPreview, PreviewNotice } from "./PreviewChrome";
 import { DOC_MAX_BYTES } from "@shared/doc";
-import { isPdfFile, isWebPageFile, mediaKindOf, type FilePreview } from "@shared/files";
+import {
+  EDITOR_WRITE_LIMIT,
+  isPdfFile,
+  isWebPageFile,
+  mediaKindOf,
+  type FileListRequest,
+  type FilePreview,
+} from "@shared/files";
+import { isDocxFile } from "@shared/docx";
+import { isLegacyXlsFile, isXlsxFile } from "@shared/xlsx";
+import { isLegacyPptFile, isPptxFile } from "@shared/pptx";
 import type { PromptImage } from "@shared/prompt-images";
-import { PdfView, type PdfJump } from "./PdfView";
+import type { CiteEntry } from "@shared/cite";
+import type { LatexIssue, LatexNav, LatexProjectIndex } from "@shared/latex";
+import { XlsxView } from "../xlsx/XlsxView";
+import { PptxView } from "../pptx/PptxView";
+import type { TextQuote } from "@shared/quote";
+import { DocxView } from "../docx/DocxView";
+import { flushDocxForLeave } from "../docx/docx-flush.ts";
 import { MediaView } from "./MediaView";
 import { DocEditPane } from "../doc-panel/DocEditPane";
 import { watchDocMeta } from "./doc-meta-refresh.ts";
-import type { TextQuote } from "@shared/quote";
+import { PdfView, type PdfJump, type PdfSyncJump } from "./PdfView";
 import { useT } from "../../locale.ts";
 
 /** 用文档视图（阅读 / 编辑 / 源码）打开的文件：md / markdown / txt；.slides.json 由 DocEditPane 路由到演示文稿编辑器 */
@@ -53,6 +71,47 @@ export function FilePreviewPane(props: {
   rootLabel: string;
   /** PDF 引用跳转（点了正文里的引用编号）：滚到原文处并高亮。非 PDF / 没有跳转时 null */
   jump?: PdfJump | null;
+  /**
+   * 强制走 PDF 预览（论文工作台）：项目里刚编出来的 PDF 是编译条的直接产物，
+   * 不受「PDF 引用」实验开关管。开关管理的只是引用编号，不是「能不能看 PDF」。
+   */
+  pdfPreview?: boolean;
+  /** 外部要求重载 PDF（编译成功后自增）：按 mtime 重读，失败时不增、保留旧 PDF */
+  pdfReloadToken?: number;
+  /** SyncTeX 正向查找的落点（源码右键「在 PDF 中定位」）；只在项目 PDF 上生效 */
+  syncJump?: PdfSyncJump | null;
+  /** PDF 双击 / Ctrl+单击 → 外层反查源码。缺席 = 这份 PDF 不接反查 */
+  onLocatePdf?: (point: { page: number; x: number; y: number }) => void;
+  /**
+   * 论文工作台：把编辑器的把手 / 脏状态交给 FilesPanel（编译前保存、标签圆点都靠它）。
+   * 缺席时编辑器照常能改能自动保存，只是外层拿不到把手。
+   */
+  editor?: {
+    register: (path: string, handle: TexEditorHandle | null) => void;
+    onDirtyChange: (path: string, dirty: boolean) => void;
+    onSaved?: () => void;
+    onError: (path: string, message: string) => void;
+    /** agent 与本文件同改一个文件的边界（只读 / 重载 / 按块撤销） */
+    collab?: EditorCollabView;
+    /** 右键「在 PDF 中定位」（SyncTeX 正向查找）；缺席 = 不出这一项 */
+    onForwardSync?: (line: number) => void;
+    /** 右键「引用到对话」：把这一行 / 选区放进输入框 */
+    onQuote?: (text: string, line: number) => void;
+    /** PDF 反查回来的落点：滚到这一行并短暂高亮 */
+    reveal?: { line: number; token: number } | null;
+    /** 项目文献库：`\cite{` 的候选（不在 LaTeX 项目里时缺席） */
+    cite?: readonly CiteEntry[];
+    /** 项目符号索引：`\\ref` / 自定义命令 / 路径补全的候选（不在项目里时缺席） */
+    latexIndex?: LatexProjectIndex | null;
+    /** 本机 TeX 树里的宏包名（`\usepackage{` 的候选）；空 / 缺席 = 没有 TeX，只补已加载的 */
+    packageNames?: readonly string[];
+    /** 多文件导航（包含图 + 章节）：Ctrl/Cmd+单击 跳转与跨文件大纲读它 */
+    nav?: LatexNav | null;
+    /** 打开项目里的另一个源码文件（可带行号）；\input 跳转与跨文件大纲共用 */
+    onOpenSource?: (path: string, line: number | null) => void;
+    /** 这次编译的问题（行内波浪线）；不在 LaTeX 项目里时缺席 */
+    diagnostics?: { issues: readonly LatexIssue[]; projectDir: string } | null;
+  };
   /** 一打开就进「编辑」模式（刚新建的文档 / 演示文稿） */
   openInEdit?: boolean;
   /** 编辑模式里划选后「引用」进输入框；缺席 = 工具栏只剩复制 */
@@ -61,6 +120,10 @@ export function FilePreviewPane(props: {
   onOpenTarget?: (root: string, path: string) => void;
   /** 文档文件被移走时横幅上的「关闭」：关掉这个标签 */
   onCloseTab?: () => void;
+  /** `.pptx` 大纲页列表的宽度（settings.pptxPagesWidth）；缺席 = 184 */
+  pptxPagesWidth?: number;
+  /** 页列表拖动结束落盘（与另三条拆分同一个 settings 通道） */
+  onPptxPagesWidth?: (width: number) => void;
 }) {
   const t = useT();
   const { sessionId, workspaceId, root, path } = props;
@@ -69,9 +132,25 @@ export function FilePreviewPane(props: {
   const sentImage = props.sentImage;
   // 附图走 session.attachment，不会是 PDF
   const pdf = sentImage === undefined && isPdfFile(path);
+  /**
+   * .tex 走编辑器（PR4）：只读预览换成 CodeMirror；仍要等 fs:read 回一份完整的文本
+   * （截断到 2 MB 的文件不编辑——写回会丢后半截）。二进制 / 图片不会走到这里。
+   */
+  const editableLatex = sentImage === undefined && isEditableLatexFile(path);
   const [pdfReload, setPdfReload] = useState(0);
   // 音视频走播放器（流式读，不过 fs:read）；附图不是媒体文件
   const mediaKind = sentImage === undefined ? mediaKindOf(path) : null;
+  // .docx 走应用内的分页编辑器（issue #273）：它不需要实验开关，也不再是「不支持的类型」
+  const docx = sentImage === undefined && isDocxFile(path);
+  const [docxReload, setDocxReload] = useState(0);
+  // .xlsx 走自己的结构化预览（只读 + 外部打开）；旧版 .xls 靠 EmptyPreview 明说不支持
+  const xlsx = sentImage === undefined && isXlsxFile(path);
+  const legacyXls = sentImage === undefined && isLegacyXlsFile(path);
+  const [xlsxReload, setXlsxReload] = useState(0);
+  // .pptx 走只读大纲（页序 / 标题 / 要点 / 表格 / 备注，不渲染）；旧版 .ppt 明说不支持
+  const pptx = sentImage === undefined && isPptxFile(path);
+  const legacyPpt = sentImage === undefined && isLegacyPptFile(path);
+  const [pptxReload, setPptxReload] = useState(0);
   const name = sentImage?.name ?? fileTabName(path);
   // 面包屑从所在的根开始（绝对路径放不下时截掉的总是末尾的文件名）；完整路径进 tooltip
   const segments =
@@ -90,6 +169,22 @@ export function FilePreviewPane(props: {
     sentImage !== undefined
       ? imageState.status === "loading"
       : mediaKind === null && (state.status === "loading" || refreshing);
+  // 可以进编辑器的只有「完整读回来的文本」：main 之后「text」就是整份内容（超大的走
+  // large-text / 分段预览，进不到这里），所以这里只需再挡一道写盘上限——盘上超过
+  // EDITOR_WRITE_LIMIT 的 .tex 能打开却一定存不回去（fs:write 回 too-large），
+  // 与其给个假的「已保存」按钮，不如退成只读预览
+  const editorInitial =
+    editableLatex &&
+    state.status === "ready" &&
+    state.data.kind === "text" &&
+    state.data.size <= EDITOR_WRITE_LIMIT
+      ? state.data.text
+      : null;
+  const editorRequest = useMemo<FileListRequest>(
+    () => ({ sessionId, workspaceId, ...extra, root, dir: path }),
+    // extra 由 extraWorkspaceId 派生；这里列的是它的来源
+    [sessionId, workspaceId, extraWorkspaceId, root, path],
+  );
 
   const [mode, setMode] = useState<"rendered" | "source" | "edit">(props.openInEdit === true ? "edit" : "rendered");
   // 切文件（标签重挂载或换 path）：Source / 编辑模式不带过去，新文件一律先看 Rendered（刚新建的直接进编辑）
@@ -221,16 +316,34 @@ export function FilePreviewPane(props: {
             <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
               <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
             </PanelIconButton>
-            <PanelIconButton
-              title={t.files.refreshPreview}
-              onClick={() => {
-                refresh();
-                if (pdf || mediaKind !== null) setPdfReload((n) => n + 1);
-                else setTextReload((n) => n + 1);
-              }}
-            >
-              <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
-            </PanelIconButton>
+            {/* .tex 打开后是编辑器：头部刷新只换预览数据、碰不到编辑器里的文本，
+                会让人以为「刷新就能丢弃本地改动」。重载盘上版本在冲突条里（带抉择）。
+                读不全的文件（>2 MB 截断）没有编辑器，刷新照旧给。 */}
+            {(docx || editorInitial === null) && (
+              <PanelIconButton
+                title={t.files.refreshPreview}
+                onClick={() => {
+                  // 重读 docx = 卸载当前编辑器（引擎整份重新解析）：先把待存改动落盘，
+                  // 失败就不重读，提示由 docx 视图自己挂（评审 2c：这里原本直接换 key，
+                  // 屏幕上的字和未落盘的改动一起消失）
+                  if (docx) {
+                    void flushDocxForLeave(path).then((outcome) => {
+                      if (!outcome.ok) return;
+                      refresh();
+                      setDocxReload((n) => n + 1);
+                    });
+                    return;
+                  }
+                  refresh();
+                  if (pdf || mediaKind !== null) setPdfReload((n) => n + 1);
+                  else if (xlsx) setXlsxReload((n) => n + 1);
+                  else if (pptx) setPptxReload((n) => n + 1);
+                  else setTextReload((n) => n + 1);
+                }}
+              >
+                <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
+              </PanelIconButton>
+            )}
           </div>
         )}
       </header>
@@ -255,7 +368,23 @@ export function FilePreviewPane(props: {
       )}
       <div
         className="file-preview-body"
-        data-kind={pdf ? "pdf" : mediaKind !== null ? "media" : editing || asDocument ? "edit" : undefined}
+        data-kind={
+          docx
+            ? "docx"
+            : pdf
+              ? "pdf"
+              : mediaKind !== null
+                ? "media"
+                : xlsx
+                  ? "xlsx"
+                  : pptx
+                    ? "pptx"
+                    : editorInitial !== null
+                      ? "tex"
+                      : editing || asDocument
+                        ? "edit"
+                        : undefined
+        }
         ref={bodyRef}
       >
         {asDocument ? (
@@ -278,6 +407,12 @@ export function FilePreviewPane(props: {
             onClose={() => pickMode("rendered")}
             {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
           />
+        ) : docx ? (
+          <DocxView
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={docxReload}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
         ) : mediaKind !== null ? (
           <MediaView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
@@ -290,8 +425,58 @@ export function FilePreviewPane(props: {
           <PdfView
             request={{ sessionId, workspaceId, ...extra, root, dir: path }}
             jump={props.jump ?? null}
-            reloadToken={pdfReload}
+            reloadToken={pdfReload + (props.pdfReloadToken ?? 0)}
+            syncJump={props.syncJump ?? null}
+            {...(props.onLocatePdf === undefined ? {} : { onLocate: props.onLocatePdf })}
           />
+        ) : editorInitial !== null ? (
+          <TexEditorPane
+            request={editorRequest}
+            initialText={editorInitial}
+            register={props.editor?.register ?? noopRegister}
+            onDirtyChange={props.editor?.onDirtyChange ?? noopDirty}
+            // 保存后顺手重读预览数据：头部的大小・mtime 与磁盘同步；外层借这次回调
+            // 让编译条立刻看到「源码比 PDF 新」
+            onSaved={() => {
+              refresh();
+              props.editor?.onSaved?.();
+            }}
+            onError={props.editor?.onError ?? noopError}
+            {...(props.editor?.collab === undefined ? {} : { collab: props.editor.collab })}
+            {...(props.editor?.onForwardSync === undefined ? {} : { onForwardSync: props.editor.onForwardSync })}
+            {...(props.editor?.onQuote === undefined ? {} : { onQuote: props.editor.onQuote })}
+            reveal={props.editor?.reveal ?? null}
+            {...(props.editor?.cite === undefined ? {} : { cite: props.editor.cite })}
+            latexIndex={props.editor?.latexIndex ?? null}
+            {...(props.editor?.packageNames === undefined ? {} : { packageNames: props.editor.packageNames })}
+            nav={props.editor?.nav ?? null}
+            {...(props.editor?.onOpenSource === undefined ? {} : { onOpenSource: props.editor.onOpenSource })}
+            diagnostics={props.editor?.diagnostics ?? null}
+          />
+        ) : xlsx ? (
+          <XlsxView
+            // 换文件按路径重挂载：表号回到第一张，也不会拿旧表号先发一次多余请求
+            key={path}
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={xlsxReload}
+            onOpenDefault={openDefault}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : pptx ? (
+          <PptxView
+            // 与 XlsxView 同一条纪律：换文件按路径重挂载，页号回到第 1 页
+            key={path}
+            request={{ sessionId, workspaceId, ...extra, root, dir: path }}
+            reloadToken={pptxReload}
+            onOpenDefault={openDefault}
+            {...(props.pptxPagesWidth === undefined ? {} : { pagesWidth: props.pptxPagesWidth })}
+            {...(props.onPptxPagesWidth === undefined ? {} : { onPagesWidthCommit: props.onPptxPagesWidth })}
+            {...(props.onQuote === undefined ? {} : { onQuote: props.onQuote })}
+          />
+        ) : legacyPpt ? (
+          <LegacyPptPreview onOpenDefault={openDefault} />
+        ) : legacyXls ? (
+          <LegacyXlsPreview onOpenDefault={openDefault} />
         ) : sentImage === undefined ? (
           <PreviewBody
             name={name}
@@ -334,6 +519,11 @@ export function FilePreviewPane(props: {
     </div>
   );
 }
+
+/** 外部没接编辑器回调时的空实现（组件照常可编辑可保存，只是外层拿不到把手） */
+const noopRegister = (): void => undefined;
+const noopDirty = (): void => undefined;
+const noopError = (): void => undefined;
 
 type LoadState =
   | { status: "loading" }
@@ -621,6 +811,43 @@ function HighlightedCode(props: { name: string; text: string }) {
   return (
     <div className="chat-md">
       <div dangerouslySetInnerHTML={markup} />
+    </div>
+  );
+}
+
+/**
+ * 旧版二进制工作簿（.xls）：fs:read 只给「二进制」，但一句「没法预览」不够——说清
+ * 是这个格式不支持（.xls 是 OLE2 复合文档，ExcelJS 与预览通道都不读它），并给
+ * 「用默认应用打开」这个出口。
+ */
+function LegacyXlsPreview(props: { onOpenDefault: () => void }) {
+  const t = useT();
+  return (
+    <div className="file-preview-empty">
+      <Icon name="file-spreadsheet" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+      <PanelLine>{t.files.xlsUnsupported}</PanelLine>
+      <PanelButton onClick={props.onOpenDefault}>
+        <Icon name="external-link" size={14} />
+        {t.files.openDefault}
+      </PanelButton>
+    </div>
+  );
+}
+
+/**
+ * 旧版二进制演示文稿（.ppt）：与 .xls 同理——说清是这个格式不支持（.ppt 是 OLE2
+ * 复合文档，不是 zip + OOXML，大纲通道读不了），并给「用默认应用打开」这个出口。
+ */
+function LegacyPptPreview(props: { onOpenDefault: () => void }) {
+  const t = useT();
+  return (
+    <div className="file-preview-empty">
+      <Icon name="presentation" size={24} style={{ color: "var(--color-text-tertiary)" }} />
+      <PanelLine>{t.files.pptUnsupported}</PanelLine>
+      <PanelButton onClick={props.onOpenDefault}>
+        <Icon name="external-link" size={14} />
+        {t.files.openDefault}
+      </PanelButton>
     </div>
   );
 }

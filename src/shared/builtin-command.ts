@@ -70,3 +70,4 @@ export function readCommandCard(details: unknown): CommandCardData | null {
   const subtitle = raw["subtitle"];
   return { kind, path, title, ...(typeof subtitle === "string" ? { subtitle } : {}) };
 }
+

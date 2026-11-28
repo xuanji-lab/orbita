@@ -118,6 +118,19 @@ describe("TurnFileTracker", () => {
     assert.deepEqual(await tracker.finalize(), []);
   });
 
+  test("edit_bib 与 write / edit 同一张跟踪名单：.bib 排序能进轮尾卡", async () => {
+    let disk: Record<string, string> = { [join(CWD, "refs.bib")]: "@article{b}\n@article{a}\n" };
+    const tracker = new TurnFileTracker(CWD, fakeFsProxy(() => disk));
+    await tracker.noteAllowed("c1", "edit_bib", { action: "sort", path: "refs.bib" });
+    disk = { [join(CWD, "refs.bib")]: "@article{a}\n@article{b}\n" };
+    await tracker.noteExecutionEnd("c1");
+    const changes = await tracker.finalize();
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0]?.path, join(CWD, "refs.bib"));
+    assert.deepEqual(changes[0]?.before, { kind: "text", content: "@article{b}\n@article{a}\n" });
+    assert.deepEqual(changes[0]?.after, { kind: "text", content: "@article{a}\n@article{b}\n" });
+  });
+
   test(">1MB 或二进制：unrecoverable，照常出现在账里（卡片计数、回退标无法回退）", async () => {
     const big = "a".repeat(1024 * 1024 + 1);
     const tracker = new TurnFileTracker(CWD, fakeFs({ [join(CWD, "big.txt")]: big, [join(CWD, "bin.png")]: "\u0000\u0001" }));

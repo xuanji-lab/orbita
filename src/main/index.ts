@@ -20,6 +20,7 @@ import { resolveAvatarModel } from "../shared/planet-avatar.ts";
 import { effectiveLanguage, lastUsedPair, type Language, type ThemePreference } from "../shared/settings.ts";
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
+import { OFFICECLI_PATH_ENV, resolveOfficecliPath } from "./agent/officecli-bin.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -110,6 +111,9 @@ import { installCloseToTray, loadTrayIcon, type AppTray } from "./window/tray.ts
 import { registerWorkspaceIpc } from "./workspace/ipc.ts";
 import { WorkspaceStore } from "./workspace/store.ts";
 import { registerFilesIpc } from "./files/ipc.ts";
+import { registerDocxIpc } from "./docx/ipc.ts";
+import { applyDocxEditRequest } from "./docx/agent-edit.ts";
+import { dispatchDocxEdit } from "./docx/ipc.ts";
 import { installMediaProtocol, registerMediaScheme } from "./files/media-protocol.ts";
 import { MediaTokens } from "./files/media-stream.ts";
 import { applyDocRequest } from "./doc-panel/agent-requests.ts";
@@ -121,6 +125,17 @@ import { registerSlidesIpc } from "./slides/ipc.ts";
 import { resolveFileRoots } from "./files/roots.ts";
 import { TerminalService } from "./terminal/service.ts";
 import { registerTerminalIpc } from "./terminal/ipc.ts";
+import { LatexRunner } from "./latex/run.ts";
+import { applyLatexPackageRequest, applyLatexRequest } from "./latex/agent-requests.ts";
+import { registerLatexIpc } from "./latex/ipc.ts";
+import { OFFICE_BACKUP_DIR, registerOfficeIpc } from "./office/ipc.ts";
+import { removeEmptyLegacyOfficeBackupDirs } from "./office/legacy-backups.ts";
+import { applyOfficeRequest } from "./office/agent.ts";
+import { applyDocxExportRequest } from "./docx-export/agent-requests.ts";
+import { createDocxExporter, printReferenceDoc, spawnPandoc } from "./docx-export/export.ts";
+import { createPandocProbe } from "./docx-export/probe.ts";
+import { registerDocxExportIpc } from "./docx-export/ipc.ts";
+import { registerCiteIpc } from "./cite/ipc.ts";
 import { registerReviewIpc } from "./review/ipc.ts";
 import { registerFocusIpc } from "./focus/ipc.ts";
 import { registerPowerIpc } from "./power/ipc.ts";
@@ -630,8 +645,21 @@ void app.whenReady().then(async () => {
   });
   // pi 打进 bundle 后会把 Orbita 的 package.json 当成自己的，版本号错了 pi.dev 的目录就是 404（pi-package.ts）
   const piPackage = piPackageDir({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() });
+  // 随包的 OfficeCLI（officecli-bin.ts）：**不进 PATH**，只把绝对路径交给 agent 进程——工具层用
+  // execFile 调它，模型没法在 bash 里直接 officecli open / install 绕过「只用 batch、禁自更新」。
+  // 二进制缺失（开发版没跑 fetch 脚本）就不设这个变量，工具层据此报「Office 能力未就绪」。
+  const officecli = resolveOfficecliPath({
+    env: process.env,
+    exists: existsSync,
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+    platform: process.platform,
+    arch: process.arch,
+  });
   const agentProcessEnv = {
     ...(existsSync(searchBins) ? agentEnv(process.env, searchBins, process.platform) : process.env),
+    ...(officecli === null ? {} : { [OFFICECLI_PATH_ENV]: officecli }),
     // pi.dev 目录覆盖层的缓存落我们自己的数据目录（model-catalog.ts），不写 pi CLI 的 ~/.pi/agent
     [CATALOG_CACHE_ENV]: join(configDir, "model-catalog-cache.json"),
     ...(existsSync(join(piPackage, "package.json")) ? { [PI_PACKAGE_DIR_ENV]: piPackage } : {}),
@@ -805,6 +833,21 @@ void app.whenReady().then(async () => {
         );
       return;
     }
+    // docx 指哪打哪：agent 的 edit_docx。**写入在 renderer 里活着的编辑器**（docx:edit-reply
+    // 回来结账），主进程只判白名单并把请求送进窗口。同样任何路径都回执
+    if (event.type === "docxEditRequest") {
+      void resolveFileRoots(workspaces, sessions, { sessionId: event.sessionId, workspaceId: event.workspaceId })
+        .then((roots) => applyDocxEditRequest({ roots, dispatch: dispatchDocxEdit }, event))
+        .then((outcome) => agentHost.answerDocxEdit(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerDocxEdit(event.requestId, {
+            ok: false,
+            reason: "engine",
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
     // 文档导出：docx / pdf / md 的生成在主进程（PDF 要隐藏窗口），UI 的导出菜单与 agent 共用同一套函数。同样任何路径都回执
     if (event.type === "docRequest") {
       void resolveFileRoots(workspaces, sessions, { sessionId: event.sessionId, workspaceId: event.workspaceId })
@@ -825,6 +868,69 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerTerminal(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerTerminal(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // Word 导出：pandoc 进程、模板体检、OOXML 后处理与原子写都在主进程（latexRequest
+    // 同一条边界）。同样任何路径都回执
+    if (event.type === "docxExportRequest") {
+      void applyDocxExportRequest(
+        docxExporter,
+        sessions,
+        workspaces,
+        async () => {
+          const current = await settings.read();
+          return {
+            pandocPath: current.pandocPath ?? null,
+            templateMode: current.docxTemplateMode ?? "default",
+            customTemplatePath: current.docxTemplatePath ?? null,
+          };
+        },
+        event,
+      )
+        .then((outcome) => agentHost.answerDocxExport(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerDocxExport(event.requestId, {
+            ok: false,
+            code: "write-failed",
+            error: cause instanceof Error ? cause.message : String(cause),
+            warnings: [],
+          }),
+        );
+      return;
+    }
+    // LaTeX：agent 的 compile_latex——latexmk 进程与 .log 解析都在主进程（terminalRequest
+    // 同一条边界）。同样任何路径都回执，否则那次工具调用会永远等下去
+    if (event.type === "officeRequest") {
+      void applyOfficeRequest(office, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerOffice(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerOffice(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    if (event.type === "latexRequest") {
+      void applyLatexRequest(latex, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerLatex(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerLatex(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    if (event.type === "latexPackageRequest") {
+      void applyLatexPackageRequest(latex, sessions, workspaces, event)
+        .then((outcome) => agentHost.answerLatexPackage(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerLatexPackage(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
@@ -1348,10 +1454,11 @@ void app.whenReady().then(async () => {
     // 插件的「只在这些工作区」名单里摘掉它（摘空转停用）
     await plugins.removeWorkspace(id);
   });
-  // 文件面板（fs:roots / fs:list / fs:reveal）：根每次现算，不缓存
+  // docx 轻量编辑（docx:open / docx:save）：白名单同上，上一版备份放 userData 里
+  registerDocxIpc(workspaces, sessions, join(configDir, "docx-backups"));
+  // 媒体播放协议（orbita-media://）：token 映射到已过白名单的真实路径，只认 token
   const mediaTokens = new MediaTokens();
   installMediaProtocol(mediaTokens, (url) => isOwnRendererPage(url, ownRendererOrigin()));
-  registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path), mediaTokens);
   // 文档 / 演示文稿面板（doc:*）：白名单同文件面板，写入比较后交换 + 原子写
   registerDocIpc(workspaces, sessions);
   registerSlidesIpc(workspaces, sessions);
@@ -1384,6 +1491,46 @@ void app.whenReady().then(async () => {
   // 终端面板：PTY 全部住在独立的 terminal utility 进程，主进程只存现状与快照缓冲
   const terminals = new TerminalService();
   registerTerminalIpc(terminals);
+  // LaTeX 编译：latexmk 进程、.log 解析、并发记账都在主进程（agent 工具与文件面板
+  // 的编译条共用同一个 runner——两边看到的是同一次编译）
+  const latex = new LatexRunner(undefined, {
+    // 「指定位置」选的 latexmk 落在设置里（机器级）；每轮现读，改完不用重启
+    explicitPath: async () => (await settings.read()).latexmkPath,
+  });
+  registerLatexIpc(latex, workspaces, sessions, settings);
+  // Office「指哪打哪」：OfficeCLI 的定位 / 验活 / 渲染 / batch 与改动清单都在主进程
+  // （agent 的 read_office / edit_office 经 officeRequest 问答走同一份 service）
+  const office = registerOfficeIpc({
+    settings,
+    sessions,
+    workspaces,
+    // 备份放 userData（不进会话工作台：那是文件面板的第一个根，会被当成用户文件看到）
+    backupRoot: join(configDir, OFFICE_BACKUP_DIR),
+  });
+  // 文件面板（fs:roots / fs:list / fs:reveal / fs:write-xlsx）：根每次现算，不缓存。
+  // 网格写回要把人的改动记进 Office 的那份改动清单（与 edit_office 同一批），所以放在
+  // office 之后建——那一个是进程级单例，agent 的 read_office / edit_office 也用它。
+  registerFilesIpc(workspaces, sessions, (path) => browserSandbox.openLocalFile(path), mediaTokens, office);
+  // 旧版本留在会话工作台里的空 office-backups（只删空目录，非空的旧备份一个字节都不动）
+  void removeEmptyLegacyOfficeBackupDirs(join(configDir, "workbenches")).catch(() => undefined);
+  // Word 导出：pandoc 探测 / 模板体检 / 内置默认模板的 IPC 面（设置页的「Word 导出」组）。
+  // 模板与 pandoc 都是机器级配置，主进程是唯一真源；导出流水线本身走 agentRequest。
+  const docxProbe = createPandocProbe();
+  const docxTemplatesDir = join(configDir, "docx-templates");
+  const docxExporter = createDocxExporter({
+    probe: (explicit) => docxProbe.probe(explicit),
+    runPandoc: spawnPandoc,
+    printReference: printReferenceDoc,
+    cacheDir: docxTemplatesDir,
+  });
+  registerDocxExportIpc({
+    probe: docxProbe,
+    settings,
+    cacheDir: docxTemplatesDir,
+    printReference: printReferenceDoc,
+  });
+  // 引用补全：读项目里的 .bib（只读盘、与编译同一道白名单与同一个项目目录）
+  registerCiteIpc(workspaces, sessions);
   const agentIpc = registerAgentIpc(
     agentHost,
     providers,
@@ -1573,6 +1720,8 @@ void app.whenReady().then(async () => {
     memoryHost.stop();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
+    // 在编的 latexmk 同样是进程树：不杀就会留下孤儿引擎进程继续占 CPU 与 .aux
+    latex.cancelAll();
   });
 
   /**

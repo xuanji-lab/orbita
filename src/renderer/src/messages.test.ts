@@ -19,6 +19,11 @@ const ALLOWED_LATIN = new Set([
   "PowerPoint",
   // 新手引导「文档与演示」一章：文档的写法跟 Obsidian 一致（笔记应用的产品名）
   "Obsidian",
+  // Office「指哪打哪」：产品名与它的环境变量（用户真的会在 settings.json / 环境里照写）
+  "Office",
+  "OfficeCLI",
+  "ORBITA",
+  "OFFICECLI",
   // 品牌
   "orbita",
   "GitHub",
@@ -34,6 +39,10 @@ const ALLOWED_LATIN = new Set([
   "SSE",
   "HTTP",
   "Markdown",
+  // LaTeX 命令名（bib 未使用清单里说明「正文有全部引用标记」时要照写）
+  "nocite",
+  // Word 导出的转换引擎（产品名，设置页与工具文案都照写）
+  "pandoc",
   // 文档面板的导出格式名
   "Word",
   "PDF",
@@ -58,8 +67,11 @@ const ALLOWED_LATIN = new Set([
   "MB",
   // 内存与模型文件的计量单位（向量模型页的设备一行）
   "GB",
-  // 文档格式名（PDF 预览与引用）
+  // 文档格式名（PDF 预览与引用、docx 轻量编辑）
   "PDF",
+  "docx",
+  // 其他应用的名字（docx 只读 / 密码提示里指的就是 Word）
+  "Word",
   // 格式记号（环境变量 / 请求头一行的写法，原样照填）
   "KEY",
   "VALUE",
@@ -69,6 +81,9 @@ const ALLOWED_LATIN = new Set([
   // 更新出口的环境变量名（HTTPS_PROXY / HTTP_PROXY，用户照抄进终端或启动脚本）
   "HTTPS",
   "PROXY",
+  // 随包的第三方二进制与它的许可（软件更新 › 当前版本：产品名与许可名是字面量，翻成中文就不是它了）
+  "OfficeCLI",
+  "Apache-2.0",
   // 命令名与工具名前缀（用户照抄的字面量）
   "node",
   "npx",
@@ -99,6 +114,43 @@ const ALLOWED_LATIN = new Set([
   "DeepSeek",
   "deepseek",
   "endpoints",
+  // 排版工具链的名字（用户照抄的字面量：发行版 / 构建器 / 包管理器 / 文件类型）
+  "LaTeX",
+  "latexmk",
+  "tlmgr",
+  // TeX 发行版与它们的安装位置（引导卡要指名的路径片段与环境变量）
+  "TeX",
+  "Live",
+  "MiKTeX",
+  "MacTeX",
+  "texlive",
+  "texbin",
+  "bin",
+  "windows",
+  "Library",
+  "Program",
+  "Files",
+  "PATH",
+  "LOCALAPPDATA",
+  "tex",
+  // 文献库的文件类型（「一份 .bib」「refs 里的 .bib」——同 tex 一类，是用户照抄的字面量）
+  "bib",
+  // 在线检索的两个公共接口名与 DOI 这个编号体系的缩写（用户输入 / 照抄的字面量）
+  "DOI",
+  "arXiv",
+  "Crossref",
+  // BibTeX 的引用命令（界面上给出「已插入 \cite{…}」，用户照着核对）
+  "cite",
+  // LaTeX 的 label 是源码里的字面量（`\label{…}`），中文文案里保留原名便于对照
+  "label",
+  // 缺宏包安装：MiKTeX 的包管理器与提权命令（用户照抄进终端的字面量）
+  "mpm",
+  "MiKTeX",
+  "sudo",
+  // SyncTeX 双向定位：命令名与它的产品名（用户照抄 / 发行版自带的写法）
+  "SyncTeX",
+  "synctex",
+  "TeX",
   "Claude",
   "Code",
   // Claude 订阅的档位名（产品自称，不译）与登录域名
@@ -127,10 +179,21 @@ const ALLOWED_LATIN = new Set([
   "UniST",
   "UrbanCLIP",
   "arXiv",
+  // TeX 辅助文件的扩展名（清理辅助文件那条文案里要指名删的是什么）
+  "aux",
+  "log",
   // 文件名
   "mcp.json",
   "SKILL.md",
   "AGENTS.md",
+  // 表格文件的扩展名（.xlsx 预览的说明文案里点名格式，用户看到的就是后缀）
+  "xlsx",
+  "xls",
+  // 演示文稿文件的扩展名（.pptx 大纲的说明文案里点名格式）
+  "pptx",
+  "ppt",
+  // 其他应用的名字（隐藏表的提示要让用户知道去哪里取消隐藏）
+  "Excel",
   // MCP 配置的字段名与变量名（用户要照抄进 mcp.json 的字面量）
   "workspaces",
   "workspaceFolder",
@@ -145,6 +208,19 @@ const ALLOWED_LATIN = new Set([
   "volc.bigasr.sauc.duration",
   // 语音厂商凭证字段名（阶跃星辰 API Key，用户原样照填）
   "Key",
+  // Word 模板体检里的 OOXML 术语与包内条目名（用户要拿它们去 Word 里对）
+  "OLE2",
+  "ZIP",
+  "word",
+  "xml",
+  "Content",
+  "Types",
+  "Heading",
+  "w",
+  "sectPr",
+  "twip",
+  "numbering.xml",
+  "VBA",
   // 按键名
   "Ctrl",
   "Alt",
@@ -227,6 +303,30 @@ describe("messages —— 中英两张表", () => {
       .filter(({ text }) => /[\u4e00-\u9fff][,?:!;()]|[,?:!;()][\u4e00-\u9fff]/.test(text))
       .map(({ path, text }) => `${path}: ${text}`);
     deepStrictEqual(offenders, []);
+  });
+
+  test("pptx 超解析预算不说「文件太大」：体积超限才用 tooLarge 的文案", () => {
+    // 0.9 MB 的构造包是「内容量」超了，不是文件体积超了；两件事必须说成两件事
+    deepStrictEqual(
+      [zh.files.pptxBudgetLimited(0, 40), zh.files.pptxBudgetLimited(12, 40)],
+      [
+        "这份演示文稿的内容超出了大纲的解析上限，用默认应用打开。",
+        "内容超出解析上限，只解析了前 12 页（共 40 页）",
+      ],
+    );
+    deepStrictEqual(
+      [en.files.pptxBudgetLimited(0, 40), en.files.pptxBudgetLimited(12, 40)],
+      [
+        "This presentation has more content than the outline can parse — open it with the default app.",
+        "More content than the outline can parse — parsed the first 12 of 40 slides",
+      ],
+    );
+    // 真正的体积超限（>50 MB）保留原文案
+    deepStrictEqual(
+      [zh.files.pptxBudgetLimited(0, 40).includes("文件太大"), en.files.pptxBudgetLimited(0, 40).includes("too large")],
+      [false, false],
+    );
+    deepStrictEqual([zh.files.tooLarge("60 MB", "50 MB").includes("太大"), en.files.tooLarge("60 MB", "50 MB").includes("Too large")], [true, true]);
   });
 
   test("行数未知的文案：英文界面不露中文（0.1.16 之前是写死的中文）", () => {

@@ -77,6 +77,9 @@ const VENDOR_NAMES: Record<DictationProvider, string> = {
 const plural = (count: number, one: string, many: string = `${one}s`): string =>
   `${count} ${count === 1 ? one : many}`;
 
+/** 计数的写法：千分位，与 Excel 的行号习惯一致（20000 → 20,000） */
+const grouped = (count: number): string => count.toLocaleString("en-US");
+
 export const en = {
   /** 花费的显示币种（utils/money.ts）：数据一律美元，英文界面原样显示 */
   currency: { symbol: "$", perUsd: 1 },
@@ -796,6 +799,7 @@ export const en = {
     tooLongTotal: (max: number) => `Quotes are capped at ${max} characters in total — remove a few first.`,
     lines: (from: number, to: number) => (from === to ? `line ${from}` : `lines ${from}–${to}`),
     slide: (n: number) => `page ${n}`,
+    docxBlock: (n: number) => (n > 0 ? `paragraph ${n}` : "Word paragraph"),
     more: (n: number) => `${n} more quotes…`,
     expand: "Show quoted text in full",
     collapse: "Collapse quotes",
@@ -1345,6 +1349,17 @@ export const en = {
       memory: "Memory",
       experimental: "Experimental",
     },
+    /** Office 渲染（OfficeCLI）：状态行 + 显式路径（绝对路径，留空走自动定位） */
+    office: {
+      title: "Office",
+      cliPath: "OfficeCLI path",
+      cliPathInfo: "Leave empty to use the bundled binary, the ORBITA_OFFICECLI environment variable, or a standard install location.",
+      status: "Status",
+      ready: (version: string, source: string) => `OfficeCLI ${version} · ${source}`,
+      missing: "Not found — Office files fall back to the data grid / outline",
+      checking: "Checking…",
+      recheck: "Check again",
+    },
     appearance: "Appearance",
     theme: "Theme",
     language: "Language",
@@ -1468,6 +1483,9 @@ export const en = {
       group: "Software update",
       currentVersion: "Current version",
       currentNotesMissing: "This version has no release notes.",
+      // 与 zh 同一条事实：随包的 OfficeCLI 与其许可文件位置（版本号不写进文案，见 messages-zh.ts）
+      bundledThirdParty:
+        "Bundled third party: OfficeCLI (Apache-2.0). Its license and third-party notices ship with the app under /resources/licenses/officecli.",
       viewOnGitHub: "View this release on GitHub",
       updates: "Updates",
       idleHint: "Checked automatically in the background.",
@@ -1519,6 +1537,96 @@ export const en = {
     downloadDirectory: "Download location",
     downloadDirectoryInfo:
       "Files you download in the built-in browser land here · the agent is told where it is and can organize it for you · files the agent downloads go to its session workbench",
+    // ── Word export (settings/WordExportSettings.tsx) ──
+    wordExportGroup: "Word export",
+    pandocStatus: "pandoc",
+    pandocStatusInfo:
+      "The engine that turns Markdown / LaTeX into Word · needs 3.10.2 or newer (equation numbering relies on that fix) · older versions make the export fail loudly instead of producing wrong numbers silently",
+    pandocMissing: "pandoc not found · install it, then re-check",
+    pandocTooOld: (version: string, min: string) => `pandoc ${version} is too old (${min} or newer is required)`,
+    pandocDetect: "Check again",
+    pandocDetecting: "Checking…",
+    pandocPathAria: "pandoc executable path",
+    pandocPathPlaceholder: "Absolute path; leave empty to auto-detect",
+    pandocChoose: "Choose…",
+    pandocPathAbsolute: "Enter an absolute path (type it or choose the executable)",
+    pandocPathInvalid: "This path does not run as pandoc; settings were left unchanged",
+    pandocUpgrade: "Upgrade pandoc",
+    docxTemplate: "Word template",
+    docxTemplateInfo:
+      "Where the styles come from · use a school template when you need its headers, footers and cover styles · only styles and page setup are read; macros are never executed",
+    docxTemplateDefault: "Built-in",
+    docxTemplateProject: "Project file",
+    docxTemplateCustom: "School template",
+    docxTemplateProjectHint: "Uses template.docx next to the source file · falls back to the built-in default (the export says so)",
+    docxTemplateChoose: "Choose template…",
+    docxTemplateChoosing: "Choosing…",
+    docxTemplateNone: "No template selected yet",
+    docxTemplateInvalid: "This file cannot be used as a template; settings were left unchanged",
+    /* Template check: the main process returns kinds and numbers, the sentences live here */
+    docxTemplateReport: {
+      summary: (styles: number | null, headerFooter: number, macros: boolean, warnings: number) =>
+        `${
+          styles === null ? "no styles" : `${styles} style${styles === 1 ? "" : "s"}`
+        } · ${headerFooter} header/footer · ${macros ? "macros" : "no macros"} · ${
+          warnings > 0 ? `${warnings} warning${warnings === 1 ? "" : "s"} (export still works)` : "ready"
+        }`,
+      problem: {
+        noneSelected: "No school template is selected yet.",
+        notFound: (path: string, detail: string | null) =>
+          `Cannot read the template: ${path}${detail === null ? "" : ` (${detail})`}`,
+        pandocMissing: (message: string) => `The built-in template needs pandoc: ${message}`,
+        builtinUnavailable: (detail: string | null) =>
+          `Could not prepare the built-in template${detail === null ? "" : `: ${detail}`}`,
+        empty: "This file is empty.",
+        tooLarge: (mb: number) => `The file is larger than ${mb} MB — that is not a template.`,
+        encrypted: "This is a password-protected Word file (OLE2 container), not a readable .docx.",
+        notZip: "This is not a .docx package (it is not a ZIP container).",
+        corrupt: (detail: string | null) =>
+          `The .docx package cannot be opened (the ZIP is corrupt or truncated)${detail === null ? "" : `: ${detail}`}`,
+        noDocument: "The package has no word/document.xml — it is not a Word document.",
+      },
+      finding: {
+        contentTypesMissing: "Missing [Content_Types].xml",
+        contentTypesMissingDetail: "Word may refuse to open the output; re-save the template from Word.",
+        stylesMissing: "No word/styles.xml",
+        stylesMissingDetail: "pandoc falls back to its own reference styles, so the school formatting will not be applied.",
+        styles: (styles: number, headings: number) =>
+          headings === 0
+            ? `${styles} paragraph / character styles · no Heading 1–6`
+            : `${styles} paragraph / character styles · ${headings} heading levels`,
+        headingsMissing: "No built-in heading styles",
+        headingsMissingDetail:
+          "Table of contents and equation numbering rely on Heading 1; add them in Word for chapter-based numbering.",
+        eastAsian: (language: string) => `East-Asian language: ${language}`,
+        pageSetupMissing: "No page setup (w:sectPr)",
+        pageSetupMissingDetail: "pandoc will use its default page size and margins.",
+        sections: (count: number, body: boolean, width: number | null, height: number | null) =>
+          `${count} section${count === 1 ? "" : "s"}${body ? "" : " (no body sectPr)"}${
+            width === null || height === null ? "" : ` · ${width}×${height} twips`
+          }`,
+        numberingMissing: "No numbering.xml",
+        numberingMissingDetail: "Numbered / bulleted lists will use pandoc's default list formatting.",
+        numbering: (count: number) => `${count} numbering definition${count === 1 ? "" : "s"}`,
+        headerFooterMissing: "No headers or footers",
+        headerFooterMissingDetail: "Page numbers and the school running head will be missing from the output.",
+        headerFooter: (headers: number, footers: number) =>
+          `${headers} header${headers === 1 ? "" : "s"} · ${footers} footer${footers === 1 ? "" : "s"}`,
+        fields: (count: number, instructions: string) =>
+          `${count} field marker${count === 1 ? "" : "s"}${instructions === "" ? "" : ` · ${instructions}`}`,
+        toc: "Existing table of contents",
+        tocMissing: "No existing table of contents",
+        tocMissingDetail: "The export adds one automatically when the source has headings.",
+        cover: "Cover-like first page detected",
+        coverMissing: "No cover page detected",
+        macros: "No VBA macros",
+        macrosPresent: "Contains VBA macros (word/vbaProject.bin)",
+        macrosPresentDetail: "Macros are never executed; pandoc only reads styles, page setup and headers/footers.",
+        trackChanges: "Track changes is on in the template",
+        trackChangesDetail: "New edits may open as revisions.",
+        builtinUnavailable: "Built-in template unavailable",
+      },
+    },
     changeDirectory: "Change…",
     chooseDownloadDirectory: "Choose a download location",
     openDownloadDirectory: "Open the download location",
@@ -3182,6 +3290,9 @@ export const en = {
     detach: "Detach",
     symlink: "Symbolic link",
     rules: "rules",
+    /** LaTeX 项目的可编译 root（main.tex / appendix.tex）在文件树里的尾注 */
+    latexRoot: "root",
+    latexRootTip: "Compilable LaTeX root — the document other files are \\input from",
     missingTip: "Directory not found — moved or renamed outside orbita",
     missing: "Directory not found — moved or renamed",
     attachments: "Attachments",
@@ -3237,12 +3348,493 @@ export const en = {
     largeTextWindowed: (size: string) => `Large file (${size}) — rendering the visible lines only`,
     pdfFailed: "Couldn't open this PDF:",
     pdfPassword: "This PDF is password-protected and can't be previewed.",
+    /* PDF 预览的工具栏（缩放 / 翻页 / 查找 / 缩略图） */
+    pdfAria: "PDF preview",
+    pdfThumbnails: "Page thumbnails",
+    pdfPrevPage: "Previous page",
+    pdfNextPage: "Next page",
+    pdfPage: (page: number, total: number) => `Page ${page} of ${total}`,
+    pdfFindPlaceholder: "Find in document",
+    pdfFindNone: "No matches",
+    pdfFindCount: (current: number, total: number) => `${current} / ${total}`,
+    pdfFindPrev: "Previous match",
+    pdfFindNext: "Next match",
+    pdfFindFailed: "Search failed",
+    pdfZoomIn: "Zoom in",
+    pdfZoomOut: "Zoom out",
+    pdfFitWidth: "Fit width",
+    pdfFitPage: "Fit page",
     citeNotFound: (page: number) =>
       `The cited passage isn't on page ${page} anymore. The file may have changed since it was cited.`,
     citeOutside: (name: string) => `Can't open ${name} here. It's outside the folders this task can see.`,
+    /* ---------- .xlsx 只读预览（xlsx.ts 契约） ---------- */
+    xlsxSheets: "Sheets",
+    /** 裁剪提示：整表多大、面板给了多少 */
+    xlsxTruncated: (rows: number, cols: number, totalRows: number, totalCols: number) =>
+      `Editable: first ${grouped(rows)} rows × ${grouped(cols)} columns of ${grouped(totalRows)} × ${grouped(totalCols)}`,
+    /* ---------- grid editing (values / formulas / save / undo) ---------- */
+    xlsxCellInput: "Cell contents",
+    xlsxCellInputPlaceholder: "A value, or a formula starting with =",
+    xlsxSelection: (cell: string) => `Cell ${cell}`,
+    xlsxUnsaved: (n: number) => `${n} unsaved`,
+    xlsxSaved: "Saved",
+    xlsxSave: "Save",
+    xlsxSaveAll: "Save changes",
+    xlsxSaveShortcut: "Ctrl+S",
+    xlsxUndoAll: "Undo",
+    xlsxUndoOne: "Undo this change",
+    xlsxPendingTitle: (n: number) => `Unsaved changes · ${n}`,
+    xlsxFormulaNotCalculated: "Formulas are not recalculated here — the value updates once Excel opens the file",
+    xlsxConflict: "The file changed outside this panel (maybe the agent just edited it), so the save was blocked. Reload, then make the change again.",
+    xlsxReload: "Reload",
+    xlsxReloadDiscard: (n: number) => `Click again to discard ${n} changes`,
+    xlsxOutOfWindow: (rows: number, cols: number) =>
+      `Outside the editable range (first ${grouped(rows)} rows × ${grouped(cols)} columns) — those cells were not written`,
+    xlsxSharedFormula: (cell: string) =>
+      `${cell} is the head of a shared formula; writing a value there would leave the whole group undefined. Change it in Excel first.`,
+    xlsxSaveFailed: (detail: string) => `Save failed: ${detail}`,
+    xlsxSheetMissing:
+      "The sheet these changes belong to no longer exists (renamed or removed) — reload to see the current sheets.",
+    xlsxUnsavedInGrid: "You have unsaved changes — save or undo them before switching to the rendered view.",
+    xlsxExternalChange: "The file changed outside this panel; a save will be blocked until you reload",
+    xlsxEditingHint: "Enter commits, Tab moves right, Esc cancels",
+    /** 冻结窗格提示：原文件冻了，预览不冻 */
+    xlsxFrozen: (rows: number, cols: number) =>
+      `The file freezes the first ${rows > 0 ? `${plural(rows, "row")}${cols > 0 ? " and " : ""}` : ""}${cols > 0 ? plural(cols, "column") : ""}; this preview scrolls freely`,
+    xlsxEmpty: "This sheet is empty",
+    xlsxPassword: "This workbook is password-protected, or it isn't a real .xlsx file.",
+    xlsxFormulaUncached:
+      "formula — no cached value yet; the rendered view can show it",
+    xlsxNormalized:
+      "This file was rewritten by the Office tool — read in compatibility mode (the file itself is unchanged).",
+    xlsxRenderStillViewable:
+      "The data grid could not parse this workbook (the parser, not the file's contents). Switch to Rendered above to view it.",
+    xlsxBroken: "Couldn't read this workbook — it may be damaged.",
+    xlsxHiddenOnly: "Every sheet in this workbook is hidden. Right-click a sheet tab in Excel to unhide one.",
+    xlsUnsupported: "Old .xls workbooks can't be previewed — open it with the default app.",
+    /* ---------- .pptx 只读大纲（pptx.ts 契约） ---------- */
+    pptxSlides: "Slides",
+    pptxPagesHandle: "Drag to resize the slide list · double-click to reset",
+    pptxOutline: "Outline",
+    /** 页列表的坐标：页码 + 版式名（版式读不到时只留页码） */
+    pptxSlideLabel: (number: number, layout: string) =>
+      layout === "" ? `Slide ${number}` : `Slide ${number} · ${layout}`,
+    pptxUntitled: "Untitled",
+    pptxTables: "Tables",
+    pptxNotes: "Notes",
+    pptxEmptySlide: "No text on this slide",
+    pptxPictures: (count: number) =>
+      `${plural(count, "image")} on this slide — open it with the default app to see`,
+    pptxTextTruncated: (limit: number) => `Text on this slide is cut at ${grouped(limit)} characters`,
+    pptxDeckTruncated: (shown: number, total: number) =>
+      `Parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+    /** 解析成本预算超限：后面的页没有解析（内容量太大，不是文件体积；文件体积有 tooLarge） */
+    pptxBudgetLimited: (shown: number, total: number) =>
+      shown === 0
+        ? "This presentation has more content than the outline can parse — open it with the default app."
+        : `More content than the outline can parse — parsed the first ${grouped(shown)} of ${grouped(total)} slides`,
+    pptxHidden: "Hidden",
+    pptxReadOnly: "Read-only",
+    pptxEmpty: "This presentation has no slides",
+    pptxPassword: "This presentation is password-protected, or it isn't a real .pptx file.",
+    pptxBroken: "Couldn't read this presentation — it may be damaged.",
+    pptxTimeout: "This presentation takes too long to outline — open it with the default app.",
+    pptxComplex: "This presentation is too complex to outline — open it with the default app.",
+    pptUnsupported: "Old .ppt presentations can't be previewed — open it with the default app.",
     citeMissing: (name: string) => `${name} was cited in this task, but the original file has been deleted or moved.`,
     /** 左栏（专注 / 浏览态）双击的文件不在面板任何根里（不该发生——额外预览根总在） */
     treeOpenOutside: (name: string) => `Can't open ${name} here. It's outside the folders this panel can see.`,
+  },
+
+  /* ---------- 论文工作台的编译条 + 问题抽屉（LaTeX 项目） ---------- */
+  /**
+   * Office「指哪打哪」：xlsx / pptx 的渲染视图与点击标注（组件在 features/office/）。
+   */
+  office: {
+    modeRender: "Rendered",
+    modeGrid: "Data",
+    modeOutline: "Outline",
+    pickCell: "Click a cell to annotate it (Shift-click a second cell for a range)",
+    pickElement: "Click a shape, table or chart to annotate it",
+    rangeCells: (n: number) => (n === 1 ? "1 cell" : `${n} cells`),
+    quote: "Quote to chat",
+    copyImage: "Copy as image",
+    copied: "Copied",
+    changes: (n: number) => (n === 1 ? "1 change this round" : `${n} changes this round`),
+    revert: "Revert this batch",
+    authorYou: "You",
+    authorAgent: "Agent",
+    retry: "Retry",
+    renderUnavailable: "Office rendering is unavailable",
+    noticeGrid: "Office rendering is off — showing the data grid",
+    noticeOutline: "Office rendering is off — showing the outline",
+  },
+  latex: {
+    aria: "LaTeX build",
+    engineTip: "Engine — lists what this machine has; picking one writes .orbita/latex.json",
+    engineAuto: "auto",
+    mainTip: "Main file for this project",
+    noMain: "Choose main file",
+    noMainTip: "No compilable root was found in this project yet",
+    rootTip: (n: number, outDir: string) =>
+      `${n} compilable roots in this project — pick one to build it; products go to ${outDir}`,
+    rootOnlyOne: "This project has a single compilable root",
+    declaredBy: (file: string, line: number) => `declared by ${file}:${line}`,
+    customRecipe: "custom recipe",
+    outputs: (n: number) => (n === 1 ? "1 output" : `${n} outputs`),
+    outputsTip: "Files this build wrote — click to show them in the file manager",
+    openOutputs: "Show output folder",
+    openLog: "Open build log",
+    openLogMissing: "No build log yet",
+    rootOutside: "The % !TEX root line points outside this workspace — refused",
+    runningStep: (step: string, elapsed: string) => `Building… ${step} · ${elapsed}`,
+    stepRun: (step: string, run: number) => `${step} · run ${run}`,
+    compile: "Compile",
+    compileTip: (shortcut: string) => `Compile (${shortcut})`,
+    cancel: "Cancel",
+    cancelTip: "Stop this build (the whole process tree)",
+    idleUpToDate: "PDF is up to date",
+    idleNoPdf: "No PDF yet",
+    dirty: "Sources changed — the PDF is out of date",
+    running: (elapsed: string) => `Building… ${elapsed}`,
+    success: (pages: number, duration: string) => `Succeeded · ${pages} pages · ${duration}`,
+    successNoPages: (duration: string) => `Succeeded · ${duration}`,
+    failed: (errors: string, duration: string) => `Failed · ${errors} · ${duration}`,
+    failedShort: (duration: string) => `Failed · ${duration}`,
+    cancelled: "Build cancelled",
+    notInstalled: "latexmk was not found on this machine",
+    noMainFile: "Pick a main .tex before compiling this project",
+    notStarted: (detail: string) => `The compile did not start: ${detail}`,
+    noSession: "The compile did not start: this panel is not bound to a session yet — send a message, or attach the folder to a workspace, then compile",
+    stalePdf: (time: string) => `still showing the ${time} build`,
+    problems: "Problems",
+    problemsHandle: "Drag to resize the problems drawer · double-click to reset",
+    noProblems: "No problems",
+    errorCount: (n: number) => (n === 1 ? "1 error" : `${n} errors`),
+    warningCount: (n: number) => (n === 1 ? "1 warning" : `${n} warnings`),
+    lintCount: (n: number) => (n === 1 ? "1 style check" : `${n} style checks`),
+    pendingCount: (n: number) => (n === 1 ? "1 waiting for you" : `${n} waiting for you`),
+    missingPackage: (name: string) => `Missing package ${name}`,
+    engineWaiting: "The engine is waiting for you to confirm an install before the build can continue",
+    installInTerminal: "Install in terminal",
+    installTip: (command: string, sudo: boolean) =>
+      sudo
+        ? `Fill \`${command}\` into the visible terminal — you type the sudo password and press Enter`
+        : `Fill \`${command}\` into the visible terminal — you press Enter`,
+    installThenRecompile: "Compile again once it is installed (nothing recompiles on its own)",
+    packageLookingUp: "Looking up the package name…",
+    packageAlreadyInstalled:
+      "This machine can already find that file — the log may be stale, or the engine uses a different TeX tree",
+    packageNoTool: "tlmgr / mpm was not found, so the owning package cannot be looked up",
+    packageInvalidName: "Invalid file name — it is not a .sty / .cls name, so nothing was looked up",
+    packageToolError: "The lookup command did not run (failed to start or errored), so no package was found",
+    packageNotLookedUp: "Not looked up this time (too many missing files, or the lookup channel failed)",
+    packageUnknown: (file: string) =>
+      `Unknown package — nothing in your TeX distribution claims ${file}; search for that file name`,
+    handToAgent: "Hand to agent",
+    handToAgentTip: "Add it to the quote box; nothing is sent until you send it",
+    quoteError: "Compile error",
+    quoteWarning: "Compile warning",
+    quoteLint: "Style check",
+    quoteLayout: "Layout warning",
+    quoteMissingPackage: "Missing package",
+    quotePending: "Waiting for install confirmation",
+    quoteVerify: "Citation check",
+    duplicateLabel: (name: string, file: string, line: number) =>
+      `Label ${name} is defined more than once — the first one is ${file}:${line}`,
+    /* ---------- SyncTeX (source ↔ PDF) ---------- */
+    syncNoPdf: "No PDF yet — compile once, then jump.",
+    syncNoSynctex: "This PDF has no SyncTeX data. Compile it again to enable jumping (the build passes -synctex for you).",
+    syncNotFound: "The PDF has no record for this spot. Recompile after editing the source.",
+    syncOutside: "This spot belongs to a file outside the project (a system package), not your source.",
+    syncNotInstalled: "The synctex command was not found. Your TeX distribution may be missing a component.",
+    syncFailed: (detail: string) => `SyncTeX failed: ${detail}`,
+    actionsTip: "Project actions",
+    /* ---------- 配方 chip（9 条预设，见 shared/latex-recipes.ts） ---------- */
+    recipeTip: "Recipe — the command chain that builds this project; picking one writes .orbita/latex.json",
+    recipeGroups: {
+      recommended: "Recommended",
+      index: "Index",
+      glossary: "Glossary",
+      manual: "Manual chain",
+      debug: "Debug",
+      special: "Special",
+    },
+    recipeRecommended: "recommended",
+    recipeSingleHint: (engine: string) => `Runs ${engine} once — no index, glossary or bibliography step`,
+    cleanUnavailable: "This recipe does not use latexmk, so there is no latexmk -c to clean with",
+    /* ---------- PDF 标签（cap-tabs 里的普通标签） ---------- */
+    openPdf: "Show the PDF",
+    closePdf: "Hide the PDF",
+    pdfTabTip: (pages: number | null, time: string) =>
+      pages === null ? `Built ${time}` : `${pages} pages · built ${time}`,
+    pdfTabStale: "This PDF is older than the sources",
+    logStaleNote: "the log is from the previous build",
+    logStaleHint: (time: string) => `Log from the previous build (${time})`,
+    compileOnSave: "Compile on save",
+    compileOnSaveHint: "Compiles after the editor autosaves; kept in .orbita/latex.json for this project",
+    /** 「没有 latexmk」引导卡：找过哪里 + 三个动作（不自动下载） */
+    setup: {
+      title: "No LaTeX compiler on this machine",
+      body:
+        "Building a PDF needs latexmk, which ships with TeX Live, MiKTeX or MacTeX. Orbita doesn't download installers for you — install one, then come back.",
+      lookedIn: (n: number) => (n === 1 ? "Looked in 1 place" : `Looked in ${n} places`),
+      noPaths: "No install location could be inspected on this machine.",
+      whereNote:
+        "PATH, texlive\\<year>\\bin\\windows on every drive, MiKTeX under %LOCALAPPDATA% and Program Files; on macOS /Library/TeX/texbin and /usr/local/texlive.",
+      openDownload: "Open download page",
+      redetect: "Installed it — check again",
+      checking: "Checking…",
+      locate: "Choose location…",
+      invalidFile: (path: string) => `That file didn't answer \`latexmk --version\`, so nothing was saved: ${path}`,
+    },
+    clean: "Clean auxiliary files",
+    cleanHint: "latexmk -c — removes .aux / .log and other intermediates, keeps the PDF",
+    cleaning: "Cleaning…",
+    cleaned: (n: number) =>
+      n === 1 ? "Cleaned 1 auxiliary file" : `Cleaned ${n} auxiliary files`,
+    cleanedNothing: "Nothing to clean — the output folder already holds only the PDF",
+    cleanFailed: (message: string) => `Clean failed: ${message}`,
+  },
+
+  /* ---------- 本地 .bib 文献库（\cite 补全与它的问题条目） ---------- */
+  cite: {
+    // 抽屉的定位列已经写着文件名，消息里不再重复（重复会把 300px 的面板挤成三行）
+    badEntries: (count: number) => `Skipped ${count} malformed ${count === 1 ? "entry" : "entries"}`,
+    unreadable: (detail: string) => `Couldn't read this file: ${detail}`,
+    /* 上限 / 体积挡下的文件：补全可能不全，必须说出来 */
+    skipped: (count: number) => `Not read: ${count} .bib ${count === 1 ? "file" : "files"} (too large or too many) — completions may be incomplete`,
+    truncated: "The project has more files than the scan reads — some .bib entries may be missing from completions",
+  },
+
+  /* ---------- 未使用的文献（bib 里有、正文没引；只读，点一条跳到 .bib） ---------- */
+  citeUnused: {
+    title: "Uncited entries",
+    count: (n: number) => `${n}`,
+    scanned: (n: number) => `${n} .tex files scanned`,
+    none: "Every entry is cited",
+    noBib: "No .bib file found",
+    noRoot: "Could not work out the current root, so uncited entries cannot be computed",
+    nociteAll: "The document has \\nocite{*}, so every entry counts as cited",
+    truncated: "The scan hit a limit; this list may be incomplete",
+    jumpTip: "Jump to this line in the .bib file",
+  },
+
+  /* ---------- 在线检索文献（右键「查找文献」的面板） ---------- */
+  citeSearch: {
+    menu: "Find reference…",
+    title: "Find a reference",
+    placeholder: "Title, DOI or arXiv ID",
+    search: "Search",
+    searching: "Searching…",
+    /* 结果行的来源列（两个公共接口的名字，不译） */
+    crossref: "Crossref",
+    arxiv: "arXiv",
+    empty: "No match. Try different words, or paste a DOI or arXiv ID.",
+    offline: "No network. Check the connection or proxy, then try again.",
+    timeout: "Search timed out (8s). The network may be slow or blocked.",
+    rateLimited: "Too many requests — the service is throttling us. Wait a moment and try again.",
+    notFound: "No record for this DOI or arXiv ID.",
+    partial: (source: string) => `${source} did not answer (timeout or throttled) — these results are from the other source.`,
+    reused: (path: string) => `Already in ${path}`,
+    failed: (detail: string) => `Search failed: ${detail}`,
+    written: (path: string) => `Saved to ${path}`,
+    inserted: (key: string) => `Inserted \\cite{${key}}`,
+    insertBlocked: "Saved, but the editor is read-only until the turn ends.",
+    conflict: (path: string) => `Not saved: ${path} changed while you were choosing. Pick again to re-key it.`,
+    writeFailed: (detail: string) => `Not saved: ${detail}`,
+    outside: "This file is not inside a LaTeX project.",
+  },
+
+  /* ---------- 引文核验（cite:verify：DOI / arXiv 号 / 标题 → Crossref / arXiv） ---------- */
+  citeVerify: {
+    title: "Citations",
+    run: "Verify",
+    running: "Verifying…",
+    tip: "Look each entry up by DOI / arXiv ID / title. Only the identifier is sent; nothing is uploaded.",
+    never: "Not verified yet",
+    checked: (checked: number, total: number) => `${checked} of ${total} verified this time`,
+    unverifiedCount: (count: number) => `${count} need a look`,
+    verified: "Found and the title matches",
+    skipped: "Nothing to look up",
+    notFound: (kind: string, value: string) => `Not found at Crossref or arXiv (${kind}: ${value})`,
+    notFoundNoIdentifier: "Not found at Crossref or arXiv",
+    mismatch: (found: string) => `That DOI / arXiv ID belongs to a different paper: ${found}`,
+    error: (reason: string) => `Lookup did not finish — ${reason}`,
+    /* 整条通道不可用时的两句（项目不在白名单 / 读库失败） */
+    outside: "This file is not inside a LaTeX project.",
+    failed: (detail: string) => `Could not read the bibliography: ${detail}`,  },
+
+  /* ---------- 论文工作台的两种布局（对话为主 / 稿件为主） ---------- */
+  paper: {
+    chatTitle: "Chat",
+    toPaper: "Paper first — sources and PDF side by side, chat moves to the right column",
+    toChat: "Back to chat first",
+    sourcePdfHandle: "Drag to resize source and PDF · double-click to reset",
+    chatHandle: "Drag to resize the chat column · double-click to reset",
+  },
+
+  /* ---------- 论文工作台的源码编辑器（.tex 标签） ---------- */
+  editor: {
+    aria: "LaTeX source editor",
+    locateInPdf: "Show in PDF",
+    quoteLine: "Quote to chat",
+    findReference: "Find reference…",
+    saved: "Saved",
+    unsaved: "Unsaved",
+    saving: "Saving…",
+    saveFailed: "Couldn't save",
+    conflictState: "Conflict",
+    cursor: (line: number, column: number) => `Ln ${line}, Col ${column}`,
+    conflictBanner: "This file changed on disk while you were editing. Nothing was overwritten.",
+    errorBanner: "Couldn't save this file.",
+    conflictAfterClose: "Not saved: the file changed on disk while you were editing. Reopen the tab to resolve it.",
+    conflictBlocksCompile: "Not compiled: resolve the file conflict first — the editor's copy and the disk disagree.",
+    resolveConflictFirst: "Resolve the file conflict first (reload from disk or keep mine).",
+    resolveConflictBeforeSwitch:
+      "Not switched: resolve this file's conflict first — switching would lose what you haven't saved.",
+    reload: "Reload from disk",
+    keepMine: "Keep mine",
+    tooLarge: (size: string, limit: string) => `Not saved: ${size} is over the ${limit} editor limit.`,
+    /* agent 与本文件同改一个（回合进行中只读 / 回合落定按块撤销） */
+    agentWriting: "The agent is writing this file. The editor is read-only until the turn ends.",
+    agentWrote: "The agent changed this file this turn. The editor is read-only until the turn ends.",
+    agentOverwriteBanner:
+      "The agent wrote this file this turn and you have changes that aren't on disk. Nothing was overwritten — choose which version to keep.",
+    useDisk: "Use disk version",
+    agentMayWrite:
+      "This turn ran a shell, terminal or MCP tool, which can also rewrite this file. The editor is read-only until the turn ends.",
+    agentHunks: (count: number) => `The agent changed ${count} block${count === 1 ? "" : "s"} this turn`,
+    undoTurn: "Undo all",
+    undoHunk: "Undo",
+    hunkEdited: "Edited since — cannot undo",
+    hunksShow: "Show blocks",
+    hunksHide: "Hide blocks",
+    /* 大纲抽屉（章节树） */
+    outline: "Outline",
+    outlineTip: "Sections in this file — click to jump",
+    outlineClose: "Close outline",
+    outlineEmpty: "No sections in this file yet",
+    outlineLine: (line: number) => `Line ${line}`,
+    /** 跨文件包含图撞到上限：大纲可能不全（不报错，只在标题上标一句） */
+    outlineTruncated: "The include graph hit its depth or size limit — this outline may be incomplete",
+    /** Ctrl/Cmd+单击一个解析不到的 \input / \include / \subfile 参数 */
+    includeMissing: (file: string) => `Can't find ${file} — check the path, or save if you just typed it`,
+  },
+
+  /* ---------- docx 轻量编辑（issue #273）：工具栏、保存状态、保真闸门 ---------- */
+  docx: {
+    bold: "Bold",
+    italic: "Italic",
+    underline: "Underline",
+    undo: "Undo",
+    redo: "Redo",
+    /** 刚打开、还没动过：磁盘上的这一份就是屏幕上的这一份 */
+    clean: "No changes",
+    unsaved: "Not saved",
+    saving: "Saving…",
+    saved: "Saved",
+    saveFailed: "Couldn't save",
+    /** 工具栏状态栏的短写；完整说明在下面的提示条里 */
+    conflictShort: "File changed on disk",
+    conflictChanged: "This file changed on disk after you opened it. Nothing was written.",
+    conflictMissing: "This file was deleted on disk. Nothing was written.",
+    reload: "Reload from disk",
+    dismiss: "Dismiss",
+    /** 保真闸门：这次保存会整份重新生成文档，先把原因说清楚 */
+    repackLead: (reasons: string) => `This save rewrites the whole document (${reasons}).`,
+    repackReason: {
+      structure: "paragraphs or tables changed",
+      image: "a new image was added",
+      numbering: "a new numbering definition was added",
+      engine: "the editor reports a full rewrite",
+    },
+    /** 覆盖前的上一版落在应用数据目录（不进工作区） */
+    backupHint: "The previous version is copied into orbita's app data folder first, so you can go back to it.",
+    saveAnyway: "Save anyway",
+    /** 离场被拒：这次保存是「要切走」逼出来的，失败就等于切走会丢字 */
+    leaveBlocked: "These edits aren't saved yet, so leaving now would lose them. Retry the save, then switch.",
+    /** 关窗口被 beforeunload 拦下、flush 又没成功 */
+    unloadBlocked: "There are unsaved edits and the save failed, so closing was blocked. Retry, or close anyway and lose them.",
+    /** 关窗口/刷新被拦下但已经存好：不再自动关（分不清关窗与重载），给一句反馈 */
+    unloadSaved: "Your edits are saved now — close or reload again when you're ready.",
+    /** 写盘被权限 / 占用挡住（EPERM / EACCES / EBUSY 的人话版） */
+    writeBlocked: "This file can't be written: it is read-only, or another program is holding it open.",
+    retrySave: "Retry save",
+    closeAnyway: "Close anyway",
+    savedWithBackup: (path: string) => `Save (previous version: ${path})`,
+    /** 挂载前的页数粗估：先问，不要先冻住面板 */
+    oversizeEstimate: (estimate: number, limit: number) =>
+      `About ${estimate} pages — beyond the in-app limit (${limit}). Opening it here can freeze the panel for a while.`,
+    openAnyway: "Open anyway",
+    /** 页数超过 DOCX_MAX_PAGES：只读，改去 Word */
+    oversize: (limit: number, pages: number) =>
+      `This document has ${pages} pages — the in-app editor stops at ${limit}. It is read-only here; edit it in Word.`,
+    tooLarge: (size: string, limit: string) => `Too large to open here (${size} — the limit is ${limit})`,
+    tooNarrow: "The panel is too narrow for a readable page — widen it, or press Ctrl+\\ to switch to the paper layout.",
+    invalid: {
+      password: "This document is password-protected. Remove the password in Word and save again.",
+      "not-docx": "This file isn't a Word document.",
+      corrupt: "This file is damaged — it isn't a readable .docx package.",
+      missing: "This file isn't on disk anymore — it was deleted or renamed outside orbita.",
+    },
+    /* 目录页码自愈（issue #276）：保存时按屏幕上这一份分页改写目录里的页码 */
+    tocNoLayout: "Pagination isn't ready yet, so the contents page numbers weren't updated.",
+    tocHealed: (n: number) => `Updated ${n} contents page number${n === 1 ? "" : "s"}.`,
+    tocMissed: (n: number) =>
+      `Couldn't locate ${n} contents entr${n === 1 ? "y" : "ies"}; their page numbers were left as they were.`,
+    tocStatic: (n: number) =>
+      `Updated ${n} page number${n === 1 ? "" : "s"} in a static contents list — convert it to a field in Word for a lasting fix.`,
+    /* point-and-edit (N2): selection anchor chip, agent revisions, review bar */
+    anchorLabel: (ordinal: number, chars: number) =>
+      ordinal > 0 ? `paragraph ${ordinal} · ${chars} chars selected` : `${chars} chars selected`,
+    anchorTableLabel: (row: number, cell: number, chars: number) => `table row ${row}, cell ${cell} · ${chars} chars selected`,
+    anchorQuote: "Quote into composer",
+    anchorQuoteTitle: "Put this passage and its address in the composer — the agent edits it with edit_docx",
+    anchorClear: "Clear selection",
+    anchorSpanBlock: "Select inside one paragraph (a multi-paragraph selection can't be edited in one go yet)",
+    anchorQuoted: "Added to the composer.",
+    anchorTooLong: (max: number) => `The selection is longer than ${max} characters — select a shorter passage.`,
+    reviewTitle: (n: number) => `${n} revision${n === 1 ? "" : "s"}`,
+    reviewAccept: "Accept",
+    reviewReject: "Reject",
+    reviewAcceptAll: "Accept all",
+    reviewRejectAll: "Reject all",
+    reviewAgent: "agent edit",
+    reviewReanchored: "re-anchored",
+    reviewStale: "This revision is no longer in the document (already accepted or rejected).",
+    agentEditDone: (groups: number, skipped: number) =>
+      skipped === 0
+        ? `${groups} revision${groups === 1 ? "" : "s"} written — decide on them in the review bar below.`
+        : `${groups} revision${groups === 1 ? "" : "s"} written, ${skipped} not applied (see the tool result).`,
+    agentEditNothing: "That edit changed nothing (the replacement text equals the original).",
+    agentWriting: "The agent is writing a revision…",
+    agentAuthor: "Orbita",
+    stampNote: (n: number) => `Added paragraph ids to ${n} paragraph${n === 1 ? "" : "s"} (Word-compatible, body untouched) so edits can name the exact paragraph.`,
+    stampFailed:
+      "Couldn't add paragraph ids (the package may be signed): locating works for this session only — after saving and reopening you'll need to select again.",
+    /* toolbar (2026-11-22): paragraph style / alignment / lists — only what folio really supports */
+    paragraphStyleNamed: (name: string) => `Paragraph style: ${name}`,
+    alignLeft: "Align left",
+    alignCenter: "Center",
+    alignRight: "Align right",
+    paragraphMenu: "Alignment and lists",
+    bulletList: "Bulleted list",
+    numberedList: "Numbered list",
+    listMenu: "List",
+    /* comments (2026-11-22): list + new comment */
+    commentsTitle: (n: number) => `${n} comment${n === 1 ? "" : "s"}`,
+    commentAdd: "Comment",
+    commentPlaceholder: "Write this comment…",
+    commentSubmit: "Add comment",
+    commentCancel: "Cancel",
+    commentLocate: "Jump to text",
+    commentAnchorMissing: "Original text is gone",
+    commentReplies: (n: number) => `${n} repl${n === 1 ? "y" : "ies"}`,
+    commentAdded: "Comment added.",
+    commentStaleSelection: "The selected text changed — select the sentence you want to annotate again.",
+    commentWriteFailed: "This comment wasn't written (the editor is still loading).",
+    commentAuthor: "Me",
   },
 
   /* ---------- 右栏「意图」面板（实验功能 intent-system）：C 骨架 + 簇图 + 条目 ---------- */

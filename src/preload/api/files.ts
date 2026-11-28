@@ -16,10 +16,14 @@ import type {
   FilePreview,
   FileRoot,
   FileRootsRequest,
+  FileWriteRequest,
+  FileWriteResult,
   FsEntryFact,
   PdfFile,
   WebThumb,
 } from "../../shared/files.ts";
+import type { XlsxPreview, XlsxReadRequest, XlsxWriteRequest, XlsxWriteResult } from "../../shared/xlsx.ts";
+import type { PptxPreview, PptxReadRequest } from "../../shared/pptx.ts";
 
 export const filesApi = {
   /** 这条会话的根清单（工作台 / 工作区 / 附加目录），顺序固定、每次现算 */
@@ -32,6 +36,21 @@ export const filesApi = {
   read: (req: FileListRequest): Promise<FilePreview> => ipcRenderer.invoke(ipcChannels.fsRead, req),
   /** 读 PDF 整份字节给预览面板渲染（同白名单，且须是 .pdf） */
   readPdf: (req: FileListRequest): Promise<PdfFile> => ipcRenderer.invoke(ipcChannels.fsReadPdf, req),
+  /**
+   * 编辑器写回一个文本文件（同白名单）。`expectedHash` 对不上盘上内容时回 conflict、
+   * 不动盘；null = 用户选了「保留我的」，强制写。
+   */
+  write: (req: FileWriteRequest): Promise<FileWriteResult> => ipcRenderer.invoke(ipcChannels.fsWrite, req),
+  /** 读一份 .xlsx 的结构化预览（同白名单，且须是 .xlsx） */
+  readXlsx: (req: XlsxReadRequest): Promise<XlsxPreview> => ipcRenderer.invoke(ipcChannels.fsReadXlsx, req),
+  /**
+   * 把一批单元格改动写回 .xlsx（同白名单，且须是 .xlsx）。`expected` 是预览回执里的
+   * 指纹：盘上被外部改过就回 conflict、不动盘。只支持窗口内的格（见 shared/xlsx.ts）。
+   */
+  writeXlsx: (req: XlsxWriteRequest): Promise<XlsxWriteResult> =>
+    ipcRenderer.invoke(ipcChannels.fsWriteXlsx, req),
+  /** 读一份 .pptx 的只读大纲（同白名单，且须是 .pptx；只读，不含任何写入口） */
+  readPptx: (req: PptxReadRequest): Promise<PptxPreview> => ipcRenderer.invoke(ipcChannels.fsReadPptx, req),
   /** 给音 / 视频文件要播放地址（同白名单，且须是媒体扩展名）；<audio> / <video> 拿它按 Range 流式读 */
   mediaUrl: (req: FileListRequest): Promise<FileMediaUrl> => ipcRenderer.invoke(ipcChannels.fsMediaUrl, req),
   /** 建行索引（同 root/dir 白名单）：>16 MB 的文本走分段预览时先问这个文件有多少行 */

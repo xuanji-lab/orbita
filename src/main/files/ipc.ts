@@ -18,18 +18,32 @@ import {
   type PdfFile,
   type WebThumb,
   type FileRootsRequest,
+  type FileWriteRequest,
+  type FileWriteResult,
   type FsEntryFact,
 } from "../../shared/files.ts";
+import {
+  isXlsxFile,
+  type XlsxPreview,
+  type XlsxReadRequest,
+  type XlsxWriteRequest,
+  type XlsxWriteResult,
+} from "../../shared/xlsx.ts";
+import { isPptxFile, type PptxPreview, type PptxReadRequest } from "../../shared/pptx.ts";
 import type { SessionStore } from "../session/store.ts";
 import type { WorkspaceStore } from "../workspace/store.ts";
 import { resolveFileRoots } from "./roots.ts";
 import { listDirectory, whitelistedPath } from "./list.ts";
 import { buildLineIndex, readLines } from "./lines.ts";
 import { readPdfFile, readPreview } from "./read.ts";
+import { officeChangesFromCellEdits } from "../../shared/office.ts";
+import type { OfficeService } from "../office/service.ts";
+import { writeEditedFile } from "./write.ts";
+import { readXlsxInWorker, writeXlsxInWorker } from "../xlsx/service.ts";
+import { readPptxInWorker } from "../pptx/service.ts";
 import { localPageRoots } from "../browser/local-file.ts";
 import { webThumbOf } from "./web-thumb.ts";
 import { issueMediaUrl, type MediaTokens } from "./media-stream.ts";
-
 /**
  * @param openInBrowser 在内置浏览器「你的」tab 打开一个本地网页（BrowserSandbox.openLocalFile）。
  * 传函数不传沙盒：文件面板只需要这一个动作；页面可读根由浏览器按网页真实路径收窄。
@@ -44,6 +58,8 @@ export function registerFilesIpc(
   sessions: SessionStore,
   openInBrowser: (path: string) => Promise<void>,
   mediaTokens: MediaTokens,
+  /** 网格写回后把人的改动记进**与 agent 同一份**改动清单（office/service.ts） */
+  office?: OfficeService,
 ): void {
   ipcMain.handle(ipcChannels.fsRoots, (_event, req: FileRootsRequest) =>
     resolveFileRoots(workspaces, sessions, req),
@@ -129,6 +145,62 @@ export function registerFilesIpc(
     const path = await whitelistedPath(roots, req);
     if (!isPdfFile(path)) throw new Error(`Not a PDF file: ${path}`);
     return readPdfFile(path);
+  });
+
+  /**
+   * 编辑器写回（同白名单，契约见 files.ts 的 FileWriteRequest）。写前重读比对指纹：
+   * 编辑期间被外部改过就回 conflict、不动盘。「保留我的」用 expectedHash=null 强制写。
+   */
+  ipcMain.handle(ipcChannels.fsWrite, async (_event, req: FileWriteRequest): Promise<FileWriteResult> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    return writeEditedFile(path, req.text, req.expectedHash);
+  });
+
+  /**
+   * 读一份 .xlsx 的结构化预览（同白名单，外加只认 .xlsx）。**解析在 worker 线程里**：
+   * 大工作簿的解压 + 建模型有一段秒级的同步计算，主进程直接读会把窗口卡住（见
+   * main/xlsx/service.ts 顶注释）。扩展名判定同样用 realpath 之后的路径。
+   */
+  ipcMain.handle(ipcChannels.fsReadXlsx, async (_event, req: XlsxReadRequest): Promise<XlsxPreview> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isXlsxFile(path)) throw new Error(`Not an .xlsx file: ${path}`);
+    return readXlsxInWorker(path, req.sheet ?? 0);
+  });
+
+  /**
+   * 把一批单元格改动写回 .xlsx（同白名单，外加只认 .xlsx）。契约见 shared/xlsx.ts，
+   * 内核见 main/xlsx/edit.ts：只改目标格的 XML，原子写，带冲突闸与窗口闸。
+   *
+   * 写盘在同一个 worker 线程里（同一个文件天然串行）。人的改动是「这一批文档改动」的
+   * 一部分，所以写成功后记进 OfficeService 的同一份清单（作者「你」）——面板上人的改动
+   * 与 agent 的 `edit_office` 共用一份口径、同一个「回退这批改动」。
+   */
+  ipcMain.handle(ipcChannels.fsWriteXlsx, async (_event, req: XlsxWriteRequest): Promise<XlsxWriteResult> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isXlsxFile(path)) throw new Error(`Not an .xlsx file: ${path}`);
+    const run = (): Promise<XlsxWriteResult> => writeXlsxInWorker(path, req.edits, req.expected);
+    if (office === undefined || req.sessionId === null) return run();
+    // 清单条目现在就算好（写回是全有全无，成功的条目就是这一批）；旧值由面板带上
+    const changes = officeChangesFromCellEdits(req.edits, Date.now());
+    return office.saveGridEdits(req.sessionId, path, run, changes);
+  });
+
+  /**
+   * 读一份 .pptx 的只读大纲（同白名单，外加只认 .pptx）。扩展名判定同样用 realpath
+   * 之后的路径——改名成 foo.pptx 的软链接指向别的文件一样被拒。
+   *
+   * **解析在一次性 worker 线程里**（含堆上限与总超时，见 main/pptx/service.ts 顶注释）：
+   * 解压成本由文件内容决定，0.9 MB 的构造包能解出几百 MB XML，留在主进程就是
+   * 卡顿 / OOM。
+   */
+  ipcMain.handle(ipcChannels.fsReadPptx, async (_event, req: PptxReadRequest): Promise<PptxPreview> => {
+    const roots = await resolveFileRoots(workspaces, sessions, req);
+    const path = await whitelistedPath(roots, req);
+    if (!isPptxFile(path)) throw new Error(`Not a .pptx file: ${path}`);
+    return readPptxInWorker(path);
   });
 
   /**

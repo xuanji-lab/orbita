@@ -1,0 +1,56 @@
+This is BibTeX, Version 0.99d (TeX Live 2025)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: main.aux
+The style file: plain.bst
+Database file #1: refs.bib
+Illegal end of database file---line 5 of file refs.bib
+ : }
+ :  
+I'm skipping whatever remains of this entry
+Warning--to sort, need author or key in levy2019
+Warning--empty author in levy2019
+Warning--empty title in levy2019
+Warning--empty journal in levy2019
+Warning--empty year in levy2019
+You've used 1 entry,
+            2118 wiz_defined-function locations,
+            498 strings with 3993 characters,
+and the built_in function-call counts, 175 in all, are:
+= -- 10
+> -- 1
+< -- 0
++ -- 1
+- -- 0
+* -- 19
+:= -- 24
+add.period$ -- 1
+call.type$ -- 1
+change.case$ -- 2
+chr.to.int$ -- 0
+cite$ -- 6
+duplicate$ -- 10
+empty$ -- 19
+format.name$ -- 0
+if$ -- 31
+int.to.chr$ -- 0
+int.to.str$ -- 1
+missing$ -- 1
+newline$ -- 6
+num.names$ -- 0
+pop$ -- 10
+preamble$ -- 1
+purify$ -- 2
+quote$ -- 0
+skip$ -- 7
+stack$ -- 0
+substring$ -- 5
+swap$ -- 0
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 4
+warning$ -- 5
+while$ -- 0
+width$ -- 2
+write$ -- 6
+(There was 1 error message)

@@ -7,6 +7,7 @@
 import { PRICE_CHART_CATEGORIES, type PriceChartCategory } from "./price-chart.ts";
 import { isThinkingLevel, type ThinkingLevel } from "./thinking.ts";
 import { MEMORY_VECTOR_MODELS, type MemoryVectorSettings } from "./memory.ts";
+import { isDocxTemplateMode, type DocxTemplateMode } from "./docx-export.ts";
 
 /**
  * 主题偏好。"system" 是真正的默认，不是「light 的别名」：
@@ -209,6 +210,29 @@ export interface AppSettings {
    */
   sidebarWidth?: number;
   /**
+   * 论文工作台并排（源码 ↔ PDF）的宽度比例：**左块（源码）占面板的比例**。
+   * 0.2–0.8，缺席 = 0.5。存比例不存像素——面板宽随布局 / 窗口变化，像素值换个
+   * 窗口就不再是用户要的那个比例。每侧的最小宽（源码 320 / PDF 280）由渲染层
+   * 按当前面板宽夹取，存储层只拦明显越界的坏值。
+   */
+  paperPdfRatio?: number;
+  /**
+   * 布局 B「稿件为主」里对话栏的宽度（px），缺席 = PAPER_CHAT_WIDTH（340）。
+   * **真正的上限是动态的**：容器宽的一半（见 split-limits.ts 的 clampPaperChatWidth），
+   * 存储层只做 280 的下界与 4096 的硬上界——换个窄窗口打开时渲染层会按当前容器再夹一次。
+   * 只在这个布局生效；布局 A 的对话栏仍然吃满主区。
+   */
+  paperChatWidth?: number;
+  /**
+   * 问题抽屉被拖出来的高度（px）。**缺席 = 按内容自适应**（现状），不给默认值——
+   * 大多数时候抽屉只有一行或几行，写死一个高度反而更差。
+   * 下界 96（一行头部 + 一条问题）；上界在这里只做硬校验（2400），真正的
+   * 「不超过视口 70%」由渲染层按当前窗口高夹取。
+   */
+  latexProblemsHeight?: number;
+  /** `.pptx` 大纲页列表的宽度（px）：140–360，缺席 = 184。容器 <420 时布局转上下，不生效。 */
+  pptxPagesWidth?: number;
+  /**
    * 星系的相机俯角（度，设置 › 外观 › 星系倾角）：单智能体首页、编排 New Task 页、右栏星系图、设计面板的轨道预览同一个值
    * （2026-11-24 用户：「可以多给我几种倾斜角度的星系吗，我来选一个舒服的，或者我们也可以直接 provide 这个 option」）。
    * 只认 GALAXY_TILT 区间内、步长整数倍的值，别的丢掉；缺席 = GALAXY_TILT.default
@@ -360,6 +384,40 @@ export interface AppSettings {
    * 用户指定，agent 每轮被告知（TurnDirectories.browserDownloads）。
    */
   browserDownloadDir?: string;
+  /**
+   * 显式指定的 latexmk 可执行文件（绝对路径）。**缺席 = 只靠 PATH 与常见安装根探测**。
+   *
+   * 为什么需要它：TeX 装在非常规位置（自定目录 / 内网分发 / 多个发行版共存）时，
+   * PATH 与常见根都会落空，而「指定位置」是未安装引导卡上的第三个动作。机器级
+   * 而不是项目级：换项目不该重选一次编译器。只接受**绝对路径**（相对路径会随 cwd 漂）；
+   * 坏的路径不会把编译变成死路，probe 验不活会回退到 PATH（见 probe.ts）。
+   */
+  latexmkPath?: string;
+  /**
+   * 显式指定的 OfficeCLI 可执行文件（绝对路径）。**缺席 = 设置没指 → 环境变量
+   * ORBITA_OFFICECLI → 随包资源 → 开发态 build/bin → 常见安装目录**（顺序见
+   * main/office/cli.ts）。同 latexmkPath：只认绝对路径；验不过就继续往下找，不会让
+   * Office 渲染变成死路。设置页只有一个状态行与这个路径输入框。
+   */
+  officeCliPath?: string;
+  /**
+   * Word 导出用的 pandoc 可执行文件（绝对路径）。**缺席 = 只靠 PATH 与常见安装根探测**。
+   * 与 latexmkPath 同一条纪律：机器级、只认绝对路径、坏的路径不把导出变成死路
+   * （probe 验不活会回退到 PATH）。
+   */
+  pandocPath?: string;
+  /**
+   * Word 导出的模板来源：`default`（内置，pandoc reference.docx + 中文字体）、
+   * `project`（源文件旁边的 template.docx）、`custom`（docxTemplatePath）。
+   * 缺席 = default。
+   */
+  docxTemplateMode?: DocxTemplateMode;
+  /**
+   * 学校 / 期刊模板 .docx 的绝对路径（`docxTemplateMode === "custom"` 时用）。
+   * 机器级：同一所学校的所有论文共用一个模板。配了但文件不在时导出**报错而不是
+   * 静默回落内置模板**——用户以为在用学校模板、实际没有，是最坏的一种「成功」。
+   */
+  docxTemplatePath?: string;
   /**
    * 设置 › 模型服务这一页的界面记忆：卡片尺寸、「仅显示已添加」、价格 · 能力图停在哪个分类，
    * 放在一个对象里管（用户 2026-10-25）。缺席 = 全部默认。store 写入时按键合并一层（同 drawer），
@@ -536,11 +594,13 @@ export const isDocPaper = (value: unknown): value is DocPaper =>
 export type SettingsPatch = Partial<
   Omit<
     AppSettings,
-    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays" | "avatarModel"
+    "drawer" | "lastUsed" | "choreModel" | "subSessionModel" | "subSessionThinking" | "sidebarAgeDays" | "latexProblemsHeight" | "avatarModel"
   >
 > & {
   /** `null` = 清除，退回「不限」（同 choreModel：undefined 在补丁里是「没改」，选不回默认） */
   sidebarAgeDays?: SidebarAgeDays | null;
+  /** `null` = 清除，抽屉回到按内容自适应（同 sidebarAgeDays 的 null 语义） */
+  latexProblemsHeight?: number | null;
   drawer?: Partial<DrawerSettings>;
   lastUsed?: Partial<LastUsedIntent>;
   /**
@@ -571,6 +631,18 @@ export const RIGHT_PANEL_WIDTH_DEFAULT = 320;
 export const SIDEBAR_WIDTH_MIN = 240;
 export const SIDEBAR_WIDTH_MAX = 400;
 export const SIDEBAR_WIDTH_DEFAULT = 288;
+
+/**
+ * 论文工作台三处拆分条的区间（与渲染层拖拽 / 键盘的夹取同源）。
+ * - `PAPER_PDF_RATIO`：源码 ↔ PDF 的宽度**比例**（左块占整块面板的比例）；
+ * - `PAPER_CHAT_WIDTH_RANGE`：布局 B 的对话栏宽（px，280 起；上限由容器宽的一半现算）；
+ * - `PROBLEMS_HEIGHT`：问题抽屉高（px，上界 2400 只是存储层的硬校验，渲染层按 70vh 夹）；
+ * - `PPTX_PAGES_WIDTH`：`.pptx` 大纲页列表宽（px）。
+ */
+export const PAPER_PDF_RATIO = { min: 0.2, max: 0.8, default: 0.5 } as const;
+export const PAPER_CHAT_WIDTH_RANGE = { min: 280, max: 4096, default: 340 } as const;
+export const PROBLEMS_HEIGHT = { min: 96, max: 2400 } as const;
+export const PPTX_PAGES_WIDTH = { min: 140, max: 360, default: 184 } as const;
 
 /**
  * 右栏宽度的硬地板（px）。小窗口保护：窗口再窄，右栏也不能收成一条看不出内容的缝。
@@ -734,6 +806,10 @@ export function parseSettings(raw: unknown): AppSettings {
     rightPanelWidth?: unknown;
     docPanelWidth?: unknown;
     sidebarWidth?: unknown;
+    paperPdfRatio?: unknown;
+    paperChatWidth?: unknown;
+    latexProblemsHeight?: unknown;
+    pptxPagesWidth?: unknown;
     galaxyTilt?: unknown;
     galaxyAzimuth?: unknown;
     galaxyTurntable?: unknown;
@@ -761,6 +837,11 @@ export function parseSettings(raw: unknown): AppSettings {
     avatarModel?: unknown;
     lastUsed?: unknown;
     browserDownloadDir?: unknown;
+    latexmkPath?: unknown;
+    officeCliPath?: unknown;
+    pandocPath?: unknown;
+    docxTemplateMode?: unknown;
+    docxTemplatePath?: unknown;
     starredModels?: unknown;
     usagePet?: unknown;
     providersPage?: unknown;
@@ -782,6 +863,10 @@ export function parseSettings(raw: unknown): AppSettings {
   const width = record.rightPanelWidth;
   const sidebar = record.sidebarWidth;
   const docWidth = record.docPanelWidth;
+  const pdfRatio = record.paperPdfRatio;
+  const chatWidth = record.paperChatWidth;
+  const problemsHeight = record.latexProblemsHeight;
+  const pptxPages = record.pptxPagesWidth;
   const compaction = parseCompaction(record.compaction);
   const orchestraMain = parseKeyed(record.orchestraMain, isSessionId);
   const orchestraEntry = parseKeyed(record.orchestraEntry, isOrchestraEntry);
@@ -821,6 +906,32 @@ export function parseSettings(raw: unknown): AppSettings {
     sidebar >= SIDEBAR_WIDTH_MIN &&
     sidebar <= SIDEBAR_WIDTH_MAX
       ? { sidebarWidth: Math.round(sidebar) }
+      : {}),
+    // 论文工作台的三处拆分：同样是「越界直接丢」，每侧最小宽 / 70vh 由渲染层按
+    // 当前面板与窗口尺寸夹——存储层拿不到那些数字
+    ...(typeof pdfRatio === "number" &&
+    Number.isFinite(pdfRatio) &&
+    pdfRatio >= PAPER_PDF_RATIO.min &&
+    pdfRatio <= PAPER_PDF_RATIO.max
+      ? { paperPdfRatio: pdfRatio }
+      : {}),
+    ...(typeof chatWidth === "number" &&
+    Number.isFinite(chatWidth) &&
+    chatWidth >= PAPER_CHAT_WIDTH_RANGE.min &&
+    chatWidth <= PAPER_CHAT_WIDTH_RANGE.max
+      ? { paperChatWidth: Math.round(chatWidth) }
+      : {}),
+    ...(typeof problemsHeight === "number" &&
+    Number.isFinite(problemsHeight) &&
+    problemsHeight >= PROBLEMS_HEIGHT.min &&
+    problemsHeight <= PROBLEMS_HEIGHT.max
+      ? { latexProblemsHeight: Math.round(problemsHeight) }
+      : {}),
+    ...(typeof pptxPages === "number" &&
+    Number.isFinite(pptxPages) &&
+    pptxPages >= PPTX_PAGES_WIDTH.min &&
+    pptxPages <= PPTX_PAGES_WIDTH.max
+      ? { pptxPagesWidth: Math.round(pptxPages) }
       : {}),
     ...(isGalaxyTilt(record.galaxyTilt) ? { galaxyTilt: record.galaxyTilt } : {}),
     ...(isGalaxyAzimuth(record.galaxyAzimuth) ? { galaxyAzimuth: record.galaxyAzimuth } : {}),
@@ -880,6 +991,30 @@ export function parseSettings(raw: unknown): AppSettings {
     // 只认绝对路径（POSIX 以 / 开头，Windows 盘符或 UNC）：相对路径会随 cwd 漂，当作没设
     ...(typeof record.browserDownloadDir === "string" && isAbsolutePath(record.browserDownloadDir)
       ? { browserDownloadDir: record.browserDownloadDir }
+      : {}),
+    // 同一条纪律：latexmk 的显式路径必须是绝对路径，且不是空串
+    ...(typeof record.latexmkPath === "string" &&
+    record.latexmkPath.trim() !== "" &&
+    isAbsolutePath(record.latexmkPath.trim())
+      ? { latexmkPath: record.latexmkPath.trim() }
+      : {}),
+    // OfficeCLI 的显式路径：同一条纪律（绝对路径、非空）
+    ...(typeof record.officeCliPath === "string" &&
+    record.officeCliPath.trim() !== "" &&
+    isAbsolutePath(record.officeCliPath.trim())
+      ? { officeCliPath: record.officeCliPath.trim() }
+      : {}),
+    // pandoc / 学校模板同一条纪律：只认绝对路径
+    ...(typeof record.pandocPath === "string" &&
+    record.pandocPath.trim() !== "" &&
+    isAbsolutePath(record.pandocPath.trim())
+      ? { pandocPath: record.pandocPath.trim() }
+      : {}),
+    ...(isDocxTemplateMode(record.docxTemplateMode) ? { docxTemplateMode: record.docxTemplateMode } : {}),
+    ...(typeof record.docxTemplatePath === "string" &&
+    record.docxTemplatePath.trim() !== "" &&
+    isAbsolutePath(record.docxTemplatePath.trim())
+      ? { docxTemplatePath: record.docxTemplatePath.trim() }
       : {}),
     // 只认布尔（同 gitAttribution 的纪律）："yes" 这类手改值该被丢掉，而不是当成真；
     // 逐项开关下「全关」不落键（空表 undefined，同 starredModels 的纪律）
