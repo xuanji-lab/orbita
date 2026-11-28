@@ -74,6 +74,14 @@ export interface ComputerUseRuntimeDeps {
   allowNetwork?: () => boolean | Promise<boolean>;
   /** L3 的后端（QEMU）。不传就用默认配置自己造一个——单测与不关心镜像路径的调用方不必给 */
   qemu?: SandboxProvider;
+  /**
+   * **状态迁移的唯一出口**（index.ts 接 `broadcastComputerUseStatus` + 租约作废）。
+   *
+   * WSB / L2b 由自己的构造参数直推（它们在 index.ts 里就接了）；QEMU 这只**是门面造的**，
+   * 所以必须从这里转一手，否则 `computer-use:status` 对 qemu 一条都不推——真机 P0：
+   * VM 明明起来了，设置页一直「未启动」，「关闭」还是灰的，用户停不掉。
+   */
+  onStatus?: (status: SandboxStatus) => void;
   /** 能力探测里的 L2b 依赖检查 */
   probeIsolation: () => Promise<IsolationSessionProbe>;
   log?: (message: string) => void;
@@ -111,8 +119,19 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    * QEMU 也在这张表里（P3 的空位），它的 status() 恒为 off——注册在这里是为了让
    * 「谁在跑」这件事只有一处枚举，而不是每个方法各写一份 if。
    */
+  const onStatus = deps.onStatus;
   const qemu: SandboxProvider =
-    deps.qemu ?? new QemuSandboxProvider({ ...(deps.allowNetwork === undefined ? {} : { allowNetwork: deps.allowNetwork }) });
+    deps.qemu ??
+    new QemuSandboxProvider({
+      ...(deps.allowNetwork === undefined ? {} : { allowNetwork: deps.allowNetwork }),
+      ...(onStatus === undefined ? {} : { onStatus }),
+    });
+  /**
+   * 注入进来的 provider（单测的真 provider + 假 VM、或将来的换实现）不走上面的构造参数，
+   * 但仍须接到同一条广播上——这条 P0 的成因就是「有一条路没接上」。
+   * 没有 subscribeStatus 的实现（纯假件）自然跳过：它们自己决定要不要发事件。
+   */
+  if (deps.qemu !== undefined && onStatus !== undefined) qemu.subscribeStatus?.(onStatus);
   const providers: readonly SandboxProvider[] = [deps.isolation, deps.wsb, qemu];
 
   /** 本门面亲手启动的那一局的两个事实；没在跑 = null。见 ComputerUseRunningFacts 的理由 */

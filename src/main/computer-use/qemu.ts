@@ -128,6 +128,16 @@ export interface QemuSandboxHooks {
    * guest 出不了外网；桌面通道（hostfwd）不受影响。
    */
   allowNetwork?: () => boolean | Promise<boolean>;
+  /**
+   * 状态迁移的通知**（每一次迁移都调，含启动失败与停止失败）**。
+   *
+   * 为什么这是 P0：三个后端里只有 WSB / L2b 在 index.ts 里接了这条广播，QEMU 没接——
+   * 真机上点「启动」VM 起来了（进程在、端口在、截图是桌面），设置页却一直显示「未启动」，
+   * 「关闭」还是灰的：**用户在设置页里停不掉这台 VM**。反过来停的时候 400ms 就回 off，
+   * 界面还停在「运行中」。
+   * 门面（runtime.ts）把这里的通知接到 deps.onStatus，与另外两个后端同一条广播。
+   */
+  onStatus?: (status: SandboxStatus) => void;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -150,12 +160,34 @@ export class QemuSandboxProvider implements SandboxProvider {
   #screen: { width: number; height: number } | null = null;
   #version = "p3-guestd";
 
+  /** 状态迁移的订阅者（构造参数里的 onStatus + 后来 subscribeStatus 的） */
+  readonly #statusListeners: Array<(status: SandboxStatus) => void> = [];
+
   constructor(hooks: QemuSandboxHooks = {}) {
     this.#hooks = hooks;
+    if (hooks.onStatus !== undefined) this.#statusListeners.push(hooks.onStatus);
   }
 
   status(): SandboxStatus {
     return this.#state;
+  }
+
+  /**
+   * 事后订阅状态迁移。**为了注入的 provider 也能接上同一条广播**：门面（runtime.ts）
+   * 自己造的这只走构造参数；单测 / 换实现传进来的那只走这里——否则两条路会分叉，
+   * 而分叉的正是这条 P0（事件从没发出去）。
+   */
+  subscribeStatus(listener: (status: SandboxStatus) => void): void {
+    this.#statusListeners.push(listener);
+  }
+
+  /**
+   * 唯一的写状态处：赋值并**通知所有订阅者**（与 WSB / L2b 每次迁移都 onStatus 一致）。
+   * 新对象与 status() 返回的是同一个引用——监听方可以把它直接交给界面。
+   */
+  #setState(next: SandboxStatus): void {
+    this.#state = next;
+    for (const listener of this.#statusListeners) listener(next);
   }
 
   /**
@@ -166,7 +198,7 @@ export class QemuSandboxProvider implements SandboxProvider {
     if (this.#state.state === "running") return { ok: true };
     if (this.#state.state === "starting") return { ok: false, error: cuTexts().qemuStarting };
     const paths = this.#hooks.paths ?? qemuVmPaths();
-    this.#state = { state: "starting", startedAt: Date.now(), backend: "qemu" };
+    this.#setState({ state: "starting", startedAt: Date.now(), backend: "qemu" });
     let vm: QemuVmHandle | null = null;
     try {
       const ports = await pickFreePorts();
@@ -192,19 +224,19 @@ export class QemuSandboxProvider implements SandboxProvider {
       // 参照物，它要是空白，模型会拿着一张空屏去「找图标」。所以这里等画出来再报 running。
       await waitForPaintedDesktop({ port: vm.ports.desk, token: vm.token });
       this.#version = ready.version ?? "p3-guestd";
-      this.#state = {
+      this.#setState({
         state: "running",
         startedAt: Date.now(),
         bridgeVersion: this.#version,
         backend: "qemu",
-      };
+      });
       return { ok: true };
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
       if (vm !== null) await (this.#hooks.stopVm ?? stopQemuVm)(vm).catch(() => undefined);
       this.#vm = null;
       this.#screen = null;
-      this.#state = { state: "error", message, backend: "qemu" };
+      this.#setState({ state: "error", message, backend: "qemu" });
       return { ok: false, error: message };
     }
   }
@@ -214,17 +246,17 @@ export class QemuSandboxProvider implements SandboxProvider {
     this.#vm = null;
     this.#screen = null;
     if (vm === null) {
-      this.#state = { state: "off" };
+      this.#setState({ state: "off" });
       return { ok: true };
     }
-    this.#state = { state: "stopping" };
+    this.#setState({ state: "stopping" });
     try {
       await (this.#hooks.stopVm ?? stopQemuVm)(vm);
-      this.#state = { state: "off" };
+      this.#setState({ state: "off" });
       return { ok: true };
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      this.#state = { state: "error", message, backend: "qemu" };
+      this.#setState({ state: "error", message, backend: "qemu" });
       return { ok: false, error: cuTexts().qemuStopFailed(message) };
     }
   }
@@ -399,11 +431,11 @@ export class QemuSandboxProvider implements SandboxProvider {
     this.#vm = null;
     if (vm === null) return;
     if (!vmAlive(vm.pid)) {
-      this.#state = { state: "off" };
+      this.#setState({ state: "off" });
       return;
     }
     await (this.#hooks.stopVm ?? stopQemuVm)(vm).catch(() => undefined);
-    this.#state = { state: "off" };
+    this.#setState({ state: "off" });
   }
 
   /**
