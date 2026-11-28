@@ -1197,7 +1197,7 @@ export const zh: Messages = {
     shotAlt: "沙箱桌面截图",
     /*
      * 会话级同意书（2026-11-27）：流里问一次（甲），答完后流里留一条记录 + 输入框上方
-     * 一条安静的状态行（乙）。拒绝原文来自 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT——
+     * 一条安静的状态行（乙）。拒绝原文来自 shared 的 computerUseConsentTexts（按界面语言取）——
      * 与模型收到的那句是同一句。
      */
     consentAsk: "允许操作这台沙箱桌面？",
@@ -1206,6 +1206,7 @@ export const zh: Messages = {
     consentDeny: "拒绝",
     consentAllowedRecord: "已允许，本会话内不再询问",
     consentDeniedRecord: "已拒绝，本会话内不再操作电脑",
+    consentUnansweredRecord: "没有人回答，已按拒绝处理 · 需要时请重新允许",
     consentRevoke: "撤销",
     consentToldModel: (text: string) => `已告知模型：${text}`,
     consentStatusAllowed: "已允许操作沙箱桌面（本会话）",
@@ -1215,6 +1216,9 @@ export const zh: Messages = {
     emergencyHotkeyInfo:
       "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。**不关闭沙箱**——现场留着给你看。要再用需要重新授权。",
     emergencyRegistered: "已注册，随时可用",
+    /** 主选被占用、降级到候选键位时说清「现在生效的是哪一个」（2026-11-28 验收 P2-2） */
+    emergencyFallback: (preferred: string, active: string) =>
+      `主快捷键 ${preferred} 被其它应用占用，已改用 ${active}`,
     emergencyUnavailable: (error) => `不可用：${error}。请关掉占用这个快捷键的应用后重启本应用。`,
     emergencyStopped: "已急停：这一轮已经停下，本会话的电脑使用授权已撤销。沙箱没有关闭，画面还在。",
   },

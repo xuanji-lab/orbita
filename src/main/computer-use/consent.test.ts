@@ -11,18 +11,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  COMPUTER_USE_CONSENT_DENIED_TEXT,
-  COMPUTER_USE_CONSENT_STOPPED_TEXT,
-  COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
-  COMPUTER_USE_UNATTENDED_TEXT,
   computerUseBlockedReason,
+  computerUseConsentTexts,
   type ComputerUseConsent,
   type ComputerUseConsentAskCancelledEvent,
   type ComputerUseConsentAskEvent,
   type ComputerUseConsentStateEvent,
+  type ComputerUseConsentTexts,
   type ComputerUseSessionShape,
   type ComputerUseTurnOrigin,
 } from "../../shared/computer-use.ts";
+
+/** 测试里默认用中文那一份：正文断言与产品默认行为（中文界面）一致 */
+const ZH = computerUseConsentTexts("zh");
+const EN = computerUseConsentTexts("en");
 import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./consent.ts";
 
 function collectAsk(): {
@@ -140,7 +142,7 @@ function fakeSession(
   initial: ComputerUseConsent | null,
   options: { session?: ComputerUseSessionShape; origin?: ComputerUseTurnOrigin } = {},
 ): {
-  read: () => Promise<{ consent: ComputerUseConsent; blockedReason: string | null } | null>;
+  read: () => Promise<{ consent: ComputerUseConsent; blocked: "main-session-only" | "unattended" | null } | null>;
   write: (next: ComputerUseConsent) => Promise<boolean>;
   state: () => ComputerUseConsent | null;
   writes: ComputerUseConsent[];
@@ -155,7 +157,7 @@ function fakeSession(
     // 忠实复刻 store.update：meta 不在就是「没写」，不抛错
     read: async () =>
       alive && value !== null
-        ? { consent: value, blockedReason: computerUseBlockedReason(session, origin) }
+        ? { consent: value, blocked: computerUseBlockedReason(session, origin) }
         : null,
     write: async (next) => {
       if (!alive) return false;
@@ -179,6 +181,7 @@ function makeGate(options: {
   silentWrite?: boolean;
   session?: ComputerUseSessionShape;
   origin?: ComputerUseTurnOrigin;
+  texts?: ComputerUseConsentTexts;
   timeoutMs?: number;
 }): {
   gate: ReturnType<typeof createComputerUseConsentGate>;
@@ -215,6 +218,7 @@ function makeGate(options: {
     },
     canAsk: () => options.canAsk !== false,
     notify: (event) => states.push(event),
+    texts: async () => options.texts ?? ZH,
     log: () => {},
   });
   void events;
@@ -232,7 +236,7 @@ test("闸门：denied 不执行，回固定的那句拒绝文本（同一来源�
   const { gate, asked } = makeGate({ initial: "denied" });
   assert.deepEqual(await gate.ensure("s1", "click"), {
     ok: false,
-    error: COMPUTER_USE_CONSENT_DENIED_TEXT,
+    error: ZH.denied,
   });
   assert.deepEqual(asked, [], "拒绝过就不再打扰用户");
 });
@@ -255,7 +259,7 @@ test("闸门：unset → 答拒绝 → 落 denied 并拒绝（同一句固定文
   const { gate, store } = makeGate({ initial: "unset", decision: "denied" });
   assert.deepEqual(await gate.ensure("s1", "sandbox-navigate"), {
     ok: false,
-    error: COMPUTER_USE_CONSENT_DENIED_TEXT,
+    error: ZH.denied,
   });
   assert.deepEqual(store.writes, ["denied"]);
 });
@@ -264,7 +268,7 @@ test("闸门：超时按 denied 落库并拒绝（fail closed）", async () => {
   const { gate, store, states } = makeGate({ initial: "unset", decision: "timeout", timeoutMs: 20 });
   assert.deepEqual(await gate.ensure("s1", "screenshot"), {
     ok: false,
-    error: COMPUTER_USE_CONSENT_DENIED_TEXT,
+    error: ZH.denied,
   });
   assert.deepEqual(store.writes, ["denied"]);
   assert.equal(states[0]!.source, "timeout");
@@ -278,7 +282,7 @@ test("闸门：停轮 → 挂起提问被取消 → 工具以「已停止」返�
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(waiter.size, 1);
   waiter.cancel("s1");
-  assert.deepEqual(await pending, { ok: false, error: COMPUTER_USE_CONSENT_STOPPED_TEXT });
+  assert.deepEqual(await pending, { ok: false, error: ZH.stopped });
   assert.deepEqual(store.writes, [], "取消不写 meta");
   assert.deepEqual(states, [], "也没有状态广播（授权状态没变）");
   assert.equal(store.state(), "unset");
@@ -289,7 +293,7 @@ test("闸门：停轮 → 挂起提问被取消 → 工具以「已停止」返�
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(asked.length, 2, "重新问了一次");
   waiter.cancel("s1");
-  assert.deepEqual(await again, { ok: false, error: COMPUTER_USE_CONSENT_STOPPED_TEXT });
+  assert.deepEqual(await again, { ok: false, error: ZH.stopped });
   assert.deepEqual(store.writes, []);
 });
 
@@ -298,7 +302,7 @@ test("闸门：停轮后即使等过 120s（缩小成 20ms），也不许写 den
   const pending = gate.ensure("s1", "click");
   await new Promise((resolve) => setTimeout(resolve, 5));
   waiter.cancel("s1");
-  assert.deepEqual(await pending, { ok: false, error: COMPUTER_USE_CONSENT_STOPPED_TEXT });
+  assert.deepEqual(await pending, { ok: false, error: ZH.stopped });
   // 超过原来的超时线再等一会：不能有任何 delayed 写入
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.deepEqual(store.writes, [], "取消之后没有任何写盘（既没 denied 也没别的）");
@@ -309,7 +313,7 @@ test("闸门：没人能回答（窗口全关 / 自动化无人看守）不提�
   const { gate, store, asked } = makeGate({ initial: "unset", canAsk: false });
   assert.deepEqual(await gate.ensure("s1", "screenshot"), {
     ok: false,
-    error: COMPUTER_USE_CONSENT_DENIED_TEXT,
+    error: ZH.denied,
   });
   assert.deepEqual(asked, [], "不弹一个没人看的卡");
   assert.deepEqual(store.writes, ["denied"]);
@@ -325,7 +329,7 @@ test("闸门：允许了但落盘抛错 → 这次也不执行（不拿没记下
   const { gate, states } = makeGate({ initial: "unset", decision: "allowed", writeFails: true });
   assert.deepEqual(await gate.ensure("s1", "screenshot"), {
     ok: false,
-    error: COMPUTER_USE_CONSENT_DENIED_TEXT,
+    error: ZH.denied,
   });
   assert.deepEqual(states, []);
 });
@@ -333,7 +337,7 @@ test("闸门：允许了但落盘抛错 → 这次也不执行（不拿没记下
 test("闸门：允许了但写盘静默没落下（会话在挂起期间被删）→ 按拒绝收口，不下发", async () => {
   const { gate, asked, states } = makeGate({ initial: "unset", decision: "allowed", silentWrite: true });
   const verdict = await gate.ensure("s1", "screenshot");
-  assert.deepEqual(verdict, { ok: false, error: COMPUTER_USE_CONSENT_DENIED_TEXT });
+  assert.deepEqual(verdict, { ok: false, error: ZH.denied });
   assert.deepEqual(asked, ["screenshot"], "提问是真的发出去了");
   assert.deepEqual(states, [], "没落下就不广播一条假的 allowed");
 });
@@ -342,7 +346,7 @@ test("闸门：子会话 / 自动化会话立刻拒绝（主会话专用），�
   const { gate, asked, store } = makeGate({ initial: "allowed", session: { parentId: "p" } });
   assert.deepEqual(await gate.ensure("child", "screenshot"), {
     ok: false,
-    error: COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
+    error: ZH.mainSessionOnly,
   });
   assert.deepEqual(asked, [], "不问——它的提问用户看不到");
   assert.deepEqual(store.writes, [], "也不写它的 meta");
@@ -354,7 +358,7 @@ test("闸门：子会话 / 自动化会话立刻拒绝（主会话专用），�
  */
 test("闸门：自动化发起 + 主会话 → 即时拒绝、0 次提问、0 次写盘（this_session 那条入口）", async () => {
   const { gate, store, asked, states } = makeGate({ initial: "unset", origin: "automation" });
-  assert.deepEqual(await gate.ensure("s1", "click"), { ok: false, error: COMPUTER_USE_UNATTENDED_TEXT });
+  assert.deepEqual(await gate.ensure("s1", "click"), { ok: false, error: ZH.unattended });
   assert.deepEqual(asked, [], "用户不在看：问也问不到，直接说清楚");
   assert.deepEqual(store.writes, [], "更不能借 120s 超时把 denied 写进用户的会话");
   assert.deepEqual(states, [], "没有状态广播");
@@ -388,8 +392,29 @@ test("闸门 × 下发：promoted 自动化 + 用户发起会执行；同一会�
     origin: "automation",
   });
   assert.deepEqual(viaAutomation.ran, [], "自动化那一轮不碰桌面，哪怕本会话早前被允许过");
-  assert.equal(viaAutomation.verdictError, COMPUTER_USE_UNATTENDED_TEXT);
+  assert.equal(viaAutomation.verdictError, ZH.unattended);
 });
+/**
+ * P2-1：给模型的固定文本按界面语言取。英文界面下四句都要是英文——
+ * 拒绝文本会原样出现在界面「已告知模型：…」那一行里，夹中文就是夹生字。
+ */
+test("英文界面：拒绝 / 停止 / 主会话专用 / 自动化 四句都走英文", async () => {
+  const denied = makeGate({ initial: "denied", texts: EN });
+  assert.deepEqual(await denied.gate.ensure("s1", "click"), { ok: false, error: EN.denied });
+
+  const stopped = makeGate({ initial: "unset", texts: EN, timeoutMs: 5_000 });
+  const pending = stopped.gate.ensure("s1", "click");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  stopped.waiter.cancel("s1");
+  assert.deepEqual(await pending, { ok: false, error: EN.stopped });
+
+  const child = makeGate({ initial: "allowed", texts: EN, session: { parentId: "p" } });
+  assert.deepEqual(await child.gate.ensure("s1", "click"), { ok: false, error: EN.mainSessionOnly });
+
+  const unattended = makeGate({ initial: "unset", texts: EN, origin: "automation" });
+  assert.deepEqual(await unattended.gate.ensure("s1", "click"), { ok: false, error: EN.unattended });
+});
+
 test("状态迁移：unset → allowed → denied → unset，每一步的落库值与广播都对", async () => {
   const store = fakeSession("unset");
   const states: ComputerUseConsentStateEvent[] = [];
@@ -409,6 +434,7 @@ test("状态迁移：unset → allowed → denied → unset，每一步的落库
     ask: (sessionId, action) => waiter.ask(sessionId, action),
     canAsk: () => true,
     notify: (event) => states.push(event),
+    texts: async () => ZH,
     log: () => {},
   });
 
@@ -440,6 +466,7 @@ async function runWithFakeBroker(options: {
   canAsk?: boolean;
   session?: ComputerUseSessionShape;
   origin?: ComputerUseTurnOrigin;
+  texts?: ComputerUseConsentTexts;
   timeoutMs?: number;
 }): Promise<{ ran: string[]; verdictError: string | null }> {
   const ran: string[] = [];
@@ -460,18 +487,18 @@ test("闸门 × 下发：allowed 执行；denied 不执行；超时也不执行�
 
   const denied = await runWithFakeBroker({ initial: "denied" });
   assert.deepEqual(denied.ran, []);
-  assert.equal(denied.verdictError, COMPUTER_USE_CONSENT_DENIED_TEXT);
+  assert.equal(denied.verdictError, ZH.denied);
 
   const timedOut = await runWithFakeBroker({ initial: "unset", decision: "timeout", timeoutMs: 20 });
   assert.deepEqual(timedOut.ran, []);
-  assert.equal(timedOut.verdictError, COMPUTER_USE_CONSENT_DENIED_TEXT);
+  assert.equal(timedOut.verdictError, ZH.denied);
 
   const answered = await runWithFakeBroker({ initial: "unset", decision: "allowed" });
   assert.deepEqual(answered.ran, ["s1:screenshot"], "用户点头之后这一条才真的下发");
 
   const child = await runWithFakeBroker({ initial: "allowed", session: { parentId: "p" } });
   assert.deepEqual(child.ran, [], "子会话永远不下发");
-  assert.equal(child.verdictError, COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+  assert.equal(child.verdictError, ZH.mainSessionOnly);
 });
 
 test("闸门 × 下发：停轮取消之后，动作一次都不下发", async () => {
@@ -483,7 +510,7 @@ test("闸门 × 下发：停轮取消之后，动作一次都不下发", async (
   const verdict = await ensure;
   if (verdict.ok) ran.push("click-dispatched");
   assert.deepEqual(ran, [], "停轮之后的迟到回答/迟到取消都不能让动作跑起来");
-  assert.deepEqual(verdict, { ok: false, error: COMPUTER_USE_CONSENT_STOPPED_TEXT });
+  assert.deepEqual(verdict, { ok: false, error: ZH.stopped });
 });
 
 test("急停写序：有挂起提问时先 cancel（不写）再 reset → 最终 unset，写序列里没有 denied", async () => {
@@ -500,6 +527,7 @@ test("急停写序：有挂起提问时先 cancel（不写）再 reset → 最�
     ask: (sessionId, action) => waiter.ask(sessionId, action),
     canAsk: () => true,
     notify: (event) => states.push(event),
+    texts: async () => ZH,
     log: () => {},
   });
   // 造一个挂起提问（模拟「正要动手」的那一轮）
@@ -511,7 +539,7 @@ test("急停写序：有挂起提问时先 cancel（不写）再 reset → 最�
   waiter.cancelAll();
   await gate.reset("s1", "emergency-stop");
   const verdict = await pending;
-  assert.deepEqual(verdict, { ok: false, error: COMPUTER_USE_CONSENT_STOPPED_TEXT });
+  assert.deepEqual(verdict, { ok: false, error: ZH.stopped });
   assert.deepEqual(writes, ["unset"], "只写了 reset 的 unset，没有任何 denied");
   assert.equal(store.state(), "unset");
   assert.deepEqual(states.map((event) => [event.state, event.source]), [["unset", "emergency-stop"]]);

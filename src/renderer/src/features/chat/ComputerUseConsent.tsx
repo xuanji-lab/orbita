@@ -1,9 +1,7 @@
 import { createContext, useContext, useEffect } from "react";
 import type { AgentEvent } from "@shared/agent-ipc";
-import {
-  COMPUTER_USE_CONSENT_DENIED_TEXT,
-  type ComputerUseConsent,
-} from "@shared/computer-use";
+import { computerUseConsentTexts, type ComputerUseConsent, type ComputerUseConsentSource } from "@shared/computer-use";
+import { LocaleContext } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
 import { useT } from "../../locale.ts";
 import { consentRecordKind, shouldShowConsentAskFallback, showsConsentStatusLine } from "./computer-consent.ts";
@@ -23,6 +21,8 @@ import "./computer-consent.css";
  */
 export interface ComputerUseConsentContextValue {
   consent: ComputerUseConsent;
+  /** 这条授权怎么来的（answered / timeout / unavailable / revoked / emergency-stop）；null = 盘上读回的旧值 */
+  consentSource: ComputerUseConsentSource | null;
   /** 挂起的提问（agent 事件）；null = 没有在等回答 */
   ask: Extract<AgentEvent, { type: "computerUseConsentAsk" }> | null;
   /** 记录行的挂点：本会话第一处电脑工具调用 */
@@ -100,28 +100,39 @@ export function ComputerUseConsentTail(props: { toolCallId: string; recordOnly?:
   }, [requestId, claimAsk, releaseAsk]);
   if (ctx === null) return null;
   if (drawsAsk && ask !== null) return <AskLine ask={ask} onAnswer={ctx.onAnswer} />;
-  const kind = consentRecordKind(ctx.consent, props.toolCallId, ctx.triggerToolCallId);
+  const kind = consentRecordKind(ctx.consent, ctx.consentSource, props.toolCallId, ctx.triggerToolCallId);
   if (kind === null) return null;
   return <RecordLine kind={kind} onRevoke={ctx.onRevoke} />;
 }
 
-/** 记录行：三级墨定态（已允许 / 已拒绝）+ 撤销；拒绝时多一行「已告知模型：…」 */
-function RecordLine(props: { kind: "allowed" | "denied"; onRevoke: () => void }) {
+/**
+ * 记录行：三级墨定态（已允许 / 已拒绝 / 没人回答）+ 撤销；拒绝类多一行「已告知模型：…」。
+ * 「没人回答」与「你拒绝了」必须分开说（2026-11-28 验收 P3-1）：超时 / 窗口全关时用户
+ * 从没表态，写「已拒绝」会让他以为自己点过。那句被告知模型的原文按界面语言取——
+ * 它就是闸门按同一种语言回给模型的那一句。
+ */
+function RecordLine(props: { kind: "allowed" | "denied" | "unanswered"; onRevoke: () => void }) {
   const t = useT();
+  const locale = useContext(LocaleContext);
   const allowed = props.kind === "allowed";
+  const unanswered = props.kind === "unanswered";
   return (
     <div className="cu-record" data-decision={props.kind}>
       <span className="cu-record-lead">
-        <Icon name={allowed ? "check" : "x"} size={14} />
+        <Icon name={allowed ? "check" : unanswered ? "circle-help" : "x"} size={14} />
       </span>
       <span className="cu-record-text">
-        {allowed ? t.computerUse.consentAllowedRecord : t.computerUse.consentDeniedRecord}
+        {allowed
+          ? t.computerUse.consentAllowedRecord
+          : unanswered
+            ? t.computerUse.consentUnansweredRecord
+            : t.computerUse.consentDeniedRecord}
       </span>
       <button type="button" className="notice-exit" onClick={props.onRevoke}>
         {t.computerUse.consentRevoke}
       </button>
       {!allowed && (
-        <span className="cu-told">{t.computerUse.consentToldModel(COMPUTER_USE_CONSENT_DENIED_TEXT)}</span>
+        <span className="cu-told">{t.computerUse.consentToldModel(computerUseConsentTexts(locale).denied)}</span>
       )}
     </div>
   );

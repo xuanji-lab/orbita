@@ -18,8 +18,7 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_NO_EVIDENCE_HINT,
   COMPUTER_USE_UIA_TIMEOUT_MS,
-  COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
-  COMPUTER_USE_UNATTENDED_TEXT,
+  computerUseConsentTexts,
   captureNote,
   computerUseBlockedReason,
   backendNetworkControl,
@@ -686,26 +685,51 @@ describe("backendNetworkControl（这只后端能不能真的断网）", () => {
  * 那个授权提问。两件事一起判——会话身份（子会话 / 幕后 / 未 promoted 的自动化会话）
  * 与这一轮是谁发起的（this_session 自动化会把一轮投回用户的会话）。
  */
+describe("computerUseConsentTexts —— 给模型的固定文本跟界面语言走（2026-11-28 验收 P2-1）", () => {
+  test("zh：与原来那几句一字不差（老用户看到的没变）", () => {
+    const zh = computerUseConsentTexts("zh");
+    assert.equal(zh.denied, "用户拒绝了电脑操作，本会话不要再请求");
+    assert.match(zh.stopped, /这一轮已停止/);
+    assert.match(zh.mainSessionOnly, /只在主会话里可用/);
+    assert.match(zh.unattended, /不是你手动发起的/);
+  });
+
+  test("en：四句都是英文、语义等价（英文界面下不再夹中文）", () => {
+    const en = computerUseConsentTexts("en");
+    assert.match(en.denied, /^The user denied computer actions\./);
+    assert.equal(en.denied, "The user denied computer actions. Do not request them again in this session.");
+    assert.match(en.stopped, /^This turn was stopped/);
+    assert.match(en.mainSessionOnly, /^Computer use is only available in the main session/);
+    assert.match(en.unattended, /^This turn was not started by the user/);
+    for (const text of Object.values(en)) assert.doesNotMatch(text, /[一-鿿]/, text);
+  });
+
+  test("认不出的语言（含缺省）按英文：与界面 locale 的 en 兜底一致", () => {
+    assert.deepEqual(computerUseConsentTexts(undefined), computerUseConsentTexts("en"));
+    assert.deepEqual(computerUseConsentTexts("fr"), computerUseConsentTexts("en"));
+  });
+});
+
 describe("computerUseBlockedReason —— 用户此刻能不能看到并回答", () => {
   test("普通会话 + 用户手点：能问（null）", () => {
     assert.equal(computerUseBlockedReason({}, "user"), null);
   });
 
   test("子会话 / 幕后会话：主会话专用（身份那条先挡）", () => {
-    assert.equal(computerUseBlockedReason({ parentId: "p" }, "user"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
-    assert.equal(computerUseBlockedReason({ backstage: "avatar" }, "channel"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+    assert.equal(computerUseBlockedReason({ parentId: "p" }, "user"), "main-session-only");
+    assert.equal(computerUseBlockedReason({ backstage: "avatar" }, "channel"), "main-session-only");
   });
 
   test("自动化新开的会话（automationId）不 promoted：主会话专用；用户点了转成普通会话（promoted）：按普通会话问", () => {
-    assert.equal(computerUseBlockedReason({ automationId: "au1" }, "user"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+    assert.equal(computerUseBlockedReason({ automationId: "au1" }, "user"), "main-session-only");
     assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "user"), null);
   });
 
   test("主会话但这一轮是自动化发起的（this_session）：不弹提问，说清「请在主会话里手动发起」", () => {
-    assert.equal(computerUseBlockedReason({}, "automation"), COMPUTER_USE_UNATTENDED_TEXT);
+    assert.equal(computerUseBlockedReason({}, "automation"), "unattended");
     // promoted 的自动化会话也一样：会话看得见，但这一轮不是用户发起的
-    assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "automation"), COMPUTER_USE_UNATTENDED_TEXT);
+    assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "automation"), "unattended");
     // 编排投递同理（子会话在身份那条已经挡了，这里只是不为 machine-origin 开口子）
-    assert.equal(computerUseBlockedReason({}, "channel"), COMPUTER_USE_UNATTENDED_TEXT);
+    assert.equal(computerUseBlockedReason({}, "channel"), "unattended");
   });
 });

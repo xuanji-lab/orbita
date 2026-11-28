@@ -112,5 +112,35 @@ export interface SandboxProvider extends ComputerUseGuest {
 /** 一个后端都没在跑时，车道方法回给用户/模型的话（三个后端同源，别各写一份） */
 export const SANDBOX_NOT_RUNNING = "隔离桌面没有在运行——先在「设置 › 实验功能 › 电脑使用」里启动它";
 
+/**
+ * 后端**在跑/在起，但还没就绪**时回给模型的话（2026-11-28 验收 P3-2）。
+ *
+ * 为什么需要它：runtime 只判「后端对象在不在」（state !== "off"），
+ * 于是 starting / stopping / error 三态都会把命令下发给一个还没有桥的控制器，
+ * 回执变成「没找到标题包含…的窗口」——模型读到的是一个**窗口名**，而不是真正的原因。
+ * 统一成「先原因、后建议」，六个 computer_* 工具与 sandbox_* 都走这一句。
+ *
+ * 文案里先说不存在什么（桥 / 运行中的桌面），再说下一步；不给「换一个窗口」这种
+ * 在错误前提下才成立的建议。
+ */
+export function sandboxReadinessError(state: SandboxStatus["state"]): string {
+  if (state === "starting") {
+    return (
+      "隔离桌面还在启动，桥还没有就绪——这次命令没有执行。等设置页显示「运行中」再试" +
+      "（首次启动要一两分钟；超时可以点停止再启动）"
+    );
+  }
+  if (state === "stopping") {
+    return "隔离桌面正在关闭，这次命令没有执行。等它关完再启动后再试";
+  }
+  if (state === "error") {
+    return (
+      "隔离桌面处于错误状态、没有在运行——这次命令没有执行。先去「设置 › 实验功能 › 电脑使用」里" +
+      "点停止复位、再启动；起不来时看设置页那几行提示"
+    );
+  }
+  return SANDBOX_NOT_RUNNING;
+}
+
 /** 未实现的后端（P3 的 QEMU 空位）统一用这句话，接上实现时删掉 */
 export const SANDBOX_NOT_IMPLEMENTED = "这个隔离后端还没接上（P3-2 才实现）";

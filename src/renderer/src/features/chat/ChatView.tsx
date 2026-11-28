@@ -1698,6 +1698,7 @@ function ChatViewBody(props: {
    * 逐帧新建对象会打穿整列。
    */
   const consent = session.computerUseConsent;
+  const consentSource = session.computerUseConsentSource;
   const consentAsk = session.computerUseConsentAsk;
   const consentTriggerToolId = useMemo(() => firstComputerUseToolCallId(session.transcript), [session.transcript]);
   const consentAskToolId = useMemo(
@@ -1724,6 +1725,7 @@ function ChatViewBody(props: {
   const consentCtx = useMemo<ComputerUseConsentContextValue>(
     () => ({
       consent,
+      consentSource,
       ask: consentAsk,
       triggerToolCallId: consentTriggerToolId,
       askToolCallId: consentAskToolId,
@@ -1735,6 +1737,7 @@ function ChatViewBody(props: {
     }),
     [
       consent,
+      consentSource,
       consentAsk,
       consentTriggerToolId,
       consentAskToolId,

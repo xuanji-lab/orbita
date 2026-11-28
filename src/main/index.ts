@@ -154,6 +154,7 @@ import {
   COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
   computerUseBackendChoices,
   computerUseBlockedReason,
+  computerUseConsentTexts,
   computerUseGuestCommands,
   devBackendsEnabled,
   parseComputerUseConsent,
@@ -531,7 +532,7 @@ void app.whenReady().then(async () => {
       if (meta === null) return null;
       return {
         consent: parseComputerUseConsent(meta.computerUseConsent),
-        blockedReason: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
+        blocked: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
       };
     },
     // write 回「真的落下了没」：`update` 对已删会话静默 no-op，不能把它当成功
@@ -541,6 +542,8 @@ void app.whenReady().then(async () => {
     // 不如当场按拒绝落库（fail closed 的结果一样，代价更小）。
     canAsk: () => mainWindows.list().length > 0,
     notify: (event) => broadcastAgentEvent(event),
+    // 拒绝 / 停止 / 主会话专用那几句跟界面语言走（模型回执与界面「已告知模型」同一句）
+    texts: async () => computerUseConsentTexts(effectiveLanguage((await settings.read()).language)),
   });
   // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
   registerVoiceIpc(
@@ -1386,7 +1389,7 @@ void app.whenReady().then(async () => {
       // 授权栅门（2026-11-27）：**所有**电脑工具（computer_* 像素/UIA + sandbox_* 浏览器）
       // 下发前先过会话授权——包括只读截图（它把用户沙箱桌面上的画面交给模型）。
       // unset → 问一次并挂起；denied → 当场回那句固定文本，不执行；没人能回答按 denied 落库。
-      // 栅门只做裁决，真的拒绝文案在 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT（唯一来源）。
+      // 栅门只做裁决，拒绝文案在 shared 的 computerUseConsentTexts（按界面语言取，唯一来源）。
       void computerUseConsentGate
         .ensure(event.sessionId, event.request.action)
         .then((verdict) =>

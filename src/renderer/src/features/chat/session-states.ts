@@ -33,7 +33,7 @@ import {
 import type { FileTurnView, RevertRecord, UndoRecord } from "@shared/revert";
 import type { QuotaExhaustedHint } from "@shared/quota";
 import type { TranscriptRecord } from "@shared/session";
-import type { ComputerUseConsent } from "@shared/computer-use";
+import type { ComputerUseConsent, ComputerUseConsentSource } from "@shared/computer-use";
 import type { Messages } from "../../messages-en.ts";
 
 /**
@@ -218,6 +218,14 @@ export interface SessionEntry {
    */
   computerUseConsent: ComputerUseConsent | null;
   /**
+   * 这条授权是**怎么来的**（computerUseConsentState 的 source）：`answered` = 用户点了
+   * 拒绝；`timeout` = 没人回答、按拒绝处理；`unavailable` = 窗口全关、没人可问；
+   * `revoked` / `emergency-stop` = 撤销 / 急停复位。
+   * 记录行据此分「已拒绝」与「没有人回答」（2026-11-28 验收 P3-1）。ephemeral：重开
+   * 后盘上只有 denied，分不出来——那时按「已拒绝」画，不编一个原因。
+   */
+  computerUseConsentSource: ComputerUseConsentSource | null;
+  /**
    * 最近一次系统提示注入清单（contextInventory 事件，上下文面板「规则与说明」
    * 组的数据源）。**纯 ephemeral，不落盘**：规则每轮重注入、永不被压缩，最新一份
    * 就是当前事实；未开过轮的会话（纯浏览）为 null，面板按「未知」显示。种盘即清
@@ -292,6 +300,7 @@ export const EMPTY_ENTRY: SessionEntry = {
   intentAsk: null,
   computerUseConsentAsk: null,
   computerUseConsent: null,
+  computerUseConsentSource: null,
   rules: null,
   pendingEcho: null,
 };
@@ -426,6 +435,7 @@ export function applyAgentEvent(states: SessionStates, event: AgentEvent): Sessi
     return update(states, event.sessionId, (entry) => ({
       ...entry,
       computerUseConsent: event.state,
+      computerUseConsentSource: event.source,
       // 按 requestId 清：别的会话 / 上一轮的提问不受影响（陈旧应答不串台）
       ...(event.requestId !== undefined && entry.computerUseConsentAsk?.requestId === event.requestId
         ? { computerUseConsentAsk: null }
@@ -614,6 +624,7 @@ export function seedFromDisk(
     // 授权的挂起提问与实时镜像都不落盘：种盘即清，回落到 meta 上的持久值
     computerUseConsentAsk: null,
     computerUseConsent: null,
+    computerUseConsentSource: null,
     // 注入清单不落盘：种盘即清（见字段注释），下一次开轮的推送会再填上
     rules: null,
     pendingEcho: null,
