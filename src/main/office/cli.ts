@@ -56,13 +56,24 @@ export interface OfficeRunResult {
  * 「禁 resident」要防的东西，而上游为此留了一个开关（help 里没写，二进制里有）。
  * 关掉之后 view / batch 跑完即退，不留进程、不占句柄。
  *
+ * 另外必须加 `OFFICECLI_SKIP_UPDATE=1` 与 `OFFICECLI_NO_AUTO_INSTALL=1`（macOS 1.0.158 实测）：
+ * 二进制默认 `autoUpdate: true`，首次运行就在后台把自己换成最新版（本机 1.0.158 → 1.0.163，
+ * sha256 随之变掉），并在 `~/.officecli/` 写配置与状态目录。后果是 fetch 脚本钉死的版本与 sha256
+ * 校验形同虚设（跑起来的不是审过的那份），还会往应用数据目录之外写文件。两个开关都是二进制里的
+ * 环境变量（help 里没写）；设上之后不检查更新、不自动安装，不写 `~/.officecli`。
+ *
  * 注意：**不把 officecli 挂进 PATH**（与 rg / fd 相反），所以这里只给环境，
  * 不让模型在 bash 里直接调它。
  */
 export function officeChildEnv(
   base: Record<string, string | undefined> = process.env,
 ): Record<string, string | undefined> {
-  return { ...base, OFFICECLI_NO_AUTO_RESIDENT: "1" };
+  return {
+    ...base,
+    OFFICECLI_NO_AUTO_RESIDENT: "1",
+    OFFICECLI_SKIP_UPDATE: "1",
+    OFFICECLI_NO_AUTO_INSTALL: "1",
+  };
 }
 
 /** 注入点：测试用它换掉真的 spawn（生产用 runOfficeCli） */

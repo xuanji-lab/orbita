@@ -88,6 +88,14 @@ describe("officeChildEnv", () => {
   });
 });
 
+describe("officeChildEnv 禁自更新", () => {
+  test("SKIP_UPDATE / NO_AUTO_INSTALL 恒为 1，调用方的同名变量盖不掉", () => {
+    const env = officeChildEnv({ OFFICECLI_SKIP_UPDATE: "0", OFFICECLI_NO_AUTO_INSTALL: "0" });
+    assert.equal(env["OFFICECLI_SKIP_UPDATE"], "1");
+    assert.equal(env["OFFICECLI_NO_AUTO_INSTALL"], "1");
+  });
+});
+
 describe("parseOfficeVersion", () => {
   test("从 --version 的输出里取三段号", () => {
     assert.equal(parseOfficeVersion("1.0.158\n"), "1.0.158");
