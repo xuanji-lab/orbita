@@ -146,7 +146,8 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
-import { cuTexts, setComputerUseUiLanguage } from "./computer-use/ui-language.ts";
+import { cuLanguage, cuTexts, setComputerUseUiLanguage } from "./computer-use/ui-language.ts";
+import { guestErrorText } from "./computer-use/bridge-error-text.ts";
 import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
 import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
 import { sendGuestCommand } from "./computer-use/bridge-client.ts";
@@ -1410,7 +1411,8 @@ void app.whenReady().then(async () => {
         .catch((cause: unknown) =>
           agentHost.answerComputerUse(event.requestId, {
             ok: false,
-            error: cause instanceof Error ? cause.message : String(cause),
+            // 出口的语言闸：dispatch 之外抛上来的（租约之外的那几层）也过一遍同样的映射
+            error: guestErrorText(cause instanceof Error ? cause.message : String(cause), cuLanguage()),
           }),
         );
       return;

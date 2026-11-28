@@ -17,8 +17,11 @@
 import type { ComputerUseUiTexts } from "../../shared/computer-use-texts.ts";
 import { computerUseUiTexts } from "../../shared/computer-use-texts.ts";
 
+/** 界面语言的两档（与 shared/computer-use-texts.ts 的 zh / en 一一对应） */
+export type CuLanguage = "zh" | "en";
+
 /** `zh` 原文（未接线时的缺省）与 `en`。不认得的取值一律落到 `en`，与界面缺省一致 */
-let current: "zh" | "en" = "zh";
+let current: CuLanguage = "zh";
 
 /**
  * 设置里读到 / 改过的 `language` 写进来。传 undefined（设置里没有这个字段）按英文。
@@ -30,7 +33,7 @@ export function setComputerUseUiLanguage(language: string | undefined): void {
 }
 
 /** 当前界面语言（`zh` / `en`） */
-export function cuLanguage(): "zh" | "en" {
+export function cuLanguage(): CuLanguage {
   return current;
 }
 
