@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { createPortal } from "react-dom";
 import { api } from "../../api.ts";
 import { useT } from "../../locale.ts";
 import { Icon } from "../../shell/Icon";
@@ -152,6 +153,12 @@ export function TexEditorPane(props: {
   onSaved?: () => void;
   /** 保存失败 / 写盘被拒：面板上给一行可见的错误，不静默 */
   onError?: (path: string, message: string) => void;
+  /**
+   * 状态行（光标 · 保存状态）挂到哪里。缺席 = 照旧在编辑器底下自己占一行；
+   * 给了宿主 = 搬进那一行（论文工作台把它并进问题条，省下一整行垂直空间）；
+   * 宿主还没挂上（null）时先不画，下一拍再挂。
+   */
+  statusHost?: HTMLElement | null;
   /** agent 与本文件的互动（只读、重载、按块撤销）；缺席 = 没有论文工作台的接线 */
   collab?: EditorCollabView;
   /**
@@ -1041,6 +1048,26 @@ export function TexEditorPane(props: {
     setMenu({ x: event.clientX, y: event.clientY, line: target.number, text });
   };
 
+  /**
+   * 状态行本体：编辑器底下那一行，或经 `statusHost` 搬进问题条（论文工作台）。
+   * 两处是同一份 DOM，文案与 data-phase 的配色只写一次。
+   * 大纲键已搬到这一栏右上角（与 PDF 工具条的批注键对称）：状态条只放状态。
+   */
+  const statusBar = (
+    <div
+      className={props.statusHost === undefined ? "tex-editor-status" : "tex-editor-status in-host"}
+      data-phase={phase}
+    >
+      <span className="tex-editor-cursor">
+        {t.editor.cursor(cursor.line, cursor.column)}
+      </span>
+      <span className="row-trailing tex-editor-save-state">
+        {savingNow && <span className="tex-editor-spinner" aria-hidden="true" />}
+        {currentStatus}
+      </span>
+    </div>
+  );
+
   return (
     <div className="tex-editor" ref={rootRef} onContextMenu={openContextMenu}>
       <ContextMenu
@@ -1223,17 +1250,9 @@ export function TexEditorPane(props: {
           }}
         />
       )}
-      <div className="tex-editor-status" data-phase={phase}>
-        {/* 大纲键已搬到标签页头部右上角（与 PDF 工具条的批注键对称）：
-            状态条只放状态——光标位置与保存结果 */}
-        <span className="tex-editor-cursor">
-          {t.editor.cursor(cursor.line, cursor.column)}
-        </span>
-        <span className="row-trailing tex-editor-save-state">
-          {savingNow && <span className="tex-editor-spinner" aria-hidden="true" />}
-          {currentStatus}
-        </span>
-      </div>
+      {props.statusHost === undefined
+        ? statusBar
+        : props.statusHost !== null && createPortal(statusBar, props.statusHost)}
     </div>
   );
 }

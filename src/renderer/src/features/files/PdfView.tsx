@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import {
   getDocument,
@@ -153,6 +154,11 @@ export function PdfView(props: {
   /** 选中文字引用到对话（复用会话的 quote chip） */
   onQuote?: (text: string) => void;
   /**
+   * 工具条上的外来动作键（论文工作台里文件头部那几颗：复制路径 / 刷新），放在批注键之前。
+   * 进工具条而不是另起一行：头部那一整行因此可以不画；窄栏折行时跟缩放组一起走。
+   */
+  toolbarEnd?: ReactNode;
+  /**
    * 批注（选区 → 浮条 → 草稿；列表是 PDF 右侧一条可开合的竖栏）。
    * null / 缺席 = 这份 PDF 不接批注（不是 LaTeX 项目）。
    *
@@ -195,6 +201,9 @@ export function PdfView(props: {
   const pageRef = useRef(1);
   pageRef.current = page;
   const [findQuery, setFindQuery] = useState("");
+  // 查找框平时收成一颗放大镜键：150px 的输入框是 PDF 工具条在窄栏里折成两行的主因
+  const [findOpen, setFindOpen] = useState(false);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
   const [find, setFind] = useState<FindState>(props.initialQuery != null ? { ...EMPTY_FIND, query: props.initialQuery } : EMPTY_FIND);
   /** 搜索语料（惰性建一次；换文件 / 重载时作废） */
   const corpusRef = useRef<PageTextIndex[] | null>(null);
@@ -219,6 +228,7 @@ export function PdfView(props: {
     corpusRef.current = null;
     setFind(EMPTY_FIND);
     setFindQuery("");
+    setFindOpen(false);
     setPage(1);
     void (async () => {
       try {
@@ -554,10 +564,29 @@ export function PdfView(props: {
 
         {/* 页内搜索 */}
         <div className="pdf-tool-group pdf-find">
+          {!findOpen && findQuery === "" && find.query === "" ? (
+            <button
+              type="button"
+              className="quiet-control pdf-tool"
+              title={t.files.pdfFindPlaceholder}
+              aria-label={t.files.pdfFindPlaceholder}
+              onClick={() => {
+                setFindOpen(true);
+                requestAnimationFrame(() => findInputRef.current?.focus());
+              }}
+            >
+              <Icon name="search" size={14} />
+            </button>
+          ) : (
+          <>
           <Icon name="search" size={13} className="pdf-find-icon" />
           <input
+            ref={findInputRef}
             className="pdf-find-input"
             value={findQuery}
+            onBlur={() => {
+              if (findQuery === "") setFindOpen(false);
+            }}
             placeholder={t.files.pdfFindPlaceholder}
             aria-label={t.files.pdfFindPlaceholder}
             onChange={(event) => setFindQuery(event.target.value)}
@@ -567,6 +596,7 @@ export function PdfView(props: {
                 moveMatch(event.shiftKey ? -1 : 1);
               } else if (event.key === "Escape") {
                 setFindQuery("");
+                setFindOpen(false);
               }
             }}
           />
@@ -602,6 +632,8 @@ export function PdfView(props: {
                 <Icon name="chevron-down" size={13} />
               </button>
             </>
+          )}
+          </>
           )}
         </div>
 
@@ -649,6 +681,10 @@ export function PdfView(props: {
             <Icon name="file" size={14} />
           </button>
         </div>
+
+        {props.toolbarEnd !== undefined && (
+          <div className="pdf-tool-group pdf-file-actions">{props.toolbarEnd}</div>
+        )}
 
         {/* 批注：与 tex 的大纲同一个形态——按钮开、按钮关，列表是右侧一条竖栏。
             有批注时按钮上带条数；一条都没有也留着（先看空态说明，再决定写不写） */}
