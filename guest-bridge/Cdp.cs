@@ -2622,7 +2622,9 @@ internal sealed class CdpSession
     var el=nodes[i];
     var r=el.getBoundingClientRect();
     if(r.width<=0||r.height<=0) continue;
-    var label=el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.getAttribute('title')||el.innerText||el.value||'';
+    // 注意：**不读 el.value**。输入框里可能就是用户刚打的密码 / token，这个 label 会进 observe 回执，
+    // 而回执会写进会话 JSONL。宁可给空标签，让模型用选择器与 aria-label / placeholder 认元素。
+    var label=el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.getAttribute('title')||el.innerText||'';
     label=String(label).replace(/\s+/g,' ');
     label=label.replace(/\u0001/g,' ').replace(/\u0002/g,' ').replace(/\u0003/g,' ').trim();
     if(label.length>80) label=label.slice(0,80);
@@ -2667,7 +2669,8 @@ internal sealed class CdpSession
             + "try{el.scrollIntoView({block:'center',inline:'center'});}catch(e){el.scrollIntoView();}"
             + "var r=el.getBoundingClientRect();"
             + "if(r.width<=0||r.height<=0) return 'NOTFOUND';"
-            + "var label=String(el.innerText||el.value||'').replace(/\\s+/g,' ').slice(0,80);"
+            // 同 observe：**不读 el.value**（输入框里可能是密码 / token，这个 label 会进回执 → 页面回执）
+            + "var label=String(el.innerText||'').replace(/\\s+/g,' ').slice(0,80);"
             + "return [Math.round(r.left+r.width/2),Math.round(r.top+r.height/2),el.tagName.toLowerCase(),label].join('\\u0002');})()";
         string result = EvalString(js, 8000);
         if (result == "NOTFOUND" || result.Length == 0) return null;
@@ -2716,11 +2719,14 @@ internal sealed class CdpSession
         }
         Thread.Sleep(120);
 
+        // 读回只取**长度**：这是模型 / 用户打进去的原文（登录页上就是密码），回执会进会话 JSONL，
+        // 落盘就收不回来。要回答的是「打进去了没有」——字符数对得上就够，值本身一个字都不回。
         string readJs = "(function(){var el=document.querySelector(" + Program.JsonQuote(selector) + ");"
-            + "if(!el) return ''; return (el.value !== undefined && el.value !== null) ? String(el.value) : String(el.innerText||'');})()";
-        string value = EvalString(readJs, 5000);
-        if (value.Length > 200) value = value.Substring(0, 200);
-        return new JObj().Bool("ok", true).Str("value", value).Bool("submitted", submitted).ToString();
+            + "if(!el) return -1; return (el.value !== undefined && el.value !== null) ? String(el.value).length : String(el.innerText||'').length;})()";
+        long fieldChars = ParseLong(EvalString(readJs, 5000), -1);
+        return new JObj().Bool("ok", true).Bool("typed", true)
+            .Num("chars", text.Length).Num("fieldChars", fieldChars)
+            .Bool("submitted", submitted).ToString();
     }
 
     private void DispatchEnter()

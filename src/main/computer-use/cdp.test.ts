@@ -273,7 +273,10 @@ describe("sandbox_* 回执翻成人话", () => {
     const { guest, calls } = fakeGuest({
       running: true,
       replies: {
-        [computerUseGuestCommands.cdpType]: () => ({ ok: true, resp: { ok: true, value: "hello", submitted: false } }),
+        [computerUseGuestCommands.cdpType]: () => ({
+          ok: true,
+          resp: { ok: true, typed: true, chars: 5, fieldChars: 5, submitted: false },
+        }),
       },
     });
     const cdp = new CdpSession(guest, tempOutDir());
@@ -282,7 +285,52 @@ describe("sandbox_* 回执翻成人话", () => {
     assert.equal(outcome.ok, true);
     const call = calls.find((item) => item.command === computerUseGuestCommands.cdpType);
     assert.deepEqual(call?.fields, { selector: "#q", text: "hello", submit: false, clear: true, session: "default" });
-    assert.match(outcome.ok ? outcome.text : "", /"hello"/);
+    // 回执只说「打进去了几个字符」，不把值抄回来
+    assert.match(outcome.ok ? outcome.text : "", /Typed 5 character\(s\) into #q/);
+    assert.match(outcome.ok ? outcome.text : "", /holds 5 character\(s\)/);
+    assert.doesNotMatch(outcome.ok ? outcome.text : "", /"hello"/);
+  });
+
+  test("type：**回执不回显输入的原文**（登录页上那就是密码）", async () => {
+    const secret = "S3cr3t-PASSword!";
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpType]: () => ({
+          ok: true,
+          resp: { ok: true, typed: true, chars: secret.length, fieldChars: secret.length, submitted: true },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-type", selector: "#pw", text: secret, submit: true });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    // 大小写都不许出现（旧实现把 resp.value 原样写进正文，等于把密码落进会话 JSONL）
+    assert.equal(text.toLowerCase().includes(secret.toLowerCase()), false, text);
+    assert.equal(text.includes("S3cr3t"), false);
+    assert.match(text, new RegExp(`Typed ${secret.length} character`));
+    assert.match(text, new RegExp(`holds ${secret.length} character`));
+    assert.match(text, /not echoed back/);
+  });
+
+  test("type：老桥回 value 也不回显（宿主只认长度字段）", async () => {
+    const secret = "old-bridge-secret";
+    const { guest } = fakeGuest({
+      running: true,
+      replies: {
+        [computerUseGuestCommands.cdpType]: () => ({
+          ok: true,
+          resp: { ok: true, value: secret, submitted: false },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-type", selector: "#pw", text: secret });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.equal(text.includes(secret), false, text);
+    assert.match(text, /not echoed back/);
   });
 
   test("type：clear:false / submit:true 都传下去", async () => {
@@ -1082,5 +1130,58 @@ describe("沙箱浏览器：设置 → cdp-start → 回执", () => {
     const outcome = await run(cdp, { action: "sandbox-navigate", url: "https://example.com/" });
     assert.equal(outcome.ok, true);
     assert.doesNotMatch(outcome.ok ? outcome.text : "", /configured browser/);
+  });
+});
+
+describe("浏览器回退说一次 + 正文不写死 Edge", () => {
+  const fallbackStart = () => ({
+    ok: true as const,
+    resp: {
+      ok: true,
+      port: 12345,
+      browser: "edge",
+      browserFallbackFrom: "chrome",
+    },
+  });
+
+  test("第一个碰到浏览器的动作就把回退说出来（observe 也算），之后不再重复", async () => {
+    const { guest } = fakeGuest({
+      replies: {
+        [computerUseGuestCommands.cdpStatus]: () => ({ ok: true, resp: { ok: true, running: false, port: 0 } }),
+        [computerUseGuestCommands.cdpStart]: fallbackStart,
+        [computerUseGuestCommands.cdpObserve]: () => ({
+          ok: true,
+          resp: { ok: true, elements: [], text: "", totalTextLength: 0, truncated: false },
+        }),
+      },
+    });
+    const cdp = new CdpSession(guest, tempOutDir(), async () => "chrome");
+    // 第一次拉起浏览器的是 navigate：回退说明跟它一起出去
+    const first = await run(cdp, { action: "sandbox-navigate", url: "https://example.com/" });
+    assert.equal(first.ok, true);
+    const firstText = first.ok ? first.text : "";
+    assert.match(firstText, /configured browser \(chrome\) is not inside this sandbox/);
+    assert.match(firstText, /runs edge instead/);
+    // 之后的动作不再重复（否则每张图 / 每次 observe 都顶一段）
+    const second = await run(cdp, { action: "sandbox-observe" });
+    assert.equal(second.ok, true);
+    assert.doesNotMatch(second.ok ? second.text : "", /configured browser/);
+  });
+
+  test("没回退时一个字都不加（老桥 / 本来就是 Edge）", async () => {
+    const { guest } = fakeGuest({ running: true });
+    const cdp = new CdpSession(guest, tempOutDir(), async () => "edge");
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.doesNotMatch(outcome.ok ? outcome.text : "", /configured browser/);
+  });
+
+  test("screenshot 正文不写死 Edge（浏览器可能是 Chrome / Brave / Chromium）", async () => {
+    const { guest } = fakeGuest({ running: true });
+    const cdp = new CdpSession(guest, tempOutDir());
+    const outcome = await run(cdp, { action: "sandbox-screenshot" });
+    assert.equal(outcome.ok, true);
+    const text = outcome.ok ? outcome.text : "";
+    assert.doesNotMatch(text, /Edge window/);
+    assert.match(text, /browser window/);
   });
 });
