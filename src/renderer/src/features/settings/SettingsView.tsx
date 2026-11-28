@@ -2334,12 +2334,21 @@ function GuardGroup() {
     };
   }, []);
 
+  /**
+   * 热键那句话放进**左列**的 note（名字下面），不放控件列。
+   *
+   * 为什么：它是一整句中文（主选被占用时是「主快捷键 X 被其它应用占用，已改用 Y」），
+   * 摆在控件列会把那一列撑到整行宽、把左边的名字与说明挤成竖排窄条（2026-11-28 真机验收 P3）。
+   * 控件列只留组合本身（nowrap）——那才是「一眼要看到的那个值」。
+   */
   const note = failed
     ? "读取热键状态失败（主进程没有回执）"
     : state === null
       ? undefined
       : state.registered
-        ? undefined
+        ? state.accelerator === state.preferred
+          ? t.computerUse.emergencyRegistered
+          : t.computerUse.emergencyFallback(state.preferred, state.accelerator)
         : t.computerUse.emergencyUnavailable(state.error ?? "");
 
   return (
@@ -2349,7 +2358,10 @@ function GuardGroup() {
         info={t.computerUse.emergencyHotkeyInfo}
         note={
           note === undefined ? undefined : (
-            <span role={state !== null && !state.registered ? "alert" : undefined} className="set-row-hint">
+            <span
+              role={state !== null && !state.registered ? "alert" : undefined}
+              className={state !== null && !state.registered ? "set-row-error" : "set-row-hint"}
+            >
               {note}
             </span>
           )
@@ -2366,15 +2378,6 @@ function GuardGroup() {
               {state?.accelerator ?? "Control+Alt+Shift+Escape"}
             </code>
           </span>
-          {state?.registered === true && (
-            <span className="set-row-hint">
-              {/* 生效的组合就是上面那个 code；主选被占用时补一句「已改用哪一个」——
-                  用户没有换键入口，至少要一眼看出该记哪个组合（2026-11-28 验收 P2-2） */}
-              {state.accelerator === state.preferred
-                ? t.computerUse.emergencyRegistered
-                : t.computerUse.emergencyFallback(state.preferred, state.accelerator)}
-            </span>
-          )}
         </span>
       </SettingRow>
     </SettingGroup>
