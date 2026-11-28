@@ -3596,6 +3596,27 @@ export const en = {
       n === 1 ? "Cleaned 1 auxiliary file" : `Cleaned ${n} auxiliary files`,
     cleanedNothing: "Nothing to clean — the output folder already holds only the PDF",
     cleanFailed: (message: string) => `Clean failed: ${message}`,
+    /* ---------- 双 diff 对照（改动块的「对照」，见 PdfDiffReview.tsx） ---------- */
+    diff: {
+      titleSrc: "TeX source (red = before, green = after)",
+      titleBefore: "PDF before (red)",
+      titleAfter: "PDF after (green)",
+      comment: "Comment",
+      commentPreset: "Not sure about this one — leave it for now",
+      backupFailed: "Backup failed",
+      compileFailed: "Recompile failed",
+    },
+  },
+
+  /* ---------- LaTeX 补全弹层的说明（latex-suggest.ts 是纯函数，文案由调用方传） ---------- */
+  latexSuggest: {
+    loaded: "Loaded",
+    projectDefined: "Defined in this project",
+    /** 引用候选右侧附注：重名 label 的短标记（前面带分隔点，拼在「文件:行」后面） */
+    dupLabel: " · duplicate label",
+    dupLabelInfo: (file: string, line: number) =>
+      `Defined more than once — the reference number may point elsewhere: ${file}:${line}`,
+    directory: "Folder",
   },
 
   /* ---------- 设置 › LaTeX 论文（preflight 自查） ---------- */
@@ -3778,6 +3799,9 @@ export const en = {
     hunkEdited: "Edited since — cannot undo",
     hunksShow: "Show blocks",
     hunksHide: "Hide blocks",
+    /* 改动块行尾的「对照」：源码 diff + 改前 / 改后两版 PDF 并排 */
+    diffOpen: "Compare",
+    diffOpenTip: "Compare the source diff with the before/after PDFs",
     /* 大纲抽屉（章节树） */
     outline: "Outline",
     outlineTip: "Sections in this file — click to jump",

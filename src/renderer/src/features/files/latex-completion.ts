@@ -23,7 +23,7 @@ import type { Extension } from "@codemirror/state";
 import type { CiteEntry } from "../../../../shared/cite.ts";
 import type { LatexProjectIndex } from "../../../../shared/latex.ts";
 import { citeArgumentBefore, citeDetail, citeInfo, citeInsertion, suggestCites } from "./cite-suggest.ts";
-import { latexContextBefore, loadedPackageNames, suggestLatex, LATEX_SUGGEST_LIMIT, type LatexSuggestion } from "./latex-suggest.ts";
+import { latexContextBefore, loadedPackageNames, suggestLatex, LATEX_SUGGEST_LIMIT, type LatexSuggestion, type LatexSuggestTexts } from "./latex-suggest.ts";
 
 /**
  * 往回看多远找现场：一行长的引用列表（几十个 key）也在这个窗口里。
@@ -42,11 +42,16 @@ export interface LatexCompletionInput {
    * 「只补这份文档已加载的」。
    */
   packages?: () => readonly string[];
+  /**
+   * 候选行的说明文字（`已加载` / `本项目定义` / `目录` …，即 `t.latexSuggest`）。
+   * 同样用取值函数：切语言时不必重建编辑器（重建会丢光标与撤销历史）。
+   */
+  texts: () => LatexSuggestTexts;
 }
 
 export function latexCompletion(input: LatexCompletionInput): Extension {
   return autocompletion({
-    override: [latexSource(input.index, input.packages ?? (() => [])), citeSource(input.cite)],
+    override: [latexSource(input.index, input.packages ?? (() => []), input.texts), citeSource(input.cite)],
     // 图标用的是默认的彩色字母块，与设计系统「颜色各有职责」冲突；名字本身就是标识
     icons: false,
     // 弹层里同时渲染的行数：滚太长的列表不如多打两个字
@@ -58,6 +63,7 @@ export function latexCompletion(input: LatexCompletionInput): Extension {
 function latexSource(
   index: () => LatexProjectIndex | null,
   packages: () => readonly string[],
+  texts: () => LatexSuggestTexts,
 ): CompletionSource {
   return (context: CompletionContext): CompletionResult | null => {
     const start = Math.max(0, context.pos - LOOKBEHIND);
@@ -65,7 +71,7 @@ function latexSource(
     const live = latexContextBefore(text);
     if (live === null) return null;
     // `\usepackage{` 的两层：本机已装（主进程扫）+ 这份文档已经加载过的（光标前的窗口里）
-    const options: Completion[] = suggestLatex(live, index(), LATEX_SUGGEST_LIMIT, {
+    const options: Completion[] = suggestLatex(live, index(), texts(), LATEX_SUGGEST_LIMIT, {
       installed: live.kind === "package" ? packages() : [],
       loaded: live.kind === "package" ? loadedPackageNames(text) : [],
     }).map(toCompletion);
