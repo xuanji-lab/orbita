@@ -19,6 +19,8 @@
  */
 import http from "node:http";
 
+import { cuTexts } from "./ui-language.ts";
+
 /** 一个 guest 服务的地址与令牌（每次起 VM 现生成，见 qemu-vm.ts 的 orbita_token=） */
 export interface GuestDeskChannel {
   port: number;
@@ -90,7 +92,7 @@ function post(channel: GuestDeskChannel, body: string, timeoutMs: number): Promi
       },
     );
     request.on("timeout", () => {
-      request.destroy(new Error(`guest 服务 ${timeoutMs}ms 没有回应（127.0.0.1:${channel.port}）`));
+      request.destroy(new Error(cuTexts().qemuGuestTimeout(timeoutMs, channel.port)));
     });
     request.on("error", reject);
     request.end(body);
@@ -100,11 +102,7 @@ function post(channel: GuestDeskChannel, body: string, timeoutMs: number): Promi
 /** 服务没应答时给模型/用户的那句话。**点名端口**：同一台机器上可能开着别的实例 */
 export function guestUnreachableMessage(channel: GuestDeskChannel, cause: unknown): string {
   const reason = cause instanceof Error ? cause.message : String(cause);
-  return (
-    `L3 桌面 VM 里的服务没有应答（宿主 127.0.0.1:${channel.port}）：${reason}。` +
-    "这台 VM 可能没起来、已经退出，或者 guest 里的 orbita-desk 服务没启动" +
-    "（日志在镜像目录的 logs/ 下：qemu-*.log 与 serial-*.log）。"
-  );
+  return cuTexts().qemuGuestUnreachable(channel.port, reason);
 }
 
 /** 发一条命令并解析 JSON 回执。**ok:false 不抛异常**：那是 guest 给模型的人话，要原样往上带 */
@@ -121,17 +119,17 @@ export async function deskCommand(
     return { ok: false, fields: {}, error: guestUnreachableMessage(channel, cause) };
   }
   if (raw.status !== 200) {
-    return { ok: false, fields: {}, error: `guest 服务回了 HTTP ${raw.status}（127.0.0.1:${channel.port}）` };
+    return { ok: false, fields: {}, error: cuTexts().qemuGuestHttp(raw.status, channel.port) };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.body.toString("utf8"));
   } catch {
     const snippet = raw.body.toString("utf8").slice(0, 200);
-    return { ok: false, fields: {}, error: `guest 服务的回执不是 JSON：${snippet}` };
+    return { ok: false, fields: {}, error: cuTexts().qemuGuestNotJson(snippet) };
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, fields: {}, error: "guest 服务的回执不是对象" };
+    return { ok: false, fields: {}, error: cuTexts().qemuGuestNotObject };
   }
   const record = parsed as Record<string, unknown>;
   if (record["ok"] !== true) {
@@ -139,7 +137,7 @@ export async function deskCommand(
     return {
       ok: false,
       fields: record,
-      error: typeof error === "string" && error !== "" ? error : "guest 服务拒绝了这条命令（没有给原因）",
+      error: typeof error === "string" && error !== "" ? error : cuTexts().qemuGuestRefusedNoReason,
     };
   }
   return { ok: true, fields: record };
@@ -173,7 +171,7 @@ export async function deskScreenshot(
   } catch (cause) {
     throw new Error(guestUnreachableMessage(channel, cause));
   }
-  if (raw.status !== 200) throw new Error(`guest 服务回了 HTTP ${raw.status}（要截图时）`);
+  if (raw.status !== 200) throw new Error(cuTexts().qemuShotHttp(raw.status));
   if (!raw.contentType.startsWith("image/")) {
     // CGI 出错时回的是 JSON（ok:false）——把那句话原样带出来，别只报「不是图」
     let reason = raw.body.toString("utf8").slice(0, 300);
@@ -183,10 +181,10 @@ export async function deskScreenshot(
     } catch {
       // 不是 JSON 就用原文片段
     }
-    throw new Error(`guest 没给出截图：${reason}`);
+    throw new Error(cuTexts().qemuNoShot(reason));
   }
   const size = pngSize(raw.body);
-  if (size === null) throw new Error("guest 回的截图不是合法 PNG（PNG 头不对）");
+  if (size === null) throw new Error(cuTexts().qemuShotBadPng);
   return { png: raw.body, ...size };
 }
 
@@ -234,9 +232,9 @@ export async function waitForDesk(
   const timeoutMs = options.timeoutMs ?? 90_000;
   const intervalMs = options.intervalMs ?? 400;
   const deadline = Date.now() + timeoutMs;
-  let lastError = "还没试过";
+  let lastError = cuTexts().qemuWaitNotTried;
   while (Date.now() < deadline) {
-    if (options.signal?.aborted === true) throw new Error("等 guest 服务就绪时被取消");
+    if (options.signal?.aborted === true) throw new Error(cuTexts().qemuWaitCancelled);
     const reply = await deskCommand(channel, { cmd: "ping" }, 5_000);
     if (reply.ok) {
       const width = reply.fields["w"];
@@ -246,11 +244,11 @@ export async function waitForDesk(
         const version = reply.fields["version"];
         return { width, height, ...(typeof version === "string" ? { version } : {}) };
       }
-      lastError = desktop === 1 ? "桌面尺寸不对" : "桌面还没起来（xfwm4 不在）";
+      lastError = desktop === 1 ? cuTexts().qemuDesktopWrongSize : cuTexts().qemuDesktopNotUp;
     } else {
-      lastError = reply.error ?? "没有原因";
+      lastError = reply.error ?? cuTexts().qemuNoReason;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  throw new Error(`等不到 L3 桌面服务（${Math.round(timeoutMs / 1000)}s）：${lastError}`);
+  throw new Error(cuTexts().qemuWaitTimeout(Math.round(timeoutMs / 1000), lastError));
 }

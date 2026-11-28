@@ -23,7 +23,6 @@
 import {
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_DESKTOP_KEY,
-  computerUseDevBackendRefusal,
   devBackendsEnabled,
   type ComputerUseRunningFacts,
   type ComputerUseBackend,
@@ -42,12 +41,13 @@ import type { ComputerUseGuest } from "./agent-requests.ts";
 import type { IsolationSessionController, IsolationSessionProbe } from "./isolation-session.ts";
 import { QemuSandboxProvider } from "./qemu.ts";
 import {
-  SANDBOX_NOT_RUNNING,
+  sandboxNotRunningText,
   sandboxReadinessError,
   type SandboxCapabilities,
   type SandboxProvider,
 } from "./provider.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /** 门面要的那部分控制器（两个控制器结构上都满足它） */
 /** 门面要的后端面：provider（统一面）+ 各自的能力探测 */
@@ -148,7 +148,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
      */
     const devAllowed = deps.devBackends ?? (() => devBackendsEnabled(process.env));
     if (wanted === "qemu" && !devAllowed()) {
-      return { ok: false, error: computerUseDevBackendRefusal() };
+      return { ok: false, error: cuTexts().devBackendRefusal };
     }
     // 三个后端各自一份整机资源（WSB 的 VM / MXC 的 OS 会话 / QEMU 的 VM），同时起两只是
     // 两份隔离同时在跑：设置页说不清现在用的是哪个，租约也说不对。所以先停别的。
@@ -157,7 +157,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       log(`切换隔离后端：先停掉 ${other.id}`);
       const stopped = await other.stop();
       if (stopped.ok === false) {
-        return { ok: false, error: `切换后端前停不掉 ${other.id}：${stopped.error}` };
+        return { ok: false, error: cuTexts().backendSwitchStopFailed(other.id, stopped.error) };
       }
     }
     // 启动前读一次开关：这就是这一局真正生效的那个值（WSB 的 .wsb / QEMU 的 -netdev 都在
@@ -193,7 +193,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       log(`能力探测失败：${cause instanceof Error ? cause.message : String(cause)}`);
       const isolation = await deps.probeIsolation().catch(() => ({
         available: false,
-        reason: "探测失败",
+        reason: cuTexts().probeCrashReason,
         nodeVersion: process.versions.node,
         nodeOk: false,
       }));
@@ -208,12 +208,12 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
         isolationSession: isolation,
         wsl2: "unknown",
         ready: false,
-        guidance: "能力探测失败——看主进程日志",
+        guidance: cuTexts().probeCrashGuidance,
       };
     }
   };
 
-  const notRunning = <T>(error: string = SANDBOX_NOT_RUNNING): Extract<T, { ok: false }> =>
+  const notRunning = <T>(error: string = sandboxNotRunningText()): Extract<T, { ok: false }> =>
     ({ ok: false, error }) as unknown as Extract<T, { ok: false }>;
 
   /**
@@ -226,7 +226,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    */
   const lane = (): { provider: SandboxProvider } | { error: string } => {
     const provider = runningProvider();
-    if (provider === null) return { error: SANDBOX_NOT_RUNNING };
+    if (provider === null) return { error: sandboxNotRunningText() };
     const state = provider.status().state;
     if (state !== "running") return { error: sandboxReadinessError(state) };
     return { provider };

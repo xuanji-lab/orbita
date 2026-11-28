@@ -10,6 +10,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { BRIDGE_INFO_FILE, bridgeTcpFields, type GuestTcpChannel } from "../../shared/computer-use.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /**
  * 桥在 bridge.json 里通告的就绪信息（version/pid 仅日志与排障用，不参与协议判断）。
@@ -110,13 +111,7 @@ export async function waitForBridgeInfo(outDir: string, options: WaitForBridgeOp
       if (info !== null) return info;
     }
     if (Date.now() >= deadline) {
-      throw new Error(
-        `${Math.round(options.timeoutMs / 1000)} 秒内没等到 guest 桥就绪（bridge.json 未出现）——` +
-        "沙箱可能还在启动，或桥启动失败。**如果之前有一只沙箱没退干净，就会一直卡在这里**" +
-        "（Windows 同时只允许一只沙箱，旧的那只占着位置、新的一只永远起不来）：" +
-        "去任务管理器结束 WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox，" +
-        "或等它们自己退出（通常 10–20 秒），然后再点一次启动。",
-      );
+      throw new Error(cuTexts().bridgeReadyTimeout(Math.round(options.timeoutMs / 1000)));
     }
     await sleep(intervalMs);
   }

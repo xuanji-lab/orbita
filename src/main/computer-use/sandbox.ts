@@ -47,6 +47,8 @@ import {
 } from "../../shared/computer-use.ts";
 import { writeTextAtomic } from "../atomic-write.ts";
 import { platformGuidance, probe as probeCapability } from "./capability.ts";
+import { cuTexts } from "./ui-language.ts";
+import type { ComputerUseUiAction } from "../../shared/computer-use-texts.ts";
 import type { SandboxCapabilities, SandboxProviderId } from "./provider.ts";
 import type { ProbeDeps } from "./capability.ts";
 import {
@@ -551,7 +553,7 @@ export class SandboxController {
       case "stopping":
         return { state: "stopping" };
       case "error":
-        return { state: "error", message: this.errorMessage ?? "未知错误" };
+        return { state: "error", message: this.errorMessage ?? cuTexts().unknownError };
     }
   }
 
@@ -573,19 +575,19 @@ export class SandboxController {
     if ((this.deps.platform ?? process.platform) !== "win32") {
       return { ok: false, error: platformGuidance(this.deps.platform ?? process.platform) };
     }
-    if (this.state === "starting") return { ok: false, error: "沙箱已经在启动中" };
-    if (this.state === "running") return { ok: false, error: "沙箱已经在运行" };
-    if (this.state === "stopping") return { ok: false, error: "沙箱正在关闭，等它关完再启动" };
+    if (this.state === "starting") return { ok: false, error: cuTexts().sandboxAlreadyStarting };
+    if (this.state === "running") return { ok: false, error: cuTexts().sandboxAlreadyRunning };
+    if (this.state === "stopping") return { ok: false, error: cuTexts().sandboxAlreadyStopping };
     // 廉价前置检查（两个文件存在性；reg query 那种秒级慢查询留给 probe，不拖在这里）
     const fileExists = this.deps.fileExists ?? existsSync;
     const bridgeExePath = join(this.deps.bridgeDir, GUEST_BRIDGE_EXE);
     if (!fileExists(bridgeExePath)) {
-      return { ok: false, error: `guest 桥不存在（${bridgeExePath}）——先运行 bun run build:bridge 构建` };
+      return { ok: false, error: cuTexts().bridgeExeMissing(bridgeExePath) };
     }
     if (!fileExists(this.deps.sandboxExePath)) {
       return {
         ok: false,
-        error: `找不到 ${this.deps.sandboxExePath}——Windows 沙箱功能可能未启用，先「检测能力」看开启指引`,
+        error: cuTexts().sandboxExeMissing(this.deps.sandboxExePath),
       };
     }
     // 映射落点由 .wsb 的 <SandboxFolder> 写死，与宿主目录末段名无关——这里不再有
@@ -606,10 +608,7 @@ export class SandboxController {
       const names = [...new Set(leftover.map((process) => process.image))].join(" / ");
       return {
         ok: false,
-        error:
-          `已经有一只 Windows 沙箱在运行（Windows 同时只允许一只）：${names}。` +
-          "如果那是上一只没退干净的，等它自己退（通常 10–20 秒）；一直不退就在任务管理器里结束 " +
-          "WindowsSandboxRemoteSession / vmwp.exe / vmmemWindowsSandbox，然后再点一次启动。",
+        error: cuTexts().anotherSandboxRunning(names),
       };
     }
 
@@ -673,8 +672,8 @@ export class SandboxController {
       if (info === null) {
         // 被取消：stop()/dispose() 已接管清理；若其实是沙箱进程先死（failLocal 已结算
         // 真实原因进 error 态），把真实原因带出来，不许吞成「已取消」
-        if (this.phase() === "error") return { ok: false, error: this.errorMessage ?? "启动失败" };
-        return { ok: false, error: "启动已取消" };
+        if (this.phase() === "error") return { ok: false, error: this.errorMessage ?? cuTexts().startFailed };
+        return { ok: false, error: cuTexts().startCancelled };
       }
       // 通告 ≠ 能干活：映射文件夹 host→guest 方向开机后有 ~20 秒热身期（2026-10-10 实测），
       // 必须经命令通道 ping 通才算就绪。「running」的定义 = 桥真的能执行命令。
@@ -684,8 +683,8 @@ export class SandboxController {
       // ping 用启动阶段的剩余预算（与等通告共享同一个 deadline）。
       const pinged = await this.pingWithCancel(outputDir, remainingMs(), generation);
       if (!pinged) {
-        if (this.phase() === "error") return { ok: false, error: this.errorMessage ?? "启动失败" };
-        return { ok: false, error: "启动已取消" };
+        if (this.phase() === "error") return { ok: false, error: this.errorMessage ?? cuTexts().startFailed };
+        return { ok: false, error: cuTexts().startCancelled };
       }
       this.bridge = info;
       // 等到之后 stop() 可能已经把状态改走；只有还停在 starting 才轮得到我们宣布 running
@@ -752,7 +751,7 @@ export class SandboxController {
 
   /** 手动「看一眼」：向 guest 桥要一张沙箱桌面截图（文件协议）。只在 running 可用。 */
   async screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult> {
-    const gate = this.notRunning("截图");
+    const gate = this.notRunning("screenshot");
     if (gate !== null) return gate;
     try {
       const shot = await fetchGuestScreenshot(
@@ -790,7 +789,7 @@ export class SandboxController {
   async windowShot(
     options: { hwnd?: number; title?: string; maxWidth?: number },
   ): Promise<ComputerUseWindowShotResult> {
-    const gate = this.notRunning("按窗口截图");
+    const gate = this.notRunning("windowShot");
     if (gate !== null) return gate;
     const fields: Record<string, unknown> = { maxWidth: clampMaxWidth(options.maxWidth) };
     if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
@@ -822,7 +821,7 @@ export class SandboxController {
    * 那条路已经白等过一次超时，不能再用 45s 把模型的下一次机会一起吃掉。
    */
   async listWindows(timeoutMs?: number): Promise<ComputerUseWindowListResult> {
-    const gate = this.notRunning("窗口列表");
+    const gate = this.notRunning("windowList");
     if (gate !== null) return gate;
     try {
       const windows = await fetchGuestWindowList(this.outDir(), timeoutMs);
@@ -844,7 +843,7 @@ export class SandboxController {
     maxItems?: number;
     since?: number;
   }): Promise<ComputerUseUiaListResult> {
-    const gate = this.notRunning("UIA 控件列表");
+    const gate = this.notRunning("uiaList");
     if (gate !== null) return gate;
     const fields: Record<string, unknown> = {};
     if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
@@ -876,7 +875,7 @@ export class SandboxController {
     value?: string;
     timeoutMs?: number;
   }): Promise<ComputerUseUiaActResult> {
-    const gate = this.notRunning("UIA 控件操作");
+    const gate = this.notRunning("uiaAct");
     if (gate !== null) return gate;
     const fields: Record<string, unknown> = { action: options.perform };
     if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
@@ -926,7 +925,7 @@ export class SandboxController {
     command: ComputerUseGuestCommand,
     fields: Record<string, unknown>,
   ): Promise<GuestCommandReply> {
-    const gate = this.notRunning("沙箱操作");
+    const gate = this.notRunning("pixels");
     if (gate !== null) return gate;
     try {
       // 像素点击 / 滚动要带「打在谁身上」的判定素材：坐标 → hwnd → guest 内 PID →
@@ -962,7 +961,7 @@ export class SandboxController {
     command: ComputerUseGuestCommand,
     fields: Record<string, unknown>,
   ): Promise<GuestCommandReply> {
-    const gate = this.notRunning("沙箱里的浏览器操作");
+    const gate = this.notRunning("browser");
     if (gate !== null) return gate;
     try {
       const resp = await sendGuestCommand(
@@ -998,7 +997,7 @@ export class SandboxController {
     command: ComputerUseGuestCommand,
     fields: Record<string, unknown>,
   ): Promise<GuestShotReply> {
-    const gate = this.notRunning("沙箱里的浏览器操作");
+    const gate = this.notRunning("browser");
     if (gate !== null) return gate;
     try {
       const shot = await fetchGuestShot(
@@ -1115,12 +1114,9 @@ export class SandboxController {
    * 同一句话，所以这句里必须带**下一步怎么办**：agent 自己启不了沙箱，它只能把这句
    * 转告用户；只回一句「沙箱没运行」它大概率会重试。
    */
-  private notRunning(what: string): { ok: false; error: string } | null {
+  private notRunning(what: ComputerUseUiAction): { ok: false; error: string } | null {
     if (this.state === "running" && this.bridge !== null) return null;
-    return {
-      ok: false,
-      error: `沙箱没有在运行（当前状态：${this.state}），${what}不可用——先在「设置 › 实验功能 › 电脑使用」里启动沙箱`,
-    };
+    return { ok: false, error: cuTexts().sandboxNotRunning(what, this.state) };
   }
 
   /**
@@ -1343,14 +1339,11 @@ export class SandboxController {
     // e. 总预算到点还在：**不假装 off**。留一句能照做的清理指引（UI 上「未启动」而 VM 还在吃
     //    3~6GB，比报一个错坑得多）。
     const left = this.newSandboxPids();
-    const leftText = left.length === 0 ? "（观测不到具体 PID）" : left.join(", ");
+    const leftText = left.length === 0 ? cuTexts().unknownPids : left.join(", ");
     this.log(`沙箱进程可能未退出：${leftText}——状态转 error，宿主里可能留着孤儿 VM`);
     this.transition(
       "error",
-      `沙箱没有在 1–2 分钟内退干净（还剩进程 ${leftText}），宿主里可能留着孤儿 VM（每个约 3~6GB）。` +
-        "能手动结束的是 WindowsSandboxRemoteSession / WindowsSandboxServer（任务管理器 → 结束任务）；" +
-        "vmwp.exe / vmmemWindowsSandbox 结束不了（拒绝访问），只能等它自己退或重启电脑。" +
-        "确认干净后再点一次「停止」复位这个状态。",
+      cuTexts().sandboxLeftoverVms(leftText),
     );
   }
 
@@ -1430,7 +1423,7 @@ export class SandboxController {
         this.log(`沙箱启动器已退出（code ${code ?? "null"}）——新架构由 WindowsSandboxServer 接管，继续等 guest 桥就绪`);
         return;
       }
-      this.failLocal(`沙箱窗口在 guest 桥就绪前就关闭了（exit code ${code}）`);
+      this.failLocal(cuTexts().sandboxWindowClosedEarly(String(code)));
       return;
     }
     if (this.state === "stopping") {
@@ -1526,7 +1519,7 @@ export class SandboxController {
 
   private onChildError(generation: number, cause: Error): void {
     if (generation !== this.generation || this.state !== "starting") return;
-    this.failLocal(`WindowsSandbox.exe 启动失败：${cause.message}`);
+    this.failLocal(cuTexts().wsbLaunchFailed(cause.message));
   }
 
   /** starting 阶段的失败收口：清理资源、杀进程、宣布 error（等桥的轮询靠 isCancelled 自行解开）。 */

@@ -1,4 +1,4 @@
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   editionToSku,
@@ -12,6 +12,7 @@ import {
   WSL_PROBE_ARGS,
   type RunCommand,
 } from "./capability.ts";
+import { setComputerUseUiLanguage } from "./ui-language.ts";
 
 /** 模拟 reg query 的真实输出形状 */
 const REG_PRO = `
@@ -378,5 +379,58 @@ describe("能力探测 · L2b（多会话隔离）的依赖检查", () => {
     assert.equal(probed, false);
     assert.equal(result.isolationSession.available, false);
     assert.match(result.isolationSession.reason ?? "", /只在 Windows 上有/);
+  });
+});
+
+
+/**
+ * 设置页那一列为什么是英文 / 中文（2026-11-28 双语）。
+ *
+ * 探测结果里的 `guidance` 会被 SettingsView 逐条铺在设置页上（visual.guidance），所以它
+ * 必须跟着界面语言走：英文界面下是完整英文句子，中文界面下是中文原文。同一个 fixture
+ * 只换语言，就能把「文案从哪来」钉死。
+ */
+describe("探测指引跟界面语言走", () => {
+  afterEach(() => setComputerUseUiLanguage("zh"));
+
+  const homeMachine = async () =>
+    probe({
+      platform: "win32",
+      run: makeRun({ reg: REG_HOME, hypervisor: "True", wsl: "x" }),
+      exeExists: makeExeExists({ sandbox: false, wsl: true }),
+    });
+
+  test("英文：guidance 是英文，且不含 CJK", async () => {
+    setComputerUseUiLanguage("en");
+    const result = await homeMachine();
+    assert.equal(result.ready, false);
+    assert.ok(result.guidance !== null && result.guidance !== "");
+    assert.doesNotMatch(result.guidance ?? "", /[一-鿿]/);
+    assert.match(result.guidance ?? "", /Windows Home has no Windows Sandbox feature/);
+  });
+
+  test("中文：同一台机器给出中文原文", async () => {
+    setComputerUseUiLanguage("zh");
+    const result = await homeMachine();
+    assert.match(result.guidance ?? "", /Windows 家庭版没有 Windows 沙箱功能/);
+  });
+
+  test("非 Windows 的平台文案也分语言（macOS 那条要给出浏览器档的出路）", async () => {
+    setComputerUseUiLanguage("en");
+    const english = await probe({ platform: "darwin", run: makeRun({}), exeExists: () => false });
+    assert.doesNotMatch(english.guidance ?? "", /[一-鿿]/);
+    assert.match(english.guidance ?? "", /built-in browser/);
+    setComputerUseUiLanguage("zh");
+    const chinese = await probe({ platform: "darwin", run: makeRun({}), exeExists: () => false });
+    assert.match(chinese.guidance ?? "", /内置浏览器/);
+  });
+
+  test("隔离会话不可用的原因也分语言（设置页档位那一行会显示它）", async () => {
+    setComputerUseUiLanguage("en");
+    const english = await probe({ platform: "darwin", run: makeRun({}), exeExists: () => false });
+    assert.doesNotMatch(english.isolationSession.reason ?? "", /[一-鿿]/);
+    setComputerUseUiLanguage("zh");
+    const chinese = await probe({ platform: "darwin", run: makeRun({}), exeExists: () => false });
+    assert.match(chinese.isolationSession.reason ?? "", /只在 Windows 上有/);
   });
 });

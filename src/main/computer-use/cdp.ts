@@ -40,6 +40,7 @@ import {
   type SandboxElement,
 } from "../../shared/computer-use.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /**
  * 这一层真正要的那两个能力。**收窄成接口而不是直接吃 SandboxController**：
@@ -51,10 +52,18 @@ export interface CdpGuest {
   guestShot(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestShotReply>;
 }
 
-/** 沙箱里的 Edge 没有在运行（桥 / 状态机都可能这么说）。用文案判定，不引错误码 */
+/**
+ * 沙箱里的 Edge 没有在运行（桥 / 状态机都可能这么说）。
+ *
+ * 用文案判定而不是错误码：其中一半来自 **guest 桥**（C#，回的是中文），宿主这边的闸门文案
+ * 从 2026-11-28 起跟界面语言走——所以两种语言的说法都要认，少一种就会在英文界面下
+ * 丢掉「清缓存 + 重试一次」这条自愈路径（用户看到一条本可自愈的失败，模型还去换窗口名）。
+ */
+const NOT_RUNNING_MARKERS = ["没有在运行", "没有启动", "is not running", "is not started"] as const;
+
 function isNotRunning(cause: unknown): boolean {
   const message = cause instanceof Error ? cause.message : String(cause);
-  return message.includes("没有在运行") || message.includes("没有启动");
+  return NOT_RUNNING_MARKERS.some((marker) => message.includes(marker));
 }
 
 /** 降级指引：只有模型看得到它，不写这句它就会重试同一个动作 */
@@ -231,7 +240,7 @@ export class CdpSession {
     }
     for (const key of [...this.started]) if (!live.has(key)) this.started.delete(key);
     if (live.size >= COMPUTER_USE_BROWSER_MAX) {
-      throw new Error(computerUseBrowserErrors.tooMany(COMPUTER_USE_BROWSER_MAX));
+      throw new Error(cuTexts().tooManyBrowsers(COMPUTER_USE_BROWSER_MAX));
     }
   }
 
@@ -244,10 +253,7 @@ export class CdpSession {
       this.started.add(session);
       return;
     }
-    throw new Error(
-      "沙箱里的浏览器还没有打开任何页面。先调用 sandbox_navigate 打开一个网址——它会把 Edge 拉起来，"
-      + "之后 sandbox_observe / sandbox_click 才能用。CDP 起不来时再退回 computer_screenshot 像素工具",
-    );
+    throw new Error(cuTexts().browserNoPage);
   }
 
   private async send(
@@ -338,15 +344,15 @@ export class CdpSession {
     try {
       info = await stat(hostPath);
     } catch {
-      throw new Error(`找不到要上传的文件：${hostPath}`);
+      throw new Error(cuTexts().browserUploadNotFound(hostPath));
     }
-    if (!info.isFile()) throw new Error(`这不是一个文件：${hostPath}`);
-    if (info.size === 0) throw new Error(`这个文件是空的（0 字节）：${hostPath}`);
+    if (!info.isFile()) throw new Error(cuTexts().browserUploadNotFile(hostPath));
+    if (info.size === 0) throw new Error(cuTexts().browserUploadEmpty(hostPath));
 
     // 模型可能给正斜杠路径（"C:/Users/me/a.pdf"）：win32.basename 只认反斜杠，先归一化
     const base = win32.basename(hostPath.replaceAll("/", "\\"));
     const safe = base.replace(/[\\/:*?"<>|]/g, "_");
-    if (safe === "") throw new Error(`文件名不可用：${hostPath}`);
+    if (safe === "") throw new Error(cuTexts().browserUploadBadName(hostPath));
     const name = `${Date.now()}-${safe}`;
     const dir = join(this.outDir, "upload");
     await mkdir(dir, { recursive: true });
@@ -571,7 +577,7 @@ export async function applySandboxBrowserRequest(
         const nativeWidth = number(shot.resp["nativeWidth"]);
         const nativeHeight = number(shot.resp["nativeHeight"]);
         if (width === undefined || height === undefined || nativeWidth === undefined || nativeHeight === undefined) {
-          throw new Error("cdp-shot 的回执缺尺寸字段（width / height / nativeWidth / nativeHeight）");
+          throw new Error(cuTexts().browserShotShape);
         }
         return {
           ok: true,
@@ -661,7 +667,7 @@ export async function applySandboxBrowserRequest(
       default:
         return {
           ok: false,
-          error: `内部错误：${request.action} 不是 sandbox_* 浏览器动作，不该进 CDP 通道。`,
+          error: cuTexts().internalWrongLane(request.action, "CDP"),
         };
     }
   } catch (cause: unknown) {

@@ -37,8 +37,6 @@ import {
   COMPUTER_USE_DESKTOP_KEY,
   COMPUTER_USE_LEASE,
   browserKey,
-  computerUseLeaseErrors,
-  computerUseUiaErrors,
   isUiaFocusRequest,
   isUiaRequest,
   isSandboxBrowserAction,
@@ -46,6 +44,7 @@ import {
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
 } from "../../shared/computer-use.ts";
+import { cuTexts } from "./ui-language.ts";
 import { runWithLease, type ComputerUseLease } from "./lease.ts";
 
 export interface ComputerUseDispatcherDeps {
@@ -96,7 +95,7 @@ export function createComputerUseDispatcher(deps: ComputerUseDispatcherDeps): Co
     // 它不碰桌面，所以不取锁、也不消费过期标记，直接回一句带替代路径的话——模型看不见 UI，
     // 不告诉它换什么，它只会重试同一个动作。
     if (isUiaFocusRequest(request)) {
-      return { ok: false, error: computerUseUiaErrors.focusRemoved };
+      return { ok: false, error: cuTexts().uiaFocusRemoved };
     }
     // UIA 车道不占桌面租约：调模式不移动前台焦点（AutoSetFocus 已关），不依赖桌面现状，
     // 所以它可以与别人持着的 desktop:exclusive 共存。放在过期标记之前：它也不该被
@@ -108,7 +107,7 @@ export function createComputerUseDispatcher(deps: ComputerUseDispatcherDeps): Co
     const key = browser ? browserKey(sessionId) : (deps.desktopKey ?? (() => COMPUTER_USE_DESKTOP_KEY))(sessionId);
     if (expiredSessions.has(sessionId)) {
       expiredSessions.delete(sessionId);
-      return { ok: false, error: computerUseLeaseErrors.holdExpired(COMPUTER_USE_LEASE.holdMaxMs / 60_000) };
+      return { ok: false, error: cuTexts().leaseHoldExpired(COMPUTER_USE_LEASE.holdMaxMs / 60_000) };
     }
     const title = await deps.titleOf(sessionId);
     // 这里**只是预检**（拿得到就立刻拿到，拿不到就是排队 / 报错），真正的 acquire 在

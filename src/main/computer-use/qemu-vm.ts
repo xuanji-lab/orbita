@@ -19,6 +19,8 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
+import { cuTexts } from "./ui-language.ts";
+
 /** guest 里桌面服务监听的固定端口（desk-cgi.sh 那套；宿主侧端口每次现挑） */
 export const GUEST_DESK_PORT = 8080;
 /** guest 里 Xvnc 的 RFB 端口（指针输入走它；镜像的 orbita-xvnc 就是这么起的） */
@@ -118,7 +120,7 @@ export async function pickFreePorts(): Promise<QemuVmPorts> {
     const [a, b, c] = await Promise.all([portFree(port), portFree(port + 1), portFree(port + 2)]);
     if (a && b && c) return { desk: port, monitor: port + 1, rfb: port + 2 };
   }
-  throw new Error(`没有空闲端口（在 ${HOST_PORT_BASE}..${HOST_PORT_BASE + HOST_PORT_SPAN} 找三个）`);
+  throw new Error(cuTexts().qemuNoFreePorts(`${HOST_PORT_BASE}..${HOST_PORT_BASE + HOST_PORT_SPAN}`));
 }
 
 /**
@@ -217,10 +219,7 @@ export function bootQemuVm(options: QemuVmOptions & { ports: QemuVmPorts }): Qem
   const { paths, ports } = options;
   const missing = missingQemuVmFiles(paths);
   if (missing.length > 0) {
-    throw new Error(
-      `L3 镜像或 QEMU 不全，缺：${missing.join("、")}。` +
-        "先在仓里跑 scripts/p3-desktop/build-ramdisk.mjs 与 build-image.mjs（产物在仓外，别拷进仓）。",
-    );
+    throw new Error(cuTexts().qemuVmFilesMissing(missing.join("、")));
   }
   const token = options.token ?? randomBytes(16).toString("hex");
   const logDir = options.logDir ?? path.join(paths.imageDir, "logs");
@@ -240,7 +239,7 @@ export function bootQemuVm(options: QemuVmOptions & { ports: QemuVmPorts }): Qem
   });
   child.unref();
   fs.closeSync(fd);
-  if (child.pid === undefined) throw new Error("QEMU 没起来（spawn 没有 pid）");
+  if (child.pid === undefined) throw new Error(cuTexts().qemuSpawnNoPid);
   return { pid: child.pid, ports, token, qemuLog, serialLog, args, spawnedAt: Date.now() };
 }
 
@@ -261,7 +260,7 @@ export function qemuMonitor(port: number, text: string, timeoutMs = 5_000): Prom
     let buffer = "";
     const timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error("QEMU monitor 超时"));
+      reject(new Error(cuTexts().qemuMonitorTimeout));
     }, timeoutMs);
     socket.on("connect", () => {
       socket.write(text);

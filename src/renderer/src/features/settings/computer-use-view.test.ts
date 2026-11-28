@@ -8,6 +8,7 @@ import {
   computerUseBackendChoices,
 } from "../../../../shared/computer-use.ts";
 import type { AppSettings } from "../../../../shared/settings.ts";
+import { computerUseUiTexts } from "../../../../shared/computer-use-texts.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import {
@@ -408,5 +409,41 @@ describe("设置页 · 隔离后端（开发者门）", () => {
       // 换后端的补丁只发 backend 一个键，不碰 allowNetwork / browser
       assert.deepEqual(backendPatch(saved), { computerUse: { backend: saved } });
     }
+  });
+});
+
+/**
+ * 设置页派生层「按语言取到对应的那几句」（2026-11-28 双语）。
+ *
+ * 主进程把 `guidance` 交给人话、这里把它拆成行——中间不许再拼字，也不许换语言。
+ * 所以给定 en / zh 两份主进程文案，派生出来的行必须逐条来自对应的那一份。
+ */
+describe("设置页派生层：guidance 跟界面语言走", () => {
+  test("英文：拆出来的每一行都是英文，且无 CJK", () => {
+    const texts = computerUseUiTexts("en");
+    const visual = probeVisual(
+      probeResult({
+        ready: false,
+        featureState: "disabled",
+        guidance: [texts.guidanceHomeEdition, texts.guidanceVirtualizationOff].join(String.fromCharCode(10)),
+      }),
+    );
+    assert.equal(visual.kind, "not-ready");
+    const lines = visual.kind === "not-ready" ? visual.guidance : [];
+    assert.equal(lines.length, 2);
+    for (const line of lines) assert.doesNotMatch(line, /[一-鿿]/);
+  });
+
+  test("中文：同一份结构下逐条是中文原文", () => {
+    const texts = computerUseUiTexts("zh");
+    const visual = probeVisual(
+      probeResult({
+        ready: false,
+        featureState: "disabled",
+        guidance: [texts.guidanceHomeEdition, texts.guidanceVirtualizationOff].join(String.fromCharCode(10)),
+      }),
+    );
+    const lines = visual.kind === "not-ready" ? visual.guidance : [];
+    assert.deepEqual(lines, [texts.guidanceHomeEdition, texts.guidanceVirtualizationOff]);
   });
 });

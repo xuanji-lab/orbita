@@ -46,12 +46,12 @@ import {
   COMPUTER_USE_BROWSER_LEASE,
   COMPUTER_USE_DESKTOP_KEY,
   COMPUTER_USE_LEASE,
-  computerUseLeaseErrors,
   type ComputerUseLeaseAuditRecord,
   type ComputerUseLeaseKeyStats,
   type ComputerUseLeaseResult,
   type ComputerUseLeaseStatus,
 } from "../../shared/computer-use.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /** 租约看到的时钟。测试注入一个推进用的假表；生产直接用 Date.now */
 export interface LeaseClock {
@@ -395,7 +395,7 @@ export function createComputerUseLease(options: LeaseOptions): ComputerUseLease 
     // 不排队的键（浏览器）：自己的浏览器永远立刻可用，走不到这条；真走到了说明调用方
     // 把别人的键递了过来——当场拒绝，不给它排一个没有超时线的队
     if (lane.policy.waitMs <= 0) {
-      return reject(lane, sessionId, title, "busy", computerUseLeaseErrors.busy(ownerTitle), 0);
+      return reject(lane, sessionId, title, "busy", cuTexts().leaseBusy(ownerTitle), 0);
     }
     // 有占用者：排队等它。**队列满就直接拒绝**——无限排队等于把失败推给未来
     if (lane.queue.length >= lane.policy.queueLimit) {
@@ -404,7 +404,7 @@ export function createComputerUseLease(options: LeaseOptions): ComputerUseLease 
         sessionId,
         title,
         "queueFull",
-        computerUseLeaseErrors.queueFull(ownerTitle, lane.policy.queueLimit),
+        cuTexts().leaseQueueFull(ownerTitle, lane.policy.queueLimit),
         0,
       );
     }
@@ -431,7 +431,7 @@ export function createComputerUseLease(options: LeaseOptions): ComputerUseLease 
       waiter.settled = true;
       removeWaiter(lane, waiter);
       const waitedMs = clock.now() - waiter.since;
-      const timeoutError = computerUseLeaseErrors.timeout(ownerTitle);
+      const timeoutError = cuTexts().leaseTimeout(ownerTitle);
       void reject(lane, sessionId, title, "timeout", timeoutError, waitedMs);
       waiter.settle({ ok: false, error: timeoutError });
     }, lane.policy.waitMs);
@@ -457,7 +457,7 @@ export function createComputerUseLease(options: LeaseOptions): ComputerUseLease 
         removeWaiter(lane, queued);
         queued.cancelTimer();
         queued.settled = true;
-        queued.settle({ ok: false, error: computerUseLeaseErrors.revoked("会话已停止") });
+        queued.settle({ ok: false, error: cuTexts().leaseRevoked(cuTexts().leaseReasonSessionStopped) });
       }
       return;
     }
@@ -476,7 +476,7 @@ export function createComputerUseLease(options: LeaseOptions): ComputerUseLease 
       for (const waiter of pending) {
         waiter.cancelTimer();
         waiter.settled = true;
-        waiter.settle({ ok: false, error: computerUseLeaseErrors.revoked(reason) });
+        waiter.settle({ ok: false, error: cuTexts().leaseRevoked(reason) });
       }
       if (lane.held !== null) {
         const holder = lane.held;

@@ -146,6 +146,7 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { cuTexts, setComputerUseUiLanguage } from "./computer-use/ui-language.ts";
 import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
 import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
 import { sendGuestCommand } from "./computer-use/bridge-client.ts";
@@ -486,12 +487,16 @@ void app.whenReady().then(async () => {
   // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
   // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
   // 不再随设置开关拉起 / 停
-  registerSettingsIpc(settings, () => {
+  registerSettingsIpc(settings, (next) => {
     void keepAwake.sync().catch(() => undefined);
+    // 切了语言，电脑使用那批文案下一条回执就跟上（与 consent 文本同一套「现读」纪律）
+    setComputerUseUiLanguage(effectiveLanguage(next.language));
   });
   registerWindowIpc();
   const initialSettings = await settings.read();
   applyNativeTheme(initialSettings);
+  // 电脑使用的界面文案跟界面语言走（缺省 zh 只在「没接线」时成立，真实运行不落那条）
+  setComputerUseUiLanguage(effectiveLanguage(initialSettings.language));
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
@@ -843,7 +848,9 @@ void app.whenReady().then(async () => {
        * 浏览器在沙箱里，沙箱没了它们就不存在了。
        */
       if (status.state === "off" || status.state === "error") {
-        computerUseLease.revoke(status.state === "off" ? "沙箱已停止" : "沙箱出错");
+        computerUseLease.revoke(
+          status.state === "off" ? cuTexts().leaseReasonSandboxStopped : cuTexts().leaseReasonSandboxError,
+        );
       }
       broadcastComputerUseStatus(status);
     },
@@ -908,7 +915,9 @@ void app.whenReady().then(async () => {
     onStatus: (status) => {
       // 与 L2 同一条纪律：隔离环境没了，桌面租约一并作废（排队者等的是一个不存在的东西）
       if (status.state === "off" || status.state === "error") {
-        computerUseLease.revoke(status.state === "off" ? "隔离会话已停止" : "隔离会话出错");
+        computerUseLease.revoke(
+          status.state === "off" ? cuTexts().leaseReasonIsolationStopped : cuTexts().leaseReasonIsolationError,
+        );
       }
       broadcastComputerUseStatus(status);
     },
@@ -1317,7 +1326,7 @@ void app.whenReady().then(async () => {
     if (event.type === "failed" && event.sessionId === null) {
       // agent 进程整个没了：所有租约持有者与等待者都不存在了（工具调用已随进程消失），
       // 留着只会让下一个会话排满 30 秒再报一句「被某个会话占着」
-      computerUseLease.revoke("agent 进程退出");
+      computerUseLease.revoke(cuTexts().leaseReasonAgentExited);
       // 挂起的授权提问也没人再回答了：按 cancelled 结掉（不写 meta），renderer 收行
       computerUseConsentWaiter.cancelAll();
       closeChannelsForLostProcess();
@@ -2181,7 +2190,7 @@ void app.whenReady().then(async () => {
     void computerUse.dispose();
     // 租约只在内存里（见 lease.ts 头部：落盘会留下没人能放掉的死锁）；退出前把定时器收掉，
     // 不给进程留一个拽着退出 30s 的句柄
-    computerUseLease.revoke("应用退出");
+    computerUseLease.revoke(cuTexts().leaseReasonAppExiting);
     /*
      * 审计：一行账把「桌面到底挤不挤」留在日志里（v1.5-2 要用真实数据决定后续路线）。
      * 只在真有人用过沙箱时才打——没人用过就没数字可报。
