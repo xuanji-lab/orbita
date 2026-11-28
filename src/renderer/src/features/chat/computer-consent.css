@@ -95,6 +95,17 @@
   color: var(--color-danger);
 }
 
+/*
+ * 「没人回答」不是成功也不是失败：中性 / 次要那一档（2026-11-28 真机验收 P3-1）。
+ * 没有这条规则时它会继承 .cu-record-lead 的 success 绿——看起来像「办成了」。
+ * 不用红（用户没有拒绝），也不用绿（没有发生任何同意）；图标本身已经是 circle-help。
+ * `unavailable` 是为同一类的「没人可问」留的别名（派生层现在只产 unanswered）。
+ */
+.cu-record[data-decision="unanswered"] .cu-record-lead,
+.cu-record[data-decision="unavailable"] .cu-record-lead {
+  color: var(--color-text-secondary);
+}
+
 .cu-record-text {
   color: var(--color-text-tertiary);
 }

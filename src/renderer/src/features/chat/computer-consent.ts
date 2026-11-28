@@ -103,6 +103,23 @@ export function groupHoldsPendingAsk(
 }
 
 /**
+ * 记录行的**原因**从哪里来（2026-11-28 验收 P3-2）：实时事件 > 盘上 meta > `answered`。
+ *
+ * 为什么必须持久化：只写 denied 的话，刷新一次「没人回答」就退回「你拒绝了」——
+ * 而刷新是最常见的路径。老会话文件没有这个键时按 `answered`（那时他大概率是亲手点的；
+ * 编一个「超时」比不编更坏）。`unset` 没有原因可言，回 null。
+ */
+export function effectiveConsentSource(
+  consent: ComputerUseConsent,
+  live: ComputerUseConsentSource | null,
+  persisted: ComputerUseConsentSource | null,
+): ComputerUseConsentSource | null {
+  if (consent === "unset") return null;
+  if (live !== null) return live;
+  return persisted ?? "answered";
+}
+
+/**
  * 记录行的形态：允许 / 用户拒绝 / 没人回答。
  *
  * 只有「本会话第一处电脑工具调用」那一行下面画，且授权状态不是 unset（撤销之后整行消失，

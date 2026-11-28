@@ -712,6 +712,18 @@ describe("computerUseConsentTexts —— 给模型的固定文本跟界面语言
     for (const text of Object.values(en)) assert.doesNotMatch(text, /[一-鿿]/, text);
   });
 
+  test("超时 / 没人回答那条：不能说成「用户拒绝了」（2026-11-28 验收顺手项）", () => {
+    const zh = computerUseConsentTexts("zh");
+    const en = computerUseConsentTexts("en");
+    // 两份都要点明「没有人明确拒绝」，否则模型会转告用户「你拒绝了」
+    assert.match(zh.deniedUnanswered, /用户没有明确拒绝/);
+    assert.match(zh.deniedUnanswered, /没有收到用户的回答/);
+    assert.match(en.deniedUnanswered, /the user did not explicitly deny it/i);
+    // 与「用户拒绝」那句必须不同（同一句就没有意义了）
+    assert.notEqual(zh.deniedUnanswered, zh.denied);
+    assert.notEqual(en.deniedUnanswered, en.denied);
+  });
+
   test("认不出的语言（含缺省）按英文：与界面 locale 的 en 兜底一致", () => {
     assert.deepEqual(computerUseConsentTexts(undefined), computerUseConsentTexts("en"));
     assert.deepEqual(computerUseConsentTexts("fr"), computerUseConsentTexts("en"));

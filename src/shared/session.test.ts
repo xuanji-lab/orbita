@@ -163,6 +163,36 @@ describe("parseSessionMeta", () => {
     }
   });
 
+  it("结局原因随授权一起读回；授权 unset / 坏值时丢掉它（2026-11-28 验收 P3-2）", () => {
+    // 写了就原样读回：刷新后记录行还能分出「没人回答」
+    strictEqual(
+      parseSessionMeta({ ...valid, computerUseConsent: "denied", computerUseConsentSource: "timeout" })
+        ?.computerUseConsentSource,
+      "timeout",
+    );
+    strictEqual(
+      parseSessionMeta({ ...valid, computerUseConsent: "denied", computerUseConsentSource: "unavailable" })
+        ?.computerUseConsentSource,
+      "unavailable",
+    );
+    // 老会话文件没有这个键：不落键（读的一方按 answered 兜底），也不报错
+    strictEqual("computerUseConsentSource" in (parseSessionMeta({ ...valid, computerUseConsent: "denied" }) ?? {}), false);
+    // 坏值丢掉
+    for (const bad of [undefined, null, "yes", 1, true]) {
+      strictEqual(
+        "computerUseConsentSource" in
+          (parseSessionMeta({ ...valid, computerUseConsent: "denied", computerUseConsentSource: bad }) ?? {}),
+        false,
+      );
+    }
+    // 授权本身是 unset：原因只是上一局的残影，不能跟着读出来
+    strictEqual(
+      "computerUseConsentSource" in
+        (parseSessionMeta({ ...valid, computerUseConsent: "unset", computerUseConsentSource: "timeout" }) ?? {}),
+      false,
+    );
+  });
+
   it("标题可以缺——建了还没发消息的会话就是这样", () => {
     strictEqual(parseSessionMeta({ ...valid, title: undefined })?.title, "");
   });

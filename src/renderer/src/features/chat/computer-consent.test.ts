@@ -5,6 +5,8 @@
  * 确认行与记录行分别出不出现、挂在哪一条工具调用下面。
  */
 import test, { describe } from "node:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import type { TranscriptItem } from "@earendil-works/pi-protocol";
 import {
@@ -13,6 +15,7 @@ import {
   groupHoldsPendingAsk,
   isComputerUseToolName,
   pendingComputerUseToolCallId,
+  effectiveConsentSource,
   shouldShowConsentAskFallback,
   showsConsentStatusLine,
 } from "./computer-consent.ts";
@@ -128,4 +131,27 @@ describe("确认行的避让与折叠兜底", () => {
     assert.equal(groupHoldsPendingAsk(["a", "b"], "z"), false);
     assert.equal(groupHoldsPendingAsk([], "z"), false);
   });
+});
+
+/**
+ * 2026-11-28 验收 P3-2：刷新后「超时」不能又变回「你拒绝了」。来源呢：实时 > 盘上 > answered。
+ */
+test("effectiveConsentSource：实时优先；没有实时就取盘上的；老文件缺席按 answered；unset 没有来源", () => {
+  assert.equal(effectiveConsentSource("denied", "timeout", "answered"), "timeout");
+  assert.equal(effectiveConsentSource("denied", null, "timeout"), "timeout", "刷新后从 meta 读回来");
+  assert.equal(effectiveConsentSource("denied", null, null), "answered", "老会话文件没有这个键");
+  assert.equal(effectiveConsentSource("allowed", null, "answered"), "answered");
+  assert.equal(effectiveConsentSource("unset", "revoked", "timeout"), null);
+});
+
+/**
+ * P3-1：「没人回答」不能沿用 success 绿。样式断言直接读 CSS 源（这条规则只在这一处）。
+ */
+test("记录行样式：unanswered / unavailable 是中性墨，不是成功绿也不是危险红", () => {
+  const css = readFileSync(fileURLToPath(new URL("./computer-consent.css", import.meta.url)), "utf8");
+  const rule = css.slice(css.indexOf("[data-decision=\"unanswered\"]"));
+  const block = rule.slice(0, rule.indexOf("}"));
+  assert.match(block, /\[data-decision="unavailable"\]/, "别名也走同一条规则");
+  assert.match(block, /color:\s*var\(--color-text-secondary\)/);
+  assert.doesNotMatch(block, /--color-success|--color-danger/);
 });
