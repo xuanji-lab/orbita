@@ -2090,6 +2090,12 @@ export function captureNote(capture: ComputerUseCaptureInfo | undefined): string
       "could not be found and covered. If a password field is visible in this image, do not read it. " +
       "Run computer_uia list on that window first, then take the screenshot again.";
   }
+  // P2-2 的那半句实话：桌面车道只认 UIA 的 IsPassword。网页里点过「显示密码」的框已经被翻成
+  // 普通输入框，**在本次 list 之前**就翻开的那种桌面车道根本没见过——不能装作能遮。
+  note +=
+    " This is the desktop lane: it knows password fields only from the last computer_uia list, so a web page " +
+    "field already switched to plain text by \"show password\" before that list is invisible to it — for web " +
+    "pages use sandbox_screenshot, which masks by DOM.";
   if (capture.userTyping) {
     note +=
       " A person was typing in the sandbox while this was captured (their input takes priority over yours), " +

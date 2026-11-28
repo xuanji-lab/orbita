@@ -465,8 +465,16 @@ describe("captureNote（截图回执里那句「遮了 / 没遮」）", () => {
     assert.match(old, /Run computer_uia list on that window first/);
   });
 
-  test("看过而且没有密码框：一个字都不添（正常截图的文案不能被这一刀改掉）", () => {
-    assert.equal(captureNote({ ...masked, maskedRegions: 0 }), "");
+  test("看过而且没有密码框：不吓人，但**一定要带桌面车道的声明**", () => {
+    // 旧版本这里一个字都不添。现在不行了：「一块都没遮」恰恰是“页面把密码翻成明文”的样子
+    // （IsPassword=false → 0 块），模型必须知道这条车道看不见那种框、网页要用 sandbox_screenshot。
+    // 但不能带 WARNING / NOT masked 那种吓人的话：清单是新的，没没遮。
+    const note = captureNote({ ...masked, maskedRegions: 0 });
+    assert.match(note, /desktop lane/);
+    assert.match(note, /show password/);
+    assert.match(note, /sandbox_screenshot/);
+    assert.doesNotMatch(note, /WARNING/);
+    assert.doesNotMatch(note, /blacked out/);
   });
 
   test("老桥不报 capture：不添话、也不编造「已遮」", () => {

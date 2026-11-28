@@ -505,9 +505,19 @@ internal static class WinShot
             return new MaskPlan();
         }
         List<MaskCacheEntry> entries = new List<MaskCacheEntry>();
+        int hidden = 0;
         MaskCacheEntry entry;
-        if (PasswordRects.TryGet(hwnd.ToInt64(), InputHook.NowTick(), out entry)) entries.Add(entry);
-        return Mask.Plan(width, height, originX, originY, entries, Mask.CacheMaxAgeMs);
+        if (PasswordRects.TryGet(hwnd.ToInt64(), InputHook.NowTick(), out entry))
+        {
+            // 只过「页面已换」那道闸（标题变了说明这份清单说的不是现在这一页）；
+            // 可见性这道闸不适用于按窗口截图——它拍的就是这个窗口自己的 surface。
+            int dropped;
+            entries.Add(Mask.VisiblePart(entry, ReadTitle(hwnd), null, out dropped));
+            hidden += dropped;
+        }
+        MaskPlan plan = Mask.Plan(width, height, originX, originY, entries, Mask.CacheMaxAgeMs);
+        plan.Hidden = hidden;
+        return plan;
     }
 
     /** 枚举 + 过滤（上限 MaxWindows，保持 z 序）。任何单个窗口的异常都不该让整条命令失败 */
