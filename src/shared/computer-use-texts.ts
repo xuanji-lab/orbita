@@ -238,6 +238,13 @@ export interface ComputerUseUiTexts {
   deliveryRefused: string;
   noEvidenceHint: string;
   devBackendRefusal: string;
+  /**
+   * guest 桥（C#）报了一个认不出的错误：英文界面只给这句通用话，原文进日志
+   * （见 main/computer-use/bridge-error-text.ts 的兜底）。
+   */
+  guestErrorGeneric: string;
+  /** 同上，但原文里有网络错误码（`ERR_*`）——那个码是「为什么打不开」的证据，留着 */
+  guestErrorGenericCode(code: string): string;
 }
 
 /** 文案里带占用者名字的尾巴（与 shared/computer-use.ts 的 holderSuffix 同一份规则） */
@@ -515,6 +522,8 @@ const ZH: ComputerUseUiTexts = {
   deliveryRefused: "没有发出去（参数不合法、发送失败或后端明确拒绝）：可以修参数后重试。",
   noEvidenceHint: COMPUTER_USE_NO_EVIDENCE_HINT,
   devBackendRefusal: computerUseDevBackendRefusal(),
+  guestErrorGeneric: "沙箱报了一个错误，细节见应用日志。",
+  guestErrorGenericCode: (code) => `沙箱报了一个错误（${code}），细节见应用日志。`,
 };
 
 const EN: ComputerUseUiTexts = {
@@ -835,6 +844,9 @@ const EN: ComputerUseUiTexts = {
     "repository), and it only does screenshots, clicks and typing — no UIA control tree, no browser debug port, no " +
     "host file mapping, no snapshots. To enable it, start this application with the environment variable " +
     `${COMPUTER_USE_DEV_BACKENDS_ENV}=1 and then start it again.`,
+  guestErrorGeneric: "The sandbox reported an error. Details are in the application log.",
+  guestErrorGenericCode: (code) =>
+    `The sandbox reported an error (${code}). Details are in the application log.`,
 };
 
 /**

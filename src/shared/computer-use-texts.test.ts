@@ -89,6 +89,7 @@ const SAMPLE_ARGS: Partial<Record<keyof ComputerUseUiTexts, unknown[][]>> = {
   leaseHoldExpired: [[15]],
   leaseRevoked: [["stopped"]],
   leaseBusy: [["Kimi"]],
+  guestErrorGenericCode: [["net::ERR_CONNECTION_RESET"]],
 };
 
 /** 把一份表摊成 `键 → 该键产出的全部文本`（函数按样本实参调一遍） */

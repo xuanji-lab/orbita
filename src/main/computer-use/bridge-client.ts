@@ -44,7 +44,8 @@ import {
   type GuestTcpChannel,
 } from "../../shared/computer-use.ts";
 import { parseBridgeInfo } from "./bridge-ready.ts";
-import { cuTexts } from "./ui-language.ts";
+import { cuLanguage, cuTexts } from "./ui-language.ts";
+import { guestErrorText } from "./bridge-error-text.ts";
 
 export interface GuestScreenshot {
   jpeg: Uint8Array;
@@ -1109,7 +1110,10 @@ async function sendGuestCommandRaw(
   if (attempt.kind === "failed") throw attempt.error;
   if (attempt.kind === "reply") {
     if (attempt.resp.ok === false) {
-      const message = typeof attempt.resp.error === "string" ? attempt.resp.error : cuTexts().bridgeNoReason;
+      const message =
+        typeof attempt.resp.error === "string"
+          ? guestErrorText(attempt.resp.error, cuLanguage())
+          : cuTexts().bridgeNoReason;
       throw new GuestCommandRejected(message, parseComputerUseDelivery(attempt.resp["delivery"]));
     }
     return {
@@ -1152,7 +1156,8 @@ async function sendGuestCommandRaw(
       const resp = parseResp(raw);
       if (resp !== null) {
         if (resp.ok === false) {
-          const message = typeof resp.error === "string" ? resp.error : cuTexts().bridgeNoReason;
+          const message =
+            typeof resp.error === "string" ? guestErrorText(resp.error, cuLanguage()) : cuTexts().bridgeNoReason;
           await cleanup();
           throw new GuestCommandRejected(message, parseComputerUseDelivery(resp["delivery"]));
         }

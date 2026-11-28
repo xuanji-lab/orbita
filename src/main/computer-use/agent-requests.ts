@@ -44,7 +44,8 @@ import {
 } from "../../shared/computer-use.ts";
 import type { GuestCommandReply } from "./sandbox.ts";
 import type { SandboxCapabilities } from "./provider.ts";
-import { cuTexts } from "./ui-language.ts";
+import { cuLanguage, cuTexts } from "./ui-language.ts";
+import { guestNoteText } from "./bridge-error-text.ts";
 
 /**
  * 这一层真正要的那几个能力。**收窄成接口而不是直接吃 SandboxController**：
@@ -336,7 +337,8 @@ function deliveryOf(resp: Record<string, unknown>, evidence: EvidenceLevel | nul
  */
 function guestNote(resp: Record<string, unknown>): string {
   const note = resp["note"];
-  return typeof note === "string" && note !== "" ? ` ${note}` : "";
+  // 桥给的补充说明是中文：跟界面语言走（认不出的在英文界面下丢掉，原文进日志）
+  return typeof note === "string" && note !== "" ? ` ${guestNoteText(note, cuLanguage())}` : "";
 }
 
 /**

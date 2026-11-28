@@ -44,7 +44,8 @@ import {
   type ComputerUseToolOutcome,
   type ComputerUseToolRequest,
 } from "../../shared/computer-use.ts";
-import { cuTexts } from "./ui-language.ts";
+import { cuLanguage, cuTexts } from "./ui-language.ts";
+import { guestErrorText } from "./bridge-error-text.ts";
 import { runWithLease, type ComputerUseLease } from "./lease.ts";
 
 export interface ComputerUseDispatcherDeps {
@@ -79,7 +80,19 @@ export interface ComputerUseDispatcher {
 export function createComputerUseDispatcher(deps: ComputerUseDispatcherDeps): ComputerUseDispatcher {
   const expiredSessions = new Set<string>();
 
-  const dispatch = async (
+  /**
+   * 出口的**最后一道语言闸**（2026-11-28）：回执里的错误串只要是中文、而界面是英文，就换成
+   * 英文那一句（`bridge-error-text.ts`：认得出的家族给完整英文，认不出的给通用句 + 原文进日志）。
+   *
+   * 为什么放在这一层而不是每条 lane 里：所有 computer_* / sandbox_* 请求都从这里出去（index.ts
+   * 的 computerUseRequest → dispatch → answerComputerUse），在这里拦一次就覆盖全部出口——
+   * 包括将来新加的 lane，以及别的模块抛上来、我们没预料到的中文错误。
+   * 已经是英文的串原样返回（映射是幂等的），中文界面下也原样返回。
+   */
+  const localized = (outcome: ComputerUseToolOutcome): ComputerUseToolOutcome =>
+    outcome.ok === false ? { ...outcome, error: guestErrorText(outcome.error, cuLanguage()) } : outcome;
+
+  const dispatchInner = async (
     sessionId: string,
     request: ComputerUseToolRequest,
   ): Promise<ComputerUseToolOutcome> => {
@@ -127,6 +140,11 @@ export function createComputerUseDispatcher(deps: ComputerUseDispatcherDeps): Co
       rejected: (error) => ({ ok: false, error }),
     });
   };
+
+  const dispatch = async (
+    sessionId: string,
+    request: ComputerUseToolRequest,
+  ): Promise<ComputerUseToolOutcome> => localized(await dispatchInner(sessionId, request));
 
   return {
     dispatch,
