@@ -194,12 +194,15 @@ describe("pdfPaneModeOf —— 容得下就并排，容不下就单栏显示 PDF
     });
   });
 
-  test("宽到容得下 → 并排，与点没点过无关", () => {
-    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: false }), {
-      kind: "split",
+  test("宽到容得下、但焦点在 PDF → 也单独全幅（2026-11-27 用户裁决：点 PDF 就是聚焦 PDF）", () => {
+    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: true }), {
+      kind: "solo",
       path: "/p/main.pdf",
     });
-    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: true }), {
+  });
+
+  test("宽到容得下、焦点在源码 → 并排", () => {
+    assert.deepEqual(pdfPaneModeOf({ ...base, splitAllowed: true, pdfFocused: false }), {
       kind: "split",
       path: "/p/main.pdf",
     });

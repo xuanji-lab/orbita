@@ -94,6 +94,7 @@ import type {
   LatexLabelRef,
   LatexResolvedPackage,
   LatexSyncFailure,
+  PdfAnnotation,
 } from "@shared/latex";
 import type { DocKind } from "@shared/doc";
 import { pathTail, pathWithin, samePath } from "../../../../shared/path.ts";
@@ -375,6 +376,123 @@ export function FilesPanel(props: {
     [activeTab, sessionId, workspaceId, focusWorkspaceId],
   );
   const latex = useLatexWorkbench(latexContext);
+  /**
+   * PDF 选区批注的**唯一持有者**（项目目录的 .orbita/annotations.json）。
+   *
+   * 2026-11-27 用户裁决：列表搬进底部问题抽屉。原实现把列表画在 PDF 右栏（220px 常驻、
+   * 空着也占）——1200 宽的论文工作台里它吃掉 PDF 面板 47%（视口 245px / 26% 缩放）。
+   * PDF 栏只负责「选中 → 写一条」，列表 / 删除 / 跳页都从这里发给抽屉。
+   */
+  const [pdfAnnotations, setPdfAnnotations] = useState<readonly PdfAnnotation[]>([]);
+  /** 写盘用当前值的镜像：放进 setState 的更新函数里做副作用会被 StrictMode 跑两遍 */
+  const pdfAnnotationsRef = useRef<readonly PdfAnnotation[]>([]);
+  const annotationsCtx = latexContext;
+  const projectDir = latex.project?.dir ?? null;
+  useEffect(() => {
+    pdfAnnotationsRef.current = pdfAnnotations;
+  }, [pdfAnnotations]);
+  /**
+   * 从盘上重读批注。什么时候读：打开项目 / 换激活文件 / 编出新 PDF / **抽屉被拉开**。
+   * 最后一条是必须的——agent 或另一扇窗写进 .orbita/annotations.json 时，这一侧没有
+   * 任何事件会通知它；抽屉是唯一的显示面，拉开那一刻读一次就够（2026-11-27 实测：
+   * 只在挂载时读一次，写进去的批注要抖窗口才出现）。
+   */
+  const reloadAnnotations = useCallback(() => {
+    const ctx = annotationsCtx;
+    if (ctx === null || projectDir === null) {
+      setPdfAnnotations([]);
+      return;
+    }
+    void api.latex
+      .annotationsGet(ctx)
+      .then((store) => setPdfAnnotations(store.annotations))
+      .catch(() => {
+        // 读不出来就当没有：批注是辅助信息，不该让 PDF 打不开
+        setPdfAnnotations([]);
+      });
+  }, [annotationsCtx, projectDir]);
+  useEffect(() => {
+    reloadAnnotations();
+    // 编译出新的 PDF 也要重读：批注锚在页上，重编后页码 / 位置都可能变
+  }, [reloadAnnotations, latex.project?.pdf?.modifiedAt]);
+  const writeAnnotations = useCallback(
+    (next: readonly PdfAnnotation[]) => {
+      const ctx = annotationsCtx;
+      setPdfAnnotations(next);
+      pdfAnnotationsRef.current = next;
+      if (ctx === null) return;
+      void api.latex
+        .annotationsPut({ ...ctx, store: { version: 1, annotations: [...next] } })
+        .catch((cause: unknown) => {
+          setEditorNotice(cause instanceof Error ? cause.message : String(cause));
+        });
+    },
+    [annotationsCtx],
+  );
+  const addAnnotation = useCallback(
+    (annotation: PdfAnnotation) => {
+      writeAnnotations([...pdfAnnotationsRef.current, annotation]);
+    },
+    [writeAnnotations],
+  );
+  const removeAnnotation = useCallback(
+    (id: string) => {
+      writeAnnotations(pdfAnnotationsRef.current.filter((item) => item.id !== id));
+    },
+    [writeAnnotations],
+  );
+  /**
+   * 把批注交给智能体：走与「问题交给智能体」同一条通道——**放进输入框的引用**，
+   * 发不发由用户决定（不直接发送）。引用带 PDF 的路径，模型能顺着去读那一页原文。
+   *
+   * 全部一次给：按页码排，超过 40 条只列前 40 条并写明还剩多少（引用块在输入卡里
+   * 是给人看的，太长会把输入卡顶掉）。
+   */
+  const annotationPdfPath = latex.project?.pdf?.path ?? null;
+  const handAnnotation = useCallback(
+    (annotation: PdfAnnotation) => {
+      session.addQuote({
+        text: t.pdfAnnotations.handText(t.pdfAnnotations.page(annotation.page), annotation.quote, annotation.comment),
+        messageId: `pdf-annot:${annotation.id}`,
+        role: "assistant",
+        ...(annotationPdfPath === null ? {} : { filePath: annotationPdfPath }),
+      });
+      document.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+    },
+    [session, t, annotationPdfPath],
+  );
+  const handAllAnnotations = useCallback(() => {
+    if (pdfAnnotations.length === 0) return;
+    const LIMIT = 40;
+    const shown = pdfAnnotations.slice(0, LIMIT);
+    const lines = shown.map((item, index) =>
+      t.pdfAnnotations.handLine(index + 1, t.pdfAnnotations.page(item.page), item.quote, item.comment),
+    );
+    const rest = pdfAnnotations.length - shown.length;
+    session.addQuote({
+      text: [
+        t.pdfAnnotations.handAllText(pdfAnnotations.length, annotationPdfPath === null ? "" : annotationPdfPath),
+        ...lines,
+        ...(rest > 0 ? [t.pdfAnnotations.handRest(rest)] : []),
+      ].join("\n"),
+      messageId: `pdf-annot:all:${pdfAnnotations.length}`,
+      role: "assistant",
+      ...(annotationPdfPath === null ? {} : { filePath: annotationPdfPath }),
+    });
+    document.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+  }, [pdfAnnotations, session, t, annotationPdfPath]);
+  const annotationsApiFor = useCallback(
+    (onJump: (item: PdfAnnotation) => void) => ({
+      items: pdfAnnotations,
+      onSave: addAnnotation,
+      onRemove: removeAnnotation,
+      onJump,
+      onOpen: reloadAnnotations,
+      onHandAll: handAllAnnotations,
+      onHand: handAnnotation,
+    }),
+    [pdfAnnotations, addAnnotation, removeAnnotation, reloadAnnotations, handAllAnnotations, handAnnotation],
+  );
   /** 文献库：`\cite{` 的候选（编辑器）与坏 .bib 的 warning（问题抽屉）都读这一份 */
   const citeState = useCiteLibrary(latexContext, latex.project);
   const citeLibrary = citeState?.library ?? null;
@@ -420,6 +538,17 @@ export function FilesPanel(props: {
     setEditorsVersion((version) => version + 1);
   }, []);
 
+  /** 大纲开着的文件（按钮在标签页头部，状态在编辑器里，这里只做转发） */
+  const [outlinePaths, setOutlinePaths] = useState<ReadonlySet<string>>(new Set());
+  const handleOutlineChange = useCallback((path: string, open: boolean): void => {
+    setOutlinePaths((current) => {
+      if (current.has(path) === open) return current;
+      const next = new Set(current);
+      if (open) next.add(path);
+      else next.delete(path);
+      return next;
+    });
+  }, []);
   const handleEditorDirty = useCallback((path: string, dirty: boolean): void => {
     setDirtyPaths((current) => {
       if (current.has(path) === dirty) return current;
@@ -1494,6 +1623,32 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
   const citeFocus = props.citeFocus ?? null;
   const consumedCiteRef = useRef<number | null>(null);
   const [jump, setJump] = useState<PdfJump | null>(null);
+  /** 批注跳页的 token：与引用跳转共用同一个 jump 通道（同一页连点两次也要重放高亮） */
+  const annotationJumpToken = useRef(0);
+  /**
+   * 抽屉里点一条批注 → 滚到那一页并高亮原文。
+   * 用与引用跳转同一条通道（合成一条 PdfCitation：start/end 故意给 0，让
+   * locateCitation 走 quote 重搜——批注存的页内坐标是归一化的，重编后不可靠）。
+   */
+  const jumpToAnnotation = useCallback(
+    (annotation: PdfAnnotation) => {
+      const pdfPath = latex.project?.pdf?.path ?? null;
+      if (pdfPath === null) return;
+      annotationJumpToken.current += 1;
+      setJump({
+        citation: {
+          id: `annot:${annotation.id}`,
+          path: pdfPath,
+          page: annotation.page,
+          start: 0,
+          end: 0,
+          text: annotation.quote,
+        },
+        token: annotationJumpToken.current,
+      });
+    },
+    [latex.project?.pdf?.path],
+  );
   /** SyncTeX 正向查找的落点（源码右键「在 PDF 中定位」）：交给显示项目 PDF 的那块 */
   const [pdfSync, setPdfSync] = useState<PdfSyncJump | null>(null);
   /** SyncTeX 反向查找的落点（PDF 双击）：要打开 / 滚到的源码行 */
@@ -2159,12 +2314,19 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                   pdfReloadToken={leftIsPdf ? latex.pdfReloadToken : 0}
                   // SyncTeX：左半显示的就是项目 PDF 时，落点框与双击反查都给它
                   syncJump={leftIsProjectPdf ? pdfSync : null}
+                  pdfAnnotations={annotationsApiFor(jumpToAnnotation)}
                   {...(leftIsProjectPdf
                     ? { onLocatePdf: (point: { page: number; x: number; y: number }) => locateSource(leftPath ?? shownTab.path, point) }
                     : {})}
                   editor={{
                     register: registerEditor,
                     onDirtyChange: handleEditorDirty,
+                    onOutlineChange: handleOutlineChange,
+                    // 标签页头部右上角的大纲键：与 PDF 工具条上的批注键对称
+                    outline: {
+                      open: outlinePaths.has(leftPath ?? shownTab.path),
+                      onToggle: () => editorsRef.current.get(leftPath ?? shownTab.path)?.toggleOutline(),
+                    },
                     onSaved: handleEditorSaved,
                     onError: handleEditorError,
                     // agent 与本文件同改一个文件：只读 / 重载 / 按块撤销（按左块路径取）。
@@ -2276,6 +2438,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     })}
                     pdfReloadToken={latex.pdfReloadToken}
                     syncJump={pdfSync}
+                    pdfAnnotations={annotationsApiFor(jumpToAnnotation)}
                     // 引用跳转只落到它那份 PDF 上（同一条引用连点也重放）
                     jump={jump !== null && samePath(jump.citation.path, pdfSidePath) ? jump : null}
                     onLocatePdf={(point: { page: number; x: number; y: number }) => locateSource(pdfSidePath, point)}
@@ -2291,7 +2454,11 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             groups={latexGroups}
             lintIssues={lintIssues}
             open={problemsOpen}
-            onToggle={() => setProblemsOpen((open) => !open)}
+            onToggle={() => {
+              // 拉开时重读一遍：写盘的另一方（agent / 另一扇窗）没有事件通知这一侧
+              if (!problemsOpen) reloadAnnotations();
+              setProblemsOpen((open) => !open);
+            }}
             onHandToAgent={handProblemToAgent}
             onJump={jumpToProblem}
             height={props.settings.latexProblemsHeight ?? null}

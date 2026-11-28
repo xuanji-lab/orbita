@@ -104,6 +104,13 @@ export interface TexEditorHandle {
   text: () => string | null;
   /** 回合结束时从盘上同步一次（干净→静默重载，脏→冲突条）；盘上没变则什么都不做 */
   syncFromDisk: (diskText: string) => void;
+  /**
+   * 大纲开着没有。按钮已经搬到**标签页头部的右上角**（与 PDF 工具条上的批注键对称），
+   * 那颗键画在 FilePreviewPane 里，所以开合状态要能被外面读到。
+   */
+  outlineOpen: () => boolean;
+  /** 开 / 关大纲（标签页头部那颗键调它） */
+  toggleOutline: () => void;
 }
 
 /** 编辑器看到的「agent 本轮对我做了什么」（由 useEditorCollab 算好递进来） */
@@ -137,6 +144,8 @@ export function TexEditorPane(props: {
   initialText: string;
   /** 把把手登记给 FilesPanel（编译前 flush / 关标签前 flush 都走它）；卸载时注销 */
   register: (path: string, handle: TexEditorHandle | null) => void;
+  /** 大纲开合变了：标签页头部那颗键据此点亮（state 在这一层，按钮在上一层） */
+  onOutlineChange?: (path: string, open: boolean) => void;
   /** 脏状态变了：标签上的圆点跟着亮 / 灭 */
   onDirtyChange: (path: string, dirty: boolean) => void;
   /** 保存成功（FilesPanel 借它让编译条立刻看到「源码比 PDF 新」） */
@@ -401,6 +410,8 @@ export function TexEditorPane(props: {
   // 把手也只建一次（FilesPanel 只在挂载时登记它）：里面同样只持槽，不持函数；
   // text / syncFromDisk 是 #310 协作安全用的字段，与槽并存。
   const handleRef = useRef<TexEditorHandle | null>(null);
+  /** 大纲开合的当前实现（每轮渲染更新；把手里只存槽，不存挂载那一刻的闭包） */
+  const toggleOutlineRef = useRef<() => void>(() => {});
   if (handleRef.current === null) {
     handleRef.current = {
       flush: () => saveSlot.get()(false),
@@ -409,6 +420,8 @@ export function TexEditorPane(props: {
       conflicted: () => phaseRef.current === "conflict",
       text: () => viewRef.current?.state.doc.toString() ?? null,
       syncFromDisk: (diskText: string) => syncFromDiskRef.current(diskText),
+      outlineOpen: () => outlineOpenRef.current,
+      toggleOutline: () => toggleOutlineRef.current(),
     };
   }
   const handle = handleRef.current;
@@ -597,14 +610,19 @@ export function TexEditorPane(props: {
   };
 
   const toggleOutline = (): void => {
-    if (outlineOpen) {
+    // 开合都从这里走，顺手把状态报给头部那颗键（同一个入口，不会两处不同步）
+    const next = !outlineOpenRef.current;
+    if (!next) {
       setOutlineOpen(false);
+      props.onOutlineChange?.(path, false);
       return;
     }
     const view = viewRef.current;
     setOutlineText(view?.state.doc.toString() ?? props.initialText);
     setOutlineOpen(true);
+    props.onOutlineChange?.(path, true);
   };
+  toggleOutlineRef.current = toggleOutline;
 
   // 脏状态下盯一眼盘上内容：用户停手不打字时，外部改动也要能看见
   useEffect(() => {
@@ -1203,18 +1221,8 @@ export function TexEditorPane(props: {
         />
       )}
       <div className="tex-editor-status" data-phase={phase}>
-        {showOutline && (
-          <button
-            type="button"
-            className="quiet-control tex-editor-outline-toggle"
-            aria-expanded={outlineOpen}
-            title={t.editor.outlineTip}
-            onClick={toggleOutline}
-          >
-            <Icon name="list-tree" size={12} />
-            {t.editor.outline}
-          </button>
-        )}
+        {/* 大纲键已搬到标签页头部右上角（与 PDF 工具条的批注键对称）：
+            状态条只放状态——光标位置与保存结果 */}
         <span className="tex-editor-cursor">
           {t.editor.cursor(cursor.line, cursor.column)}
         </span>

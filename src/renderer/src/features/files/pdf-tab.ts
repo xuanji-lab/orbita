@@ -122,10 +122,15 @@ export function pdfSplitOf(input: {
 /**
  * PDF 那一栏这一刻该怎么出现（2026-11 用户裁决：「PDF 应该是一个已经打开的标签页」）：
  *
- * - `none`：没开 PDF 标签，或用户此刻在看源码（窄窗单栏）；
- * - `split`：面板宽到容得下（布局 B / 布局 A 大屏），源码与 PDF 并排；
- * - `solo`：窄到容不下并排，但用户点了 PDF 标签——PDF 占满整个面板，
- *   源码标签点回去。窄窗是**单栏切换**，不是「不显示」。
+ * - `none`：没开 PDF 标签，或用户此刻在看源码；
+ * - `split`：焦点在源码、面板又宽到容得下（布局 B / 布局 A 大屏）——源码与 PDF 并排；
+ * - `solo`：**用户点了 PDF 标签**（焦点在 PDF）——PDF 占满整个面板，宽窄都一样；
+ *   点回源码标签：宽的回到并排，窄的回到源码单栏。
+ *
+ * 「焦点在 PDF = 单独全幅」是用户 2026-11-27 的裁决（#573 的取舍得到确认）：标签焦点
+ * 就是「现在要看谁」；想在宽窗里并排看，点回源码标签即可。需要「源码 ↔ PDF 同时看」
+ * 的动作（SyncTeX 正向定位、菜单里「打开 PDF」）由调用方在容得下并排时**不设焦点**，
+ * 于是落在 split，而不是把源码藏起来。
  */
 export type PdfPaneMode =
   | { kind: "none" }
@@ -140,18 +145,20 @@ export function pdfPaneModeOf(input: {
   sourcePath: string | null;
   /** 面板容不容得下并排（既有阈值：布局 B / 布局 A 的 ≥1800 自动并排） */
   splitAllowed: boolean;
-  /** 用户点了 PDF 标签：窄窗单栏时该显示 PDF，而不是源码 */
+  /** 用户点了 PDF 标签（焦点在 PDF）：宽窄都单独全幅显示 PDF */
   pdfFocused: boolean;
 }): PdfPaneMode {
   const path = pdfPanePathOf(input);
   if (path === null) return { kind: "none" };
+  // 左栏本来就是这份 PDF（引用跳转把它当文件标签打开了）→ 不必再叠一块
+  if (input.sourcePath !== null && samePath(input.sourcePath, path)) return { kind: "none" };
+  // 焦点在 PDF：单独铺满，宽窄一样。这一条**必须排在并排判定之前**，否则宽窗里
+  // 永远回不到「放大看一页稿」（2026-11-22 就是这么被困住的）
+  if (input.pdfFocused) return { kind: "solo", path };
   if (pdfSplitOf({ panePath: path, sourcePath: input.sourcePath, splitAllowed: input.splitAllowed })) {
     return { kind: "split", path };
   }
-  if (!input.pdfFocused) return { kind: "none" };
-  // 左栏本来就是这份 PDF（引用跳转把它当文件标签打开了）→ 不必再叠一块
-  if (input.sourcePath !== null && samePath(input.sourcePath, path)) return { kind: "none" };
-  return { kind: "solo", path };
+  return { kind: "none" };
 }
 
 /** 每个会话记住「用户关掉过 PDF 标签」：只存内存（与 paper-layout 的记忆同一条纪律） */

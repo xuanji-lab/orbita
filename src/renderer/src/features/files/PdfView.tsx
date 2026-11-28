@@ -56,8 +56,8 @@ import {
   type SourceSpan,
 } from "../../../../shared/pdf-quote.ts";
 import type { FileListRequest } from "@shared/files";
-import type { LatexFileContext } from "@shared/latex";
-import { PdfAnnotations } from "./PdfAnnotations";
+import type { PdfAnnotation } from "@shared/latex";
+import { PdfAnnotationRail, PdfAnnotations } from "./PdfAnnotations";
 import type { PdfCitation } from "@shared/pdf-quote";
 import type { LatexSyncRect } from "@shared/latex";
 
@@ -152,8 +152,27 @@ export function PdfView(props: {
   onLocate?: (point: { page: number; x: number; y: number }) => void;
   /** 选中文字引用到对话（复用会话的 quote chip） */
   onQuote?: (text: string) => void;
-  /** 批注存取的项目上下文（.orbita/annotations.json）；null = 不是 LaTeX 项目，不出批注栏 */
-  annotationCtx?: LatexFileContext | null;
+  /**
+   * 批注（选区 → 浮条 → 草稿；列表是 PDF 右侧一条可开合的竖栏）。
+   * null / 缺席 = 这份 PDF 不接批注（不是 LaTeX 项目）。
+   *
+   * 为什么是「右侧竖栏 + 工具栏开关键」而不是底部一条：批注一多，底部横条会把
+   * PDF 高度吃掉（2026-11-27 用户判断）；与 tex 的「大纲」同一套形态——按钮开、
+   * 按钮关，竖着排，信息密度高，关掉时 PDF 拿回整块宽度。
+   */
+  pdfAnnotations?: {
+    items: readonly PdfAnnotation[];
+    onSave: (annotation: PdfAnnotation) => void;
+    onRemove: (id: string) => void;
+    /** 点一条：滚到那一页并高亮原文（外层走与引用跳转同一条 jump 通道） */
+    onJump: (item: PdfAnnotation) => void;
+    /** 拉开竖栏时调一次：写盘的另一方（agent / 另一扇窗）没有事件通知这一侧 */
+    onOpen: () => void;
+    /** 把全部批注交给智能体（放进输入框的引用，发不发由用户决定） */
+    onHandAll: () => void;
+    /** 只把这一条交给智能体 */
+    onHand: (item: PdfAnnotation) => void;
+  } | null;
   /** 搜索高亮的色调：red = 改前（删除）、green = 改后（新增）；缺省 accent */
   highlightTone?: "red" | "green";
   /** 打开时就带着的搜索词（改动对照：备份视图搜旧文本、当前视图搜新文本） */
@@ -182,6 +201,8 @@ export function PdfView(props: {
   /** 当前命中的 token：rect 算完后按它精调滚动，旧 token 的回报丢掉 */
   const findTokenRef = useRef(0);
   const [findToken, setFindToken] = useState(0);
+  /** 右侧批注栏开着没有。默认关：看稿优先（与 tex 大纲同一套交互） */
+  const [annotationsOpen, setAnnotationsOpen] = useState(false);
 
   const updatePrefs = (patch: Partial<PdfViewPrefs>): void => {
     setPrefs((current) => {
@@ -628,6 +649,40 @@ export function PdfView(props: {
             <Icon name="file" size={14} />
           </button>
         </div>
+
+        {/* 批注：与 tex 的大纲同一个形态——按钮开、按钮关，列表是右侧一条竖栏。
+            有批注时按钮上带条数；一条都没有也留着（先看空态说明，再决定写不写） */}
+        {props.pdfAnnotations != null && (
+          <div className="pdf-tool-group">
+            <button
+              type="button"
+              className="quiet-control pdf-tool pdf-annot-toggle"
+              aria-expanded={annotationsOpen}
+              title={
+                props.pdfAnnotations.items.length === 0
+                  ? t.pdfAnnotations.toggleTip
+                  : `${t.pdfAnnotations.toggleTip} · ${t.pdfAnnotations.count(props.pdfAnnotations.items.length)}`
+              }
+              aria-label={t.pdfAnnotations.toggleTip}
+              onClick={() => {
+                if (!annotationsOpen) props.pdfAnnotations?.onOpen();
+                setAnnotationsOpen((open) => !open);
+              }}
+            >
+              {/* 角标而不是「图标后面跟个数字」：工具条按钮是方形图标位，数字写在外面
+                  会把键挤宽、两三位数还会跟相邻按钮贴住；角标形状与右栏未读角标同一套
+                  （.rail-badge 的语法），宽度随位数长、99 以上收成「99+」 */}
+              <span className="pdf-annot-toggle-icon">
+                <Icon name="message-square" size={14} />
+                {props.pdfAnnotations.items.length > 0 && (
+                  <span className="pdf-annot-badge" aria-hidden="true">
+                    {props.pdfAnnotations.items.length > 99 ? "99+" : props.pdfAnnotations.items.length}
+                  </span>
+                )}
+              </span>
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="pdf-body">
@@ -700,8 +755,18 @@ export function PdfView(props: {
             );
           })}
         </div>
-        {props.annotationCtx != null && (
-          <PdfAnnotations containerRef={scrollRef} ctx={props.annotationCtx} onQuote={props.onQuote} />
+        {props.pdfAnnotations != null && (
+          <PdfAnnotations containerRef={scrollRef} onSave={props.pdfAnnotations.onSave} onQuote={props.onQuote} />
+        )}
+        {props.pdfAnnotations != null && annotationsOpen && (
+          <PdfAnnotationRail
+            items={props.pdfAnnotations.items}
+            onJump={props.pdfAnnotations.onJump}
+            onRemove={props.pdfAnnotations.onRemove}
+            onClose={() => setAnnotationsOpen(false)}
+            onHandAll={props.pdfAnnotations.onHandAll}
+            onHand={props.pdfAnnotations.onHand}
+          />
         )}
       </div>
     </div>
