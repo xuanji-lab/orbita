@@ -419,7 +419,7 @@ const ZH: ComputerUseUiTexts = {
     "先用 computer_screenshot 确认桌面状态，必要时重启沙箱",
 
   browserNoPage:
-    "沙箱里的浏览器还没有打开任何页面。先调用 sandbox_navigate 打开一个网址——它会把 Edge 拉起来，" +
+    "沙箱里的浏览器还没有打开任何页面。先调用 sandbox_navigate 打开一个网址——它会把浏览器拉起来，" +
     "之后 sandbox_observe / sandbox_click 才能用。CDP 起不来时再退回 computer_screenshot 像素工具",
   browserUploadNotFound: (path) => `找不到要上传的文件：${path}`,
   browserUploadNotFile: (path) => `这不是一个文件：${path}`,
@@ -695,7 +695,7 @@ const EN: ComputerUseUiTexts = {
     "or resetting: take a computer_screenshot to check the desktop, and restart the sandbox if needed",
 
   browserNoPage:
-    "The sandbox browser has not opened any page yet. Call sandbox_navigate with a URL first — that starts Edge, " +
+    "The sandbox browser has not opened any page yet. Call sandbox_navigate with a URL first — that starts the browser, " +
     "and only then do sandbox_observe / sandbox_click work. If CDP cannot start, fall back to the pixel tools " +
     "(computer_screenshot).",
   browserUploadNotFound: (path) => `The file to upload was not found: ${path}`,

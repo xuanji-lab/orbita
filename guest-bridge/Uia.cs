@@ -1026,8 +1026,6 @@ internal static class Uia
     private const int SlotTextRangeGetText = 3 + 10 - 1;
     /** evidence.detail 的硬上限（给模型看的证据，不该把回执撑爆）；超了截断并注明 */
     private const int EvidenceDetailMax = 200;
-    /** detail 里每个值的展示上限（先各自截短，再受 EvidenceDetailMax 总长限制） */
-    private const int EvidenceValueMax = 80;
     /** IUIAutomationSelectionItemPattern 第 1 个方法 Select() */
     private const int SlotSelect = 3 + 1 - 1;
 
@@ -1641,8 +1639,10 @@ internal static class Uia
         string where = verdict.Source == "value"
             ? "ValuePattern.Current.Value"
             : "TextPattern.DocumentRange.GetText";
-        verdict.Detail = ClipDetail("期望 " + QuoteForDetail(expected) + "，读回 " + QuoteForDetail(actual)
-            + "（" + where + "）");
+        // **不回显值本身**：这是模型 / 用户填进去的原文，回执会进会话 JSONL。
+        // 只给「长度 + 一致与否」——那才是读回要回答的问题。
+        verdict.Detail = ClipDetail("期望 " + DescribeValueForDetail(expected) + "，读回 "
+            + DescribeValueForDetail(actual) + "（" + where + "）");
         return verdict;
     }
 
@@ -1661,23 +1661,17 @@ internal static class Uia
         return string.Equals(expected, actual.Substring(0, end), StringComparison.Ordinal);
     }
 
-    /** detail 里的值：引号包起来，换行/制表改成可见的转义（一条单行证据），单值先截短 */
-    private static string QuoteForDetail(string value)
+    /**
+     * detail 里怎么描述一个值：**只说形状，不说内容**（长度 + 打码）。**纯函数**。
+     *
+     * 为什么不回显原文：模型 / 用户往框里填的东西可能就是密码、token、验证码；回执会写进
+     * 会话 JSONL，落盘就无法收回。读回要回答的是「设进去了没有」，长度对上就够了。
+     */
+    private static string DescribeValueForDetail(string value)
     {
         if (value == null) return "（读回失败）";
-        string clipped = value.Length <= EvidenceValueMax ? value : value.Substring(0, EvidenceValueMax) + "…";
-        StringBuilder text = new StringBuilder();
-        text.Append('"');
-        for (int i = 0; i < clipped.Length; i++)
-        {
-            char c = clipped[i];
-            if (c == '\r') text.Append("\\r");
-            else if (c == '\n') text.Append("\\n");
-            else if (c == '\t') text.Append("\\t");
-            else text.Append(c);
-        }
-        text.Append('"');
-        return text.ToString();
+        if (value.Length == 0) return "（空）";
+        return "••••（" + value.Length + " 字符）";
     }
 
     /** evidence.detail 总长硬上限：超了截断并注明（不塞超长文本，理由见 A 的规格） */
@@ -3075,16 +3069,28 @@ internal static class Uia
         // ⑧ setValue 的读回证据（0.15.0）：三档 + 密码框不带值 + detail 不超长
         ReadbackVerdict same = JudgeSetValueReadback("新建文本.txt", "新建文本.txt", "value", false);
         CheckString(failures, ref cases, "读回与期望一致 → confirmed", "confirmed", same.Delivery);
-        CheckTrue(failures, ref cases, "一致时带 evidence（kind=value，detail 写清期望与读回）",
-            same.Detail != null && same.Detail.IndexOf("新建文本.txt", StringComparison.Ordinal) >= 0
-            && same.Detail.IndexOf("ValuePattern.Current.Value", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "一致时带 evidence（kind=value，写清读回通道）",
+            same.Detail != null && same.Detail.IndexOf("ValuePattern.Current.Value", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "**evidence 不回显原文**（只给长度）",
+            same.Detail != null && same.Detail.IndexOf("新建文本.txt", StringComparison.Ordinal) < 0
+            && same.Detail.IndexOf("8 字符", StringComparison.Ordinal) >= 0);
         CheckString(failures, ref cases, "读回的来源原样写进回执", "value", same.Source);
 
         ReadbackVerdict changed = JudgeSetValueReadback("hello", "hello world", "value", false);
         CheckString(failures, ref cases, "读回与期望不一致 → suspected_noop", "suspected_noop", changed.Delivery);
-        CheckTrue(failures, ref cases, "不一致时 evidence 同时写出期望与读回",
-            changed.Detail != null && changed.Detail.IndexOf("\"hello\"", StringComparison.Ordinal) >= 0
-            && changed.Detail.IndexOf("\"hello world\"", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "不一致时 evidence 给出两个长度（不回显原文）",
+            changed.Detail != null && changed.Detail.IndexOf("5 字符", StringComparison.Ordinal) >= 0
+            && changed.Detail.IndexOf("11 字符", StringComparison.Ordinal) >= 0
+            && changed.Detail.IndexOf("hello", StringComparison.Ordinal) < 0);
+
+        // 大小写各试一次：任何形式的原文都不许出现在证据里
+        ReadbackVerdict leak = JudgeSetValueReadback("SeCrEt-Zq9-KEY", "SeCrEt-Zq9-KEY", "value", false);
+        CheckTrue(failures, ref cases, "证据里没有原文（大小写都不许出现）",
+            leak.Detail != null
+            && leak.Detail.IndexOf("secret", StringComparison.OrdinalIgnoreCase) < 0
+            && leak.Detail.IndexOf("Zq9", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "证据里给出长度 13", leak.Detail != null
+            && leak.Detail.IndexOf("14 字符", StringComparison.Ordinal) >= 0);
 
         ReadbackVerdict missing = JudgeSetValueReadback("x", null, "none", false);
         CheckString(failures, ref cases, "拿不到读回 → unverifiable（不猜 confirmed）", "unverifiable", missing.Delivery);
@@ -3111,12 +3117,12 @@ internal static class Uia
         StringBuilder longValue = new StringBuilder();
         for (int i = 0; i < 400; i++) longValue.Append('x');
         ReadbackVerdict clipped = JudgeSetValueReadback(longValue.ToString(), longValue.ToString(), "value", false);
-        CheckTrue(failures, ref cases, "超长值截断到 200 字符并注明",
+        CheckTrue(failures, ref cases, "超长值只报长度（detail 本身不会被原文撑爆）",
             clipped.Detail.Length <= EvidenceDetailMax
-            && clipped.Detail.IndexOf("已截断", StringComparison.Ordinal) >= 0);
+            && clipped.Detail.IndexOf("400 字符", StringComparison.Ordinal) >= 0);
         ReadbackVerdict multiline = JudgeSetValueReadback("a\nb", "a\nb", "value", false);
-        CheckTrue(failures, ref cases, "detail 是单行（换行转义成 \\n，不把回执弄成两行）",
-            multiline.Detail.IndexOf('\n') < 0 && multiline.Detail.IndexOf("\\n", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "证据是单行、且不回显原文（只给长度）",
+            multiline.Detail.IndexOf((char)10) < 0 && multiline.Detail.IndexOf("3 字符", StringComparison.Ordinal) >= 0);
 
         // 槽号是内插出来的：三个新槽必须**夹在已知邻居之间**，数错一格就是调错函数
         CheckNumber(failures, ref cases, "ValuePattern get_CurrentValue 槽号 = 3 + 2 - 1", "4",

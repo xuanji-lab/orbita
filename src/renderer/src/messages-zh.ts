@@ -1156,7 +1156,7 @@ export const zh: Messages = {
     browserInfo:
       "智能体在沙箱里用哪个浏览器打开网页。默认 Edge——沙箱镜像自带它，不用额外准备，启动到 CDP 就绪也比从宿主映射进来的 Chrome 快一秒左右。",
     browserBelow:
-      "Chrome / Brave / Chromium 不在沙箱镜像里：需要先把它们映射或拷贝进沙箱，否则这次会自动回退 Edge（工具回执里会写明）。改动在下一次打开网页时生效。",
+      "Chrome / Brave / Chromium 不在沙箱镜像里：需要先把它们映射或拷贝进沙箱，否则这次会自动回退 Edge（工具回执里会写明）——这一行仍显示你选的那个，沙箱里跑的却是 Edge。改动在下一次打开网页时生效。",
     browserAria: "沙箱里用哪个浏览器",
     browserAuto: "自动",
     // 「最多三分钟」对着 src/main/computer-use/sandbox.ts 的 BRIDGE_READY_TIMEOUT_MS（180s）；

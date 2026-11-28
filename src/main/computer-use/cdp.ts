@@ -69,7 +69,7 @@ function isNotRunning(cause: unknown): boolean {
 /** 降级指引：只有模型看得到它，不写这句它就会重试同一个动作 */
 const FALLBACK_HINT =
   "If CDP keeps failing, fall back to the pixel tools: computer_screenshot to see the sandbox desktop, " +
-  "computer_click / computer_type / computer_key to drive it. They do not need Edge's debugging port.";
+  "computer_click / computer_type / computer_key to drive it. They do not need the browser's debugging port.";
 
 /** 把底层失败翻成带下一步的人话（已经带了指引就不再叠一遍） */
 function browserFailure(cause: unknown): string {
@@ -112,7 +112,7 @@ export class CdpSession {
    * 桥这次实际用的浏览器（来自 cdp-start 的回执）。**只为“说清楚”用**：配了 Chrome 却回退
    * Edge 时，回执 / 日志是唯一能看出这件事的地方（模型看不见设置页）。
    */
-  private readonly browsers = new Map<string, { browser: string; fallbackFrom?: string }>();
+  private readonly browsers = new Map<string, { browser: string; fallbackFrom?: string; announced?: boolean }>();
 
   /**
    * 界面语言的读取口（缺省 = en）。它只影响 overlay 上那行字（`maskLabel`）：
@@ -193,6 +193,19 @@ export class CdpSession {
       `${entry.browser} instead. To use ${entry.fallbackFrom}, map or copy it into the sandbox (Settings › ` +
       `Computer use › Sandbox browser) — or set that setting back to Edge. `
     );
+  }
+
+  /**
+   * 回退这件事**只说一次**：谁先碰到浏览器（navigate / observe / screenshot …）谁带回执，
+   * 之后不再重复。早先只有 navigate 的正文里带它——模型若第一下就是 observe / screenshot，
+   * 用户永远看不到「你配的 Chrome 没生效」。
+   */
+  takeBrowserFallbackNote(session: string): string {
+    const entry = this.browsers.get(session);
+    if (entry === undefined || entry.fallbackFrom === undefined || entry.announced) return "";
+    const note = this.browserNote(session);
+    entry.announced = true;
+    return note;
   }
 
   /**
@@ -420,6 +433,18 @@ export class CdpSession {
  */
 export async function applySandboxBrowserRequest(
   cdp: CdpSession,
+  sessionId: string,
+  request: ComputerUseToolRequest,
+): Promise<ComputerUseToolOutcome> {
+  const session = safeBrowserSessionId(sessionId);
+  const outcome = await dispatchSandboxBrowserRequest(cdp, sessionId, request);
+  if (!outcome.ok) return outcome;
+  const note = cdp.takeBrowserFallbackNote(session);
+  return note === "" ? outcome : { ...outcome, text: `${note}${outcome.text}` };
+}
+
+async function dispatchSandboxBrowserRequest(
+  cdp: CdpSession,
   /**
    * 发起这次请求的 agent 会话。**这一层不再只是日志素材**：sandbox_* 按会话各用一个浏览器
    * 实例（v1.5-1），会话 id 经 safeBrowserSessionId 归一化后就是桥侧的路由键。
@@ -450,7 +475,6 @@ export async function applySandboxBrowserRequest(
           text:
             `Opened ${url === "" ? request.url : url}${title === "" ? "" : ` ("${title}")`} in the sandbox browser` +
             `${ms === undefined ? "" : ` in ${ms} ms`}. ${warning === "" ? "" : `${warning} `}` +
-            `${cdp.browserNote(session)}` +
             "Call sandbox_observe to see what is on the page; its selectors stay valid until the page navigates. " +
             "This browser is the isolated sandbox one — it has none of the user's sign-in state and no CAPTCHA help.",
         };
@@ -507,14 +531,19 @@ export async function applySandboxBrowserRequest(
           },
           "open",
         );
-        const value = text(resp["value"]);
+        // **只报长度，不回显原文**：登录页上这段就是密码，而工具结果会写进会话 JSONL。
+        // 旧回执把 `resp.value`（字段的完整值）原样写进正文，等于把密码永久落到会话盘上。
+        const chars = number(resp["chars"]) ?? request.text.length;
+        const fieldChars = number(resp["fieldChars"]);
         const submitted = resp["submitted"] === true;
         return {
           ok: true,
           text:
-            `Typed ${request.text.length} character(s) into ${request.selector}` +
+            `Typed ${chars} character(s) into ${request.selector}` +
             `${request.clear === false ? " (appended, the old value was kept)" : ""}. ` +
-            `The field now holds "${value.length > 120 ? `${value.slice(0, 120)}…` : value}".` +
+            (fieldChars === undefined || fieldChars < 0
+              ? "The field now holds the typed text (its content is not echoed back)."
+              : `The field now holds ${fieldChars} character(s) (the content is not echoed back).`) +
             (submitted ? " Enter was pressed to submit." : "") +
             " Call sandbox_observe (or sandbox_wait for the next page) to see the result.",
         };
@@ -587,7 +616,7 @@ export async function applySandboxBrowserRequest(
             // 遮罩的实话：盖了几块、盖到哪一层；降级时明说跨源 iframe 没遮（老桥没有这几个字段就不添话）
             computerUseShotMaskNote(computerUseShotMask(shot.resp)) +
             " Prefer sandbox_observe / sandbox_click (DOM level) over reading things off the image; " +
-            "computer_click can also hit the Edge window as a last resort, but it has no idea what is under the pointer.",
+            "computer_click can also hit the browser window as a last resort, but it has no idea what is under the pointer.",
           shot: {
             data: Buffer.from(shot.jpeg).toString("base64"),
             width,
