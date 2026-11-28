@@ -9,6 +9,10 @@ import type { ReactNode } from "react";
  *
  * 样子全在 CSS（styles.css 的 .home-slogan / .home-galaxy-*）；这里只决定标题写不写星系名。
  * 纸面两档主题（小学作业 / 打字稿）已随主题一起删掉：门面不再按主题换脸，没有红笔批语。
+ *
+ * **这一句有意不本地化**（用户 2026-11-28 决定）：英文界面下它照样是中文——它是品牌文案，
+ * 不是界面文案。因此验收口径是「电脑使用各面零 CJK」，不是「整个界面零 CJK」；别为了
+ * 让某个守卫变绿把它挪进 messages，也别把它当成漏翻的提示。
  */
 export function HomeHero(props: { galaxy?: ReactNode }) {
   if (props.galaxy !== undefined) {
