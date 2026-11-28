@@ -9123,6 +9123,8 @@ a.latex-setup-action {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
+  /* 选区批注的浮条 / 草稿按它定位（PdfAnnotations） */
+  position: relative;
 }
 .pdf-toolbar {
   display: flex;
@@ -10572,4 +10574,182 @@ a.latex-setup-action {
 }
 .office-notice-detail {
   color: var(--color-text-tertiary);
+}
+
+/* ============================================================
+ * 本层（feat/latex-pdf-review）自己的样式增量：PDF 选区批注 + .pdf-view
+ * 的相对定位（相对 #574 是一条纯新增块，173 行）。接在最后，同名选择器
+ * 以这一份为准。
+ * ============================================================ */
+
+/* ===== PDF 选区批注（论文工作台 C1） ===== */
+.pdf-view {
+  position: relative;
+}
+.pdf-annot-float {
+  position: absolute;
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-popover);
+  z-index: 8;
+  font-size: var(--font-size-sm);
+}
+.pdf-annot-draft {
+  position: absolute;
+  width: 260px;
+  padding: var(--space-2);
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-popover);
+  z-index: 9;
+}
+.pdf-annot-draft textarea {
+  width: 100%;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  padding: var(--space-2);
+  resize: vertical;
+}
+.annot-draft-quote {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-2);
+}
+.annot-draft-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.pdf-annot-rail {
+  width: 220px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.pdf-annot-rail-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.annot-empty {
+  padding: var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.annot-card {
+  margin: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  background: var(--color-bg-app);
+  font-size: var(--font-size-xs);
+}
+.annot-comment {
+  color: var(--color-text-primary);
+}
+.annot-meta {
+  color: var(--color-text-tertiary);
+  margin-top: var(--space-1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* ===== 改动裁决的双 diff 对照（C2） ===== */
+.pdf-diff-review {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-panel);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.pdf-diff-review .diff-src {
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.pdf-diff-review .diff-title {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin-bottom: var(--space-2);
+}
+.pdf-diff-review .diff-del {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  border-radius: 4px;
+  padding: 0 var(--space-1);
+}
+.pdf-diff-review .diff-add {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  border-radius: 4px;
+  padding: 0 var(--space-1);
+}
+.pdf-diff-review .diff-ctx {
+  color: var(--color-text-tertiary);
+}
+.pdf-diff-review .diff-pdfs {
+  display: flex;
+  min-height: 0;
+}
+.pdf-diff-review .diff-pdf-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border-subtle);
+}
+.pdf-diff-review .diff-pdf-col:last-child {
+  border-right: none;
+}
+.pdf-diff-review .diff-pdf-col .diff-title {
+  padding: var(--space-2) var(--space-3) 0;
+}
+.pdf-diff-review .diff-pdf-col .pdf-shell {
+  height: 320px;
+}
+.pdf-diff-review .diff-actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+.pdf-diff-review .diff-accept {
+  color: var(--color-success);
+}
+.pdf-diff-review .diff-reject {
+  color: var(--color-danger);
+}
+.pdf-diff-review .diff-error {
+  padding: var(--space-3);
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.pdf-find-mark[data-tone="red"] {
+  background: var(--color-danger-soft);
+  text-decoration: line-through;
+}
+.pdf-find-mark[data-tone="green"] {
+  background: var(--color-success-soft);
+  text-decoration: underline;
 }

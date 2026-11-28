@@ -49,6 +49,7 @@ import { latexCompletion } from "./latex-completion.ts";
 import { inlineDiagnostics } from "./latex-diagnostics.ts";
 import { outlineIndexAt, outlineView, type OutlineEntry } from "./latex-outline.ts";
 import { TexOutline } from "./TexOutline.tsx";
+import { PdfDiffReview } from "./PdfDiffReview";
 import { isTexFile } from "./editor-state.ts";
 import {
   clampCursorLine,
@@ -223,6 +224,7 @@ export function TexEditorPane(props: {
   const phaseRef = useRef<EditorPhase>("saved");
   const [phase, setPhase] = useState<EditorPhase>("saved");
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
+  const [reviewHunk, setReviewHunk] = useState<EditorHunk | null>(null);
   const [conflictText, setConflictText] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [savingNow, setSavingNow] = useState(false);
@@ -1145,6 +1147,16 @@ export function TexEditorPane(props: {
                       <span className="tex-editor-hunk-preview">{hunk.preview}</span>
                     </button>
                     <span className="row-trailing">
+                      {!stale && (
+                        <button
+                          type="button"
+                          className="quiet-control"
+                          title="看源码与 PDF 的双 diff 对照"
+                          onClick={() => setReviewHunk(hunk)}
+                        >
+                          对照
+                        </button>
+                      )}
                       {stale ? (
                         <span className="tex-editor-hunk-stale">{t.editor.hunkEdited}</span>
                       ) : (
@@ -1163,6 +1175,32 @@ export function TexEditorPane(props: {
             </ul>
           )}
         </div>
+      )}
+      {reviewHunk !== null && (
+        <PdfDiffReview
+          hunk={reviewHunk}
+          ctx={{
+            sessionId: props.request.sessionId,
+            workspaceId: props.request.workspaceId,
+            root: props.request.root,
+            path: props.request.dir,
+          }}
+          onAccept={() => {
+            // 接受 = 改动留下，清掉这块的待裁决标记
+            props.collab?.onUndone([reviewHunk.id]);
+            setReviewHunk(null);
+          }}
+          onReject={() => {
+            // 拒绝 = 现有按块撤销
+            undoHunk(reviewHunk);
+            setReviewHunk(null);
+          }}
+          onComment={(text) => {
+            // 评论 = 把意见带回输入框，交给 agent 下一轮
+            props.onQuote?.(text, reviewHunk.anchorLine);
+            setReviewHunk(null);
+          }}
+        />
       )}
       <div className="tex-editor-status" data-phase={phase}>
         {showOutline && (

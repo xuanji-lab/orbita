@@ -2199,6 +2199,12 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                   // 这四条跟着**左块实际显示的那个文件**走（并排时左块未必是激活标签）
                   openInEdit={openInEdit.has(leftPath ?? shownTab.path)}
                   onQuote={session.addQuote}
+                  onPdfQuote={(text) => session.addQuote({
+                    text,
+                    messageId: `pdf:${leftPath ?? shownTab.path}`,
+                    role: "assistant",
+                    filePath: leftPath ?? shownTab.path,
+                  })}
                   onCloseTab={() => closeOne(leftPath ?? shownTab.path)}
                   onOpenTarget={(root, path) => {
                     setTabs((prev) => openTab(prev, root, path));
@@ -2262,6 +2268,12 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                       tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
                     }
                     pdfPreview
+                    onPdfQuote={(text) => session.addQuote({
+                      text,
+                      messageId: `pdf:${pdfSidePath}`,
+                      role: "assistant",
+                      filePath: pdfSidePath,
+                    })}
                     pdfReloadToken={latex.pdfReloadToken}
                     syncJump={pdfSync}
                     // 引用跳转只落到它那份 PDF 上（同一条引用连点也重放）

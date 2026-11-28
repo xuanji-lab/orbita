@@ -116,6 +116,8 @@ export function FilePreviewPane(props: {
   openInEdit?: boolean;
   /** 编辑模式里划选后「引用」进输入框；缺席 = 工具栏只剩复制 */
   onQuote?: (quote: TextQuote) => void;
+  /** PDF 选区「引用到对话」（与 docx 选区 chip 同一套） */
+  onPdfQuote?: (text: string) => void;
   /** 文档里点双链 / 嵌入：在文件面板里开解析到的文件（root = 它所在的根，path = 文件绝对路径） */
   onOpenTarget?: (root: string, path: string) => void;
   /** 文档文件被移走时横幅上的「关闭」：关掉这个标签 */
@@ -428,6 +430,8 @@ export function FilePreviewPane(props: {
             reloadToken={pdfReload + (props.pdfReloadToken ?? 0)}
             syncJump={props.syncJump ?? null}
             {...(props.onLocatePdf === undefined ? {} : { onLocate: props.onLocatePdf })}
+            onQuote={props.onPdfQuote}
+            annotationCtx={props.pdfPreview === true ? { sessionId, workspaceId, extraWorkspaceId: props.extraWorkspaceId, root, path } : null}
           />
         ) : editorInitial !== null ? (
           <TexEditorPane
