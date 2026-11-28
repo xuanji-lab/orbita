@@ -54,8 +54,10 @@ export interface ComputerUseReceiptTexts {
   rcptWindowShot(title: string, hwnd: number, width: number, height: number, nativeWidth: number, nativeHeight: number): string;
   rcptWindowRestored: string;
   rcptWindowShotFooter: string;
-  rcptClickSent(kind: string, x: number, y: number): string;
+  /** 点击回执：按钮与「单/双击」由这里按语言拼（中文「左键单击」，英文 left click） */
+  rcptClickSent(button: string, double: boolean, x: number, y: number): string;
   rcptTypedChars(chars: number): string;
+  /** 按键回执：键名按语言取（中文「回车 / Ctrl+A」，英文保留 enter / ctrl+a） */
   rcptKeyPressed(key: string): string;
   rcptScrolled(delta: number, x: number, y: number): string;
   /** 准入信息（桥 0.12.0）：verdict + 目标 exe + 一句解释 */
@@ -155,6 +157,62 @@ export interface ComputerUseReceiptTexts {
   rcptBrowserNoPage: string;
 }
 
+/** 鼠标按钮 → 中文（认不出的原样带上，至少不丢信息） */
+function zhButton(button: string): string {
+  if (button === "left") return "左键";
+  if (button === "right") return "右键";
+  if (button === "middle") return "中键";
+  return `${button} 键`;
+}
+
+/**
+ * 键名 → 中文界面里读得出来的写法。
+ *
+ * 模型传的是协议键名（`enter`、`ctrl+a`、`pageup`…），直接插进中文句子就是「按下 enter」——
+ * 中文界面里夹一个英文词。常见键给中文/通用写法（回车、Tab、Ctrl+A），认不出的原样保留：
+ * 键名是模型下一次要复用的标识，不能为了好看把它改得认不回来。
+ */
+function zhKeyName(key: string): string {
+  const names: Record<string, string> = {
+    enter: "回车",
+    return: "回车",
+    tab: "Tab",
+    escape: "Esc",
+    esc: "Esc",
+    space: "空格",
+    backspace: "退格",
+    delete: "Delete",
+    home: "Home",
+    end: "End",
+    pageup: "PageUp",
+    pagedown: "PageDown",
+    up: "↑",
+    down: "↓",
+    left: "←",
+    right: "→",
+    ctrl: "Ctrl",
+    control: "Ctrl",
+    alt: "Alt",
+    shift: "Shift",
+    meta: "Win",
+    win: "Win",
+    super: "Win",
+    insert: "Insert",
+    printscreen: "PrintScreen",
+    capslock: "CapsLock",
+  };
+  return key
+    .split("+")
+    .map((part) => {
+      const token = part.trim();
+      const mapped = names[token.toLowerCase()];
+      if (mapped !== undefined) return mapped;
+      // 单个字母的修饰组合键按惯例大写（ctrl+a → Ctrl+A）
+      return /^[a-z]$/i.test(token) ? token.toUpperCase() : token;
+    })
+    .join("+");
+}
+
 const ZH: ComputerUseReceiptTexts = {
   rcptNavOpened: (url, title, ms, warning) =>
     `已在沙箱浏览器里打开 ${url}${title === "" ? "" : `（${title}）`}${ms === "" ? "" : `，用时 ${ms}`}。` +
@@ -226,9 +284,15 @@ const ZH: ComputerUseReceiptTexts = {
   rcptWindowShotFooter:
     "这张图的坐标是窗口像素、不是桌面像素：不要拿去当 computer_click 的坐标——点击之前先截一张不带 window 的" +
     " computer_screenshot。",
-  rcptClickSent: (kind, x, y) => `已在沙箱桌面上执行${kind}，位置 (${x}, ${y})。`,
+  rcptClickSent: (button, double, x, y) => `已在沙箱桌面上${zhButton(button)}${double ? "双击" : "单击"}，位置 (${x}, ${y})。`,
   rcptTypedChars: (chars) => `已向沙箱桌面上当前聚焦的窗口输入 ${chars} 个字符。`,
-  rcptKeyPressed: (key) => `已在沙箱桌面上按下 ${key}。`,
+  rcptKeyPressed: (key) => {
+    const name = zhKeyName(key);
+    // 汉字开头的直接连写（「按下回车」）；拉丁键名留一个空格（「按下 Ctrl+A」「按下 Esc」）
+    return /^[一-鿿]/.test(name)
+      ? `已在沙箱桌面上按下${name}。`
+      : `已在沙箱桌面上按下 ${name}。`;
+  },
   rcptScrolled: (delta, x, y) => `已在沙箱桌面上 (${x}, ${y}) 处滚动 ${delta} 格（正值向下）。`,
   rcptAdmission: (verdict, targetExe, tail) =>
     ` 准入信息（guest 侧判定）："admission":"${verdict}","targetExe":"${targetExe}"——${tail}。`,
@@ -425,7 +489,7 @@ const EN: ComputerUseReceiptTexts = {
   rcptWindowShotFooter:
     "Coordinates from THIS image are window pixels, not desktop pixels: do not pass them to computer_click — " +
     "take a normal computer_screenshot (without a window) before clicking.",
-  rcptClickSent: (kind, x, y) => `Sent a ${kind} at (${x}, ${y}) on the sandbox desktop.`,
+  rcptClickSent: (button, double, x, y) => `Sent a ${double ? "double " : ""}${button} click at (${x}, ${y}) on the sandbox desktop.`,
   rcptTypedChars: (chars) => `Typed ${chars} characters into the focused window on the sandbox desktop.`,
   rcptKeyPressed: (key) => `Pressed ${key} on the sandbox desktop.`,
   rcptScrolled: (delta, x, y) =>

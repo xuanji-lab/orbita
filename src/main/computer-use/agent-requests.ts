@@ -163,12 +163,11 @@ export async function applyComputerUseRequest(
         });
         if (!reply.ok) return failedReply(reply, evidence);
         const delivery = deliveryOf(reply.resp, evidence);
-        const kind = `${request.double === true ? "double " : ""}${button} click`;
         return {
           ok: true,
           delivery,
           text:
-            cuTexts().rcptClickSent(kind, request.x, request.y) + " " +
+            cuTexts().rcptClickSent(button, request.double === true, request.x, request.y) + " " +
             deliveryNote(delivery, evidence) +
             guestNote(reply.resp) +
             admissionNote(reply.admission, sessionId) +

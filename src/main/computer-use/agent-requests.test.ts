@@ -1374,6 +1374,10 @@ describe("回执正文跟界面语言走（中文界面不许出现整句英文�
       }
       // 下一步指引两语都要有：中文这句要指向重新截图
       assert.match(shot.ok ? shot.text : "", /截图/);
+      // 点击那几个按钮/单双击也是中文（「左键单击」，不是 left click）
+      const clickText = click.ok ? click.text : "";
+      assert.match(clickText, /左键单击/, clickText);
+      assert.doesNotMatch(clickText, /left|click|double/i, clickText);
     } finally {
       setComputerUseUiLanguage("en");
     }

@@ -75,8 +75,11 @@ function isNotRunning(cause: unknown): boolean {
 function browserFailure(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (message.includes("computer_screenshot") || message.includes("computer_click")) return message;
-  // 已经是完整句子（桥的错误 / 表里的句子）时不要再补一个句号
-  return message.endsWith(".") ? `${message} ${cuTexts().cdpFallbackHint}` : `${message}. ${cuTexts().cdpFallbackHint}`;
+  // 已经是完整句子（桥的错误 / 表里的句子）时不要再补一个句号。
+  // **中英两种句末标点都认**：中文句以「。」收尾，只判 "." 会在中文界面下拼出「。。. 」这种怪东西
+  return /[.。！？!?]$/.test(message)
+    ? `${message} ${cuTexts().cdpFallbackHint}`
+    : `${message}. ${cuTexts().cdpFallbackHint}`;
 }
 
 /**

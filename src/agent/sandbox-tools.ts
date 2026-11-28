@@ -336,7 +336,8 @@ export function createSandboxBrowserTools(
         },
         signal,
       );
-      // 明文留在 details / 转录（JSONL 保留明文，computer_type 同一条纪律）；
+      // 正文**不进 details**：computerUseAudit 只留 textChars（details 会写进会话 JSONL，
+      // 登录页上这段就是密码）。模型自己那次调用的参数在转录里，那是另一回事、去不掉。
       // details 不进模型上下文。
       return writeOnly(result, "sandbox-type", {
         selector,
