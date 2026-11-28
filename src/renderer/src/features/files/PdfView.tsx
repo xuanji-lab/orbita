@@ -201,6 +201,9 @@ export function PdfView(props: {
   const pageRef = useRef(1);
   pageRef.current = page;
   const [findQuery, setFindQuery] = useState("");
+  // 查找框平时收成一颗放大镜键：150px 的输入框是 PDF 工具条在窄栏里折成两行的主因
+  const [findOpen, setFindOpen] = useState(false);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
   const [find, setFind] = useState<FindState>(props.initialQuery != null ? { ...EMPTY_FIND, query: props.initialQuery } : EMPTY_FIND);
   /** 搜索语料（惰性建一次；换文件 / 重载时作废） */
   const corpusRef = useRef<PageTextIndex[] | null>(null);
@@ -225,6 +228,7 @@ export function PdfView(props: {
     corpusRef.current = null;
     setFind(EMPTY_FIND);
     setFindQuery("");
+    setFindOpen(false);
     setPage(1);
     void (async () => {
       try {
@@ -560,10 +564,29 @@ export function PdfView(props: {
 
         {/* 页内搜索 */}
         <div className="pdf-tool-group pdf-find">
+          {!findOpen && findQuery === "" && find.query === "" ? (
+            <button
+              type="button"
+              className="quiet-control pdf-tool"
+              title={t.files.pdfFindPlaceholder}
+              aria-label={t.files.pdfFindPlaceholder}
+              onClick={() => {
+                setFindOpen(true);
+                requestAnimationFrame(() => findInputRef.current?.focus());
+              }}
+            >
+              <Icon name="search" size={14} />
+            </button>
+          ) : (
+          <>
           <Icon name="search" size={13} className="pdf-find-icon" />
           <input
+            ref={findInputRef}
             className="pdf-find-input"
             value={findQuery}
+            onBlur={() => {
+              if (findQuery === "") setFindOpen(false);
+            }}
             placeholder={t.files.pdfFindPlaceholder}
             aria-label={t.files.pdfFindPlaceholder}
             onChange={(event) => setFindQuery(event.target.value)}
@@ -573,6 +596,7 @@ export function PdfView(props: {
                 moveMatch(event.shiftKey ? -1 : 1);
               } else if (event.key === "Escape") {
                 setFindQuery("");
+                setFindOpen(false);
               }
             }}
           />
@@ -608,6 +632,8 @@ export function PdfView(props: {
                 <Icon name="chevron-down" size={13} />
               </button>
             </>
+          )}
+          </>
           )}
         </div>
 
