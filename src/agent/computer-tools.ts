@@ -254,9 +254,12 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "driving. A window image's pixels are window pixels, not desktop pixels: take a normal screenshot (no " +
       "window) before clicking. Native (Win32) password fields are blacked out in the image, but only after " +
       "listing that window once with computer_uia (list records where they are). **Browser page content is NOT " +
-      "exposed to UI Automation**, so a password typed into a web page is not blacked out this way — but the " +
-      "browser itself renders it as dots, so it does not show up in the image either. If the result warns that " +
-      "the image is NOT masked, that is normal unless you listed the window first. " +
+      "exposed to UI Automation**: this lane knows a web password field only if it still was one at the last " +
+      "computer_uia list. A field the page already switched to plain text with its own \"show password\" control " +
+      "before that list is invisible here and its value shows up in the image (the browser's dots are gone). " +
+      "For anything on a web page use sandbox_screenshot — it masks by DOM, including after the type was " +
+      "flipped. If the result warns that the image is NOT masked, that is normal unless you listed the window " +
+      "first. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
       "start it in Settings › Experimental features › Computer use; do not retry. " +

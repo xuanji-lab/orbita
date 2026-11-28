@@ -58,12 +58,36 @@ internal sealed class MaskRect
 /**
  * 缓存里的一条：某个窗口最近一次 uia-list 看到的密码框矩形 + 那份清单的年龄。
  * AgeMs 由取用时算（缓存本身只存 tick），这样「过期」这件事只有一个判据。
+ *
+ * `Title` 是**记这份清单时**那个窗口的标题（GetWindowText，与截图时读的同一个来源）：
+ * 桌面截图把矩形画在屏幕坐标上，如果这中间页面已经换了（浏览器同一窗口换了标签页 / 导航），
+ * 旧矩形就会把新内容罩住——标题变了就说明「这份清单说的已经不是屏幕上那一页了」。
  */
 internal sealed class MaskCacheEntry
 {
     public long Hwnd;
     public List<MaskRect> Rects = new List<MaskRect>();
     public int AgeMs;
+    public string Title = "";
+}
+
+/**
+ * 一个「可能是密码框」的控件：**稳定身份** + 矩形 + 本轮 uia-list 里它还是不是密码框。
+ *
+ * 为什么要身份：站点点「显示密码」只把 `type` 翻成 text，UIA 的 IsPassword 跟着变 false，
+ * 但控件还是同一个控件。按「当前是不是 IsPassword」记缓存，翻转之后就再也不遮了。
+ * 身份优先用 RuntimeId（Chromium 给），没有就 AutomationId，都没有才退化到矩形重合
+ * （取舍见 SameControl）。
+ */
+internal sealed class MaskCandidate
+{
+    /** UIA RuntimeId（强身份，例如 "42.1234.5"）；取不到为空串 */
+    public string RuntimeId = "";
+    /** UIA AutomationId（弱一点，但通常页内唯一）；取不到为空串 */
+    public string AutomationId = "";
+    public MaskRect Rect = new MaskRect();
+    /** 本轮 uia-list 里它还是密码框吗（false 也可能是「曾经是」——由 MergeCandidates 定） */
+    public bool IsPassword;
 }
 
 /**
@@ -80,6 +104,12 @@ internal sealed class MaskPlan
     public bool Stale;
     /** 最近一份清单的年龄（毫秒；-1 = 没有任何清单） */
     public int AgeMs = -1;
+    /**
+     * 有清单、也没过期，但这些矩形被「可见性 / 页面已换」两道闸挡掉了几个。
+     * 只进日志（现场排查要能回答「为什么这一张没遮」），不进回执——模型看到的
+     * 「0 个密码框」已经是实话。
+     */
+    public int Hidden;
 }
 
 internal static class Mask
@@ -208,6 +238,170 @@ internal static class Mask
         return ageMs >= 0 && ageMs < UserTypingWindowMs;
     }
 
+    /**
+     * 「屏幕上这一点现在是不是属于这个窗口」。**注入给纯函数**：
+     * 生产实现是 WindowFromPoint + GetAncestor，自测用假函数，不碰桌面。
+     */
+    internal delegate bool PointOwnedByFn(long hwnd, int x, int y);
+
+    /**
+     * 两个框的重合度（交面积 / 较小那个的面积）。**纯函数**。
+     * 用 min 而不是并集：同一个框被滚动 / 布局抖动稍微改了尺寸时，只要小的那个基本被
+     * 包含住就算同一个（IoU 对小框抖动太敏感）。
+     */
+    internal static double OverlapRatio(MaskRect a, MaskRect b)
+    {
+        if (a == null || b == null) return 0;
+        int left = a.X > b.X ? a.X : b.X;
+        int top = a.Y > b.Y ? a.Y : b.Y;
+        int right = (a.X + a.W) < (b.X + b.W) ? (a.X + a.W) : (b.X + b.W);
+        int bottom = (a.Y + a.H) < (b.Y + b.H) ? (a.Y + a.H) : (b.Y + b.H);
+        int w = right - left;
+        int h = bottom - top;
+        if (w <= 0 || h <= 0) return 0;
+        long inter = (long)w * h;
+        long small = (long)a.W * a.H;
+        long other = (long)b.W * b.H;
+        if (other < small) small = other;
+        if (small <= 0) return 0;
+        return (double)inter / small;
+    }
+
+    /**
+     * 两个候选是不是**同一个控件**（显示密码翻转后靠它把旧身份认回来）。**纯函数**。
+     *
+     * 优先级（最硬的先）：
+     *   ① 两边都有 RuntimeId → 相等才是同一个（不等就不是，**不**回退去比矩形：
+     *      同一个位置换了控件是真实的，靠矩形认会把新控件误当成旧密码框）；
+     *   ② 两边都有 AutomationId → 相等才算；
+     *   ③ 两边都拿不到身份（有些自绘控件就真的没 id）→ 退化到**矩形重合**（>= 60%）。
+     *      这一条会误判（同一格子里用户名框换成密码框），但它是「拿不到身份」时仅有的
+     *      办法；取舍：宁可多遮一块，不要把可能还含着明文的框放过。
+     */
+    internal static bool SameControl(MaskCandidate a, MaskCandidate b)
+    {
+        if (a == null || b == null) return false;
+        bool aHasRuntime = a.RuntimeId != null && a.RuntimeId.Length > 0;
+        bool bHasRuntime = b.RuntimeId != null && b.RuntimeId.Length > 0;
+        if (aHasRuntime && bHasRuntime) return string.Equals(a.RuntimeId, b.RuntimeId, StringComparison.Ordinal);
+        bool aHasAuto = a.AutomationId != null && a.AutomationId.Length > 0;
+        bool bHasAuto = b.AutomationId != null && b.AutomationId.Length > 0;
+        if (aHasAuto && bHasAuto) return string.Equals(a.AutomationId, b.AutomationId, StringComparison.Ordinal);
+        return OverlapRatio(a.Rect, b.Rect) >= 0.6;
+    }
+
+    /**
+     * 把「这一轮 list 到的候选」与「上一轮的候选」合成缓存要记的东西。**纯函数**。
+     *
+     * 规则：
+     *   · 这一轮还是 IsPassword → 留（矩形用**这一轮**的，位置可能变了）；
+     *   · 这一轮不是密码框，但上一轮同一个控件是（点过「显示密码」）→ **也留**，位置取这一轮的；
+     *   · 其余（新出现的普通输入框 / 上一轮有但这一轮没出现的）→ 不留。
+     *
+     * 第三类保证了「同一个矩形后来变成普通输入框」不会因为按位置记而被继续遮——除非两边
+     * 都拿不到身份（那只能按矩形认，见 SameControl 的取舍）。
+     */
+    internal static List<MaskCandidate> MergeCandidates(List<MaskCandidate> before, List<MaskCandidate> now)
+    {
+        List<MaskCandidate> merged = new List<MaskCandidate>();
+        if (now == null) return merged;
+        for (int i = 0; i < now.Count; i++)
+        {
+            MaskCandidate candidate = now[i];
+            if (candidate == null || candidate.Rect == null) continue;
+            bool wasPassword = false;
+            if (!candidate.IsPassword && before != null)
+            {
+                for (int j = 0; j < before.Count; j++)
+                {
+                    MaskCandidate old = before[j];
+                    if (old == null || !old.IsPassword) continue;
+                    if (!SameControl(candidate, old)) continue;
+                    wasPassword = true;
+                    break;
+                }
+            }
+            if (!candidate.IsPassword && !wasPassword) continue;
+            MaskCandidate copy = new MaskCandidate();
+            copy.RuntimeId = candidate.RuntimeId == null ? "" : candidate.RuntimeId;
+            copy.AutomationId = candidate.AutomationId == null ? "" : candidate.AutomationId;
+            copy.Rect = new MaskRect(candidate.Rect.X, candidate.Rect.Y, candidate.Rect.W, candidate.Rect.H);
+            copy.IsPassword = true; // 进了缓存就是「该遮的」
+            merged.Add(copy);
+        }
+        return merged;
+    }
+
+    /**
+     * 记清单时的窗口标题与现在的标题是否还能对上（页面换了旧矩形就不能用）。**纯函数**。
+     * 任一边读不到标题时一律当「对得上」——读不到不是「换了」的证据，不能据此放掉遮罩。
+     */
+    internal static bool TitleStillMatches(string recorded, string current)
+    {
+        if (recorded == null || recorded.Length == 0) return true;
+        if (current == null || current.Length == 0) return true;
+        return string.Equals(recorded.Trim(), current.Trim(), StringComparison.Ordinal);
+    }
+
+    /**
+     * 把缓存条目变成「这一张图真的可以涂的矩形」。**纯函数**（可见性用注入的函数）。
+     *
+     * 两道闸：
+     *   ① 页面已换（标题与记清单时不同）→ 整条不算（`hidden` 照实增加）；
+     *   ② 桌面截图专用：矩形中心那一点现在不属于这个窗口（被别的窗口盖住了 / 窗口最小化了）
+     *      → 这个矩形不算。
+     *
+     * ② 是那个真实 bug 的修法：整桌面截图会把**所有**窗口缓存的密码框画到屏幕坐标上，
+     * 而被遮窗口不在前台时，那些坐标上是别的窗口——黑块就落到无关内容上了。
+     * 按窗口截图不传 ②（图就是那个窗口自己的 surface，遮挡与它无关）。
+     */
+    internal static MaskCacheEntry VisiblePart(MaskCacheEntry entry, string currentTitle,
+        PointOwnedByFn pointOwnedBy, out int hidden)
+    {
+        hidden = 0;
+        MaskCacheEntry result = new MaskCacheEntry();
+        if (entry == null) return result;
+        result.Hwnd = entry.Hwnd;
+        result.AgeMs = entry.AgeMs;
+        result.Title = entry.Title == null ? "" : entry.Title;
+        if (!TitleStillMatches(entry.Title, currentTitle))
+        {
+            hidden = entry.Rects == null ? 0 : entry.Rects.Count;
+            return result;
+        }
+        if (entry.Rects == null) return result;
+        for (int i = 0; i < entry.Rects.Count; i++)
+        {
+            MaskRect r = entry.Rects[i];
+            if (pointOwnedBy != null)
+            {
+                int cx = r.X + r.W / 2;
+                int cy = r.Y + r.H / 2;
+                if (!pointOwnedBy(entry.Hwnd, cx, cy))
+                {
+                    hidden++;
+                    continue;
+                }
+            }
+            result.Rects.Add(new MaskRect(r.X, r.Y, r.W, r.H));
+        }
+        return result;
+    }
+
+    /** 候选列表 → 矩形列表（缓存对外只暴露矩形；身份只在合并时用） */
+    internal static List<MaskRect> RectsOf(List<MaskCandidate> candidates)
+    {
+        List<MaskRect> rects = new List<MaskRect>();
+        if (candidates == null) return rects;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            MaskCandidate c = candidates[i];
+            if (c == null || c.Rect == null) continue;
+            rects.Add(new MaskRect(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H));
+        }
+        return rects;
+    }
+
     /** 把涂黑计划画到图上（唯一碰 Bitmap 的地方；计划本身仍然是纯的） */
     internal static void Paint(Bitmap bitmap, List<MaskRect> rects)
     {
@@ -256,12 +450,15 @@ internal static class Mask
     internal static string LogLine(string command, MaskPlan plan)
     {
         if (plan.Rects.Count > 0)
-            return command + "：遮住 " + plan.Rects.Count + " 个密码框（清单 " + plan.AgeMs + "ms 前）";
+            return command + "：遮住 " + plan.Rects.Count + " 个密码框（清单 " + plan.AgeMs + "ms 前）"
+                + (plan.Hidden > 0 ? "；另有 " + plan.Hidden + " 块因被遮挡 / 页面已换未遮" : "");
         if (plan.Stale)
             return command + "：**没有遮罩**——最近一份控件清单已 " + plan.AgeMs + "ms（> " + CacheMaxAgeMs
                 + "ms），不知道密码框现在在哪；回执已写明";
         if (!plan.Listed)
             return command + "：" + "没有遮罩——这个窗口没有 uia-list 记录，不知道密码框在哪；回执已写明";
+        if (plan.Hidden > 0)
+            return command + "：没遮——清单里 " + plan.Hidden + " 个密码框被遮挡或页面已换，一个都不适合涂";
         return command + "：控件清单里没有密码框，无需遮罩";
     }
 
@@ -380,7 +577,7 @@ internal static class Mask
         PasswordRects.Clear();
         CheckInt(failures, ref cases, "清空后查不到任何窗口", -1, AgeOf(4242));
         List<MaskRect> recorded = One(10, 20, 30, 40);
-        PasswordRects.Record(4242, recorded, 1000);
+        PasswordRects.Record(4242, Cands(recorded, "rt:1"), "", 1000);
         MaskCacheEntry hit;
         bool found = PasswordRects.TryGet(4242, 1000, out hit);
         CheckTrue(failures, ref cases, "记过之后查得到", found);
@@ -391,7 +588,7 @@ internal static class Mask
         PasswordRects.TryGet(4242, 1000, out hit);
         CheckInt(failures, ref cases, "缓存不被调用方的后续改动影响", 10, hit == null ? -1 : hit.Rects[0].X);
 
-        PasswordRects.Record(4242, One(70, 80, 90, 100), 2000);
+        PasswordRects.Record(4242, Cands(One(70, 80, 90, 100), "rt:1"), "", 2000);
         PasswordRects.TryGet(4242, 2000, out hit);
         CheckInt(failures, ref cases, "同一个窗口再记一次：覆盖旧矩形", 70, hit == null ? -1 : hit.Rects[0].X);
         CheckInt(failures, ref cases, "覆盖后年龄归零", 0, hit == null ? -1 : hit.AgeMs);
@@ -404,9 +601,65 @@ internal static class Mask
         PasswordRects.Clear();
         CheckInt(failures, ref cases, "清空后再次查不到", -1, AgeOf(4242));
 
+        // ⑤b P2-2：「显示密码」翻转后仍要遮（按身份认，不按 IsPassword）
+        MaskCandidate pw1 = Cand("rt:42.1", "", 50, 60, 200, 30, true);
+        MaskCandidate name1 = Cand("rt:42.2", "", 50, 20, 200, 30, false);
+        List<MaskCandidate> first = CandsList(pw1, name1);
+        List<MaskCandidate> kept = MergeCandidates(null, first);
+        CheckInt(failures, ref cases, "合并：首次只收密码框", 1, kept.Count);
+        CheckTrue(failures, ref cases, "合并：首次留下的就是密码框", kept.Count > 0 && kept[0].IsPassword);
+
+        // 翻转：同一个 RuntimeId，现在 IsPassword=false，位置也因布局动了 4px
+        MaskCandidate flipped = Cand("rt:42.1", "", 50, 64, 200, 30, false);
+        MaskCandidate plainNew = Cand("rt:42.3", "", 50, 100, 200, 30, false);
+        List<MaskCandidate> second = CandsList(flipped, name1, plainNew);
+        List<MaskCandidate> merged = MergeCandidates(kept, second);
+        CheckInt(failures, ref cases, "翻转后：被翻开的那一个仍留在缓存里", 1, merged.Count);
+        CheckInt(failures, ref cases, "翻转后：矩形取这一轮的位置（跟着控件动）", 64, merged.Count > 0 ? merged[0].Rect.Y : -1);
+        Program.CheckString(failures, ref cases, "翻转后：身份仍是同一个", "rt:42.1", merged.Count > 0 ? merged[0].RuntimeId : null);
+
+        // 同一位置换了一个**新控件**（身份不同）：不许把新控件当成旧密码框
+        MaskCandidate replaced = Cand("rt:99.9", "", 50, 64, 200, 30, false);
+        CheckTrue(failures, ref cases, "身份不同 → 不是同一个控件（不靠位置认）",
+            !SameControl(replaced, flipped));
+        CheckInt(failures, ref cases, "同一位置换了新控件：不是密码框就不遮", 0,
+            MergeCandidates(kept, CandsList(replaced)).Count);
+
+        // 拿不到身份时退化为矩形重合（写明的取舍）
+        MaskCandidate noIdOld = Cand("", "", 10, 10, 200, 30, true);
+        MaskCandidate noIdSame = Cand("", "", 12, 12, 200, 30, false);
+        MaskCandidate noIdFar = Cand("", "", 400, 400, 200, 30, false);
+        CheckTrue(failures, ref cases, "没身份 + 重合 → 同一个（退化判据）", SameControl(noIdSame, noIdOld));
+        CheckTrue(failures, ref cases, "没身份 + 离得远 → 不是同一个", !SameControl(noIdFar, noIdOld));
+        CheckInt(failures, ref cases, "没身份时按重合认回被翻开的框", 1,
+            MergeCandidates(CandsList(noIdOld), CandsList(noIdSame)).Count);
+        CheckTrue(failures, ref cases, "AutomationId 只在两边都没 RuntimeId 时当身份",
+            SameControl(Cand("", "pw", 0, 0, 10, 10, false), Cand("", "pw", 900, 900, 10, 10, true)));
+
+        // ⑤c P2-1：可见性 / 标题两道闸
+        string currentTitle = "MASK TEST";
+        int hiddenCount;
+        MaskCacheEntry visEntry = EntryWithTitle("MASK TEST", 100, 200, 300, 40);
+        MaskCacheEntry visible = VisiblePart(visEntry, currentTitle,
+            delegate(long h, int x, int y) { return x == 250 && y == 220; }, out hiddenCount);
+        CheckInt(failures, ref cases, "可见：点归自己 → 留", 1, visible.Rects.Count);
+        CheckInt(failures, ref cases, "可见：挡掉的计数为 0", 0, hiddenCount);
+        MaskCacheEntry covered = VisiblePart(visEntry, currentTitle,
+            delegate(long h, int x, int y) { return false; }, out hiddenCount);
+        CheckInt(failures, ref cases, "被别的窗口盖住 → 一块都不涂", 0, covered.Rects.Count);
+        CheckInt(failures, ref cases, "被盖住时计数照实报", 1, hiddenCount);
+        MaskCacheEntry oldPage = VisiblePart(visEntry, "新建标签页",
+            delegate(long h, int x, int y) { return true; }, out hiddenCount);
+        CheckInt(failures, ref cases, "页面已换（标题不同）→ 一块都不涂", 0, oldPage.Rects.Count);
+        CheckInt(failures, ref cases, "页面已换时也计数", 1, hiddenCount);
+        CheckTrue(failures, ref cases, "标题任一边为空 → 不据此放掉遮罩",
+            TitleStillMatches("", "x") && TitleStillMatches("x", "") && TitleStillMatches(null, null));
+        CheckTrue(failures, ref cases, "标题相同（含首尾空白）→ 对得上",
+            TitleStillMatches("  MASK TEST ", "MASK TEST"));
+
         // ⑥ 回执字段（宿主按名字取值：名字写错就是两端脱钩）
         PasswordRects.Clear();
-        PasswordRects.Record(31, One(100, 100, 200, 30), Environment.TickCount);
+        PasswordRects.Record(31, Cands(One(100, 100, 200, 30), "rt:31"), "", Environment.TickCount);
         MaskPlan receiptPlan = Plan(1280, 720, 0, 0, SnapshotOf(31), CacheMaxAgeMs);
         string fields = CaptureFields(receiptPlan);
         CheckTrue(failures, ref cases, "回执字段含 maskedRegions", fields.IndexOf("\"maskedRegions\":1") >= 0);
@@ -434,6 +687,43 @@ internal static class Mask
     }
 
     // ---- 自测里用的小工具（生产路径不用它们）--------------------------------
+
+    private static MaskCandidate Cand(string runtimeId, string automationId, int x, int y, int w, int h, bool isPassword)
+    {
+        MaskCandidate c = new MaskCandidate();
+        c.RuntimeId = runtimeId;
+        c.AutomationId = automationId;
+        c.Rect = new MaskRect(x, y, w, h);
+        c.IsPassword = isPassword;
+        return c;
+    }
+
+    private static List<MaskCandidate> CandsList(params MaskCandidate[] items)
+    {
+        return new List<MaskCandidate>(items);
+    }
+
+    /** 一组矩形 → 候选（同一个 RuntimeId 前缀 + 下标，自测里当「密码框」） */
+    private static List<MaskCandidate> Cands(List<MaskRect> rects, string runtimeIdSeed)
+    {
+        List<MaskCandidate> list = new List<MaskCandidate>();
+        for (int i = 0; i < rects.Count; i++)
+        {
+            MaskRect r = rects[i];
+            list.Add(Cand(runtimeIdSeed + "." + i, "", r.X, r.Y, r.W, r.H, true));
+        }
+        return list;
+    }
+
+    private static MaskCacheEntry EntryWithTitle(string title, int x, int y, int w, int h)
+    {
+        MaskCacheEntry entry = new MaskCacheEntry();
+        entry.Hwnd = 77;
+        entry.AgeMs = 100;
+        entry.Title = title;
+        entry.Rects = One(x, y, w, h);
+        return entry;
+    }
 
     private static List<MaskRect> One(int x, int y, int w, int h)
     {
@@ -528,26 +818,38 @@ internal static class PasswordRects
     private sealed class Stored
     {
         public long Tick;
-        public List<MaskRect> Rects;
+        /** 记这份清单时那个窗口的标题（截图时拿来判「页面是不是已经换了」） */
+        public string Title;
+        /** 合并后的「该遮的控件」：这一轮仍是密码框的 + 曾经是密码框、现在被翻成明文的 */
+        public List<MaskCandidate> Candidates;
     }
 
     private static readonly object Gate = new object();
     private static readonly Dictionary<long, Stored> Entries = new Dictionary<long, Stored>();
 
-    /** uia-list 跑完一声：这个窗口现在的密码框在哪（空的列表也要记——「看过，没有密码框」） */
-    internal static void Record(long hwnd, List<MaskRect> rects, long tickNow)
+    /**
+     * uia-list 跑完一声：这个窗口现在哪些控件该遮（空的列表也要记——「看过，没有密码框」）。
+     *
+     * `candidates` 是这一轮 list 到的**所有可能是密码框的控件**（当前是密码框的，以及
+     * 当前是普通输入框的——后者用来认出「上一轮是密码框、这一轮被显示密码翻开了」）。
+     * 合并规则在 Mask.MergeCandidates；这里只负责把上一轮的身份交给它。
+     */
+    internal static void Record(long hwnd, List<MaskCandidate> candidates, string title, long tickNow)
     {
         Stored stored = new Stored();
         stored.Tick = tickNow;
-        stored.Rects = Mask.CopyOf(rects);
+        stored.Title = title == null ? "" : title;
         lock (Gate)
         {
+            Stored previous;
+            if (!Entries.TryGetValue(hwnd, out previous)) previous = null;
+            stored.Candidates = Mask.MergeCandidates(previous == null ? null : previous.Candidates, candidates);
             Entries[hwnd] = stored;
         }
     }
 
     /**
-     * 取某个窗口的密码框矩形 + 年龄。没有记录回 false（age 无意义）。
+     * 取某个窗口的密码框矩形 + 年龄 + 记清单时的标题。没有记录回 false（age 无意义）。
      * tick 用 32 位模运算算差值（与 InputHook.ElapsedMs 同一条纪律：TickCount 会回绕）。
      */
     internal static bool TryGet(long hwnd, long tickNow, out MaskCacheEntry entry)
@@ -557,10 +859,7 @@ internal static class PasswordRects
         {
             Stored stored;
             if (!Entries.TryGetValue(hwnd, out stored)) return false;
-            entry = new MaskCacheEntry();
-            entry.Hwnd = hwnd;
-            entry.AgeMs = (int)InputHook.ElapsedMs(tickNow, stored.Tick);
-            entry.Rects = Mask.CopyOf(stored.Rects);
+            entry = ToEntry(hwnd, stored, tickNow);
             return true;
         }
     }
@@ -572,15 +871,19 @@ internal static class PasswordRects
         lock (Gate)
         {
             foreach (KeyValuePair<long, Stored> pair in Entries)
-            {
-                MaskCacheEntry entry = new MaskCacheEntry();
-                entry.Hwnd = pair.Key;
-                entry.AgeMs = (int)InputHook.ElapsedMs(tickNow, pair.Value.Tick);
-                entry.Rects = Mask.CopyOf(pair.Value.Rects);
-                list.Add(entry);
-            }
+                list.Add(ToEntry(pair.Key, pair.Value, tickNow));
         }
         return list;
+    }
+
+    private static MaskCacheEntry ToEntry(long hwnd, Stored stored, long tickNow)
+    {
+        MaskCacheEntry entry = new MaskCacheEntry();
+        entry.Hwnd = hwnd;
+        entry.AgeMs = (int)InputHook.ElapsedMs(tickNow, stored.Tick);
+        entry.Title = stored.Title == null ? "" : stored.Title;
+        entry.Rects = Mask.RectsOf(stored.Candidates);
+        return entry;
     }
 
     /** 清空（自测用；生产不需要——桥进程随沙箱消失） */
