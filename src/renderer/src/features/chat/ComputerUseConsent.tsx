@@ -132,7 +132,14 @@ function RecordLine(props: { kind: "allowed" | "denied" | "unanswered"; onRevoke
         {t.computerUse.consentRevoke}
       </button>
       {!allowed && (
-        <span className="cu-told">{t.computerUse.consentToldModel(computerUseConsentTexts(locale).denied)}</span>
+        <span className="cu-told">
+          {/* 原文就是模型收到的那句：超时 / 没人可问时不能说成「用户拒绝了」 */}
+          {t.computerUse.consentToldModel(
+            unanswered
+              ? computerUseConsentTexts(locale).deniedUnanswered
+              : computerUseConsentTexts(locale).denied,
+          )}
+        </span>
       )}
     </div>
   );

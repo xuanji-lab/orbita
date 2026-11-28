@@ -445,6 +445,28 @@ describe("SessionStore", () => {
     assert.equal("computerUseConsent" in ((await store.readMeta(ID)) ?? {}), false);
   });
 
+  /**
+   * P3-2：结局原因与授权值**同一次原子写**。这里走真落盘 + 新开一个 SessionStore 读回
+   * （等于重启），确保刷新后记录行还能分出「没人回答」。
+   */
+  test("setComputerUseConsent 连结局原因一起落盘；重新打开读到 timeout；撤销把它清掉", async () => {
+    await store.ensureSession(meta());
+    assert.equal(await store.setComputerUseConsent(ID, "denied", "timeout"), true);
+    const reopened = await new SessionStore(join(dir, "sessions")).readMeta(ID);
+    assert.equal(reopened?.computerUseConsent, "denied");
+    assert.equal(reopened?.computerUseConsentSource, "timeout");
+
+    // answered 换成 timeout：同一字段跟着改写
+    assert.equal(await store.setComputerUseConsent(ID, "denied", "answered"), true);
+    assert.equal((await store.readMeta(ID))?.computerUseConsentSource, "answered");
+
+    // 撤销：两个键一起消失（unset 没有结局原因）
+    assert.equal(await store.setComputerUseConsent(ID, "unset"), true);
+    const cleared = await store.readMeta(ID);
+    assert.equal("computerUseConsent" in (cleared ?? {}), false);
+    assert.equal("computerUseConsentSource" in (cleared ?? {}), false);
+  });
+
   // 未读标记（2026-10-10 落盘）：标 / 清只动这一个字段；重启后读回还是它
   test("setUnread 标未读与清未读，别的字段不被波及", async () => {
     await store.ensureSession(meta({ pinned: true }));

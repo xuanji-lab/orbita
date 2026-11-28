@@ -160,6 +160,7 @@ import {
   computerUseGuestCommands,
   devBackendsEnabled,
   parseComputerUseConsent,
+  parseComputerUseConsentSource,
   type ComputerUseTurnOrigin,
 } from "../shared/computer-use.ts";
 import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
@@ -538,11 +539,12 @@ void app.whenReady().then(async () => {
       if (meta === null) return null;
       return {
         consent: parseComputerUseConsent(meta.computerUseConsent),
+        source: parseComputerUseConsentSource(meta.computerUseConsentSource),
         blocked: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
       };
     },
     // write 回「真的落下了没」：`update` 对已删会话静默 no-op，不能把它当成功
-    write: (sessionId, consent) => sessions.setComputerUseConsent(sessionId, consent),
+    write: (sessionId, consent, source) => sessions.setComputerUseConsent(sessionId, consent, source),
     ask: (sessionId, action) => computerUseConsentWaiter.ask(sessionId, action),
     // 没人能回答就不问：窗口全关 / 只剩无界面的自动化时提问只会等到 120s 超时，
     // 不如当场按拒绝落库（fail closed 的结果一样，代价更小）。

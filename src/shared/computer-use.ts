@@ -1869,8 +1869,13 @@ export const COMPUTER_USE_CONSENT_TIMEOUT_MS = 120_000;
  * 不随界面语言变。
  */
 export interface ComputerUseConsentTexts {
-  /** 用户拒绝（或没人能回答、按拒绝收口）—— 与记录行的「已告知模型」同一句 */
+  /** 用户**明确**拒绝 —— 与记录行的「已告知模型」同一句 */
   denied: string;
+  /**
+   * 没人回答（超时 / 窗口全关），按拒绝收口——**不能说成「用户拒绝了」**：
+   * 用户从没表态，模型转告用户「你拒绝了」是假话（2026-11-28 验收顺手项）。
+   */
+  deniedUnanswered: string;
   /** 本轮被停掉：不是拒绝，没有写盘 */
   stopped: string;
   /** 子会话 / 幕后 / 未 promoted 的自动化会话 */
@@ -1881,6 +1886,9 @@ export interface ComputerUseConsentTexts {
 
 const CONSENT_TEXTS_ZH: ComputerUseConsentTexts = {
   denied: "用户拒绝了电脑操作，本会话不要再请求",
+  deniedUnanswered:
+    "没有收到用户的回答（超时，或没人能看到这次提问），已按拒绝处理；用户没有明确拒绝。" +
+    "需要时请在主会话里重新发起，让用户重新授权。",
   stopped:
     "这一轮已停止，电脑操作没有执行。这不是拒绝：本会话没有记录任何决定，下次需要时会重新询问用户。",
   mainSessionOnly:
@@ -1891,6 +1899,9 @@ const CONSENT_TEXTS_ZH: ComputerUseConsentTexts = {
 
 const CONSENT_TEXTS_EN: ComputerUseConsentTexts = {
   denied: "The user denied computer actions. Do not request them again in this session.",
+  deniedUnanswered:
+    "No answer was received (it timed out, or nobody could see the prompt), so it was treated as denied; " +
+    "the user did not explicitly deny it. Ask again from the main conversation when you need it.",
   stopped:
     "This turn was stopped, so the computer action did not run. This is not a denial: nothing was recorded " +
     "for this session, and the user will be asked again the next time it is needed.",
@@ -1968,6 +1979,22 @@ export function computerUseBlockedReason(
   if (!userFacing) return "main-session-only";
   if (origin !== "user") return "unattended";
   return null;
+}
+
+/**
+ * 结局原因从 meta 读回时的归一化（2026-11-28 验收 P3-2）：只认下面这几个值，
+ * 其余（老会话缺席、坏值）回 null——调用方缺席按 `answered` 兜底（老文件没有这个键时，
+ * 他大概率是亲手点的拒绝；编一个「超时」比不编更坏）。
+ */
+export function parseComputerUseConsentSource(raw: unknown): ComputerUseConsentSource | null {
+  return raw === "answered" ||
+    raw === "timeout" ||
+    raw === "unavailable" ||
+    raw === "cancelled" ||
+    raw === "revoked" ||
+    raw === "emergency-stop"
+    ? raw
+    : null;
 }
 
 /** 授权状态变化的原因（事件里带上，renderer 据此决定要不要清挂起的提问行） */
