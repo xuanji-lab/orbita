@@ -3757,6 +3757,34 @@ button.ssp-group-toggle:hover {
   gap: var(--space-0-5);
   flex: 0 0 auto;
 }
+/*
+ * 论文工作台（compactHeader）：面包屑一行不画，只剩几颗动作键（复制路径、.tex 的大纲键），
+ * 浮在这一栏的右上角——大纲键仍住「自己那一栏的右上角」，与 PDF 工具条最右的批注键对称。
+ * 实底 panel 只做遮字用（键底下滚过去的源码不会和图标叠在一起），不加边框、不投影：
+ * 它不是一张浮起来的卡，只是几颗钉在角上的键。
+ * 大纲打开时整组退场：大纲自己的头部右上角有关闭键，同一个角不放两组键。
+ * 编辑器顶上的横幅（agent 在改 / 冲突 / 写盘失败）右侧留出这组键的宽度，横幅的动作键不被盖住。
+ */
+.files-panel-preview.compact-header {
+  position: relative;
+  --compact-actions-reserve: calc(2 * var(--titlebar-control) + var(--space-0-5) + var(--space-3));
+}
+.file-preview-header.compact {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-3);
+  z-index: 2;
+  padding: 0;
+  border-bottom: none;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-panel);
+}
+.files-panel-preview.compact-header:has(.tex-outline) > .file-preview-header.compact {
+  display: none;
+}
+.files-panel-preview.compact-header .tex-editor-banner {
+  padding-right: var(--compact-actions-reserve);
+}
 
 .file-preview-mode-row {
   display: flex;
@@ -8337,6 +8365,52 @@ button.galaxy-spill-row:hover {
 }
 .latex-problems-head:disabled {
   cursor: default;
+}
+/*
+ * 论文工作台：编辑器状态行并进问题条——左段是状态（光标 · 保存状态，落在源码一栏正下方），
+ * 其余整段仍是「问题」的展开键（计数钉在行尾）。一行放不下（满载的计数 + 窄栏）时自然折成
+ * 两行：状态在上、问题在下，与改前同高，不挤字也不截字。
+ */
+.latex-problems-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+.latex-problems-bar > .latex-problems-head {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: max-content;
+  white-space: nowrap;
+}
+.latex-problems-status {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: var(--space-3);
+  padding-right: var(--space-3);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.latex-problems-status:empty,
+.latex-problems-status[hidden] {
+  display: none;
+}
+.tex-editor-status.in-host {
+  padding: 0;
+  border-top: none;
+  white-space: nowrap;
+}
+/* 窄栏（单栏 < 420）：状态单独一行，去掉分隔竖线——两行时竖线没有可分的东西 */
+.latex-problems {
+  container: latex-problems / inline-size;
+}
+@container latex-problems (max-width: 419px) {
+  .latex-problems-status {
+    flex-basis: 100%;
+    margin: var(--space-1) var(--space-3) 0;
+    padding-right: 0;
+    border-right: none;
+  }
 }
 .latex-problem-counts {
   display: inline-flex;

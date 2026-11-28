@@ -242,6 +242,8 @@ export function FilesPanel(props: {
    * 宽到容得下并排时这一位不影响任何东西。
    */
   const [pdfFocused, setPdfFocused] = useState(false);
+  /** 问题条左段的宿主：编辑器状态行经 portal 挂进来（论文工作台省一行垂直空间） */
+  const [problemsStatusHost, setProblemsStatusHost] = useState<HTMLDivElement | null>(null);
   const pdfMemoryRef = useRef<Map<string, boolean>>(new Map());
   /** 刚新建的文档 / 演示文稿：对应标签一打开就进「编辑」模式（用户点标签 / 切走再回来则回到常规预览） */
   const [openInEdit, setOpenInEdit] = useState<ReadonlySet<string>>(new Set());
@@ -2301,6 +2303,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                   rootLabel={
                     tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
                   }
+                  // 论文工作台：面包屑一行不画（文件名在标签上、项目状态在编译条上）
+                  compactHeader={latexBarVisible}
                   {...(leftPath === shownTab.path && shownTab.name !== undefined
                     ? { sentImage: { name: shownTab.name } }
                     : {})}
@@ -2352,6 +2356,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     // 跨文件大纲 / `\input` 跳转：走 openSourceAt（与问题抽屉同一条链路）
                     onOpenSource: openSourceAt,
                     diagnostics: editorDiagnostics,
+                    // 状态行并进问题条（问题条只在 latexBarVisible 时渲染，宿主跟着它）
+                    ...(latexBarVisible ? { statusHost: problemsStatusHost } : {}),
                     reveal:
                       reveal !== null && samePath(reveal.path, leftPath ?? shownTab.path)
                         ? { line: reveal.line, token: reveal.token }
@@ -2429,6 +2435,7 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
                     rootLabel={
                       tree.roots.find((r) => r.path === shownTab.root)?.label ?? pathTail(shownTab.root)
                     }
+                    compactHeader={latexBarVisible}
                     pdfPreview
                     onPdfQuote={(text) => session.addQuote({
                       text,
@@ -2463,6 +2470,8 @@ ef{sec:intro}` 指错对象时，问题抽屉里先说清楚。
             onJump={jumpToProblem}
             height={props.settings.latexProblemsHeight ?? null}
             onHeightCommit={(height) => props.onSettingsChange({ latexProblemsHeight: height })}
+            statusHostRef={setProblemsStatusHost}
+            statusHidden={pdfSolo}
             {...(citeLibrary === null ? {} : { verify: { ...verifyState, onRun: runVerify } })}
             {...(citeUnused === null ? {} : { unused: citeUnused })}
             resolved={resolvedPackages}

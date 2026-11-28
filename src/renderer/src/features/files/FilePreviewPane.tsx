@@ -69,6 +69,11 @@ export function FilePreviewPane(props: {
   sentImage?: { name: string };
   /** 所在根的显示名（面包屑第一段：workspace / attached 的名字、session 的标题） */
   rootLabel: string;
+  /**
+   * 论文工作台的垂直空间：面包屑那一整行不画（文件名在标签上、完整路径在标签的悬停提示里，
+   * 项目与产物状态在编译条上）。剩下的几颗动作键：PDF 并进 PDF 工具条，其余浮在这一栏右上角。
+   */
+  compactHeader?: boolean;
   /** PDF 引用跳转（点了正文里的引用编号）：滚到原文处并高亮。非 PDF / 没有跳转时 null */
   jump?: PdfJump | null;
   /**
@@ -131,6 +136,8 @@ export function FilePreviewPane(props: {
     onOpenSource?: (path: string, line: number | null) => void;
     /** 这次编译的问题（行内波浪线）；不在 LaTeX 项目里时缺席 */
     diagnostics?: { issues: readonly LatexIssue[]; projectDir: string } | null;
+    /** 编辑器状态行搬到哪（论文工作台：并进问题条）；缺席 = 留在编辑器底下 */
+    statusHost?: HTMLElement | null;
   };
   /** 一打开就进「编辑」模式（刚新建的文档 / 演示文稿） */
   openInEdit?: boolean;
@@ -290,8 +297,100 @@ export function FilePreviewPane(props: {
     setMode(next);
   };
 
+  // 重读：docx 先把待存改动落盘（失败就不重读，提示由 docx 视图自己挂；评审 2c：
+  // 这里原本直接换 key，屏幕上的字和未落盘的改动一起消失），其余按类型换各自的重载号
+  const reloadPreview = (): void => {
+    if (docx) {
+      void flushDocxForLeave(path).then((outcome) => {
+        if (!outcome.ok) return;
+        refresh();
+        setDocxReload((n) => n + 1);
+      });
+      return;
+    }
+    refresh();
+    if (pdf || mediaKind !== null) setPdfReload((n) => n + 1);
+    else if (xlsx) setXlsxReload((n) => n + 1);
+    else if (pptx) setPptxReload((n) => n + 1);
+    else setTextReload((n) => n + 1);
+  };
+  /* .tex 打开后是编辑器：头部刷新只换预览数据、碰不到编辑器里的文本，
+     会让人以为「刷新就能丢弃本地改动」。重载盘上版本在冲突条里（带抉择）。
+     读不全的文件（>2 MB 截断）没有编辑器，刷新照旧给。 */
+  const showRefresh = docx || editorInitial === null;
+  const compact = props.compactHeader === true;
+  /**
+   * 论文工作台里看 PDF：复制路径 / 刷新并进 PDF 工具条（放在批注键之前，批注键仍钉最右，
+   * 与源码栏右上角的大纲键对称），头部整行不画。浮在 PDF 右上角会盖住窄栏里工具条的
+   * 搜索框与批注键（#573 在 389px 宽实测过）。
+   */
+  const pdfActionsInToolbar = compact && pdf && mediaKind === null && sentImage === undefined;
+  const pdfToolbarActions = pdfActionsInToolbar ? (
+    <>
+      <button
+        type="button"
+        className="quiet-control pdf-tool"
+        title={copied ? t.chat.copied : t.files.copyPath}
+        aria-label={t.files.copyPath}
+        onClick={copyPath}
+      >
+        <Icon name={copied ? "check" : "copy"} size={14} />
+      </button>
+      <button
+        type="button"
+        className="quiet-control pdf-tool"
+        title={t.files.refreshPreview}
+        aria-label={t.files.refreshPreview}
+        onClick={reloadPreview}
+      >
+        <Icon name="refresh-cw" size={14} spin={loading} />
+      </button>
+    </>
+  ) : null;
+
+  /** 头部右端的动作键：常规头部的行尾；论文工作台（compact）里浮在这一栏右上角 */
+  const headerActions =
+    sentImage === undefined ? (
+      <div className="file-preview-actions">
+        {webPage && (
+          <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
+            <Icon name="globe" size={16} strokeWidth={1.8} />
+          </PanelIconButton>
+        )}
+        <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
+          <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
+        </PanelIconButton>
+        {showRefresh && (
+          <PanelIconButton title={t.files.refreshPreview} onClick={reloadPreview}>
+            <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
+          </PanelIconButton>
+        )}
+        {/* 大纲：只对 .tex 的编辑器出现，钉在行尾（与 PDF 工具条最右的批注键同一个位置感）。
+            视图开关住在这一栏的右上角，状态条只留光标与保存结果 */}
+        {props.editor?.outline !== undefined && editorInitial !== null && (
+          <PanelIconButton
+            title={t.editor.outlineTip}
+            onClick={props.editor.outline.onToggle}
+          >
+            <Icon
+              name="list-tree"
+              size={16}
+              strokeWidth={1.8}
+              style={props.editor.outline.open ? { color: "var(--color-text-primary)" } : undefined}
+            />
+          </PanelIconButton>
+        )}
+      </div>
+    ) : null;
+
   return (
-    <div className="files-panel-preview">
+    <div className={compact ? "files-panel-preview compact-header" : "files-panel-preview"}>
+      {compact ? (
+        // 论文工作台：面包屑一行不画；剩下的动作键浮在右上角（PDF 的已并进工具条）
+        !pdfActionsInToolbar && headerActions !== null && (
+          <header className="file-preview-header compact">{headerActions}</header>
+        )
+      ) : (
       <header className="file-preview-header">
         <FileTypeIcon name={name} size={16} />
         {/* 面包屑：从所在的根开始的路径分段 + chevron 分隔；太长时在自身容器里
@@ -328,62 +427,9 @@ export function FilePreviewPane(props: {
             {formatSize(state.data.size)} · {formatAge(state.data.modifiedAt, Date.now(), t)}
           </span>
         )}
-        {sentImage === undefined && (
-          <div className="file-preview-actions">
-            {webPage && (
-              <PanelIconButton title={t.files.openInBrowser} onClick={openInBrowser}>
-                <Icon name="globe" size={16} strokeWidth={1.8} />
-              </PanelIconButton>
-            )}
-            <PanelIconButton title={copied ? t.chat.copied : t.files.copyPath} onClick={copyPath}>
-              <Icon name={copied ? "check" : "copy"} size={16} strokeWidth={1.8} />
-            </PanelIconButton>
-            {/* .tex 打开后是编辑器：头部刷新只换预览数据、碰不到编辑器里的文本，
-                会让人以为「刷新就能丢弃本地改动」。重载盘上版本在冲突条里（带抉择）。
-                读不全的文件（>2 MB 截断）没有编辑器，刷新照旧给。 */}
-            {(docx || editorInitial === null) && (
-              <PanelIconButton
-                title={t.files.refreshPreview}
-                onClick={() => {
-                  // 重读 docx = 卸载当前编辑器（引擎整份重新解析）：先把待存改动落盘，
-                  // 失败就不重读，提示由 docx 视图自己挂（评审 2c：这里原本直接换 key，
-                  // 屏幕上的字和未落盘的改动一起消失）
-                  if (docx) {
-                    void flushDocxForLeave(path).then((outcome) => {
-                      if (!outcome.ok) return;
-                      refresh();
-                      setDocxReload((n) => n + 1);
-                    });
-                    return;
-                  }
-                  refresh();
-                  if (pdf || mediaKind !== null) setPdfReload((n) => n + 1);
-                  else if (xlsx) setXlsxReload((n) => n + 1);
-                  else if (pptx) setPptxReload((n) => n + 1);
-                  else setTextReload((n) => n + 1);
-                }}
-              >
-                <Icon name="refresh-cw" size={16} strokeWidth={1.8} spin={loading} />
-              </PanelIconButton>
-            )}
-            {/* 大纲：只对 .tex 的编辑器出现，钉在行尾（与 PDF 工具条最右的批注键同一个位置感）。
-                视图开关住在标签页头部，状态条只留光标与保存结果 */}
-            {props.editor?.outline !== undefined && editorInitial !== null && (
-              <PanelIconButton
-                title={t.editor.outlineTip}
-                onClick={props.editor.outline.onToggle}
-              >
-                <Icon
-                  name="list-tree"
-                  size={16}
-                  strokeWidth={1.8}
-                  style={props.editor.outline.open ? { color: "var(--color-text-primary)" } : undefined}
-                />
-              </PanelIconButton>
-            )}
-          </div>
-        )}
+        {headerActions}
       </header>
+      )}
       {(showModeToggle || canEdit) && (
         <div className="file-preview-mode-row">
           {showModeToggle && (
@@ -467,6 +513,7 @@ export function FilePreviewPane(props: {
             {...(props.onLocatePdf === undefined ? {} : { onLocate: props.onLocatePdf })}
             onQuote={props.onPdfQuote}
             pdfAnnotations={props.pdfPreview === true ? (props.pdfAnnotations ?? null) : null}
+            {...(pdfToolbarActions === null ? {} : { toolbarEnd: pdfToolbarActions })}
           />
         ) : editorInitial !== null ? (
           <TexEditorPane
@@ -491,6 +538,7 @@ export function FilePreviewPane(props: {
             nav={props.editor?.nav ?? null}
             {...(props.editor?.onOpenSource === undefined ? {} : { onOpenSource: props.editor.onOpenSource })}
             diagnostics={props.editor?.diagnostics ?? null}
+            {...(props.editor?.statusHost === undefined ? {} : { statusHost: props.editor.statusHost })}
           />
         ) : xlsx ? (
           <XlsxView

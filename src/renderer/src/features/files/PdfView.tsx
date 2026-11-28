@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import {
   getDocument,
@@ -152,6 +153,11 @@ export function PdfView(props: {
   onLocate?: (point: { page: number; x: number; y: number }) => void;
   /** 选中文字引用到对话（复用会话的 quote chip） */
   onQuote?: (text: string) => void;
+  /**
+   * 工具条上的外来动作键（论文工作台里文件头部那几颗：复制路径 / 刷新），放在批注键之前。
+   * 进工具条而不是另起一行：头部那一整行因此可以不画；窄栏折行时跟缩放组一起走。
+   */
+  toolbarEnd?: ReactNode;
   /**
    * 批注（选区 → 浮条 → 草稿；列表是 PDF 右侧一条可开合的竖栏）。
    * null / 缺席 = 这份 PDF 不接批注（不是 LaTeX 项目）。
@@ -649,6 +655,10 @@ export function PdfView(props: {
             <Icon name="file" size={14} />
           </button>
         </div>
+
+        {props.toolbarEnd !== undefined && (
+          <div className="pdf-tool-group pdf-file-actions">{props.toolbarEnd}</div>
+        )}
 
         {/* 批注：与 tex 的大纲同一个形态——按钮开、按钮关，列表是右侧一条竖栏。
             有批注时按钮上带条数；一条都没有也留着（先看空态说明，再决定写不写） */}
