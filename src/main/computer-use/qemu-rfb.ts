@@ -19,6 +19,8 @@
  */
 import net from "node:net";
 
+import { cuTexts } from "./ui-language.ts";
+
 /** RFB 的按钮掩码：bit0 左、bit1 中、bit2 右、bit3 滚轮上、bit4 滚轮下 */
 const BUTTON_MASK = { left: 1, middle: 2, right: 4, wheelUp: 8, wheelDown: 16 } as const;
 
@@ -58,7 +60,7 @@ class ByteReader {
       this.#buffer = this.#buffer.subarray(size);
       return head;
     }
-    if (this.#closed) throw new Error("RFB 连接已断开");
+    if (this.#closed) throw new Error(cuTexts().rfbClosed);
     return new Promise<Buffer>((resolve) => {
       this.#waiters.push({ size, resolve });
       this.#flush();
@@ -88,7 +90,7 @@ export class VncPointer {
       const candidate = net.connect({ host: "127.0.0.1", port });
       const timer = setTimeout(() => {
         candidate.destroy();
-        reject(new Error(`连不上 guest 的 RFB（127.0.0.1:${port}）`));
+        reject(new Error(cuTexts().rfbUnreachable(port)));
       }, timeoutMs);
       candidate.once("connect", () => {
         clearTimeout(timer);
@@ -110,18 +112,18 @@ export class VncPointer {
     };
     try {
       const version = (await reader.read(12)).toString("ascii");
-      if (!version.startsWith("RFB ")) throw new Error(`不是 RFB 服务：${JSON.stringify(version)}`);
+      if (!version.startsWith("RFB ")) throw new Error(cuTexts().rfbNotRfb(JSON.stringify(version)));
       send(Buffer.from("RFB 003.008\n", "ascii"));
       const sectionCount = (await reader.read(1))[0] ?? 0;
-      if (sectionCount === 0) throw new Error("RFB 服务拒绝了连接");
+      if (sectionCount === 0) throw new Error(cuTexts().rfbRefused);
       const types = [...(await reader.read(sectionCount))];
       if (!types.includes(1)) {
-        throw new Error(`guest 的 RFB 只接受 None 认证之外的方案（${types.join(",")}），本机镜像应该用 -SecurityTypes None`);
+        throw new Error(cuTexts().rfbAuthTypes(types.join(",")));
       }
       send(Buffer.from([1])); // 选 None
       // 版本 ≥ 3.8 时 None 也会回一个 SecurityResult（4 字节 0 = 通过）
       const result = (await reader.read(4)).readUInt32BE(0);
-      if (result !== 0) throw new Error("RFB 的 None 认证被拒（SecurityResult != 0）");
+      if (result !== 0) throw new Error(cuTexts().rfbNoneRejected);
       send(Buffer.from([1])); // ClientInit: shared
 
       const head = await reader.read(24);

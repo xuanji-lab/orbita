@@ -27,7 +27,7 @@ import { CitedPdfIndex } from "./cited-pdfs.ts";
 import { EXTERNAL_FILE_COPY_MAX_BYTES, type PromptFileRef, type SentFileRef } from "../../shared/prompt-attachments.ts";
 import type { AgentStats, SessionWorkbenchStat } from "../../shared/agent-ipc.ts";
 import type { ThinkingLevel } from "../../shared/thinking.ts";
-import type { ComputerUseConsent } from "../../shared/computer-use.ts";
+import type { ComputerUseConsent, ComputerUseConsentSource } from "../../shared/computer-use.ts";
 import { parseAutomationHeader } from "../../shared/automation.ts";
 import { isClosingScanText } from "../../shared/legacy-closing-scan.ts";
 
@@ -800,8 +800,22 @@ export class SessionStore {
    * 两者共用 `updateExisting` 的读-改-写链，不会把同一条 meta 上的其它字段冲掉。
    * **返回是否真的写下了**（false = 会话不在）——闸门据此把「写不进去」收成拒绝。
    */
-  setComputerUseConsent(id: string, consent: ComputerUseConsent): Promise<boolean> {
-    return this.updateExisting(id, { computerUseConsent: consent });
+  setComputerUseConsent(
+    id: string,
+    consent: ComputerUseConsent,
+    /**
+     * 结局原因（2026-11-28 验收 P3-2）：与授权值**同一次读-改-写**落盘，刷新后记录行
+     * 还能分出「你拒绝了」与「没人回答」。`unset` 时不写（撤销 / 急停不是一次回答）。
+     */
+    source?: ComputerUseConsentSource,
+  ): Promise<boolean> {
+    return this.updateExisting(id, {
+      computerUseConsent: consent,
+      // unset / 没给来源：把旧值一并清掉（JSON.stringify 会丢掉 undefined 键）
+      ...(consent === "unset" || source === undefined
+        ? { computerUseConsentSource: undefined }
+        : { computerUseConsentSource: source }),
+    });
   }
 
   /** 归档：从主列表移走，收进侧栏底部的 Archived。**不是删除**，随时能拿回来 */

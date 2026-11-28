@@ -40,10 +40,11 @@
  */
 import { randomUUID } from "node:crypto";
 import {
-  COMPUTER_USE_CONSENT_DENIED_TEXT,
-  COMPUTER_USE_CONSENT_STOPPED_TEXT,
   COMPUTER_USE_CONSENT_TIMEOUT_MS,
+  computerUseConsentTexts,
+  type ComputerUseBlockedKind,
   type ComputerUseConsent,
+  type ComputerUseConsentTexts,
   type ComputerUseConsentAskCancelledEvent,
   type ComputerUseConsentAskEvent,
   type ComputerUseConsentSource,
@@ -210,12 +211,18 @@ export type ConsentVerdict = { ok: true } | { ok: false; error: string };
 export interface ComputerUseConsentFacts {
   consent: ComputerUseConsent;
   /**
-   * 这一条会话、这一轮，用户能不能看到并回答那个提问：null = 能；否则就是回给模型的拒绝文本。
+   * 这条授权是怎么来的（2026-11-28 验收 P3-2）。持久化在 meta 里，刷新后仍能分出
+   * 「用户拒绝」与「没人回答」；null = 老会话文件没有这个键 → 按 answered 处理。
+   */
+  source: ComputerUseConsentSource | null;
+  /**
+   * 这一条会话、这一轮，用户能不能看到并回答那个提问：null = 能；否则是**缘故**
+   * （不是文案——文案按界面语言从 `computerUseConsentTexts` 取）。
    * 由 `shared/computer-use.ts` 的 `computerUseBlockedReason(会话身份, 这一轮的发起者)` 算出来——
    * **只此一处判据**（子会话 / 幕后 / 未 promoted 的自动化会话 → 主会话专用；
    * 自动化发起的轮次 → 不弹提问）。闸门只负责当场拒。
    */
-  blockedReason: string | null;
+  blocked: ComputerUseBlockedKind | null;
 }
 
 export interface ComputerUseConsentGateDeps {
@@ -226,13 +233,22 @@ export interface ComputerUseConsentGateDeps {
    * （不抛错），只 await 不抛什么都不代表写成功——会话在提问挂起期间被删时，那正是
    * 一条 fail-open 的路。
    */
-  write: (sessionId: string, consent: ComputerUseConsent) => Promise<boolean>;
+  /**
+   * 落盘（授权值 + 结局原因，**同一次原子写**）。回 false = 没落下（会话已删）。
+   * source 与授权值一起写：只存 denied 会让刷新后的记录行把「没人回答」说成「你拒绝了」。
+   */
+  write: (sessionId: string, consent: ComputerUseConsent, source: ComputerUseConsentSource) => Promise<boolean>;
   /** 挂起的提问（waiter.ask）；这里不判窗口，`canAsk` 已经先问过 */
   ask: (sessionId: string, action: ComputerUseToolRequest["action"]) => Promise<ConsentAskOutcome>;
   /** 现在有没有人能回答（主窗口在不在）。false = 不提问，直接按拒绝落库 */
   canAsk: () => boolean;
   /** 状态变化广播（回答 / 超时 / 拒绝 / 撤销 / 急停）。写失败时不广播 */
   notify: (event: ComputerUseConsentStateEvent) => void;
+  /**
+   * 那几句固定文本按**界面语言**取（2026-11-28 验收 P2-1）。每次现读：用户切了语言，
+   * 下一条工具回执就跟上；读不到按英文（与界面缺省一致）。
+   */
+  texts: () => Promise<ComputerUseConsentTexts>;
   log?: (message: string) => void;
 }
 
@@ -263,7 +279,7 @@ export function createComputerUseConsentGate(deps: ComputerUseConsentGateDeps): 
   ): Promise<boolean> => {
     let wrote = false;
     try {
-      wrote = await deps.write(sessionId, state);
+      wrote = await deps.write(sessionId, state, source);
     } catch (cause: unknown) {
       log(`授权落盘失败（按拒绝处理）：${sessionId} ${cause instanceof Error ? cause.message : String(cause)}`);
       return false;
@@ -286,29 +302,38 @@ export function createComputerUseConsentGate(deps: ComputerUseConsentGateDeps): 
     sessionId: string,
     action: ComputerUseToolRequest["action"],
   ): Promise<ConsentVerdict> => {
+    const texts = await deps.texts().catch(() => computerUseConsentTexts("en"));
     const facts = await deps.read(sessionId).catch(() => null);
     // 会话不存在：没有 meta 可记，也没有人可以被问。fail closed。
-    if (facts === null) return { ok: false, error: COMPUTER_USE_CONSENT_DENIED_TEXT };
+    if (facts === null) return { ok: false, error: texts.denied };
     // 用户看不到 / 这一轮不是他发起的：确认行问了也没人答，等下去只会超时变 denied。
     // **先于授权状态判**：哪怕它的 meta 上留着 allowed，也不该在看不见的轮次里动桌面。
-    if (facts.blockedReason !== null) return { ok: false, error: facts.blockedReason };
+    if (facts.blocked !== null) {
+      return { ok: false, error: facts.blocked === "main-session-only" ? texts.mainSessionOnly : texts.unattended };
+    }
     if (facts.consent === "allowed") return { ok: true };
-    if (facts.consent === "denied") return { ok: false, error: COMPUTER_USE_CONSENT_DENIED_TEXT };
+    if (facts.consent === "denied") {
+      // 老会话文件没有 source：按「用户拒绝」说（那时他大概率是亲手点的）
+      const unanswered = facts.source === "timeout" || facts.source === "unavailable";
+      return { ok: false, error: unanswered ? texts.deniedUnanswered : texts.denied };
+    }
     // unset：先确认有人能回答，再提问。窗口已关 / 无人看守时不弹一个没人看的卡，
     // 直接按拒绝落库（否则每来一条工具就要等到 120s 超时）。
     if (!deps.canAsk()) {
       log(`没有可回答授权的窗口，按拒绝落库：${sessionId}`);
       await record(sessionId, "denied", "unavailable");
-      return { ok: false, error: COMPUTER_USE_CONSENT_DENIED_TEXT };
+      // 没人能回答 ≠ 用户拒绝：模型转告用户「你拒绝了」是假话
+      return { ok: false, error: texts.deniedUnanswered };
     }
     const outcome = await deps.ask(sessionId, action);
     // 本轮被停掉：不写 meta，回「已停止」——用户没有表态，下一次会重新问。
     if (outcome.decision === "cancelled") {
-      return { ok: false, error: COMPUTER_USE_CONSENT_STOPPED_TEXT };
+      return { ok: false, error: texts.stopped };
     }
     const recorded = await record(sessionId, outcome.decision, outcome.source, outcome.requestId);
     if (outcome.decision === "allowed" && recorded) return { ok: true };
-    return { ok: false, error: COMPUTER_USE_CONSENT_DENIED_TEXT };
+    // 超时按拒绝收口，但**不是用户拒绝**：给模型的话要分开（同一句也出现在界面上）
+    return { ok: false, error: outcome.source === "timeout" ? texts.deniedUnanswered : texts.denied };
   };
 
   const reset = async (sessionId: string, source: "revoked" | "emergency-stop"): Promise<void> => {

@@ -43,6 +43,8 @@ import {
   probeBlocksStart,
   probeVisual,
   sandboxControl,
+  sandboxStatusPollMs,
+  sameSandboxStatus,
   shotFromResult,
   shotMeta,
   statusVisual,
@@ -1995,6 +1997,20 @@ function ComputerUseUnsupported(props: { support: ComputerUsePlatformSupport }) 
 }
 
 /**
+ * 主动拉一次沙箱状态，**只在真的变了才 setState**（轮询每 1.5–5 秒一次，不能每次都让
+ * 整页重渲染）。失败静默：与状态推送同一条纪律——设置页不该因为一次读数失败弹红字。
+ *
+ * 为什么值得单独一个函数：事件订阅、兜底轮询、动作回执之后三处都要这一下，
+ * 抄三份迟早有一份漏掉去重或漏掉 catch。
+ */
+function pullSandboxStatus(set: (update: (prev: SandboxStatus) => SandboxStatus) => void): void {
+  void api.computerUse
+    .status()
+    .then((next) => set((prev) => (sameSandboxStatus(prev, next) ? prev : next)))
+    .catch(() => undefined);
+}
+
+/**
  * 设置 › 电脑使用（PR1）：能力检测、沙箱启停、手动「看一眼」。单独一页而不是
  * General 里的一行：三组内容与浏览器 / 语音同一档，侧栏入口由 SETTINGS_TABS
  * 自动长出来。状态不走拉取：主进程每次迁移推 computerUseStatus，冷启动按 off
@@ -2024,9 +2040,30 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
   // 只靠迁移推送会一直按 off 画（停不掉正在跑的沙盒）。
   useEffect(() => {
     const unsubscribe = api.computerUse.onStatus(setStatus);
-    void api.computerUse.status().then(setStatus);
+    pullSandboxStatus(setStatus);
     return unsubscribe;
   }, []);
+
+  /**
+   * **兜底轮询（真机 P0）**：事件漏一条就足以把用户锁死——QEMU 后端起起来了，设置页
+   * 一直「未启动」、「关闭」灰着，界面上停不掉那台 VM。事件那一处已修（qemu.ts 每次
+   * 迁移都发），但这里不把命押在事件上：页面在就按 `sandboxStatusPollMs` 的周期问一次
+   * 主进程（`status()` 只读内存里的状态机，不碰 VM）。非稳态 / 刚点完动作 1.5 s 一次，
+   * off / error 5 s 一次（漏事件的现场正是「界面说 off、实际在跑」，所以稳态也轮询）。
+   * 每次状态或在途动作变化都会重建定时器并立刻拉一次；页面卸载即停。
+   */
+  useEffect(() => {
+    let alive = true;
+    const pull = (): void => {
+      if (alive) pullSandboxStatus(setStatus);
+    };
+    pull();
+    const timer = setInterval(pull, sandboxStatusPollMs(status.state, pending !== null));
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [status.state, pending]);
 
   /**
    * 沙箱归属：每秒问一次主进程（数据源是桌面租约本身，不另写一套状态）。
@@ -2126,7 +2163,11 @@ function ComputerUseView(props: { settings: AppSettings; onChange: (patch: Setti
         if (!result.ok) setActionError(result.error);
       })
       .catch((cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause)))
-      .finally(() => setPending(null));
+      .finally(() => {
+        setPending(null);
+        // 回执只说这次调用本身；最新状态以 status() 为准（事件可能晚到——兜底轮询也会接住）
+        pullSandboxStatus(setStatus);
+      });
   };
 
   return (
@@ -2334,12 +2375,21 @@ function GuardGroup() {
     };
   }, []);
 
+  /**
+   * 热键那句话放进**左列**的 note（名字下面），不放控件列。
+   *
+   * 为什么：它是一整句中文（主选被占用时是「主快捷键 X 被其它应用占用，已改用 Y」），
+   * 摆在控件列会把那一列撑到整行宽、把左边的名字与说明挤成竖排窄条（2026-11-28 真机验收 P3）。
+   * 控件列只留组合本身（nowrap）——那才是「一眼要看到的那个值」。
+   */
   const note = failed
     ? "读取热键状态失败（主进程没有回执）"
     : state === null
       ? undefined
       : state.registered
-        ? undefined
+        ? state.accelerator === state.preferred
+          ? t.computerUse.emergencyRegistered
+          : t.computerUse.emergencyFallback(state.preferred, state.accelerator)
         : t.computerUse.emergencyUnavailable(state.error ?? "");
 
   return (
@@ -2349,7 +2399,10 @@ function GuardGroup() {
         info={t.computerUse.emergencyHotkeyInfo}
         note={
           note === undefined ? undefined : (
-            <span role={state !== null && !state.registered ? "alert" : undefined} className="set-row-hint">
+            <span
+              role={state !== null && !state.registered ? "alert" : undefined}
+              className={state !== null && !state.registered ? "set-row-error" : "set-row-hint"}
+            >
               {note}
             </span>
           )
@@ -2366,7 +2419,6 @@ function GuardGroup() {
               {state?.accelerator ?? "Control+Alt+Shift+Escape"}
             </code>
           </span>
-          {state?.registered === true && <span className="set-row-hint">{t.computerUse.emergencyRegistered}</span>}
         </span>
       </SettingRow>
     </SettingGroup>

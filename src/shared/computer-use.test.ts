@@ -18,8 +18,7 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   COMPUTER_USE_NO_EVIDENCE_HINT,
   COMPUTER_USE_UIA_TIMEOUT_MS,
-  COMPUTER_USE_MAIN_SESSION_ONLY_TEXT,
-  COMPUTER_USE_UNATTENDED_TEXT,
+  computerUseConsentTexts,
   captureNote,
   computerUseBlockedReason,
   backendNetworkControl,
@@ -27,6 +26,7 @@ import {
   computerUseBackendChoices,
   computerUseChannels,
   computerUseDevBackendRefusal,
+  computerUseMaskLabel,
   computerUseShotMask,
   computerUseShotMaskNote,
   computerUseUiaErrors,
@@ -464,8 +464,16 @@ describe("captureNote（截图回执里那句「遮了 / 没遮」）", () => {
     assert.match(old, /Run computer_uia list on that window first/);
   });
 
-  test("看过而且没有密码框：一个字都不添（正常截图的文案不能被这一刀改掉）", () => {
-    assert.equal(captureNote({ ...masked, maskedRegions: 0 }), "");
+  test("看过而且没有密码框：不吓人，但**一定要带桌面车道的声明**", () => {
+    // 旧版本这里一个字都不添。现在不行了：「一块都没遮」恰恰是“页面把密码翻成明文”的样子
+    // （IsPassword=false → 0 块），模型必须知道这条车道看不见那种框、网页要用 sandbox_screenshot。
+    // 但不能带 WARNING / NOT masked 那种吓人的话：清单是新的，没没遮。
+    const note = captureNote({ ...masked, maskedRegions: 0 });
+    assert.match(note, /desktop lane/);
+    assert.match(note, /show password/);
+    assert.match(note, /sandbox_screenshot/);
+    assert.doesNotMatch(note, /WARNING/);
+    assert.doesNotMatch(note, /blacked out/);
   });
 
   test("老桥不报 capture：不添话、也不编造「已遮」", () => {
@@ -499,6 +507,22 @@ const shotResp = {
   maskMissing: [] as string[],
   maskMissingTotal: 0,
 };
+
+describe("computerUseMaskLabel（overlay 上那行字跟界面语言走）", () => {
+  test("中文界面：中文标签", () => {
+    assert.equal(computerUseMaskLabel("zh"), "已遮罩");
+  });
+
+  test("英文界面：英文标签", () => {
+    assert.equal(computerUseMaskLabel("en"), "Masked");
+  });
+
+  test("语言缺失 / 不认识：按英文（与 effectiveLanguage 的 en 兜底、桥的默认值一致）", () => {
+    assert.equal(computerUseMaskLabel(undefined), "Masked");
+    assert.equal(computerUseMaskLabel(""), "Masked");
+    assert.equal(computerUseMaskLabel("ja"), "Masked");
+  });
+});
 
 describe("computerUseShotMask（网页截图遮罩回执的解析）", () => {
   test("老桥没有这几个字段 → undefined（不能说遮了，也不能说没遮）", () => {
@@ -669,26 +693,63 @@ describe("backendNetworkControl（这只后端能不能真的断网）", () => {
  * 那个授权提问。两件事一起判——会话身份（子会话 / 幕后 / 未 promoted 的自动化会话）
  * 与这一轮是谁发起的（this_session 自动化会把一轮投回用户的会话）。
  */
+describe("computerUseConsentTexts —— 给模型的固定文本跟界面语言走（2026-11-28 验收 P2-1）", () => {
+  test("zh：与原来那几句一字不差（老用户看到的没变）", () => {
+    const zh = computerUseConsentTexts("zh");
+    assert.equal(zh.denied, "用户拒绝了电脑操作，本会话不要再请求");
+    assert.match(zh.stopped, /这一轮已停止/);
+    assert.match(zh.mainSessionOnly, /只在主会话里可用/);
+    assert.match(zh.unattended, /不是你手动发起的/);
+  });
+
+  test("en：四句都是英文、语义等价（英文界面下不再夹中文）", () => {
+    const en = computerUseConsentTexts("en");
+    assert.match(en.denied, /^The user denied computer actions\./);
+    assert.equal(en.denied, "The user denied computer actions. Do not request them again in this session.");
+    assert.match(en.stopped, /^This turn was stopped/);
+    assert.match(en.mainSessionOnly, /^Computer use is only available in the main session/);
+    assert.match(en.unattended, /^This turn was not started by the user/);
+    for (const text of Object.values(en)) assert.doesNotMatch(text, /[一-鿿]/, text);
+  });
+
+  test("超时 / 没人回答那条：不能说成「用户拒绝了」（2026-11-28 验收顺手项）", () => {
+    const zh = computerUseConsentTexts("zh");
+    const en = computerUseConsentTexts("en");
+    // 两份都要点明「没有人明确拒绝」，否则模型会转告用户「你拒绝了」
+    assert.match(zh.deniedUnanswered, /用户没有明确拒绝/);
+    assert.match(zh.deniedUnanswered, /没有收到用户的回答/);
+    assert.match(en.deniedUnanswered, /the user did not explicitly deny it/i);
+    // 与「用户拒绝」那句必须不同（同一句就没有意义了）
+    assert.notEqual(zh.deniedUnanswered, zh.denied);
+    assert.notEqual(en.deniedUnanswered, en.denied);
+  });
+
+  test("认不出的语言（含缺省）按英文：与界面 locale 的 en 兜底一致", () => {
+    assert.deepEqual(computerUseConsentTexts(undefined), computerUseConsentTexts("en"));
+    assert.deepEqual(computerUseConsentTexts("fr"), computerUseConsentTexts("en"));
+  });
+});
+
 describe("computerUseBlockedReason —— 用户此刻能不能看到并回答", () => {
   test("普通会话 + 用户手点：能问（null）", () => {
     assert.equal(computerUseBlockedReason({}, "user"), null);
   });
 
   test("子会话 / 幕后会话：主会话专用（身份那条先挡）", () => {
-    assert.equal(computerUseBlockedReason({ parentId: "p" }, "user"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
-    assert.equal(computerUseBlockedReason({ backstage: "avatar" }, "channel"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+    assert.equal(computerUseBlockedReason({ parentId: "p" }, "user"), "main-session-only");
+    assert.equal(computerUseBlockedReason({ backstage: "avatar" }, "channel"), "main-session-only");
   });
 
   test("自动化新开的会话（automationId）不 promoted：主会话专用；用户点了转成普通会话（promoted）：按普通会话问", () => {
-    assert.equal(computerUseBlockedReason({ automationId: "au1" }, "user"), COMPUTER_USE_MAIN_SESSION_ONLY_TEXT);
+    assert.equal(computerUseBlockedReason({ automationId: "au1" }, "user"), "main-session-only");
     assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "user"), null);
   });
 
   test("主会话但这一轮是自动化发起的（this_session）：不弹提问，说清「请在主会话里手动发起」", () => {
-    assert.equal(computerUseBlockedReason({}, "automation"), COMPUTER_USE_UNATTENDED_TEXT);
+    assert.equal(computerUseBlockedReason({}, "automation"), "unattended");
     // promoted 的自动化会话也一样：会话看得见，但这一轮不是用户发起的
-    assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "automation"), COMPUTER_USE_UNATTENDED_TEXT);
+    assert.equal(computerUseBlockedReason({ automationId: "au1", promoted: true }, "automation"), "unattended");
     // 编排投递同理（子会话在身份那条已经挡了，这里只是不为 machine-origin 开口子）
-    assert.equal(computerUseBlockedReason({}, "channel"), COMPUTER_USE_UNATTENDED_TEXT);
+    assert.equal(computerUseBlockedReason({}, "channel"), "unattended");
   });
 });

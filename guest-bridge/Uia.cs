@@ -1026,8 +1026,6 @@ internal static class Uia
     private const int SlotTextRangeGetText = 3 + 10 - 1;
     /** evidence.detail 的硬上限（给模型看的证据，不该把回执撑爆）；超了截断并注明 */
     private const int EvidenceDetailMax = 200;
-    /** detail 里每个值的展示上限（先各自截短，再受 EvidenceDetailMax 总长限制） */
-    private const int EvidenceValueMax = 80;
     /** IUIAutomationSelectionItemPattern 第 1 个方法 Select() */
     private const int SlotSelect = 3 + 1 - 1;
 
@@ -1641,8 +1639,10 @@ internal static class Uia
         string where = verdict.Source == "value"
             ? "ValuePattern.Current.Value"
             : "TextPattern.DocumentRange.GetText";
-        verdict.Detail = ClipDetail("期望 " + QuoteForDetail(expected) + "，读回 " + QuoteForDetail(actual)
-            + "（" + where + "）");
+        // **不回显值本身**：这是模型 / 用户填进去的原文，回执会进会话 JSONL。
+        // 只给「长度 + 一致与否」——那才是读回要回答的问题。
+        verdict.Detail = ClipDetail("期望 " + DescribeValueForDetail(expected) + "，读回 "
+            + DescribeValueForDetail(actual) + "（" + where + "）");
         return verdict;
     }
 
@@ -1661,23 +1661,17 @@ internal static class Uia
         return string.Equals(expected, actual.Substring(0, end), StringComparison.Ordinal);
     }
 
-    /** detail 里的值：引号包起来，换行/制表改成可见的转义（一条单行证据），单值先截短 */
-    private static string QuoteForDetail(string value)
+    /**
+     * detail 里怎么描述一个值：**只说形状，不说内容**（长度 + 打码）。**纯函数**。
+     *
+     * 为什么不回显原文：模型 / 用户往框里填的东西可能就是密码、token、验证码；回执会写进
+     * 会话 JSONL，落盘就无法收回。读回要回答的是「设进去了没有」，长度对上就够了。
+     */
+    private static string DescribeValueForDetail(string value)
     {
         if (value == null) return "（读回失败）";
-        string clipped = value.Length <= EvidenceValueMax ? value : value.Substring(0, EvidenceValueMax) + "…";
-        StringBuilder text = new StringBuilder();
-        text.Append('"');
-        for (int i = 0; i < clipped.Length; i++)
-        {
-            char c = clipped[i];
-            if (c == '\r') text.Append("\\r");
-            else if (c == '\n') text.Append("\\n");
-            else if (c == '\t') text.Append("\\t");
-            else text.Append(c);
-        }
-        text.Append('"');
-        return text.ToString();
+        if (value.Length == 0) return "（空）";
+        return "••••（" + value.Length + " 字符）";
     }
 
     /** evidence.detail 总长硬上限：超了截断并注明（不塞超长文本，理由见 A 的规格） */
@@ -1803,9 +1797,17 @@ internal static class Uia
 
         bool timedOut;
         string json;
+        int passwordFields = 0;
+        int editFields = 0;
+        string className = "";
+        int truePasswords = 0;
         try
         {
-            json = Run(delegate { return BuildListJson(hwnd, maxItems, hasSince, sinceGen); }, timeoutMs, out timedOut);
+            json = Run(delegate
+            {
+                return BuildListJson(hwnd, maxItems, hasSince, sinceGen,
+                    out passwordFields, out editFields, out className, out truePasswords);
+            }, timeoutMs, out timedOut);
         }
         catch (Exception ex)
         {
@@ -1813,11 +1815,76 @@ internal static class Uia
             return Fail(ex.Message);
         }
         if (timedOut) return Fail(TimeoutMessage("uia-list", timeoutMs));
+
+        // **登录页第一次 list 只有浏览器外壳**（真机 2026-11：第一次 0 个密码框，第二次才有）：
+        // 浏览器窗口里「有输入框、却没认出密码框」时，多半是页面控件树还在长。补一次（带小延迟），
+        // 模型就不用把「list 两次」当成常识。付这 450ms 的条件很窄：必须是 Chromium 窗口类
+        // + 有输入框 + 一个密码框都没认到；普通网页（没有输入框）与已经认出密码框的页面都不补。
+        if (!timedOut && truePasswords == 0 && editFields > 0 && IsChromiumWindowClass(className))
+        {
+            Program.Log("uia-list：浏览器窗口有 " + editFields + " 个输入框但没认出密码框，"
+                + BrowserGrowWaitMs + "ms 后补一次枚举（登录页控件树可能还在长）");
+            Thread.Sleep(BrowserGrowWaitMs);
+            try
+            {
+                json = Run(delegate
+                {
+                    return BuildListJson(hwnd, maxItems, hasSince, sinceGen,
+                        out passwordFields, out editFields, out className, out truePasswords);
+                }, timeoutMs, out timedOut);
+            }
+            catch (Exception ex)
+            {
+                Program.Log("uia-list 补枚举失败（保留第一次的结果）：" + ex.Message);
+            }
+        }
         return json;
     }
 
-    private static string BuildListJson(IntPtr hwnd, int maxItems, bool hasSince, int sinceGen)
+    /** UIA_EditControlTypeId = 50004：收候选时「所有输入框」都收（理由见 CollectItem） */
+    private const int UiaEditControlTypeId = 50004;
+
+    /** RuntimeId → 可比较的字符串（"42.1234.5"）；没有就空串（退到 AutomationId / 矩形重合） */
+    private static string RuntimeIdOf(int[] ids)
     {
+        if (ids == null || ids.Length == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < ids.Length; i++)
+        {
+            if (i > 0) sb.Append('.');
+            sb.Append(ids[i].ToString(CultureInfo.InvariantCulture));
+        }
+        return sb.ToString();
+    }
+
+    /** 这一轮真正是密码框的候选有几个（回执的 passwordFields 与「登录页还没长完」的提示都用它） */
+    private static int CountPasswordFields(List<MaskCandidate> candidates)
+    {
+        int count = 0;
+        if (candidates == null) return 0;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            if (candidates[i] != null && candidates[i].IsPassword) count++;
+        }
+        return count;
+    }
+
+    /** 登录页第一次 list 常常只拿到浏览器外壳：补一次枚举前等这么久（真机 ~300-700ms 长完） */
+    private const int BrowserGrowWaitMs = 450;
+
+    /** Chromium 系浏览器（Edge / Chrome / Brave / Chromium）的主窗口类名 */
+    private static bool IsChromiumWindowClass(string className)
+    {
+        return className != null && string.Equals(className, "Chrome_WidgetWin_1", StringComparison.Ordinal);
+    }
+
+    private static string BuildListJson(IntPtr hwnd, int maxItems, bool hasSince, int sinceGen,
+        out int passwordFieldsOut, out int editFieldsOut, out string classNameOut, out int truePasswordsOut)
+    {
+        passwordFieldsOut = 0;
+        editFieldsOut = 0;
+        classNameOut = "";
+        truePasswordsOut = 0;
         // **先捕获这一次调用用的历史对象**：看门狗超时会把静态字段整个换掉（_store = new ...），
         // 而被放弃的那条线程还可能继续跑到这里——它必须往自己这一个（已经没人读的）对象里写。
         // 写到新对象里就是跨线程 Release 别人的指针，正是看门狗要避开的那个坑。
@@ -1848,9 +1915,10 @@ internal static class Uia
                     + "）——它可能不是标准窗口，改用 computer_screenshot 看一眼");
 
             List<IntPtr> retained = new List<IntPtr>();
-            // 密码框矩形单独收：**不管它列不列得进清单**（理由见 CollectItem 里的注释）。
-            // 它们就是截图遮罩的数据源（Mask.cs 的 PasswordRects）。
-            List<MaskRect> passwordRects = new List<MaskRect>();
+            // 「该遮的控件」单独收：**不管它列不列得进清单**（理由见 CollectItem 里的注释）。
+            // 它们就是截图遮罩的数据源（Mask.cs 的 PasswordRects）：当前是密码框的，
+            // 加上所有输入框（后者用来认出被「显示密码」翻开的那些）。
+            List<MaskCandidate> maskCandidates = new List<MaskCandidate>();
             // 稳定 id 的消歧表（同一代里两个一模一样的控件 → 补 #2 / #3）
             Dictionary<string, int> seenIds = new Dictionary<string, int>();
             bool truncated = false;
@@ -1867,7 +1935,7 @@ internal static class Uia
                     bool keep = false;
                     try
                     {
-                        UiaItemInfo info = CollectItem(element, passwordRects, seenIds);
+                        UiaItemInfo info = CollectItem(element, maskCandidates, seenIds);
                         if (info != null)
                         {
                             info.Ref = RefOf(snapshot.Items.Count);
@@ -1899,7 +1967,7 @@ internal static class Uia
             snapshot.Title = windowTitle;
             snapshot.ClassName = windowClass;
             snapshot.Truncated = truncated;
-            snapshot.PasswordFields = passwordRects.Count;
+            snapshot.PasswordFields = CountPasswordFields(maskCandidates);
             int editFields = 0;
             for (int i = 0; i < snapshot.Items.Count; i++)
             {
@@ -1933,8 +2001,15 @@ internal static class Uia
             // 清单跑完了：把这次看到的密码框位置记下（截图命令靠它遮罩）。
             // 空列表也记 —— 「看过，这个窗口没有密码框」与「从没看过」是两件事：
             // 前者截图不用吓唬模型，后者必须告诉它「这张图没遮，因为你还没 list 过」。
-            int passwordFields = passwordRects.Count;
-            PasswordRects.Record(key, passwordRects, InputHook.NowTick());
+            PasswordRects.Record(key, maskCandidates, WindowTitle(hwnd), InputHook.NowTick());
+
+            // 回执里的 passwordFields 说「截图时会遮几个」——**与截图回执同源**（缓存里合并后的条数），
+            // 不是「这一轮还是 IsPassword 的个数」：点过「显示密码」之后前者比后者多，回执必须
+            // 与下一张图上真的被涂黑的块数对得上。真密码数另出一个变量，只给「登录页还没长完」的重试用。
+            truePasswordsOut = snapshot.PasswordFields;
+            MaskCacheEntry cachedEntry;
+            int maskable = PasswordRects.TryGet(key, InputHook.NowTick(), out cachedEntry) ? cachedEntry.Rects.Count : 0;
+            snapshot.PasswordFields = maskable;
 
             // diff 要拿「这一代之前」的历史说话：先定基准、先算差异，再把新快照收进去
             UiaDiffPlan plan = PlanList(store, key, hasSince, sinceGen);
@@ -1978,7 +2053,7 @@ internal static class Uia
             json.Append("],\"unchanged\":").Append(diff == null ? 0 : diff.Unchanged)
                 .Append(",\"rectMoved\":").Append(diff == null ? 0 : diff.RectMoved)
                 .Append(",\"truncated\":").Append(truncated ? "true" : "false")
-                .Append(",\"passwordFields\":").Append(passwordFields)
+                .Append(",\"passwordFields\":").Append(snapshot.PasswordFields)
                 .Append(",\"editFields\":").Append(snapshot.EditFields);
 
             string note = plan.Note;
@@ -1989,9 +2064,12 @@ internal static class Uia
             if (note != null) json.Append(",\"note\":").Append(Program.JsonQuote(note));
             json.Append("}");
 
+            passwordFieldsOut = snapshot.PasswordFields;
+            editFieldsOut = snapshot.EditFields;
+            classNameOut = windowClass == null ? "" : windowClass;
             Program.Log("uia-list hwnd " + key + "「" + windowTitle + "」第 " + generation + " 代："
                 + snapshot.Items.Count + " 个可动作控件" + (truncated ? "（还有更多，已截断）" : "")
-                + "，密码框 " + passwordFields + " 个（已记下位置，截图会遮），mode=" + plan.Mode
+                + "，密码框 " + snapshot.PasswordFields + " 个（已记下位置，截图会遮），mode=" + plan.Mode
                 + (diff == null ? "" : "，变化 " + diff.Items.Count + " / 消失 " + diff.Removed.Count
                     + " / 没变 " + diff.Unchanged + " / 只挪位置 " + diff.RectMoved));
             return json.ToString();
@@ -2019,7 +2097,7 @@ internal static class Uia
      * 而这正是遮罩唯一必须命中的东西。所以 IsPassword 与它的矩形在过滤之前就取，
      * 与「这一条要不要列给模型」完全解耦。
      */
-    private static UiaItemInfo CollectItem(IntPtr element, List<MaskRect> passwordRects,
+    private static UiaItemInfo CollectItem(IntPtr element, List<MaskCandidate> candidates,
         Dictionary<string, int> seenIds)
     {
         bool isControl = ReadBool(element, SlotCurrentIsControlElement);
@@ -2027,12 +2105,21 @@ internal static class Uia
         string name = ReadString(element, SlotCurrentName);
         string automationId = ReadString(element, SlotCurrentAutomationId);
         bool isPassword = ReadIsPassword(element);
-        if (isPassword)
+        if (isPassword || controlTypeId == UiaEditControlTypeId)
         {
+            // 密码框自己，以及**所有输入框**：后者是为了「点过显示密码、type 翻成 text」之后
+            // 还能按身份把它认回来（Mask.MergeCandidates）。非输入框一律不收，免得把按钮也记进缓存。
             RECT secret = ReadRect(element);
             if (secret.Right > secret.Left && secret.Bottom > secret.Top)
-                passwordRects.Add(new MaskRect(secret.Left, secret.Top,
-                    secret.Right - secret.Left, secret.Bottom - secret.Top));
+            {
+                MaskCandidate candidate = new MaskCandidate();
+                candidate.RuntimeId = RuntimeIdOf(ReadRuntimeId(element));
+                candidate.AutomationId = automationId == null ? "" : automationId;
+                candidate.Rect = new MaskRect(secret.Left, secret.Top,
+                    secret.Right - secret.Left, secret.Bottom - secret.Top);
+                candidate.IsPassword = isPassword;
+                candidates.Add(candidate);
+            }
         }
         if (!IsListable(isControl, controlTypeId, name, automationId)) return null;
 
@@ -2982,16 +3069,28 @@ internal static class Uia
         // ⑧ setValue 的读回证据（0.15.0）：三档 + 密码框不带值 + detail 不超长
         ReadbackVerdict same = JudgeSetValueReadback("新建文本.txt", "新建文本.txt", "value", false);
         CheckString(failures, ref cases, "读回与期望一致 → confirmed", "confirmed", same.Delivery);
-        CheckTrue(failures, ref cases, "一致时带 evidence（kind=value，detail 写清期望与读回）",
-            same.Detail != null && same.Detail.IndexOf("新建文本.txt", StringComparison.Ordinal) >= 0
-            && same.Detail.IndexOf("ValuePattern.Current.Value", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "一致时带 evidence（kind=value，写清读回通道）",
+            same.Detail != null && same.Detail.IndexOf("ValuePattern.Current.Value", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "**evidence 不回显原文**（只给长度）",
+            same.Detail != null && same.Detail.IndexOf("新建文本.txt", StringComparison.Ordinal) < 0
+            && same.Detail.IndexOf("8 字符", StringComparison.Ordinal) >= 0);
         CheckString(failures, ref cases, "读回的来源原样写进回执", "value", same.Source);
 
         ReadbackVerdict changed = JudgeSetValueReadback("hello", "hello world", "value", false);
         CheckString(failures, ref cases, "读回与期望不一致 → suspected_noop", "suspected_noop", changed.Delivery);
-        CheckTrue(failures, ref cases, "不一致时 evidence 同时写出期望与读回",
-            changed.Detail != null && changed.Detail.IndexOf("\"hello\"", StringComparison.Ordinal) >= 0
-            && changed.Detail.IndexOf("\"hello world\"", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "不一致时 evidence 给出两个长度（不回显原文）",
+            changed.Detail != null && changed.Detail.IndexOf("5 字符", StringComparison.Ordinal) >= 0
+            && changed.Detail.IndexOf("11 字符", StringComparison.Ordinal) >= 0
+            && changed.Detail.IndexOf("hello", StringComparison.Ordinal) < 0);
+
+        // 大小写各试一次：任何形式的原文都不许出现在证据里
+        ReadbackVerdict leak = JudgeSetValueReadback("SeCrEt-Zq9-KEY", "SeCrEt-Zq9-KEY", "value", false);
+        CheckTrue(failures, ref cases, "证据里没有原文（大小写都不许出现）",
+            leak.Detail != null
+            && leak.Detail.IndexOf("secret", StringComparison.OrdinalIgnoreCase) < 0
+            && leak.Detail.IndexOf("Zq9", StringComparison.Ordinal) < 0);
+        CheckTrue(failures, ref cases, "证据里给出长度 13", leak.Detail != null
+            && leak.Detail.IndexOf("14 字符", StringComparison.Ordinal) >= 0);
 
         ReadbackVerdict missing = JudgeSetValueReadback("x", null, "none", false);
         CheckString(failures, ref cases, "拿不到读回 → unverifiable（不猜 confirmed）", "unverifiable", missing.Delivery);
@@ -3018,12 +3117,12 @@ internal static class Uia
         StringBuilder longValue = new StringBuilder();
         for (int i = 0; i < 400; i++) longValue.Append('x');
         ReadbackVerdict clipped = JudgeSetValueReadback(longValue.ToString(), longValue.ToString(), "value", false);
-        CheckTrue(failures, ref cases, "超长值截断到 200 字符并注明",
+        CheckTrue(failures, ref cases, "超长值只报长度（detail 本身不会被原文撑爆）",
             clipped.Detail.Length <= EvidenceDetailMax
-            && clipped.Detail.IndexOf("已截断", StringComparison.Ordinal) >= 0);
+            && clipped.Detail.IndexOf("400 字符", StringComparison.Ordinal) >= 0);
         ReadbackVerdict multiline = JudgeSetValueReadback("a\nb", "a\nb", "value", false);
-        CheckTrue(failures, ref cases, "detail 是单行（换行转义成 \\n，不把回执弄成两行）",
-            multiline.Detail.IndexOf('\n') < 0 && multiline.Detail.IndexOf("\\n", StringComparison.Ordinal) >= 0);
+        CheckTrue(failures, ref cases, "证据是单行、且不回显原文（只给长度）",
+            multiline.Detail.IndexOf((char)10) < 0 && multiline.Detail.IndexOf("3 字符", StringComparison.Ordinal) >= 0);
 
         // 槽号是内插出来的：三个新槽必须**夹在已知邻居之间**，数错一格就是调错函数
         CheckNumber(failures, ref cases, "ValuePattern get_CurrentValue 槽号 = 3 + 2 - 1", "4",

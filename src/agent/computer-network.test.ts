@@ -46,7 +46,7 @@ describe("工具描述里那段（sandboxNetworkNote）", () => {
 
   test("关着 + 能断：设置路径 + 「别重试导航」+ 宿主机工具要有用户同意", () => {
     const note = sandboxNetworkNote({ allowNetwork: false, networkControlled: true });
-    assert.match(note, /Settings › Experimental features › Computer use/);
+    assert.match(note, /Settings › Computer use/);
     assert.match(note, /Do not retry the navigation/);
     assert.match(note, /only if the user agrees — use the host browser_\* tools/);
   });
@@ -106,7 +106,7 @@ describe("system prompt 那段（computerUseNetworkGuideline）", () => {
     assert.match(guideline, /turning it on applies the next time the sandbox starts/);
     assert.match(guideline, /Local desktop and file work in the sandbox is unaffected/);
     // 设置路径要能照着找到那一行（与设置页文案同一路径）
-    assert.match(guideline, /Settings › Experimental features › Computer use/);
+    assert.match(guideline, /Settings › Computer use/);
     assert.match(guideline, /Allow network access/);
   });
 
@@ -137,7 +137,7 @@ describe("networkFailureError", () => {
   });
 
   test("关着 + 能断网 + 网络类错误：改成确定句，并说清这是设置、怎么恢复", () => {
-    const text = networkFailureError(message, { allowNetwork: false, networkControlled: true });
+    const text = networkFailureError(message, { allowNetwork: false, networkControlled: true }, "zh");
     assert.ok(text.startsWith(message), "guest 的原话要留着（含 ERR 码），模型才看得出是哪类错");
     assert.match(text, /确定原因（宿主设置，不是猜测）/);
     assert.match(text, /不允许出网/);
@@ -155,7 +155,7 @@ describe("networkFailureError", () => {
       "页面没有加载：ERR_INTERNET_DISCONNECTED（沙箱可能没有出网）。" +
       "确认方式：换一个一定能打开的地址试一次；如果所有站点都是这个错，那是网络的问题，不是这一页的问题。" +
       "仍要操作当前界面时改用 computer_screenshot / computer_click 像素工具。";
-    const text = networkFailureError(guest, { allowNetwork: false, networkControlled: true });
+    const text = networkFailureError(guest, { allowNetwork: false, networkControlled: true }, "zh");
     assert.match(text, /ERR_INTERNET_DISCONNECTED/);
     assert.match(text, /仍要操作当前界面时改用 computer_screenshot/);
     assert.doesNotMatch(text, /换一个一定能打开的地址试一次/);
@@ -169,7 +169,7 @@ describe("networkFailureError", () => {
   test("三族网络码都认：断网 / DNS / 连不上", () => {
     for (const code of ["ERR_INTERNET_DISCONNECTED", "ERR_NAME_NOT_RESOLVED", "ERR_CONNECTION_TIMED_OUT"]) {
       assert.match(
-        networkFailureError(`页面没有加载：${code}`, { allowNetwork: false, networkControlled: true }),
+        networkFailureError(`页面没有加载：${code}`, { allowNetwork: false, networkControlled: true }, "zh"),
         /不允许出网/,
         code,
       );
@@ -186,10 +186,35 @@ describe("networkFailureError", () => {
       "ERR_CONNECTION_",
     ]) {
       assert.equal(
-        networkFailureError(original, { allowNetwork: false, networkControlled: true }),
+        networkFailureError(original, { allowNetwork: false, networkControlled: true }, "zh"),
         original,
         original,
       );
     }
+  });
+});
+
+/**
+ * 出网被关的那句结论也有两种语言（2026-11-28）。
+ *
+ * 中文界面拿到中文结论、英文界面拿到英文结论——**都不含对方的字符**。桥那句中文的
+ * 「换一个地址试一次」只在中文侧存在；英文侧桥的回执早被宿主映射成英文，不会出现矛盾。
+ */
+describe("出网被关的结论：两种语言", () => {
+  const message = "页面没有加载：ERR_INTERNET_DISCONNECTED";
+  const facts = { allowNetwork: false, networkControlled: true };
+
+  test("中文界面：中文结论，无整句英文", () => {
+    const text = networkFailureError(message, facts, "zh");
+    assert.match(text, /确定原因/);
+    assert.doesNotMatch(text, /[A-Za-z]{4,} [A-Za-z]{4,} [A-Za-z]{4,}/);
+  });
+
+  test("英文界面：英文结论，不含 CJK", () => {
+    // 英文界面下桥的回执已经由宿主映射成英文，所以这里用英文的正文（真实路径）
+    const text = networkFailureError("The page did not load: ERR_INTERNET_DISCONNECTED", facts, "en");
+    assert.doesNotMatch(text, /[一-鿿]/);
+    assert.match(text, /Allow network access is off/);
+    assert.match(text, /ERR_INTERNET_DISCONNECTED/);
   });
 });

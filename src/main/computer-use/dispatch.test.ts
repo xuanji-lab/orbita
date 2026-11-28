@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { createComputerUseDispatcher } from "./dispatch.ts";
 import { createComputerUseLease, type LeaseClock } from "./lease.ts";
 import { COMPUTER_USE_DESKTOP_KEY, sessionDesktopKey } from "../../shared/computer-use.ts";
+import { setComputerUseUiLanguage } from "./ui-language.ts";
 import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "../../shared/computer-use.ts";
 
 /** 假时钟（同 lease.test.ts：手动推进，触发期间新挂的定时器也参与本次推进） */
@@ -350,5 +351,74 @@ describe("接线：L2b 的桌面键是「每会话一个」", () => {
     assert.notEqual(sessionDesktopKey("exclusive"), COMPUTER_USE_DESKTOP_KEY);
     // 空 id 退回全局键：调用方 bug 时宁可拿一把保守的共享锁
     assert.equal(sessionDesktopKey("  "), COMPUTER_USE_DESKTOP_KEY);
+  });
+});
+
+
+// ── 出口的语言闸（2026-11-28）─────────────────────────────────────────
+
+/**
+ * 所有 computer_* / sandbox_* 回执都从 `dispatch` 出去，所以它是「英文界面不露中文」的最后一道闸：
+ * lane 抛上来的、别的模块转进来的中文错误，在这里换成英文（认得出的给完整英文，认不出的给通用句）。
+ */
+describe("接线：回执出口的语言闸", () => {
+  const runWith = (error: string) => {
+    const clock = fakeClock();
+    const lease = createComputerUseLease({ clock });
+    return createComputerUseDispatcher({
+      lease,
+      titleOf: async () => "",
+      runPixels: async (): Promise<ComputerUseToolOutcome> => ({ ok: false, error }),
+      runBrowser: async (): Promise<ComputerUseToolOutcome> => ({ ok: false, error }),
+    });
+  };
+
+  test("英文界面：桥回的中文错误换成英文（不含 CJK）", async () => {
+    setComputerUseUiLanguage("en");
+    try {
+      const dispatcher = runWith("沙箱里的 Edge 没有在运行（或已经退出）");
+      const outcome = await dispatcher.dispatch("A", NAVIGATE);
+      assert.equal(outcome.ok, false);
+      const message = outcome.ok === false ? outcome.error : "";
+      assert.doesNotMatch(message, /[一-鿿]/);
+      assert.match(message, /not running/); // cdp 的自愈判据也要认得出这句
+    } finally {
+      setComputerUseUiLanguage("zh");
+    }
+  });
+
+  test("英文界面：认不出的中文错误给通用句（原文不上界面）", async () => {
+    setComputerUseUiLanguage("en");
+    try {
+      const raw = "一句以后才会出现的桥错误";
+      const dispatcher = runWith(raw);
+      const outcome = await dispatcher.dispatch("A", NAVIGATE);
+      assert.equal(outcome.ok, false);
+      const message = outcome.ok === false ? outcome.error : "";
+      assert.doesNotMatch(message, /[一-鿿]/);
+      assert.equal(message.includes(raw), false);
+      assert.match(message, /Details are in the application log/);
+    } finally {
+      setComputerUseUiLanguage("zh");
+    }
+  });
+
+  test("中文界面：一个字都不改", async () => {
+    setComputerUseUiLanguage("zh");
+    const raw = "沙箱里的 Edge 没有在运行（或已经退出）";
+    const dispatcher = runWith(raw);
+    const outcome = await dispatcher.dispatch("A", NAVIGATE);
+    assert.equal(outcome.ok === false ? outcome.error : "", raw);
+  });
+
+  test("成功的回执不经过它（正文一个字符都不变）", async () => {
+    setComputerUseUiLanguage("en");
+    try {
+      const { dispatcher } = setup({ A: "任务甲" });
+      const outcome = await dispatcher.dispatch("A", SCREENSHOT);
+      assert.deepEqual(outcome, { ok: true, text: "点完了" });
+    } finally {
+      setComputerUseUiLanguage("zh");
+    }
   });
 });

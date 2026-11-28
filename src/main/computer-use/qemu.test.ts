@@ -12,8 +12,13 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { after, before, describe, it } from "node:test";
 import { deflateSync } from "node:zlib";
-import { computerUseGuestCommands, COMPUTER_USE_DESKTOP_KEY } from "../../shared/computer-use.ts";
-import { SANDBOX_NOT_RUNNING } from "./provider.ts";
+import {
+  computerUseGuestCommands,
+  COMPUTER_USE_DESKTOP_KEY,
+  type SandboxState,
+  type SandboxStatus,
+} from "../../shared/computer-use.ts";
+import { sandboxNotRunningText } from "./provider.ts";
 import { QEMU_CAPABILITIES, QEMU_REFUSALS, QemuSandboxProvider } from "./qemu.ts";
 import { qemuAccelSpec, qemuNetdevSpec, qemuVmArgs } from "./qemu-vm.ts";
 import type { QemuVmHandle, QemuVmOptions, QemuVmPorts } from "./qemu-vm.ts";
@@ -129,7 +134,7 @@ describe("QemuSandboxProvider：L3 的命令映射与能力降级", () => {
   const pointerCalls: { op: string; x: number; y: number; button?: string; double?: boolean; notches?: number }[] = [];
 
   /** 假 VM：pid 用本进程的（alive），端口指向假 guest 服务 */
-  function fakeProvider(overrides: { failBoot?: boolean } = {}) {
+  function fakeProvider(overrides: { failBoot?: boolean; statuses?: SandboxState[] } = {}) {
     const ports: QemuVmPorts = { desk: port, monitor: 1, rfb: 2 };
     const provider = new QemuSandboxProvider({
       bootVm: (options: QemuVmOptions & { ports: QemuVmPorts }): QemuVmHandle => {
@@ -150,6 +155,10 @@ describe("QemuSandboxProvider：L3 的命令映射与能力降级", () => {
         stopped.push(handle.pid);
         return { stopped: true, forced: false };
       },
+      // 有记录就说明「每次迁移都通知了」这件事本身在跑（门面接的就是这个回调）
+      ...(overrides.statuses === undefined
+        ? {}
+        : { onStatus: (status: SandboxStatus) => overrides.statuses!.push(status.state) }),
       openPointer: async () => ({
         click: async (x: number, y: number, options: { button?: "left" | "middle" | "right"; double?: boolean }) => {
           pointerCalls.push({ op: "click", x, y, button: options.button, double: options.double });
@@ -189,10 +198,10 @@ describe("QemuSandboxProvider：L3 的命令映射与能力降级", () => {
     const provider = fakeProvider();
     const shot = await provider.screenshot();
     assert.equal(shot.ok, false);
-    assert.equal(shot.ok === false ? shot.error : "", SANDBOX_NOT_RUNNING);
+    assert.equal(shot.ok === false ? shot.error : "", sandboxNotRunningText());
     const click = await provider.guestCommand(computerUseGuestCommands.click, { x: 1, y: 2 });
     assert.equal(click.ok, false);
-    assert.equal(click.ok === false ? click.error : "", SANDBOX_NOT_RUNNING);
+    assert.equal(click.ok === false ? click.error : "", sandboxNotRunningText());
     assert.deepEqual(provider.status(), { state: "off" });
   });
 
@@ -326,6 +335,43 @@ describe("QemuSandboxProvider：L3 的命令映射与能力降级", () => {
     assert.equal(provider.desktopKey("session-a"), COMPUTER_USE_DESKTOP_KEY);
     assert.equal(provider.desktopKey("session-b"), COMPUTER_USE_DESKTOP_KEY);
     assert.equal(provider.capabilities.desktopScope, "shared");
+  });
+
+  /**
+   * 状态迁移的通知（2026-11-28 真机 P0 的账）。
+   *
+   * 真机上 QEMU 起完 7–8 秒、端口在听、截图是 XFCE，设置页却一直「未启动」：
+   * 这个 provider 从来没有把迁移告诉任何人，于是 computer-use:status 一条都不推，
+   * 「关闭」按钮一直是灰的——用户在设置页停不掉那台 VM。下面两条盯的就是
+   * 「每一次迁移都有通知」，包括失败那条。
+   */
+  describe("QEMU 状态迁移的通知（设置页靠它画状态与按钮）", () => {
+    /** 假的坚持要用的那台 guest 服务在本 describe 之外；这里直接借第一个 describe 的 fakeProvider */
+    it("启动 → starting、running；停止 → stopping、off（四条一条不少、顺序不变）", async () => {
+      const statuses: SandboxState[] = [];
+      const provider = fakeProvider({ statuses });
+      await provider.start();
+      await provider.stop();
+      assert.deepEqual(statuses, ["starting", "running", "stopping", "off"]);
+    });
+
+    it("启动失败 → starting、error（界面才不会停在「启动中」）", async () => {
+      const statuses: SandboxState[] = [];
+      const provider = fakeProvider({ failBoot: true, statuses });
+      const started = await provider.start();
+      assert.equal(started.ok, false);
+      assert.deepEqual(statuses, ["starting", "error"]);
+    });
+
+    it("subscribeStatus 与构造参数的 onStatus 共用一张订阅表（门面两条路不会分叉）", async () => {
+      const viaHook: SandboxState[] = [];
+      const viaSubscribe: SandboxState[] = [];
+      const provider = fakeProvider({ statuses: viaHook });
+      provider.subscribeStatus((status) => viaSubscribe.push(status.state));
+      await provider.start();
+      assert.deepEqual(viaHook, ["starting", "running"]);
+      assert.deepEqual(viaSubscribe, ["starting", "running"], "门面给注入的 provider 接线走的就是这条");
+    });
   });
 });
 

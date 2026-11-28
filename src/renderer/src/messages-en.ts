@@ -1239,7 +1239,7 @@ export const en = {
     browserInfo:
       "Which browser the agent drives inside the sandbox. Edge is the default because the sandbox image already has it: nothing extra to prepare, and it reaches CDP about a second faster than Chrome installed from the host.",
     browserBelow:
-      "Chrome / Brave / Chromium are not part of the sandbox image — map or copy one into the sandbox first, otherwise this session falls back to Edge and the tool reply says so. Takes effect the next time a page is opened.",
+      "Chrome / Brave / Chromium are not part of the sandbox image — map or copy one into the sandbox first, otherwise this session falls back to Edge and the tool reply says so. This row still shows your pick while the sandbox runs Edge. Takes effect the next time a page is opened.",
     browserAria: "Browser used inside the sandbox",
     browserAuto: "Auto",
     // "up to three minutes" mirrors BRIDGE_READY_TIMEOUT_MS in src/main/computer-use/sandbox.ts (180s);
@@ -1278,7 +1278,7 @@ export const en = {
     /*
      * Session consent (2026-11-27): one ask in the conversation (row A), then a record in the
      * flow plus a quiet status line above the composer (row B). The refusal text itself comes
-     * from COMPUTER_USE_CONSENT_DENIED_TEXT (shared) — same sentence the model receives.
+     * from computerUseConsentTexts (shared, by UI language) — the same sentence the model receives.
      */
     consentAsk: "Allow the agent to control the sandbox desktop?",
     consentWhy:
@@ -1287,6 +1287,7 @@ export const en = {
     consentDeny: "Deny",
     consentAllowedRecord: "Allowed for this session — no further prompts",
     consentDeniedRecord: "Denied — no computer actions this session",
+    consentUnansweredRecord: "Nobody answered, so it was treated as denied — allow again when you need it",
     consentRevoke: "Revoke",
     consentToldModel: (text: string) => `Told the model: ${text}`,
     consentStatusAllowed: "Sandbox desktop: allowed for this session",
@@ -1294,8 +1295,11 @@ export const en = {
     emergencyGroup: "Safety",
     emergencyHotkey: "Emergency stop hotkey",
     emergencyHotkeyInfo:
-      "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. **It does not close the sandbox** — the screen stays for you to look at. Re-authorize to use computer use again.",
+      "Works even when the sandbox window is in front. Pressing it stops the running turn, revokes this session's computer-use grant, and refuses every later computer_* call. It does not close the sandbox — the screen stays for you to look at. Re-authorize to use computer use again.",
     emergencyRegistered: "Registered and available",
+    /** 主选被占用、降级到候选键位时说清「现在生效的是哪一个」（2026-11-28 验收 P2-2） */
+    emergencyFallback: (preferred: string, active: string) =>
+      `The main shortcut ${preferred} is taken by another app; using ${active} instead`,
     emergencyUnavailable: (error: string) => `Unavailable: ${error}. Close the app holding this shortcut and restart Orbita.`,
     emergencyStopped:
       "Emergency stop: this turn was stopped and this session's computer-use grant was revoked. The sandbox is still open.",

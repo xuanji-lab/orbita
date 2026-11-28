@@ -21,6 +21,7 @@ import {
 import type { SandboxProcess } from "./sandbox.ts";
 import type { IsolationSessionProbe, IsolationSessionProvision, IsolationSessionSdk } from "./isolation-session.ts";
 import { nodeSupportsNativeStdio, nodeTooOldReason } from "./mxc-node.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /** ISO 会话唯一可用的网络姿态（MXC 的 provision 只接受这三个方向全 allow） */
 const NETWORK = {
@@ -54,14 +55,14 @@ export function createMxcSdk(): IsolationSessionSdk {
           available,
           reason: available
             ? null
-            : "这台机器上没有可用的 IsolationSession 后端（Windows 的 IsoSession 服务不在 / 被策略关掉了）",
+            : cuTexts().isolationBackendUnavailable,
           nodeVersion,
           nodeOk,
         };
       } catch (cause: unknown) {
         return {
           available: false,
-          reason: `MXC 原生库加载或探测失败：${cause instanceof Error ? cause.message : String(cause)}`,
+          reason: cuTexts().mxcNativeLoadFailed(cause instanceof Error ? cause.message : String(cause)),
           nodeVersion,
           nodeOk,
         };
@@ -73,7 +74,7 @@ export function createMxcSdk(): IsolationSessionSdk {
       const metadata = result.metadata;
       if (metadata === undefined) {
         // 后端没给账号/工作区就是起不来：带着 containerId 抛，让控制器去释放它
-        throw new Error("MXC 的 provision 没有返回 agent 账号与工作区（无法把桥送进会话）");
+        throw new Error(cuTexts().mxcProvisionIncomplete);
       }
       return {
         containerId: result.containerId,

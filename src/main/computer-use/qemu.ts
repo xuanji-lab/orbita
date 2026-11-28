@@ -35,8 +35,9 @@ import {
   type ComputerUseWindowShotResult,
   type SandboxStatus,
 } from "../../shared/computer-use.ts";
+import { cuTexts } from "./ui-language.ts";
 import {
-  SANDBOX_NOT_RUNNING,
+  sandboxNotRunningText,
   type SandboxCapabilities,
   type SandboxProvider,
   type SandboxProviderId,
@@ -93,17 +94,17 @@ export const QEMU_CAPABILITIES: SandboxCapabilities = {
  * 模型看不见界面也不知道后端差异，一句「不支持」只会让它原地重试。
  */
 export const QEMU_REFUSALS = {
-  uia:
-    "这个隔离后端（L3 Linux 桌面 VM）没有 UI Automation 控件树：Linux 侧的等价物是 AT-SPI，" +
-    "本版没接。改用 computer_screenshot 看清界面，再用 computer_click / computer_type 按图像坐标操作——" +
-    "点之前先截图，点之后立刻再截一张确认结果。",
-  windowShot:
-    "这个后端只能整桌面截图：Linux guest 里没有 PrintWindow 的对等物，按窗口拍只能拍到屏幕上那块像素" +
-    "（被别的窗口遮住时拍到的是遮挡者）。请用不带 window 的 computer_screenshot，坐标就是整屏像素。",
-  cdp:
-    "这个后端还没接浏览器调试车道（sandbox_*）：L3 的 guest 里有 chromium，但调试口与 sandbox_* 的接线还没做。" +
-    "网页自动化请用内置浏览器，或者在这台桌面上走 computer_* 的像素路径（截图 + 点击 + 打字）。",
-} as const;
+  // getter 而不是常量：这几句会进工具回执，要跟着界面语言走（2026-11-28）
+  get uia(): string {
+    return cuTexts().qemuRefuseUia;
+  },
+  get windowShot(): string {
+    return cuTexts().qemuRefuseWindowShot;
+  },
+  get cdp(): string {
+    return cuTexts().qemuRefuseCdp;
+  },
+};
 
 /** 这条后端认的命令（其余一律明拒，并列出认的这几个） */
 const SUPPORTED = ["click", "type", "key", "scroll"] as const;
@@ -127,6 +128,16 @@ export interface QemuSandboxHooks {
    * guest 出不了外网；桌面通道（hostfwd）不受影响。
    */
   allowNetwork?: () => boolean | Promise<boolean>;
+  /**
+   * 状态迁移的通知**（每一次迁移都调，含启动失败与停止失败）**。
+   *
+   * 为什么这是 P0：三个后端里只有 WSB / L2b 在 index.ts 里接了这条广播，QEMU 没接——
+   * 真机上点「启动」VM 起来了（进程在、端口在、截图是桌面），设置页却一直显示「未启动」，
+   * 「关闭」还是灰的：**用户在设置页里停不掉这台 VM**。反过来停的时候 400ms 就回 off，
+   * 界面还停在「运行中」。
+   * 门面（runtime.ts）把这里的通知接到 deps.onStatus，与另外两个后端同一条广播。
+   */
+  onStatus?: (status: SandboxStatus) => void;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -149,12 +160,34 @@ export class QemuSandboxProvider implements SandboxProvider {
   #screen: { width: number; height: number } | null = null;
   #version = "p3-guestd";
 
+  /** 状态迁移的订阅者（构造参数里的 onStatus + 后来 subscribeStatus 的） */
+  readonly #statusListeners: Array<(status: SandboxStatus) => void> = [];
+
   constructor(hooks: QemuSandboxHooks = {}) {
     this.#hooks = hooks;
+    if (hooks.onStatus !== undefined) this.#statusListeners.push(hooks.onStatus);
   }
 
   status(): SandboxStatus {
     return this.#state;
+  }
+
+  /**
+   * 事后订阅状态迁移。**为了注入的 provider 也能接上同一条广播**：门面（runtime.ts）
+   * 自己造的这只走构造参数；单测 / 换实现传进来的那只走这里——否则两条路会分叉，
+   * 而分叉的正是这条 P0（事件从没发出去）。
+   */
+  subscribeStatus(listener: (status: SandboxStatus) => void): void {
+    this.#statusListeners.push(listener);
+  }
+
+  /**
+   * 唯一的写状态处：赋值并**通知所有订阅者**（与 WSB / L2b 每次迁移都 onStatus 一致）。
+   * 新对象与 status() 返回的是同一个引用——监听方可以把它直接交给界面。
+   */
+  #setState(next: SandboxStatus): void {
+    this.#state = next;
+    for (const listener of this.#statusListeners) listener(next);
   }
 
   /**
@@ -163,9 +196,9 @@ export class QemuSandboxProvider implements SandboxProvider {
    */
   async start(): Promise<ComputerUseStartResult> {
     if (this.#state.state === "running") return { ok: true };
-    if (this.#state.state === "starting") return { ok: false, error: "L3 桌面 VM 正在启动，稍等几秒再试" };
+    if (this.#state.state === "starting") return { ok: false, error: cuTexts().qemuStarting };
     const paths = this.#hooks.paths ?? qemuVmPaths();
-    this.#state = { state: "starting", startedAt: Date.now(), backend: "qemu" };
+    this.#setState({ state: "starting", startedAt: Date.now(), backend: "qemu" });
     let vm: QemuVmHandle | null = null;
     try {
       const ports = await pickFreePorts();
@@ -191,19 +224,19 @@ export class QemuSandboxProvider implements SandboxProvider {
       // 参照物，它要是空白，模型会拿着一张空屏去「找图标」。所以这里等画出来再报 running。
       await waitForPaintedDesktop({ port: vm.ports.desk, token: vm.token });
       this.#version = ready.version ?? "p3-guestd";
-      this.#state = {
+      this.#setState({
         state: "running",
         startedAt: Date.now(),
         bridgeVersion: this.#version,
         backend: "qemu",
-      };
+      });
       return { ok: true };
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
       if (vm !== null) await (this.#hooks.stopVm ?? stopQemuVm)(vm).catch(() => undefined);
       this.#vm = null;
       this.#screen = null;
-      this.#state = { state: "error", message, backend: "qemu" };
+      this.#setState({ state: "error", message, backend: "qemu" });
       return { ok: false, error: message };
     }
   }
@@ -213,18 +246,18 @@ export class QemuSandboxProvider implements SandboxProvider {
     this.#vm = null;
     this.#screen = null;
     if (vm === null) {
-      this.#state = { state: "off" };
+      this.#setState({ state: "off" });
       return { ok: true };
     }
-    this.#state = { state: "stopping" };
+    this.#setState({ state: "stopping" });
     try {
       await (this.#hooks.stopVm ?? stopQemuVm)(vm);
-      this.#state = { state: "off" };
+      this.#setState({ state: "off" });
       return { ok: true };
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      this.#state = { state: "error", message, backend: "qemu" };
-      return { ok: false, error: `停 L3 桌面 VM 时出错：${message}` };
+      this.#setState({ state: "error", message, backend: "qemu" });
+      return { ok: false, error: cuTexts().qemuStopFailed(message) };
     }
   }
 
@@ -236,7 +269,7 @@ export class QemuSandboxProvider implements SandboxProvider {
 
   async screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult> {
     const channel = this.#channel();
-    if (channel === null) return { ok: false, error: SANDBOX_NOT_RUNNING };
+    if (channel === null) return { ok: false, error: sandboxNotRunningText() };
     try {
       const screen = this.#screen;
       // scrot 的缩放单位是百分比（会取整，1280 的 50% 是 640）。回图真实尺寸一律以
@@ -274,11 +307,11 @@ export class QemuSandboxProvider implements SandboxProvider {
    */
   async listWindows(timeoutMs = 5_000): Promise<ComputerUseWindowListResult> {
     const channel = this.#channel();
-    if (channel === null) return { ok: false, error: SANDBOX_NOT_RUNNING };
+    if (channel === null) return { ok: false, error: sandboxNotRunningText() };
     const reply = await deskCommand(channel, { cmd: "winlist" }, timeoutMs);
-    if (!reply.ok) return { ok: false, error: reply.error ?? "列窗口失败" };
+    if (!reply.ok) return { ok: false, error: reply.error ?? cuTexts().qemuListFailed };
     const raw = reply.fields["windows"];
-    if (!Array.isArray(raw)) return { ok: false, error: "guest 的窗口清单格式不对（windows 不是数组）" };
+    if (!Array.isArray(raw)) return { ok: false, error: cuTexts().qemuWindowListShape };
     const windows: ComputerUseWindowInfo[] = [];
     for (const item of raw) {
       if (item === null || typeof item !== "object") continue;
@@ -327,13 +360,13 @@ export class QemuSandboxProvider implements SandboxProvider {
     fields: Record<string, unknown>,
   ): Promise<GuestCommandReply> {
     const channel = this.#channel();
-    if (channel === null) return { ok: false, error: SANDBOX_NOT_RUNNING };
+    if (channel === null) return { ok: false, error: sandboxNotRunningText() };
 
     switch (command) {
       case computerUseGuestCommands.click: {
         const x = finiteNumber(fields["x"]);
         const y = finiteNumber(fields["y"]);
-        if (x === undefined || y === undefined) return { ok: false, error: "click 缺 x / y（沙箱物理像素）" };
+        if (x === undefined || y === undefined) return { ok: false, error: cuTexts().qemuClickMissing };
         const button = normaliseButton(fields["button"]);
         try {
           const pointer = await this.#pointer();
@@ -345,22 +378,22 @@ export class QemuSandboxProvider implements SandboxProvider {
       }
       case computerUseGuestCommands.type: {
         const text = typeof fields["text"] === "string" ? fields["text"] : "";
-        if (text === "") return { ok: false, error: "type 的 text 是空的" };
+        if (text === "") return { ok: false, error: cuTexts().qemuTypeEmpty };
         const reply = await deskCommand(channel, { cmd: "type", b64: deskText(text) }, 60_000);
-        return reply.ok ? { ok: true, resp: reply.fields } : { ok: false, error: reply.error ?? "打字失败" };
+        return reply.ok ? { ok: true, resp: reply.fields } : { ok: false, error: reply.error ?? cuTexts().qemuTypeFailed };
       }
       case computerUseGuestCommands.key: {
         const key = typeof fields["key"] === "string" ? fields["key"] : "";
-        if (key === "") return { ok: false, error: "key 的按键名是空的" };
+        if (key === "") return { ok: false, error: cuTexts().qemuKeyEmpty };
         const reply = await deskCommand(channel, { cmd: "key", b64: deskText(key) }, 20_000);
-        return reply.ok ? { ok: true, resp: reply.fields } : { ok: false, error: reply.error ?? "按键失败" };
+        return reply.ok ? { ok: true, resp: reply.fields } : { ok: false, error: reply.error ?? cuTexts().qemuKeyFailed };
       }
       case computerUseGuestCommands.scroll: {
         const x = finiteNumber(fields["x"]);
         const y = finiteNumber(fields["y"]);
         const deltaY = finiteNumber(fields["deltaY"]);
         if (x === undefined || y === undefined || deltaY === undefined) {
-          return { ok: false, error: "scroll 缺 x / y / deltaY" };
+          return { ok: false, error: cuTexts().qemuScrollMissing };
         }
         try {
           const pointer = await this.#pointer();
@@ -378,10 +411,7 @@ export class QemuSandboxProvider implements SandboxProvider {
       default:
         return {
           ok: false,
-          error:
-            `这个隔离后端（L3 Linux 桌面 VM）不认命令 ${command}：它只接了 ` +
-            `${SUPPORTED.join(" / ")}（外加截图与 win-list）。` +
-            "UIA 控件树、按窗口截图、CDP 浏览器车道在这个后端都没有，详见 capabilities。",
+          error: cuTexts().qemuUnknownCommand(command, SUPPORTED.join(" / ")),
         };
     }
   }
@@ -401,11 +431,11 @@ export class QemuSandboxProvider implements SandboxProvider {
     this.#vm = null;
     if (vm === null) return;
     if (!vmAlive(vm.pid)) {
-      this.#state = { state: "off" };
+      this.#setState({ state: "off" });
       return;
     }
     await (this.#hooks.stopVm ?? stopQemuVm)(vm).catch(() => undefined);
-    this.#state = { state: "off" };
+    this.#setState({ state: "off" });
   }
 
   /**
@@ -414,7 +444,7 @@ export class QemuSandboxProvider implements SandboxProvider {
    */
   async #pointer(): Promise<PointerInput> {
     const vm = this.#vm;
-    if (vm === null || this.#state.state !== "running") throw new Error(SANDBOX_NOT_RUNNING);
+    if (vm === null || this.#state.state !== "running") throw new Error(sandboxNotRunningText());
     return (this.#hooks.openPointer ?? VncPointer.connect)(vm.ports.rfb);
   }
 

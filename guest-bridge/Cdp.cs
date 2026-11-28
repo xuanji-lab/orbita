@@ -2622,7 +2622,9 @@ internal sealed class CdpSession
     var el=nodes[i];
     var r=el.getBoundingClientRect();
     if(r.width<=0||r.height<=0) continue;
-    var label=el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.getAttribute('title')||el.innerText||el.value||'';
+    // 注意：**不读 el.value**。输入框里可能就是用户刚打的密码 / token，这个 label 会进 observe 回执，
+    // 而回执会写进会话 JSONL。宁可给空标签，让模型用选择器与 aria-label / placeholder 认元素。
+    var label=el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.getAttribute('title')||el.innerText||'';
     label=String(label).replace(/\s+/g,' ');
     label=label.replace(/\u0001/g,' ').replace(/\u0002/g,' ').replace(/\u0003/g,' ').trim();
     if(label.length>80) label=label.slice(0,80);
@@ -2667,7 +2669,8 @@ internal sealed class CdpSession
             + "try{el.scrollIntoView({block:'center',inline:'center'});}catch(e){el.scrollIntoView();}"
             + "var r=el.getBoundingClientRect();"
             + "if(r.width<=0||r.height<=0) return 'NOTFOUND';"
-            + "var label=String(el.innerText||el.value||'').replace(/\\s+/g,' ').slice(0,80);"
+            // 同 observe：**不读 el.value**（输入框里可能是密码 / token，这个 label 会进回执 → 页面回执）
+            + "var label=String(el.innerText||'').replace(/\\s+/g,' ').slice(0,80);"
             + "return [Math.round(r.left+r.width/2),Math.round(r.top+r.height/2),el.tagName.toLowerCase(),label].join('\\u0002');})()";
         string result = EvalString(js, 8000);
         if (result == "NOTFOUND" || result.Length == 0) return null;
@@ -2716,11 +2719,14 @@ internal sealed class CdpSession
         }
         Thread.Sleep(120);
 
+        // 读回只取**长度**：这是模型 / 用户打进去的原文（登录页上就是密码），回执会进会话 JSONL，
+        // 落盘就收不回来。要回答的是「打进去了没有」——字符数对得上就够，值本身一个字都不回。
         string readJs = "(function(){var el=document.querySelector(" + Program.JsonQuote(selector) + ");"
-            + "if(!el) return ''; return (el.value !== undefined && el.value !== null) ? String(el.value) : String(el.innerText||'');})()";
-        string value = EvalString(readJs, 5000);
-        if (value.Length > 200) value = value.Substring(0, 200);
-        return new JObj().Bool("ok", true).Str("value", value).Bool("submitted", submitted).ToString();
+            + "if(!el) return -1; return (el.value !== undefined && el.value !== null) ? String(el.value).length : String(el.innerText||'').length;})()";
+        long fieldChars = ParseLong(EvalString(readJs, 5000), -1);
+        return new JObj().Bool("ok", true).Bool("typed", true)
+            .Num("chars", text.Length).Num("fieldChars", fieldChars)
+            .Bool("submitted", submitted).ToString();
     }
 
     private void DispatchEnter()
@@ -2845,7 +2851,7 @@ internal sealed class CdpSession
      * （它自己 + 它内部同源的嵌套子帧），每一个都要注入；注入计划由
      * `ShotMask.PlanSessionInjections` 算（自测直接验「2 个默认上下文 → 注入 2 次」）。
      */
-    private void MaskForShot(ShotMaskReport report)
+    private void MaskForShot(ShotMaskReport report, string maskLabel)
     {
         if (RemainingMs() < MaskMinBudgetMs)
         {
@@ -2875,7 +2881,7 @@ internal sealed class CdpSession
         // enable 期间可能重连过：以现在的 session 为准（事件就是它报的）
         List<string> known = new List<string>();
         for (int i = 0; i < tree.Count; i++) known.Add(tree[i].FrameId);
-        InjectPlan(ShotMask.PlanSessionInjections(tree, pageContexts), mainFrameId, report);
+        InjectPlan(ShotMask.PlanSessionInjections(tree, pageContexts), mainFrameId, report, maskLabel);
         if (_sessionId != baseSession)
         {
             report.Note("连接重建过，跨源 iframe 这一轮没遮");
@@ -2922,7 +2928,7 @@ internal sealed class CdpSession
                 visited.Add(t.Id);
                 known.Add(t.Id);
                 List<string> subFrames = new List<string>();
-                MaskIframe(t, subFrames, report);
+                MaskIframe(t, subFrames, report, maskLabel);
                 for (int j = 0; j < subFrames.Count; j++)
                 {
                     if (!HasString(known, subFrames[j])) known.Add(subFrames[j]);
@@ -2971,7 +2977,7 @@ internal sealed class CdpSession
      * 一条注入计划落到实际动作：每个条目一个 document。没有上下文的条目**不跳过**——
      * 它要进回执的「没遮到」清单（否则「这个帧不存在」与「我没遮上」看起来一样）。
      */
-    private void InjectPlan(List<MaskPlanItem> plan, string mainFrameId, ShotMaskReport report)
+    private void InjectPlan(List<MaskPlanItem> plan, string mainFrameId, ShotMaskReport report, string maskLabel)
     {
         for (int i = 0; i < plan.Count; i++)
         {
@@ -2987,7 +2993,7 @@ internal sealed class CdpSession
             }
             else
             {
-                InjectMask(outcome, item.Context, report);
+                InjectMask(outcome, item.Context, report, maskLabel);
             }
             report.Frames.Add(outcome);
         }
@@ -3010,7 +3016,7 @@ internal sealed class CdpSession
      *
      * `frameIdsOut` 回填这棵树里的帧 id（调用方拿去认领更深的嵌套 OOPIF）。
      */
-    private void MaskIframe(TargetInfo target, List<string> frameIdsOut, ShotMaskReport report)
+    private void MaskIframe(TargetInfo target, List<string> frameIdsOut, ShotMaskReport report, string maskLabel)
     {
         for (int attempt = 0; attempt < 2; attempt++)
         {
@@ -3048,7 +3054,7 @@ internal sealed class CdpSession
                     if (item.FrameId != null && item.FrameId.Length > 0 && !HasString(frameIdsOut, item.FrameId))
                         frameIdsOut.Add(item.FrameId);
                 }
-                InjectPlan(plan, "", report);
+                InjectPlan(plan, "", report, maskLabel);
                 return;
             }
             catch (Exception ex)
@@ -3136,13 +3142,13 @@ internal sealed class CdpSession
     }
 
     /** 在一个已挑好的上下文里跑注入脚本，把结果记进 outcome */
-    private void InjectMask(MaskFrameOutcome outcome, MaskContext ctx, ShotMaskReport report)
+    private void InjectMask(MaskFrameOutcome outcome, MaskContext ctx, ShotMaskReport report, string maskLabel)
     {
         outcome.SessionId = ctx.SessionId;
         outcome.ContextId = ctx.Id;
         try
         {
-            string reply = EvalInContext(ctx.SessionId, ctx.Id, ShotMask.MaskScript, MaskEvalTimeoutMs, null);
+            string reply = EvalInContext(ctx.SessionId, ctx.Id, ShotMask.MaskScriptFor(maskLabel), MaskEvalTimeoutMs, null);
             string scriptError = ShotMask.ScriptError(reply);
             if (scriptError != null)
             {
@@ -3175,7 +3181,7 @@ internal sealed class CdpSession
      *
      * 为什么没走「重连再撤」：求值要带 `contextId`，而上下文 id 是**随 session 一起生灭**的
      * ——断链重连拿到的是新 id，旧 id 一定报 "Cannot find context"，重连帮不上忙。真正的
-     * 保障在别处：MaskScript 开头先清上一轮遗留的 `[data-orbita-mask]`，所以断链留下的
+     * 保障在别处：MaskScriptFor 生成的脚本开头先清上一轮遗留的 `[data-orbita-mask]`，所以断链留下的
      * 残留会在**下一张截图**注入时被清掉，不会越积越多，也不挡点击（pointer-events:none）。
      */
     private void ClearShotMask(ShotMaskReport report)
@@ -3228,8 +3234,12 @@ internal sealed class CdpSession
     {
         int maxWidth = ReadInt(raw, "maxWidth", ShotMaxWidth, 320, 4096);
         // 先遮、再拍、后撤：遮罩失败也要把图画出来（见 MaskForShot 的硬规矩）
+        // overlay 上那行字由宿主按界面语言给（桥不猜语言；见 ShotMask.DefaultMaskLabel）。
+        // 它拼进脚本之前会过 NormalizeMaskLabel + JsSingleQuote：长度截到 32 字，引号/反斜杠转义，
+        // 换行与 U+2028 换空格——一个标签不能把整段脚本拼坏。
+        string maskLabel = Program.ExtractJsonString(raw, "maskLabel");
         ShotMaskReport mask = new ShotMaskReport();
-        try { MaskForShot(mask); }
+        try { MaskForShot(mask, maskLabel); }
         catch (Exception ex) { mask.Note("遮罩流程中断：" + Snippet(ex.Message)); }
         string reply;
         try

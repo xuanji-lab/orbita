@@ -85,6 +85,8 @@ import { waitForBridgeInfo, type BridgeInfo } from "./bridge-ready.ts";
 import type { SandboxCapabilities, SandboxProviderId } from "./provider.ts";
 import type { GuestCommandReply, GuestShotReply, SandboxProcess } from "./sandbox.ts";
 import { clampMaxWidth } from "./sandbox.ts";
+import { cuTexts } from "./ui-language.ts";
+import type { ComputerUseUiAction } from "../../shared/computer-use-texts.ts";
 
 /** 桥 exe 的文件名（与 WSB 那条路同一个产物，宿主只按这个名字找） */
 const GUEST_BRIDGE_EXE = "orbita-guest-bridge.exe";
@@ -296,7 +298,7 @@ export class IsolationSessionController {
       case "stopping":
         return { state: "stopping" };
       case "error":
-        return { state: "error", message: this.errorMessage ?? "启动失败", backend: "isolation-session" };
+        return { state: "error", message: this.errorMessage ?? cuTexts().startFailed, backend: "isolation-session" };
     }
   }
 
@@ -316,7 +318,7 @@ export class IsolationSessionController {
     if (platform !== "win32") {
       return {
         available: false,
-        reason: `多会话隔离只在 Windows 上有（当前平台 ${platform}）`,
+        reason: cuTexts().isolationWindowsOnly(platform),
         nodeVersion: process.versions.node,
         nodeOk: false,
       };
@@ -327,7 +329,7 @@ export class IsolationSessionController {
       const message = cause instanceof Error ? cause.message : String(cause);
       return {
         available: false,
-        reason: `MXC 探测失败：${message}`,
+        reason: cuTexts().isolationProbeFailed(message),
         nodeVersion: process.versions.node,
         nodeOk: false,
       };
@@ -337,11 +339,11 @@ export class IsolationSessionController {
   async start(): Promise<ComputerUseStartResult> {
     if (this.state === "running") return { ok: true };
     if (this.state === "starting" || this.state === "stopping") {
-      return { ok: false, error: "隔离会话正在启动或停止中，等它结束再试" };
+      return { ok: false, error: cuTexts().isolationStartingOrStopping };
     }
     const platform = this.deps.platform ?? process.platform;
     if (platform !== "win32") {
-      return { ok: false, error: `多会话隔离只在 Windows 上有（当前平台 ${platform}）` };
+      return { ok: false, error: cuTexts().isolationWindowsOnly(platform) };
     }
 
     const generation = ++this.generation;
@@ -360,7 +362,7 @@ export class IsolationSessionController {
     const probe = await this.probe();
     if (!probe.available) {
       // 依赖不满足是**启动前**就该说清的事：不建会话、不留账号
-      this.errorMessage = probe.reason ?? "多会话隔离不可用";
+      this.errorMessage = probe.reason ?? cuTexts().isolationUnavailable;
       if (generation === this.generation) this.transition("error");
       return { ok: false, error: this.errorMessage };
     }
@@ -370,7 +372,7 @@ export class IsolationSessionController {
       if (generation !== this.generation) {
         // 已经被 stop 掉了：把它建出来的那个会话收掉，别留孤儿账号
         void this.release(generation, provision.containerId);
-        return { ok: false, error: "启动已取消" };
+        return { ok: false, error: cuTexts().startCancelled };
       }
       this.containerId = provision.containerId;
       this.agentUserName = provision.agentUserName;
@@ -380,7 +382,7 @@ export class IsolationSessionController {
       await this.deps.sdk.start(provision.containerId);
       if (generation !== this.generation) {
         await this.releaseIfAny();
-        return { ok: false, error: "启动已取消" };
+        return { ok: false, error: cuTexts().startCancelled };
       }
 
       const layout = workspaceLayout(provision.workspacePath);
@@ -394,10 +396,10 @@ export class IsolationSessionController {
 
       const info = await this.waitForBridge(layout.outDir, generation);
       if (info === null) {
-        if (this.phase() === "error") return { ok: false, error: this.errorMessage ?? "启动失败" };
-        if (generation !== this.generation) return { ok: false, error: "启动已取消" };
-        this.fail("隔离会话起来了，但桥没有通告（等 bridge.json 超时）——看会话里的 bridge.log");
-        return { ok: false, error: this.errorMessage ?? "启动失败" };
+        if (this.phase() === "error") return { ok: false, error: this.errorMessage ?? cuTexts().startFailed };
+        if (generation !== this.generation) return { ok: false, error: cuTexts().startCancelled };
+        this.fail(cuTexts().isolationBridgeNoAnnouncement);
+        return { ok: false, error: this.errorMessage ?? cuTexts().startFailed };
       }
       this.tcp = info.tcp ?? null;
       if (this.tcp !== null) {
@@ -416,8 +418,8 @@ export class IsolationSessionController {
         await pingGuest(layout.outDir, this.deps.guestTimeoutMs ?? 20_000);
       } catch (cause: unknown) {
         const message = cause instanceof Error ? cause.message : String(cause);
-        this.fail(`桥起来了但命令通道 ping 不通：${message}`);
-        return { ok: false, error: this.errorMessage ?? "启动失败" };
+        this.fail(cuTexts().isolationBridgePingFailed(message));
+        return { ok: false, error: this.errorMessage ?? cuTexts().startFailed };
       }
 
       if (generation === this.generation && this.phase() === "starting") {
@@ -451,11 +453,10 @@ export class IsolationSessionController {
     } catch (cause: unknown) {
       if (generation !== this.generation) return null;
       const tail = await this.bridgeLogTail(layout.outDir);
-      const base = cause instanceof Error ? cause.message.split("——")[0] : String(cause);
+      const seconds = Math.round((this.deps.readyTimeoutMs ?? READY_TIMEOUT_MS) / 1000);
       throw new Error(
-        `${base}——隔离会话起来了，但会话里的桥没把 bridge.json 写出来。` +
-          `先看会话里的 ${join(layout.outDir, "bridge.log")}` +
-          (tail === null ? "（这次连日志都没生成：launcher 没跑起来，检查工作区写入权限）" : `，最后几行：${tail}`),
+        cuTexts().bridgeWaitTimedOut(seconds) +
+          cuTexts().isolationBridgeNotAnnounced(join(layout.outDir, "bridge.log"), tail),
       );
     }
   }
@@ -481,7 +482,7 @@ export class IsolationSessionController {
     const source = join(this.deps.bridgeDir, GUEST_BRIDGE_EXE);
     const fileExists = this.deps.fileExists ?? existsSync;
     if (!fileExists(source)) {
-      throw new Error(`宿主的桥 exe 不在：${source}（先跑 node guest-bridge/build.mjs）`);
+      throw new Error(cuTexts().isolationBridgeExeMissing(source));
     }
     try {
       await mkdir(workspacePath, { recursive: true });
@@ -489,10 +490,7 @@ export class IsolationSessionController {
       await writeTextAtomic(layout.launcher, renderLauncherCmd());
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      throw new Error(
-        `写不进会话工作区（${workspacePath}）：${message}。` +
-          "工作区在会话账号的 profile 下，宿主需要管理员权限才能写——确认运行 Orbita 的账号在管理员组里",
-      );
+      throw new Error(cuTexts().isolationWorkspaceWriteFailed(workspacePath, message));
     }
   }
 
@@ -539,13 +537,13 @@ export class IsolationSessionController {
       await this.deps.sdk.stop(containerId);
     } catch (cause: unknown) {
       // stop 失败不挡住 deprovision：真正删账号的是后者，能删就别把会话留成半截
-      failure = `停会话失败：${cause instanceof Error ? cause.message : String(cause)}`;
+      failure = cuTexts().isolationStopSessionFailed(cause instanceof Error ? cause.message : String(cause));
     }
     try {
       await this.deps.sdk.deprovision(containerId);
     } catch (cause: unknown) {
       const message = cause instanceof Error ? cause.message : String(cause);
-      failure = (failure === null ? "" : `${failure}；`) + `释放会话失败（账号与工作区可能还在）：${message}`;
+      failure = (failure === null ? "" : `${failure}；`) + cuTexts().isolationReleaseFailed(message);
     }
 
     const residual = await this.verifyCleaned();
@@ -594,7 +592,7 @@ export class IsolationSessionController {
       const left = residue();
       if (left === null) return null;
       if (Date.now() >= deadline) {
-        return `会话已释放，但这些残留还在：${left}（可能要注销后才删得掉；重启一次应用会再试）`;
+        return cuTexts().isolationResidue(left);
       }
       await new Promise((resolve) => setTimeout(resolve, CLEANUP_POLL_MS));
     }
@@ -613,21 +611,20 @@ export class IsolationSessionController {
 
   // ── guest 车道（与 SandboxController 同名同语义）────────────────────
 
-  private notRunning<T extends { ok: false; error: string }>(what: string): T | null {
+  private notRunning<T extends { ok: false; error: string }>(what: ComputerUseUiAction): T | null {
     if (this.state === "running") return null;
+    const texts = cuTexts();
     const state = this.state;
     const error =
-      state === "off"
-        ? `隔离会话没有在运行——先启动它再${what}`
-        : state === "error"
-          ? `隔离会话出错了（${this.errorMessage ?? "未知原因"}）——先停止并重新启动`
-          : `隔离会话正在${state === "starting" ? "启动" : "停止"}，等它结束再${what}`;
+      state === "error"
+        ? texts.isolationErrorState(this.errorMessage ?? texts.isolationUnknownReason)
+        : texts.isolationNotRunning(what, state);
     return { ok: false, error } as T;
   }
 
   private requireOutDir(): string {
     const outDir = this.outDir();
-    if (outDir === null) throw new Error("隔离会话没有工作区（未在运行）");
+    if (outDir === null) throw new Error(cuTexts().isolationNoWorkspace);
     return outDir;
   }
 
@@ -650,7 +647,7 @@ export class IsolationSessionController {
     if (isPixelInputCommand(command)) {
       return { ok: false, error: computerUseIsolationErrors.noPointer, delivery: "refused" };
     }
-    const gate = this.notRunning<{ ok: false; error: string }>("操作");
+    const gate = this.notRunning<{ ok: false; error: string }>("pixels");
     if (gate !== null) return gate;
     try {
       if (command === computerUseGuestCommands.click || command === computerUseGuestCommands.scroll) {
@@ -674,7 +671,7 @@ export class IsolationSessionController {
     command: ComputerUseGuestCommand,
     fields: Record<string, unknown>,
   ): Promise<GuestCommandReply> {
-    const gate = this.notRunning<{ ok: false; error: string }>("隔离会话里的浏览器操作");
+    const gate = this.notRunning<{ ok: false; error: string }>("browser");
     if (gate !== null) return gate;
     try {
       const resp = await sendGuestCommand(this.requireOutDir(), command, fields, this.deps.guestTimeoutMs);
@@ -694,7 +691,7 @@ export class IsolationSessionController {
   }
 
   async guestShot(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestShotReply> {
-    const gate = this.notRunning<{ ok: false; error: string }>("隔离会话里的浏览器操作");
+    const gate = this.notRunning<{ ok: false; error: string }>("browser");
     if (gate !== null) return gate;
     try {
       const shot = await fetchGuestShot(this.requireOutDir(), command, fields, this.deps.guestTimeoutMs);
@@ -705,7 +702,7 @@ export class IsolationSessionController {
   }
 
   async screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult> {
-    const gate = this.notRunning<{ ok: false; error: string }>("截图");
+    const gate = this.notRunning<{ ok: false; error: string }>("screenshot");
     if (gate !== null) return gate;
     try {
       const shot = await fetchGuestScreenshot(this.requireOutDir(), clampMaxWidth(maxWidth), this.deps.guestTimeoutMs);
@@ -733,7 +730,7 @@ export class IsolationSessionController {
     title?: string;
     maxWidth?: number;
   }): Promise<ComputerUseWindowShotResult> {
-    const gate = this.notRunning<{ ok: false; error: string }>("窗口截图");
+    const gate = this.notRunning<{ ok: false; error: string }>("windowShot");
     if (gate !== null) return gate;
     const fields: Record<string, unknown> = { maxWidth: clampMaxWidth(options.maxWidth) };
     if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
@@ -759,7 +756,7 @@ export class IsolationSessionController {
   }
 
   async listWindows(timeoutMs?: number): Promise<ComputerUseWindowListResult> {
-    const gate = this.notRunning<{ ok: false; error: string }>("窗口列表");
+    const gate = this.notRunning<{ ok: false; error: string }>("windowList");
     if (gate !== null) return gate;
     try {
       const windows = await fetchGuestWindowList(this.requireOutDir(), timeoutMs);
@@ -776,7 +773,7 @@ export class IsolationSessionController {
     maxItems?: number;
     since?: number;
   }): Promise<ComputerUseUiaListResult> {
-    const gate = this.notRunning<{ ok: false; error: string }>("UIA 控件列表");
+    const gate = this.notRunning<{ ok: false; error: string }>("uiaList");
     if (gate !== null) return gate;
     const fields: Record<string, unknown> = {};
     if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;
@@ -800,7 +797,7 @@ export class IsolationSessionController {
     value?: string;
     timeoutMs?: number;
   }): Promise<ComputerUseUiaActResult> {
-    const gate = this.notRunning<{ ok: false; error: string }>("UIA 控件操作");
+    const gate = this.notRunning<{ ok: false; error: string }>("uiaAct");
     if (gate !== null) return gate;
     const fields: Record<string, unknown> = { action: options.perform };
     if (options.hwnd !== undefined) fields["hwnd"] = options.hwnd;

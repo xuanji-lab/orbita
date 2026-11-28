@@ -23,7 +23,6 @@
 import {
   COMPUTER_USE_DEFAULT_ALLOW_NETWORK,
   COMPUTER_USE_DESKTOP_KEY,
-  computerUseDevBackendRefusal,
   devBackendsEnabled,
   type ComputerUseRunningFacts,
   type ComputerUseBackend,
@@ -42,11 +41,13 @@ import type { ComputerUseGuest } from "./agent-requests.ts";
 import type { IsolationSessionController, IsolationSessionProbe } from "./isolation-session.ts";
 import { QemuSandboxProvider } from "./qemu.ts";
 import {
-  SANDBOX_NOT_RUNNING,
+  sandboxNotRunningText,
+  sandboxReadinessError,
   type SandboxCapabilities,
   type SandboxProvider,
 } from "./provider.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /** 门面要的那部分控制器（两个控制器结构上都满足它） */
 /** 门面要的后端面：provider（统一面）+ 各自的能力探测 */
@@ -73,6 +74,14 @@ export interface ComputerUseRuntimeDeps {
   allowNetwork?: () => boolean | Promise<boolean>;
   /** L3 的后端（QEMU）。不传就用默认配置自己造一个——单测与不关心镜像路径的调用方不必给 */
   qemu?: SandboxProvider;
+  /**
+   * **状态迁移的唯一出口**（index.ts 接 `broadcastComputerUseStatus` + 租约作废）。
+   *
+   * WSB / L2b 由自己的构造参数直推（它们在 index.ts 里就接了）；QEMU 这只**是门面造的**，
+   * 所以必须从这里转一手，否则 `computer-use:status` 对 qemu 一条都不推——真机 P0：
+   * VM 明明起来了，设置页一直「未启动」，「关闭」还是灰的，用户停不掉。
+   */
+  onStatus?: (status: SandboxStatus) => void;
   /** 能力探测里的 L2b 依赖检查 */
   probeIsolation: () => Promise<IsolationSessionProbe>;
   log?: (message: string) => void;
@@ -110,8 +119,19 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
    * QEMU 也在这张表里（P3 的空位），它的 status() 恒为 off——注册在这里是为了让
    * 「谁在跑」这件事只有一处枚举，而不是每个方法各写一份 if。
    */
+  const onStatus = deps.onStatus;
   const qemu: SandboxProvider =
-    deps.qemu ?? new QemuSandboxProvider({ ...(deps.allowNetwork === undefined ? {} : { allowNetwork: deps.allowNetwork }) });
+    deps.qemu ??
+    new QemuSandboxProvider({
+      ...(deps.allowNetwork === undefined ? {} : { allowNetwork: deps.allowNetwork }),
+      ...(onStatus === undefined ? {} : { onStatus }),
+    });
+  /**
+   * 注入进来的 provider（单测的真 provider + 假 VM、或将来的换实现）不走上面的构造参数，
+   * 但仍须接到同一条广播上——这条 P0 的成因就是「有一条路没接上」。
+   * 没有 subscribeStatus 的实现（纯假件）自然跳过：它们自己决定要不要发事件。
+   */
+  if (deps.qemu !== undefined && onStatus !== undefined) qemu.subscribeStatus?.(onStatus);
   const providers: readonly SandboxProvider[] = [deps.isolation, deps.wsb, qemu];
 
   /** 本门面亲手启动的那一局的两个事实；没在跑 = null。见 ComputerUseRunningFacts 的理由 */
@@ -147,7 +167,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
      */
     const devAllowed = deps.devBackends ?? (() => devBackendsEnabled(process.env));
     if (wanted === "qemu" && !devAllowed()) {
-      return { ok: false, error: computerUseDevBackendRefusal() };
+      return { ok: false, error: cuTexts().devBackendRefusal };
     }
     // 三个后端各自一份整机资源（WSB 的 VM / MXC 的 OS 会话 / QEMU 的 VM），同时起两只是
     // 两份隔离同时在跑：设置页说不清现在用的是哪个，租约也说不对。所以先停别的。
@@ -156,7 +176,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       log(`切换隔离后端：先停掉 ${other.id}`);
       const stopped = await other.stop();
       if (stopped.ok === false) {
-        return { ok: false, error: `切换后端前停不掉 ${other.id}：${stopped.error}` };
+        return { ok: false, error: cuTexts().backendSwitchStopFailed(other.id, stopped.error) };
       }
     }
     // 启动前读一次开关：这就是这一局真正生效的那个值（WSB 的 .wsb / QEMU 的 -netdev 都在
@@ -192,7 +212,7 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       log(`能力探测失败：${cause instanceof Error ? cause.message : String(cause)}`);
       const isolation = await deps.probeIsolation().catch(() => ({
         available: false,
-        reason: "探测失败",
+        reason: cuTexts().probeCrashReason,
         nodeVersion: process.versions.node,
         nodeOk: false,
       }));
@@ -207,13 +227,29 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
         isolationSession: isolation,
         wsl2: "unknown",
         ready: false,
-        guidance: "能力探测失败——看主进程日志",
+        guidance: cuTexts().probeCrashGuidance,
       };
     }
   };
 
-  const notRunning = <T>(error: string = SANDBOX_NOT_RUNNING): Extract<T, { ok: false }> =>
+  const notRunning = <T>(error: string = sandboxNotRunningText()): Extract<T, { ok: false }> =>
     ({ ok: false, error }) as unknown as Extract<T, { ok: false }>;
+
+  /**
+   * 车道方法的入口：后端既要**存在**，也要**running**（2026-11-28 验收 P3-2）。
+   *
+   * 以前只判「存在」（`running()` 把 state !== "off" 的都算「在跑」），于是 starting /
+   * stopping / error 三态都会把命令发给一个还没有桥的控制器——回执变成「没找到标题包含…
+   * 的窗口」，模型读到的是窗口名而不是真原因，接着换个窗口名重试。现在这三种状态直接回
+   * 「没就绪 + 原因 + 下一步」（sandboxReadinessError），一句话说完。
+   */
+  const lane = (): { provider: SandboxProvider } | { error: string } => {
+    const provider = runningProvider();
+    if (provider === null) return { error: sandboxNotRunningText() };
+    const state = provider.status().state;
+    if (state !== "running") return { error: sandboxReadinessError(state) };
+    return { provider };
+  };
 
   /**
    * 启动时读一次出网开关。读不到按缺省（允许）——与 WSB 控制器「读超时就按缺省并留日志」
@@ -260,24 +296,24 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       return provider.desktopKey(sessionId);
     },
     screenshot: async (maxWidth?: number): Promise<ComputerUseScreenshotResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseScreenshotResult>();
-      return controllerOf(backend).screenshot(maxWidth);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseScreenshotResult>(target.error);
+      return target.provider.screenshot(maxWidth);
     },
     windowShot: async (options): Promise<ComputerUseWindowShotResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseWindowShotResult>();
-      return controllerOf(backend).windowShot(options);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseWindowShotResult>(target.error);
+      return target.provider.windowShot(options);
     },
     listWindows: async (timeoutMs?: number): Promise<ComputerUseWindowListResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseWindowListResult>();
-      return controllerOf(backend).listWindows(timeoutMs);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseWindowListResult>(target.error);
+      return target.provider.listWindows(timeoutMs);
     },
     uiaList: async (options): Promise<ComputerUseUiaListResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseUiaListResult>();
-      return controllerOf(backend).uiaList(options);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseUiaListResult>(target.error);
+      return target.provider.uiaList(options);
     },
     uiaAct: async (options: {
       hwnd?: number;
@@ -288,24 +324,24 @@ export function createComputerUseRuntime(deps: ComputerUseRuntimeDeps): Computer
       value?: string;
       timeoutMs?: number;
     }): Promise<ComputerUseUiaActResult> => {
-      const backend = running();
-      if (backend === null) return notRunning<ComputerUseUiaActResult>();
-      return controllerOf(backend).uiaAct(options);
+      const target = lane();
+      if ("error" in target) return notRunning<ComputerUseUiaActResult>(target.error);
+      return target.provider.uiaAct(options);
     },
     guestCommand: async (command, fields) => {
-      const backend = running();
-      if (backend === null) return notRunning<GuestCommandReply>();
-      return controllerOf(backend).guestCommand(command, fields);
+      const target = lane();
+      if ("error" in target) return notRunning<GuestCommandReply>(target.error);
+      return target.provider.guestCommand(command, fields);
     },
     guestCommandReply: async (command, fields) => {
-      const backend = running();
-      if (backend === null) return notRunning<GuestCommandReply>();
-      return controllerOf(backend).guestCommandReply(command, fields);
+      const target = lane();
+      if ("error" in target) return notRunning<GuestCommandReply>(target.error);
+      return target.provider.guestCommandReply(command, fields);
     },
     guestShot: async (command, fields) => {
-      const backend = running();
-      if (backend === null) return notRunning<GuestShotReply>();
-      return controllerOf(backend).guestShot(command, fields);
+      const target = lane();
+      if ("error" in target) return notRunning<GuestShotReply>(target.error);
+      return target.provider.guestShot(command, fields);
     },
     dispose: async (): Promise<void> => {
       // 全部都收：一只可能停在 error（资源还在），另一只可能是上一局残留

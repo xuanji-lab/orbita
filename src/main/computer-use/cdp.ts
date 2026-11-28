@@ -27,6 +27,7 @@ import {
   COMPUTER_USE_SHOT_MAX_WIDTH,
   computerUseBrowserErrors,
   computerUseGuestCommands,
+  computerUseMaskLabel,
   computerUseShotMask,
   computerUseShotMaskNote,
   isComputerUseBrowser,
@@ -39,6 +40,7 @@ import {
   type SandboxElement,
 } from "../../shared/computer-use.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /**
  * 这一层真正要的那两个能力。**收窄成接口而不是直接吃 SandboxController**：
@@ -50,22 +52,34 @@ export interface CdpGuest {
   guestShot(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestShotReply>;
 }
 
-/** 沙箱里的 Edge 没有在运行（桥 / 状态机都可能这么说）。用文案判定，不引错误码 */
+/**
+ * 沙箱里的 Edge 没有在运行（桥 / 状态机都可能这么说）。
+ *
+ * 用文案判定而不是错误码：其中一半来自 **guest 桥**（C#，回的是中文），宿主这边的闸门文案
+ * 从 2026-11-28 起跟界面语言走——所以两种语言的说法都要认，少一种就会在英文界面下
+ * 丢掉「清缓存 + 重试一次」这条自愈路径（用户看到一条本可自愈的失败，模型还去换窗口名）。
+ */
+const NOT_RUNNING_MARKERS = ["没有在运行", "没有启动", "is not running", "is not started"] as const;
+
 function isNotRunning(cause: unknown): boolean {
   const message = cause instanceof Error ? cause.message : String(cause);
-  return message.includes("没有在运行") || message.includes("没有启动");
+  return NOT_RUNNING_MARKERS.some((marker) => message.includes(marker));
 }
 
-/** 降级指引：只有模型看得到它，不写这句它就会重试同一个动作 */
-const FALLBACK_HINT =
-  "If CDP keeps failing, fall back to the pixel tools: computer_screenshot to see the sandbox desktop, " +
-  "computer_click / computer_type / computer_key to drive it. They do not need Edge's debugging port.";
-
-/** 把底层失败翻成带下一步的人话（已经带了指引就不再叠一遍） */
+/**
+ * 把底层失败翻成带下一步的人话（已经带了指引就不再叠一遍）。
+ *
+ * 降级指引从表里取（两种语言各一份）——以前是硬编码英文，拼到中文「没有在运行」那句后面
+ * 就成了中英混排（2026-11-28 真机验收 P2）。
+ */
 function browserFailure(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (message.includes("computer_screenshot") || message.includes("computer_click")) return message;
-  return `${message}. ${FALLBACK_HINT}`;
+  // 已经是完整句子（桥的错误 / 表里的句子）时不要再补一个句号。
+  // **中英两种句末标点都认**：中文句以「。」收尾，只判 "." 会在中文界面下拼出「。。. 」这种怪东西
+  return /[.。！？!?]$/.test(message)
+    ? `${message} ${cuTexts().cdpFallbackHint}`
+    : `${message}. ${cuTexts().cdpFallbackHint}`;
 }
 
 /**
@@ -102,12 +116,39 @@ export class CdpSession {
    * 桥这次实际用的浏览器（来自 cdp-start 的回执）。**只为“说清楚”用**：配了 Chrome 却回退
    * Edge 时，回执 / 日志是唯一能看出这件事的地方（模型看不见设置页）。
    */
-  private readonly browsers = new Map<string, { browser: string; fallbackFrom?: string }>();
+  private readonly browsers = new Map<string, { browser: string; fallbackFrom?: string; announced?: boolean }>();
 
-  constructor(guest: CdpGuest, outDir: string, browser?: () => string | Promise<string>) {
+  /**
+   * 界面语言的读取口（缺省 = en）。它只影响 overlay 上那行字（`maskLabel`）：
+   * 那行字画在用户网页里，英文界面下露出中文就是夹生字。每次截图现读一次，改语言立刻跟上。
+   */
+  private readonly language: (() => string | Promise<string>) | undefined;
+
+  constructor(
+    guest: CdpGuest,
+    outDir: string,
+    browser?: () => string | Promise<string>,
+    language?: () => string | Promise<string>,
+  ) {
     this.guest = guest;
     this.outDir = outDir;
     this.browser = browser;
+    this.language = language;
+  }
+
+  /** 现在的界面语言（读不到 / 没注入都按 en：与 effectiveLanguage 的兜底一致） */
+  private async languageNow(): Promise<string> {
+    if (this.language === undefined) return "en";
+    try {
+      const raw = await this.language();
+      return typeof raw === "string" && raw !== "" ? raw : "en";
+    } catch (cause: unknown) {
+      console.warn(
+        `[computer-use] 读不到界面语言设置，遮罩标签按英文处理：` +
+          (cause instanceof Error ? cause.message : String(cause)),
+      );
+      return "en";
+    }
   }
 
   /** 当前设置下的浏览器（不在五个选项里的一律按 edge；读失败也按 edge 并留一行日志） */
@@ -159,6 +200,19 @@ export class CdpSession {
   }
 
   /**
+   * 回退这件事**只说一次**：谁先碰到浏览器（navigate / observe / screenshot …）谁带回执，
+   * 之后不再重复。早先只有 navigate 的正文里带它——模型若第一下就是 observe / screenshot，
+   * 用户永远看不到「你配的 Chrome 没生效」。
+   */
+  takeBrowserFallbackNote(session: string): string {
+    const entry = this.browsers.get(session);
+    if (entry === undefined || entry.fallbackFrom === undefined || entry.announced) return "";
+    const note = this.browserNote(session);
+    entry.announced = true;
+    return note;
+  }
+
+  /**
    * 起一个会话的 Edge（幂等，桥那边已起就直接回现状）。只有 navigate 会走它。
    *
    * **上限在宿主这一侧提前判**只是为了给模型一句能照着做的话：桥才是执行者（它才知道
@@ -203,7 +257,7 @@ export class CdpSession {
     }
     for (const key of [...this.started]) if (!live.has(key)) this.started.delete(key);
     if (live.size >= COMPUTER_USE_BROWSER_MAX) {
-      throw new Error(computerUseBrowserErrors.tooMany(COMPUTER_USE_BROWSER_MAX));
+      throw new Error(cuTexts().tooManyBrowsers(COMPUTER_USE_BROWSER_MAX));
     }
   }
 
@@ -216,10 +270,7 @@ export class CdpSession {
       this.started.add(session);
       return;
     }
-    throw new Error(
-      "沙箱里的浏览器还没有打开任何页面。先调用 sandbox_navigate 打开一个网址——它会把 Edge 拉起来，"
-      + "之后 sandbox_observe / sandbox_click 才能用。CDP 起不来时再退回 computer_screenshot 像素工具",
-    );
+    throw new Error(cuTexts().browserNoPage);
   }
 
   private async send(
@@ -288,7 +339,12 @@ export class CdpSession {
   async shot(sessionId: string, maxWidth: number): Promise<{ jpeg: Uint8Array; resp: Record<string, unknown> }> {
     const session = safeBrowserSessionId(sessionId);
     await this.ensureOpen(session);
-    const result = await this.guest.guestShot(computerUseGuestCommands.cdpShot, { maxWidth, session });
+    // 标签由宿主给（桥不猜语言）：中文界面「已遮罩」，英文界面 "Masked"
+    const result = await this.guest.guestShot(computerUseGuestCommands.cdpShot, {
+      maxWidth,
+      session,
+      maskLabel: computerUseMaskLabel(await this.languageNow()),
+    });
     if (!result.ok) throw new Error(result.error);
     return { jpeg: result.jpeg, resp: result.resp };
   }
@@ -305,15 +361,15 @@ export class CdpSession {
     try {
       info = await stat(hostPath);
     } catch {
-      throw new Error(`找不到要上传的文件：${hostPath}`);
+      throw new Error(cuTexts().browserUploadNotFound(hostPath));
     }
-    if (!info.isFile()) throw new Error(`这不是一个文件：${hostPath}`);
-    if (info.size === 0) throw new Error(`这个文件是空的（0 字节）：${hostPath}`);
+    if (!info.isFile()) throw new Error(cuTexts().browserUploadNotFile(hostPath));
+    if (info.size === 0) throw new Error(cuTexts().browserUploadEmpty(hostPath));
 
     // 模型可能给正斜杠路径（"C:/Users/me/a.pdf"）：win32.basename 只认反斜杠，先归一化
     const base = win32.basename(hostPath.replaceAll("/", "\\"));
     const safe = base.replace(/[\\/:*?"<>|]/g, "_");
-    if (safe === "") throw new Error(`文件名不可用：${hostPath}`);
+    if (safe === "") throw new Error(cuTexts().browserUploadBadName(hostPath));
     const name = `${Date.now()}-${safe}`;
     const dir = join(this.outDir, "upload");
     await mkdir(dir, { recursive: true });
@@ -381,6 +437,18 @@ export class CdpSession {
  */
 export async function applySandboxBrowserRequest(
   cdp: CdpSession,
+  sessionId: string,
+  request: ComputerUseToolRequest,
+): Promise<ComputerUseToolOutcome> {
+  const session = safeBrowserSessionId(sessionId);
+  const outcome = await dispatchSandboxBrowserRequest(cdp, sessionId, request);
+  if (!outcome.ok) return outcome;
+  const note = cdp.takeBrowserFallbackNote(session);
+  return note === "" ? outcome : { ...outcome, text: `${note}${outcome.text}` };
+}
+
+async function dispatchSandboxBrowserRequest(
+  cdp: CdpSession,
   /**
    * 发起这次请求的 agent 会话。**这一层不再只是日志素材**：sandbox_* 按会话各用一个浏览器
    * 实例（v1.5-1），会话 id 经 safeBrowserSessionId 归一化后就是桥侧的路由键。
@@ -408,12 +476,12 @@ export async function applySandboxBrowserRequest(
         const ms = number(resp["ms"]);
         return {
           ok: true,
-          text:
-            `Opened ${url === "" ? request.url : url}${title === "" ? "" : ` ("${title}")`} in the sandbox browser` +
-            `${ms === undefined ? "" : ` in ${ms} ms`}. ${warning === "" ? "" : `${warning} `}` +
-            `${cdp.browserNote(session)}` +
-            "Call sandbox_observe to see what is on the page; its selectors stay valid until the page navigates. " +
-            "This browser is the isolated sandbox one — it has none of the user's sign-in state and no CAPTCHA help.",
+          text: cuTexts().rcptNavOpened(
+            url === "" ? request.url : url,
+            title,
+            ms === undefined ? "" : `${ms} ms`,
+            warning,
+          ),
         };
       }
       case "sandbox-observe": {
@@ -427,20 +495,16 @@ export async function applySandboxBrowserRequest(
         const body = text(resp["text"]).trim();
         const total = number(resp["totalTextLength"]);
         const truncated = resp["truncated"] === true;
-        const list =
-          elements.length === 0
-            ? "(no interactive elements matched — the page may still be loading: sandbox_wait for a selector, " +
-              "or sandbox_screenshot to look at it)"
-            : elements.map(formatElement).join("\n");
+        const texts = cuTexts();
+        const list = elements.length === 0 ? texts.rcptObserveNoElements : elements.map(formatElement).join("\n");
         return {
           ok: true,
           text:
-            `URL: ${text(resp["url"])}\nTitle: ${text(resp["title"])}\n\n` +
-            `${body === "" ? "(the page has no visible text)" : body}\n\n` +
-            `Interactive elements (${elements.length}):\n${list}` +
-            (truncated && total !== undefined ? `\n\n[page text truncated: showing ${body.length} of ${total} characters]` : "") +
-            "\n\nPass a selector to sandbox_click / sandbox_type / sandbox_extract. Selectors are positional and " +
-            "expire when the page navigates — observe again after a navigation.",
+            `${texts.rcptObserveTitleLine(text(resp["url"]), text(resp["title"]))}\n\n` +
+            `${body === "" ? texts.rcptObserveNoText : body}\n\n` +
+            `${texts.rcptElementsHeader(elements.length)}\n${list}` +
+            (truncated && total !== undefined ? `\n\n${texts.rcptObserveTruncated(body.length, total)}` : "") +
+            `\n\n${texts.rcptObserveFooter}`,
         };
       }
       case "sandbox-click": {
@@ -449,11 +513,14 @@ export async function applySandboxBrowserRequest(
         const label = text(resp["text"]);
         return {
           ok: true,
-          text:
-            `Clicked ${tag === "" ? "the element" : `<${tag}>`}${label === "" ? "" : ` "${label}"`} ` +
-            `(selector ${request.selector}) at (${number(resp["x"]) ?? "?"}, ${number(resp["y"]) ?? "?"}). ` +
-            `The page is now at ${text(resp["url"])}. Call sandbox_observe to see what changed — ` +
-            "selectors from before the click may no longer match.",
+          text: cuTexts().rcptClickDone(
+            tag,
+            label,
+            request.selector,
+            String(number(resp["x"]) ?? "?"),
+            String(number(resp["y"]) ?? "?"),
+            text(resp["url"]),
+          ),
         };
       }
       case "sandbox-type": {
@@ -468,16 +535,14 @@ export async function applySandboxBrowserRequest(
           },
           "open",
         );
-        const value = text(resp["value"]);
+        // **只报长度，不回显原文**：登录页上这段就是密码，而工具结果会写进会话 JSONL。
+        // 旧回执把 `resp.value`（字段的完整值）原样写进正文，等于把密码永久落到会话盘上。
+        const chars = number(resp["chars"]) ?? request.text.length;
+        const fieldChars = number(resp["fieldChars"]);
         const submitted = resp["submitted"] === true;
         return {
           ok: true,
-          text:
-            `Typed ${request.text.length} character(s) into ${request.selector}` +
-            `${request.clear === false ? " (appended, the old value was kept)" : ""}. ` +
-            `The field now holds "${value.length > 120 ? `${value.slice(0, 120)}…` : value}".` +
-            (submitted ? " Enter was pressed to submit." : "") +
-            " Call sandbox_observe (or sandbox_wait for the next page) to see the result.",
+          text: cuTexts().rcptTypeDone(chars, request.selector, request.clear === false, fieldChars, submitted),
         };
       }
       case "sandbox-extract": {
@@ -491,17 +556,18 @@ export async function applySandboxBrowserRequest(
         const total = number(resp["totalLength"]);
         const truncated = resp["truncated"] === true;
         const warning = text(resp["warning"]);
+        const texts = cuTexts();
         if (body === "" && warning === "" && request.selector === undefined) {
-          return { ok: true, text: "The page has no visible text (it may still be loading — try sandbox_wait)." };
+          return { ok: true, text: texts.rcptExtractNoText };
         }
         return {
           ok: true,
           text:
-            (body === "" ? "(no text matched)" : body) +
+            (body === "" ? texts.rcptExtractNothingMatched : body) +
             (warning === "" ? "" : `\n\n[${warning}]`) +
             (total === undefined
               ? ""
-              : `\n\n[${total} character(s) in total${truncated ? `, showing the first ${body.length}` : ""}]`),
+              : `\n\n${truncated ? texts.rcptExtractTruncated(total, body.length) : texts.rcptExtractTotal(total)}`),
         };
       }
       case "sandbox-wait": {
@@ -513,22 +579,14 @@ export async function applySandboxBrowserRequest(
         const appeared = resp["appeared"] === true;
         const waitedMs = number(resp["waitedMs"]);
         const waited = waitedMs === undefined ? "a while" : `${waitedMs} ms`;
+        const texts = cuTexts();
         if (request.selector === undefined) {
-          return { ok: true, text: `Waited ${waited}. The page has had time to settle — sandbox_observe it now.` };
+          return { ok: true, text: texts.rcptWaitSettled(waited) };
         }
         if (appeared) {
-          return {
-            ok: true,
-            text: `Element ${request.selector} appeared after ${waited}. Call sandbox_observe to get its selector and neighbours.`,
-          };
+          return { ok: true, text: texts.rcptWaitAppeared(request.selector, waited) };
         }
-        return {
-          ok: true,
-          text:
-            `Element ${request.selector} did not appear within ${waited}. Either the selector is wrong ` +
-            "(sandbox_observe shows the ones that exist) or the page needs more time (call sandbox_wait again, " +
-            "or sandbox_screenshot to see what is on screen).",
-        };
+        return { ok: true, text: texts.rcptWaitMissing(request.selector, waited) };
       }
       case "sandbox-screenshot": {
         const maxWidth = request.maxWidth ?? COMPUTER_USE_SHOT_MAX_WIDTH;
@@ -538,17 +596,23 @@ export async function applySandboxBrowserRequest(
         const nativeWidth = number(shot.resp["nativeWidth"]);
         const nativeHeight = number(shot.resp["nativeHeight"]);
         if (width === undefined || height === undefined || nativeWidth === undefined || nativeHeight === undefined) {
-          throw new Error("cdp-shot 的回执缺尺寸字段（width / height / nativeWidth / nativeHeight）");
+          throw new Error(cuTexts().browserShotShape);
         }
+        const texts = cuTexts();
         return {
           ok: true,
           text:
-            `Screenshot of the page at ${text(shot.resp["url"])}${text(shot.resp["title"]) === "" ? "" : ` ("${text(shot.resp["title"])}")`}: ` +
-            `the image is ${width}×${height}, the page viewport is ${nativeWidth}×${nativeHeight} CSS pixels.` +
+            texts.rcptShotPage(
+              text(shot.resp["url"]),
+              text(shot.resp["title"]),
+              width,
+              height,
+              nativeWidth,
+              nativeHeight,
+            ) +
             // 遮罩的实话：盖了几块、盖到哪一层；降级时明说跨源 iframe 没遮（老桥没有这几个字段就不添话）
-            computerUseShotMaskNote(computerUseShotMask(shot.resp)) +
-            " Prefer sandbox_observe / sandbox_click (DOM level) over reading things off the image; " +
-            "computer_click can also hit the Edge window as a last resort, but it has no idea what is under the pointer.",
+            computerUseShotMaskNote(computerUseShotMask(shot.resp), texts) +
+            ` ${texts.rcptShotPageFooter}`,
           shot: {
             data: Buffer.from(shot.jpeg).toString("base64"),
             width,
@@ -568,11 +632,7 @@ export async function applySandboxBrowserRequest(
         );
         return {
           ok: true,
-          text:
-            `Attached "${prepared.fileName}" to the file input ${request.selector} ` +
-            `(the page sees it as "${text(resp["fileName"])}"). ` +
-            "The file was copied into the sandbox's mapped folder first — the original on the host is untouched. " +
-            "If the page needs a submit button pressed, do that with sandbox_click.",
+          text: cuTexts().rcptUploadAttached(prepared.fileName, request.selector, text(resp["fileName"])),
         };
       }
       case "sandbox-download": {
@@ -585,20 +645,17 @@ export async function applySandboxBrowserRequest(
         );
         const names = stringArray(resp["files"]);
         const paths = await cdp.resolveDownloads(target.hostDir, names);
+        const texts = cuTexts();
         if (paths.length === 0) {
-          return {
-            ok: true,
-            text:
-              `Clicked ${request.selector} but no file landed in the download folder (${target.hostDir}) within 20 s. ` +
-              "The link may open a page instead of downloading one — sandbox_observe it, or check sandbox_screenshot.",
-          };
+          return { ok: true, text: texts.rcptDownloadNone(request.selector, target.hostDir) };
         }
         return {
           ok: true,
-          text:
-            `Downloaded ${paths.length} file(s) by clicking ${request.selector}. They are on the host at:\n` +
-            paths.map((path) => `- ${path}`).join("\n") +
-            "\nUse them directly with your file tools (read_pdf, read, …).",
+          text: texts.rcptDownloadDone(
+            paths.length,
+            request.selector,
+            paths.map((path) => `- ${path}`).join("\n"),
+          ),
         };
       }
       case "sandbox-tabs": {
@@ -612,23 +669,23 @@ export async function applySandboxBrowserRequest(
         );
         const tabs = parseTabs(resp["tabs"]);
         const active = number(resp["active"]);
+        const texts = cuTexts();
         const lines = tabs.map((tab) =>
-          `${tab.active ? "* " : "  "}[${tab.index}] ${tab.title === "" ? "(untitled)" : tab.title} — ${tab.url}`,
+          `${tab.active ? "* " : "  "}[${tab.index}] ${tab.title === "" ? texts.rcptTabsUntitled : tab.title} — ${tab.url}`,
         );
         return {
           ok: true,
           text:
-            `${tabs.length} tab(s) in the sandbox browser (the * is the one you are acting on):\n` +
-            `${lines.length === 0 ? "(none)" : lines.join("\n")}\n` +
-            (op === "switch" ? `Switched to tab ${active ?? "?"}. ` : "") +
-            "A popup or a target=_blank link opens a new tab without switching to it — list them here and switch " +
-            "when you actually need that page. Selectors from the old tab do not apply to the new one: observe again.",
+            `${texts.rcptTabsHeader(tabs.length)}\n` +
+            `${lines.length === 0 ? texts.rcptTabsNone : lines.join("\n")}\n` +
+            (op === "switch" ? texts.rcptTabsSwitched(String(active ?? "?")) : "") +
+            texts.rcptTabsFooter,
         };
       }
       default:
         return {
           ok: false,
-          error: `内部错误：${request.action} 不是 sandbox_* 浏览器动作，不该进 CDP 通道。`,
+          error: cuTexts().internalWrongLane(request.action, "CDP"),
         };
     }
   } catch (cause: unknown) {
@@ -701,7 +758,6 @@ function parseElements(value: unknown): SandboxElement[] {
 
 function formatElement(element: SandboxElement): string {
   const role = element.role === "" ? "" : ` role=${element.role}`;
-  const editable = element.editable ? " [editable]" : "";
   const label = element.text === "" ? "" : ` "${element.text}"`;
-  return `- ${element.tag}${role}${editable}: selector ${element.selector}${label} at (${element.x}, ${element.y})`;
+  return cuTexts().rcptElementLine(element.tag, role, element.editable, element.selector, label, element.x, element.y);
 }

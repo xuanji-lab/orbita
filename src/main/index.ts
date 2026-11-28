@@ -146,6 +146,8 @@ import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
 import { windowsSandboxExePath } from "./computer-use/capability.ts";
 import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { cuLanguage, cuTexts, setComputerUseUiLanguage } from "./computer-use/ui-language.ts";
+import { guestErrorText } from "./computer-use/bridge-error-text.ts";
 import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
 import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
 import { sendGuestCommand } from "./computer-use/bridge-client.ts";
@@ -154,10 +156,13 @@ import {
   COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
   computerUseBackendChoices,
   computerUseBlockedReason,
+  computerUseConsentTexts,
   computerUseGuestCommands,
   devBackendsEnabled,
   parseComputerUseConsent,
+  parseComputerUseConsentSource,
   type ComputerUseTurnOrigin,
+  type SandboxStatus,
 } from "../shared/computer-use.ts";
 import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
 
@@ -485,12 +490,16 @@ void app.whenReady().then(async () => {
   // 设置写入的观察：「阻止睡眠」设置变了按当前在跑数重对一次（keepAwake 在后面定义；
   // 设置写入只发生在窗口起来之后，那时已就绪）。记忆服务与自动化 2026-11-06 转正，
   // 不再随设置开关拉起 / 停
-  registerSettingsIpc(settings, () => {
+  registerSettingsIpc(settings, (next) => {
     void keepAwake.sync().catch(() => undefined);
+    // 切了语言，电脑使用那批文案下一条回执就跟上（与 consent 文本同一套「现读」纪律）
+    setComputerUseUiLanguage(effectiveLanguage(next.language));
   });
   registerWindowIpc();
   const initialSettings = await settings.read();
   applyNativeTheme(initialSettings);
+  // 电脑使用的界面文案跟界面语言走（缺省 zh 只在「没接线」时成立，真实运行不落那条）
+  setComputerUseUiLanguage(effectiveLanguage(initialSettings.language));
 
   // agent 跑在独立 utility 进程；主进程只转发事件，不加工（guideline §二）——
   // 唯一的例外是**落盘**，那本来就是主进程的职责，挂在同一条转发路径上是最短的一跳。
@@ -531,16 +540,19 @@ void app.whenReady().then(async () => {
       if (meta === null) return null;
       return {
         consent: parseComputerUseConsent(meta.computerUseConsent),
-        blockedReason: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
+        source: parseComputerUseConsentSource(meta.computerUseConsentSource),
+        blocked: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
       };
     },
     // write 回「真的落下了没」：`update` 对已删会话静默 no-op，不能把它当成功
-    write: (sessionId, consent) => sessions.setComputerUseConsent(sessionId, consent),
+    write: (sessionId, consent, source) => sessions.setComputerUseConsent(sessionId, consent, source),
     ask: (sessionId, action) => computerUseConsentWaiter.ask(sessionId, action),
     // 没人能回答就不问：窗口全关 / 只剩无界面的自动化时提问只会等到 120s 超时，
     // 不如当场按拒绝落库（fail closed 的结果一样，代价更小）。
     canAsk: () => mainWindows.list().length > 0,
     notify: (event) => broadcastAgentEvent(event),
+    // 拒绝 / 停止 / 主会话专用那几句跟界面语言走（模型回执与界面「已告知模型」同一句）
+    texts: async () => computerUseConsentTexts(effectiveLanguage((await settings.read()).language)),
   });
   // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
   registerVoiceIpc(
@@ -831,19 +843,18 @@ void app.whenReady().then(async () => {
     closeSandboxWindow,
     // 首选：让 guest 自己关机（VM 停了窗口自然消失，不碰确认框）
     requestGuestShutdown,
-    onStatus: (status) => {
-      /*
-       * 沙箱没了（用户停 / 启动失败 / 运行中崩了），手上那把「桌面归谁」的租约一并作废：
-       * 持有者与排队者都是等着用同一个已经不存在的东西，留着只会让排队的会话排满
-       * 30 秒后收到一句「被某个会话占着」——那是一个不成立的原因。
-       * 这一顿用 ComputerUseLease（定义在 computer-use/lease.ts）。浏览器键也一起作废——
-       * 浏览器在沙箱里，沙箱没了它们就不存在了。
-       */
-      if (status.state === "off" || status.state === "error") {
-        computerUseLease.revoke(status.state === "off" ? "沙箱已停止" : "沙箱出错");
-      }
-      broadcastComputerUseStatus(status);
-    },
+    /*
+     * 沙箱没了（用户停 / 启动失败 / 运行中崩了），手上那把「桌面归谁」的租约一并作废：
+     * 持有者与排队者都是等着用同一个已经不存在的东西，留着只会让排队的会话排满
+     * 30 秒后收到一句「被某个会话占着」——那是一个不成立的原因。
+     * 这一顿用 ComputerUseLease（定义在 computer-use/lease.ts）。浏览器键也一起作废——
+     * 浏览器在沙箱里，沙箱没了它们就不存在了。
+     */
+    onStatus: (status) =>
+      announceComputerUseStatus(status, {
+        stopped: cuTexts().leaseReasonSandboxStopped,
+        errored: cuTexts().leaseReasonSandboxError,
+      }),
   });
   /**
    * 沙箱里的资源归谁：一块桌面归一个会话（理由与状态机见 computer-use/lease.ts），
@@ -885,6 +896,26 @@ void app.whenReady().then(async () => {
     },
   });
   /**
+   * 三个隔离后端的**状态迁移唯一出口**：作废桌面租约 + 广播给所有窗口。
+   *
+   * 抽出来是因为 P0 就是这样漏掉的：WSB、L2b 各接了一份，QEMU 那一份谁也没接——
+   * VM 起来了设置页还显示「未启动」，「关闭」是灰的，用户在界面上停不掉机器。
+   * 从现在起三个后端（第三个经运行时门面转手）都走这一个函数，少接一处就会在
+   * runtime/qemu 的测试与真机验收里显形。
+   *
+   * 租约作废的语气按后端分开（沙箱 / 隔离会话）：排队者收到的「为什么没了」要说得对。
+   */
+  const announceComputerUseStatus = (
+    status: SandboxStatus,
+    reasons: { stopped: string; errored: string },
+  ): void => {
+    if (status.state === "off" || status.state === "error") {
+      computerUseLease.revoke(status.state === "off" ? reasons.stopped : reasons.errored);
+    }
+    broadcastComputerUseStatus(status);
+  };
+
+  /**
    * 运行时门面：两个隔离后端（L2 Windows 沙箱 / L2b 多会话隔离）选一个。
    *
    * L2b 的依赖（MXC 的 IsolationSession）是**可选**的：它的 SDK 会加载一个原生 DLL，
@@ -902,13 +933,12 @@ void app.whenReady().then(async () => {
     // 清理验证要判「agent 账号真的没了」：工作区之外，profile 目录也必须消失
     usersRoot: join(process.env.SystemDrive ?? "C:", "Users"),
     allowedApps: async () => effectiveGuestAllowExe(await settings.read()),
-    onStatus: (status) => {
-      // 与 L2 同一条纪律：隔离环境没了，桌面租约一并作废（排队者等的是一个不存在的东西）
-      if (status.state === "off" || status.state === "error") {
-        computerUseLease.revoke(status.state === "off" ? "隔离会话已停止" : "隔离会话出错");
-      }
-      broadcastComputerUseStatus(status);
-    },
+    // 与 L2 同一条纪律：隔离环境没了，桌面租约一并作废（排队者等的是一个不存在的东西）
+    onStatus: (status) =>
+      announceComputerUseStatus(status, {
+        stopped: cuTexts().leaseReasonIsolationStopped,
+        errored: cuTexts().leaseReasonIsolationError,
+      }),
   });
   /**
    * 开发者后端（qemu）的开关：默认关，只有以 ORBITA_CU_DEV_BACKENDS=1 启动应用才开。
@@ -927,6 +957,16 @@ void app.whenReady().then(async () => {
      * 提示词也因此不会对它说「你没网」。
      */
     allowNetwork: async () => effectiveAllowNetwork(await settings.read()),
+    /**
+     * QEMU（L3）的状态迁移也走同一个出口。**以前这一行不存在**：VM 起来了设置页还显示
+     * 「未启动」、「关闭」还是灰的 —— 真机上用户停不掉那台 VM（P0）。
+     * 租约语气沿用「沙箱」（L3 也是一台沙箱 VM）。
+     */
+    onStatus: (status) =>
+      announceComputerUseStatus(status, {
+        stopped: cuTexts().leaseReasonSandboxStopped,
+        errored: cuTexts().leaseReasonSandboxError,
+      }),
     probeIsolation: () => computerUseIsolation.probe(),
   });
   /**
@@ -949,6 +989,8 @@ void app.whenReady().then(async () => {
     },
     join(configDir, "computer-use", "out"),
     async () => effectiveGuestBrowser(await settings.read()),
+    // 遮罩标签跟界面语言走（overlay 画在用户网页里：英文界面不许露中文）
+    async () => effectiveLanguage((await settings.read()).language),
   );
 
   /**
@@ -1312,7 +1354,7 @@ void app.whenReady().then(async () => {
     if (event.type === "failed" && event.sessionId === null) {
       // agent 进程整个没了：所有租约持有者与等待者都不存在了（工具调用已随进程消失），
       // 留着只会让下一个会话排满 30 秒再报一句「被某个会话占着」
-      computerUseLease.revoke("agent 进程退出");
+      computerUseLease.revoke(cuTexts().leaseReasonAgentExited);
       // 挂起的授权提问也没人再回答了：按 cancelled 结掉（不写 meta），renderer 收行
       computerUseConsentWaiter.cancelAll();
       closeChannelsForLostProcess();
@@ -1384,7 +1426,7 @@ void app.whenReady().then(async () => {
       // 授权栅门（2026-11-27）：**所有**电脑工具（computer_* 像素/UIA + sandbox_* 浏览器）
       // 下发前先过会话授权——包括只读截图（它把用户沙箱桌面上的画面交给模型）。
       // unset → 问一次并挂起；denied → 当场回那句固定文本，不执行；没人能回答按 denied 落库。
-      // 栅门只做裁决，真的拒绝文案在 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT（唯一来源）。
+      // 栅门只做裁决，拒绝文案在 shared 的 computerUseConsentTexts（按界面语言取，唯一来源）。
       void computerUseConsentGate
         .ensure(event.sessionId, event.request.action)
         .then((verdict) =>
@@ -1396,7 +1438,8 @@ void app.whenReady().then(async () => {
         .catch((cause: unknown) =>
           agentHost.answerComputerUse(event.requestId, {
             ok: false,
-            error: cause instanceof Error ? cause.message : String(cause),
+            // 出口的语言闸：dispatch 之外抛上来的（租约之外的那几层）也过一遍同样的映射
+            error: guestErrorText(cause instanceof Error ? cause.message : String(cause), cuLanguage()),
           }),
         );
       return;
@@ -2176,7 +2219,7 @@ void app.whenReady().then(async () => {
     void computerUse.dispose();
     // 租约只在内存里（见 lease.ts 头部：落盘会留下没人能放掉的死锁）；退出前把定时器收掉，
     // 不给进程留一个拽着退出 30s 的句柄
-    computerUseLease.revoke("应用退出");
+    computerUseLease.revoke(cuTexts().leaseReasonAppExiting);
     /*
      * 审计：一行账把「桌面到底挤不挤」留在日志里（v1.5-2 要用真实数据决定后续路线）。
      * 只在真有人用过沙箱时才打——没人用过就没数字可报。

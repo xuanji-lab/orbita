@@ -1141,6 +1141,7 @@ test("遮罩接在两条截图路径上，且出图/缩放之前（源码级，�
   // 两条车道共用一份回执拼法（两处各拼一遍迟早拼出两种形状）
   assert.ok(program.indexOf("Mask.CaptureFields(mask)") >= 0 && winShot.indexOf("Mask.CaptureFields(mask)") >= 0);
 
+
   const uia = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
   assert.match(uia, /SlotCurrentIsPassword/, "isPassword 走 vtable 槽（与 ReadBool 同一套）");
   assert.match(uia, /PasswordRects\.Record\(key,/, "uia-list 结束时要记账给截图用");
@@ -1184,6 +1185,7 @@ stderr: ${r.stderr}`);
 // 真机上要另验的是「同一个窗口两次 list 的 stableId 真的对得上」（RuntimeId 真值）
 // 与「过期 ref 真机被拒」——那要沙箱，纯函数替不了。
 test("感知层源码级纪律：ref token、稳定 id、历史保留上限、diff 的按 id 比对", () => {
+
   const uia = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
   // ref 的对外写法拼在一个地方（模型照抄的就是它）
   assert.match(uia, /return "g" \+ generation\.ToString/, "ref token 只该有一个拼法");
@@ -1512,8 +1514,8 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
 
   const mask = fs.readFileSync(path.join(scriptDir, "CdpShotMask.cs"), "utf8");
   // 真正的注入脚本（头部注释里提到 createIsolatedWorld 是为了解释为什么不用它，不算数）
-  const scriptMatch = /internal const string MaskScript = @"([\s\S]*?)";/.exec(mask);
-  assert.ok(scriptMatch !== null, "CdpShotMask.cs 里应有 MaskScript 常量");
+  const scriptMatch = /internal const string MaskScriptTemplate = @"([\s\S]*?)";/.exec(mask);
+  assert.ok(scriptMatch !== null, "CdpShotMask.cs 里应有 MaskScriptTemplate 常量");
   const script = scriptMatch[1];
   // 三个命中规则 + 自有标记（「显示密码」翻转 type 之后的兜底）
   assert.match(script, /input\[autocomplete\*=password i\]/);
@@ -1529,9 +1531,10 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
   assert.match(mask, /executionContextCreated/);
   assert.match(mask, /auxData/);
 
-  const cdp = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+  const cdpSource = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+  const cdp = cdpSource;
   // 遮罩必须在截图之前、撤除在之后（顺序反了就是「遮罩没进图」或「overlay 留在页面上」）
-  const injectAt = cdp.indexOf("MaskForShot(mask)");
+  const injectAt = cdp.indexOf("MaskForShot(mask, maskLabel)");
   const captureAt = cdp.indexOf('Call("Page.captureScreenshot"');
   const clearAt = cdp.indexOf("ClearShotMask(mask)");
   assert.ok(injectAt > 0 && captureAt > injectAt, "先遮罩再截图");
@@ -1551,4 +1554,39 @@ test("截图遮罩接在 cdp-shot 里：注入脚本含三个选择器 + 打标�
   assert.doesNotMatch(mask, /maskCoverage/, "曾经的 main+iframes / main-only 枚举已被两组数字取代");
   // 一个 session 要注入几个 document 由计划算（不是「一个 target 一个上下文」）
   assert.match(mask, /PlanSessionInjections/);
+  // overlay 上那行字由宿主给：模板里不许有任何语言的字面标签，标签要过转义
+  assert.doesNotMatch(script, /[一-鿿]/, "注入脚本模板里不许有硬编码中文（标签由宿主给）");
+  assert.match(mask, /MaskLabelToken/);
+  assert.match(mask, /JsSingleQuote/);
+  assert.match(cdpSource, /ExtractJsonString\(raw, "maskLabel"\)/, "桥要从 cdp-shot 的字段里读标签");
+});
+
+// ── 输入原文不许进回执（P2：`sandbox_type` 的密码落进会话 JSONL）────────────────
+//
+// 这条链上的原文只有一个去处：会写进会话 JSONL 的工具结果（以及桥的日志）。
+// 桥这边能钉住两件事（都把值换成「长度 / 打码」）：
+//   ① cdp-type 的读回只回长度（chars / fieldChars），不回 value；
+//   ② uia-act setValue 的 evidence 只描述形状（••••（N 字符）），不回显期望/读回值。
+
+test("输入原文不进回执：cdp-type 只回长度，setValue 证据只说形状（源码级 + selftest）", { skip: !isWindows && "仅在 Windows 上运行" }, () => {
+  const cdp = fs.readFileSync(path.join(scriptDir, "Cdp.cs"), "utf8");
+  assert.match(cdp, /Num\("fieldChars"/, "cdp-type 要回读回长度");
+  assert.match(cdp, /Num\("chars"/, "cdp-type 要回输入长度");
+  assert.doesNotMatch(cdp, /Str\("value", value\)/, "cdp-type 不许把字段的原文写进回执");
+
+
+  // observe 的元素标签也不许用输入框的值（同样的会话 JSONL 泄漏面）
+  assert.doesNotMatch(cdp, /el\.innerText\|\|el\.value/, "observe / click 的 label 不许回落到 el.value");
+
+  const uia = fs.readFileSync(path.join(scriptDir, "Uia.cs"), "utf8");
+  assert.match(uia, /DescribeValueForDetail/, "setValue 的证据只描述形状");
+  assert.match(uia, /（" \+ value\.Length \+ " 字符）/, "证据里要有长度");
+  assert.doesNotMatch(uia, /QuoteForDetail\(expected\)/, "不许再把期望值原文塞进证据");
+
+  // 纯函数那一半：证据里不出现原文（大小写都试），int 校验交给 --selftest-uia
+  assert.ok(fs.existsSync(exePath), "exe 应已由 build 测试生成：" + exePath);
+  const r = spawnSync(exePath, ["--selftest-uia"], { encoding: "utf8", windowsHide: true, timeout: 60_000 });
+  assert.equal(r.status, 0, `--selftest-uia 应成功退出\nstdout: ${r.stdout}\nstderr: ${r.stderr}`);
+  const parsed = JSON.parse(r.stdout.trim());
+  assert.equal(parsed.ok, true, JSON.stringify(parsed));
 });

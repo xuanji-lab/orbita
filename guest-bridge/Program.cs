@@ -172,6 +172,57 @@ internal static class Program
     private const int SM_CXSCREEN = 0; // 主屏宽（进程 DPI aware 后为物理像素）
     private const int SM_CYSCREEN = 1; // 主屏高
 
+    // ---- 桌面截图的进一步：“这个密码框现在真的露在屏幕上吗” ----
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MaskScreenPoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr WindowFromPoint(MaskScreenPoint point);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int maxCount);
+
+    /** GA_ROOT = 2（GetAncestor 取顶层窗口） */
+    private const uint GA_ROOT = 2;
+
+    /**
+     * 屏幕上这一点最上层的**顶层**窗口，是不是 hwnd 那一个。**Mask.VisiblePart 的注入口**。
+     *
+     * 为什么要有它（真机 bug，验收两次复现）：整桌面截图把**所有**窗口缓存的密码框
+     * 按屏幕坐标画到图上。被遮的窗口不在前台时，那些坐标上现在是**别的窗口**——黑块就
+     * 落到了无关内容上（验收图：黑块画在设置窗口的左侧导航上）。
+     * 按窗口截图不走这一道（它拍的是那个窗口自己的 surface，遮挡与它无关）。
+     */
+    private static bool MaskPointStillOnWindow(long hwnd, int x, int y)
+    {
+        MaskScreenPoint point;
+        point.X = x;
+        point.Y = y;
+        IntPtr at = WindowFromPoint(point);
+        if (at == IntPtr.Zero) return false;
+        IntPtr root = GetAncestor(at, GA_ROOT);
+        if (root == IntPtr.Zero) return false;
+        IntPtr target = GetAncestor(new IntPtr(hwnd), GA_ROOT);
+        if (target == IntPtr.Zero) target = new IntPtr(hwnd);
+        return root == target;
+    }
+
+    /** 窗口标题（与 uia-list 记缓存时用的是同一个来源，才能比得上） */
+    private static string MaskWindowTitle(long hwnd)
+    {
+        StringBuilder sb = new StringBuilder(300);
+        int len = GetWindowText(new IntPtr(hwnd), sb, sb.Capacity);
+        return len <= 0 ? "" : sb.ToString().Trim();
+    }
+
     // ---- SendInput：输入注入（click / type / key / scroll）----
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -3606,8 +3657,21 @@ internal static class Program
             // 矩形来自最近一次 uia-list（Mask.PasswordRects），这里是纯查表 + 裁剪，不遍历控件树。
             // 整桌面截图的图像原点 = 屏幕原点 (0,0)，所以只做平移（0,0）；坐标系与 DPI 关系见 Mask.cs 文件头。
             // 任何窗口的清单都能遮：屏幕是同一块，谁的密码框落在图里都得遮（宁可多遮，不可漏遮）。
-            mask = Mask.Plan(nativeW, nativeH, 0, 0, PasswordRects.Snapshot(InputHook.NowTick()),
-                Mask.CacheMaxAgeMs);
+            // 两道闸（都在 Mask.VisiblePart 里，纯函数 + 注入的可见性判定）：
+            //   ① 页面已换（窗口标题与记清单时不同）→ 旧矩形不能用了；
+            //   ② 矩形中心那一点现在不属于那个窗口（被别的窗口盖住 / 窗口最小化了）→ 不涂。
+            // 否则被遮窗口不在前台时，黑块会画到前台窗口的内容上（真机复现两次）。
+            List<MaskCacheEntry> entries = new List<MaskCacheEntry>();
+            List<MaskCacheEntry> all = PasswordRects.Snapshot(InputHook.NowTick());
+            int hidden = 0;
+            for (int i = 0; i < all.Count; i++)
+            {
+                int dropped;
+                entries.Add(Mask.VisiblePart(all[i], MaskWindowTitle(all[i].Hwnd), MaskPointStillOnWindow, out dropped));
+                hidden += dropped;
+            }
+            mask = Mask.Plan(nativeW, nativeH, 0, 0, entries, Mask.CacheMaxAgeMs);
+            mask.Hidden = hidden;
             Mask.Paint(full, mask.Rects);
 
             // 缩放规则与窗口截图（win-shot）共用一份纯函数：两处算出不同的图宽，

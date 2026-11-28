@@ -38,6 +38,7 @@ import type {
   WslState,
 } from "../../shared/computer-use.ts";
 import type { IsolationSessionProbe } from "./isolation-session.ts";
+import { cuTexts } from "./ui-language.ts";
 
 const execFileP = promisify(execFile);
 
@@ -145,15 +146,8 @@ export const HYPERVISOR_PROBE_ARGS = [
  * 平台不是 win32 时**只给这一条**：reg / powershell 都没跑，再说「读不到版本档位」只会稀释信号。
  */
 export function platformGuidance(platform: NodeJS.Platform): string {
-  if (platform === "darwin") {
-    return (
-      "Windows 沙箱用不上 macOS——这是 Windows 自己的功能，不是 Orbita 还没做。" +
-      "macOS 上能用的是浏览器档：内置浏览器里的 browser_navigate / browser_observe / browser_click 等工具不受影响，网页任务照做；" +
-      "沙箱里的像素操作与沙箱浏览器（computer_* / sandbox_*）在 macOS 上没有：所有隔离后端（Windows 沙箱、多会话隔离、" +
-      "Linux 桌面虚拟机）都建在 Windows 宿主之上，没有可替代的隔离桌面。"
-    );
-  }
-  return "电脑使用沙箱只在 Windows 上提供（且需要专业版 / 企业版 / 教育版）；当前平台用不了这些工具。";
+  if (platform === "darwin") return cuTexts().guidancePlatformDarwin;
+  return cuTexts().guidancePlatformOther;
 }
 
 /**
@@ -164,10 +158,7 @@ export function platformGuidance(platform: NodeJS.Platform): string {
  * 同一句话在 `build/installer.nsh` 的安装提示里还有一份：那是 NSIS，读不到这段 TS。
  * 两边改一处就要改另一处（改字时搜「Hyper-V」）。
  */
-const HYPERVISOR_CONFLICT_NOTE =
-  "注意：启用 Windows 沙箱会同时打开 Hyper-V 平台。微软明确说明它与第三方虚拟机不兼容——" +
-  "这台机器上已有的 VMware / VirtualBox 虚拟机可能起不来或明显变慢（新版本可以用兼容模式，但仍会变慢）。" +
-  "还要用它们的话，先在别的机器上启用沙箱，或者做好取舍。";
+const HYPERVISOR_CONFLICT_NOTE = (): string => cuTexts().guidanceHypervisorConflict;
 
 function buildGuidance(result: {
   platform: NodeJS.Platform;
@@ -177,33 +168,25 @@ function buildGuidance(result: {
   hypervisorState: HypervisorState;
 }): string {
   const lines: string[] = [];
+  const texts = cuTexts();
   if (!result.platformOk) {
     // 非 Windows 上 reg / powershell 都没跑：只给平台这一条（见 platformGuidance 的注释）
     return platformGuidance(result.platform);
   }
   if (result.edition === "home") {
-    lines.push("Windows 家庭版没有 Windows 沙箱功能，需要专业版 / 企业版 / 教育版。");
+    lines.push(texts.guidanceHomeEdition);
   } else if (result.edition === "unknown") {
     // reg query 真的跑过才报「读不到」；非 Windows 上根本没跑，报这条只会稀释平台那一条
-    lines.push("读不到 Windows 版本档位（reg query 失败），无法确认沙箱可用。");
+    lines.push(texts.guidanceEditionUnknown);
   }
   // 版本档位不是 Home 才有「去开功能」的意义；家庭版开不了，别误导
   if (!result.sandboxExeFound && result.edition !== "home") {
-    lines.push(
-      "Windows 沙箱功能未启用（System32 下找不到 WindowsSandbox.exe）。手动开启：Win+R 输入 optionalfeatures.exe 回车 → " +
-        "勾选「Windows 沙箱」→ 确定 → 重启；或在管理员 PowerShell 运行：" +
-        'Enable-WindowsOptionalFeature -Online -FeatureName "Containers-DisposableClientVM" -All。' +
-        "Orbita 不会替你执行这条提权命令。",
-    );
+    lines.push(texts.guidanceSandboxFeatureDisabled);
     // 紧跟在「去启用」后面：用户读完就会去做，代价必须在他动手之前说
-    lines.push(HYPERVISOR_CONFLICT_NOTE);
+    lines.push(HYPERVISOR_CONFLICT_NOTE());
   }
   if (result.hypervisorState === "absent") {
-    lines.push(
-      "这台机器的虚拟化（VT-x / AMD-V）在 BIOS/UEFI 里被关了，Windows 沙箱起不来。" +
-        "重启进 BIOS/UEFI → 打开虚拟化（各厂商名字不同：Intel Virtualization Technology / VT-x、AMD-V / SVM Mode）→ 保存重启后回来重试。" +
-        "（Windows 里也可确认：任务管理器 › 性能 › CPU 的「虚拟化」应为「已启用」。）",
-    );
+    lines.push(texts.guidanceVirtualizationOff);
   }
   return lines.join("\n");
 }
@@ -316,10 +299,11 @@ async function probeIsolationSession(
   platform: NodeJS.Platform,
   run: ProbeDeps["isolationProbe"],
 ): Promise<IsolationSessionCapability> {
+  const texts = cuTexts();
   if (platform !== "win32") {
     return {
       available: false,
-      reason: `多会话隔离只在 Windows 上有（当前平台 ${platform}）`,
+      reason: texts.isolationWindowsOnly(platform),
       nodeVersion: process.versions.node,
       nodeOk: false,
     };
@@ -327,7 +311,7 @@ async function probeIsolationSession(
   if (run === undefined) {
     return {
       available: false,
-      reason: "本次没有接 MXC 探测（多会话隔离需要 @microsoft/mxc-sdk）",
+      reason: texts.isolationProbeNotWired,
       nodeVersion: process.versions.node,
       nodeOk: false,
     };
@@ -343,7 +327,7 @@ async function probeIsolationSession(
   } catch (cause: unknown) {
     return {
       available: false,
-      reason: `MXC 探测失败：${cause instanceof Error ? cause.message : String(cause)}`,
+      reason: texts.isolationProbeFailed(cause instanceof Error ? cause.message : String(cause)),
       nodeVersion: process.versions.node,
       nodeOk: false,
     };

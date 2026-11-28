@@ -20,6 +20,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { RequestBroker } from "./request-broker.ts";
 import type { ComputerUseTurnContext } from "../shared/agent-ipc.ts";
 import { computerUseToolsActive } from "../shared/computer-use-platform.ts";
+import { computerUseUiTexts } from "../shared/computer-use-texts.ts";
 import {
   COMPUTER_USE_DELIVERIES,
   COMPUTER_USE_DELIVERY_HINTS,
@@ -147,7 +148,17 @@ const NEEDS_SCREENSHOT =
  */
 const BROKER_TIMEOUT_MS = COMPUTER_USE_CONSENT_TIMEOUT_MS + GUEST_COMMAND_TIMEOUT_MS + 15_000;
 
-export function createComputerUseTools(broker: RequestBroker, sessionId: string): ToolDefinition[] {
+export function createComputerUseTools(
+  broker: RequestBroker,
+  sessionId: string,
+  /**
+   * 界面语言（`ComputerUseTurnContext.uiLanguage`）。**只影响回执里的句子**（参数校验的话、
+   * 截图/点击的正文），工具描述与给模型的英文协议面不随它变。缺省 en（与界面缺省一致，
+   * 也与这些句子改动前一样）。
+   */
+  uiLanguage: "zh" | "en" = "en",
+): ToolDefinition[] {
+  const ui = computerUseUiTexts(uiLanguage);
   /**
    * 本工具组最近一次截图的几何（回图尺寸 + 物理屏尺寸）。null = 这一轮还没截过图，
    * 此时一切带坐标的操作都拒绝（NEEDS_SCREENSHOT）。
@@ -210,13 +221,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
    */
   const nativePoint = (x: number, y: number): { x: number; y: number } => {
     const shot = lastShot;
-    if (shot === null) throw new Error(NEEDS_SCREENSHOT);
+    if (shot === null) throw new Error(ui.rcptNeedsScreenshot);
     const point = screenshotPointToNative(shot, x, y);
     if (point === null) {
-      throw new Error(
-        `(${x}, ${y}) is outside the screenshot you last took (${shot.width}×${shot.height} pixels): ` +
-          "take a fresh screenshot and use coordinates from that image.",
-      );
+      throw new Error(ui.rcptPointOutside(x, y, shot.width, shot.height));
     }
     return point;
   };
@@ -230,10 +238,10 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     const y = numberOf(args["y"]);
     if (x !== undefined && y !== undefined) return nativePoint(x, y);
     if (x !== undefined || y !== undefined) {
-      throw new Error("Pass both x and y, or neither (neither = the middle of the screen).");
+      throw new Error(ui.vldBothOrNeither);
     }
     const shot = lastShot;
-    if (shot === null) throw new Error(NEEDS_SCREENSHOT);
+    if (shot === null) throw new Error(ui.rcptNeedsScreenshot);
     const center = screenshotPointToNative(shot, shot.width / 2, shot.height / 2);
     if (center === null) throw new Error(NEEDS_SCREENSHOT); // 图正中永远在图内，这里只是让类型收口
     return center;
@@ -254,12 +262,15 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       "driving. A window image's pixels are window pixels, not desktop pixels: take a normal screenshot (no " +
       "window) before clicking. Native (Win32) password fields are blacked out in the image, but only after " +
       "listing that window once with computer_uia (list records where they are). **Browser page content is NOT " +
-      "exposed to UI Automation**, so a password typed into a web page is not blacked out this way — but the " +
-      "browser itself renders it as dots, so it does not show up in the image either. If the result warns that " +
-      "the image is NOT masked, that is normal unless you listed the window first. " +
+      "exposed to UI Automation**: this lane knows a web password field only if it still was one at the last " +
+      "computer_uia list. A field the page already switched to plain text with its own \"show password\" control " +
+      "before that list is invisible here and its value shows up in the image (the browser's dots are gone). " +
+      "For anything on a web page use sandbox_screenshot — it masks by DOM, including after the type was " +
+      "flipped. If the result warns that the image is NOT masked, that is normal unless you listed the window " +
+      "first. " +
       "The sandbox starts empty: no user data, no sign-in state, and its image is a bare Windows — notepad is " +
       "not installed (cmd.exe and msedge are). If the result says the sandbox is not running, tell the user to " +
-      "start it in Settings › Experimental features › Computer use; do not retry. " +
+      "start it in Settings › Computer use; do not retry. " +
       DELIVERY_VERIFY_HINT,
     parameters: {
       type: "object",
@@ -287,7 +298,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
           : { action: "screenshot", maxWidth: COMPUTER_USE_SHOT_MAX_WIDTH, window: target };
       const result = await call(request, signal);
       const shot = result.shot;
-      if (shot === undefined) throw new Error("截图回执里没有图（主进程与契约不一致）");
+      if (shot === undefined) throw new Error(ui.rcptShotMissingImage);
       // 只拍窗口时**不更新** lastShot：那张图的原点是窗口左上角，而 click 要的是整屏物理像素。
       // 更新了它，下一次 computer_click 会看起来「成功」却点到另一个地方——静默错位比报错更坏。
       if (target === undefined) lastShot = shot;
@@ -340,7 +351,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const x = numberOf(args["x"]);
       const y = numberOf(args["y"]);
       if (x === undefined || y === undefined) {
-        throw new Error("Pass x and y — pixels in your latest computer_screenshot.");
+        throw new Error(ui.vldXY);
       }
       const point = nativePoint(x, y);
       const button = buttonOf(args["button"]);
@@ -385,11 +396,12 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     } as never,
     async execute(_toolCallId, params, signal) {
       const text = (params as Record<string, unknown> | undefined)?.["text"];
-      if (typeof text !== "string") throw new Error("text is required");
+      if (typeof text !== "string") throw new Error(ui.vldTextRequired);
       const result = await call({ action: "type", text }, signal);
       return {
         content: [{ type: "text" as const, text: result.text }],
-        // 明文留在 details / 转录（JSONL 保留明文）；renderer 默认折叠显示
+        // 正文**不进 details**（computerUseAudit 只留字符数）：details 会写进会话 JSONL，
+        // 登录页上这段就是密码。模型自己那次调用的参数在转录里，那是另一回事、去不掉。
         details: { computerUse: audit({ text }, "type") },
       };
     },
@@ -420,7 +432,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     } as never,
     async execute(_toolCallId, params, signal) {
       const keyName = (params as Record<string, unknown> | undefined)?.["key"];
-      if (typeof keyName !== "string" || keyName.trim() === "") throw new Error("key is required");
+      if (typeof keyName !== "string" || keyName.trim() === "") throw new Error(ui.vldKeyRequired);
       const result = await call({ action: "key", key: keyName.trim() }, signal);
       return {
         content: [{ type: "text" as const, text: result.text }],
@@ -452,7 +464,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
     async execute(_toolCallId, params, signal) {
       const args = (params ?? {}) as Record<string, unknown>;
       const deltaY = numberOf(args["deltaY"]);
-      if (deltaY === undefined) throw new Error("deltaY is required (positive scrolls down).");
+      if (deltaY === undefined) throw new Error(ui.vldDeltaRequired);
       const notches = Math.round(deltaY);
       const target = scrollTarget(args);
       const result = await call({ action: "scroll", ...target, deltaY: notches }, signal);
@@ -567,9 +579,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       const title = typeof args["window"] === "string" ? args["window"].trim() : "";
       const target = hwnd !== undefined ? hwnd : title === "" ? undefined : title;
       if (target === undefined) {
-        throw new Error(
-          "Pass window (part of the target window's title) or hwnd — take one from computer_screenshot or a previous result.",
-        );
+        throw new Error(ui.rcptWindowOrHwnd);
       }
       if (rawAction === "list") {
         // 描述里写的是 default 60，所以这里**总是**显式下发：不写的话桥的缺省是 200，
@@ -578,7 +588,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
         // since：只有模型给了才下发（不给 = 全量，与改之前逐字同行为）
         const sinceRaw = numberOf(args["since"]);
         if (sinceRaw !== undefined && (!Number.isInteger(sinceRaw) || sinceRaw <= 0)) {
-          throw new Error("since must be a positive integer: the generation from your last list of that window.");
+          throw new Error(ui.vldSincePositive);
         }
         const result = await call(
           {
@@ -596,10 +606,7 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
       // 不把它当成「打错字」跟其他未知动作混在一起。
       if (rawAction === "focus") throw new Error(computerUseUiaErrors.focusRemoved);
       if (rawAction !== "invoke" && rawAction !== "setValue" && rawAction !== "selection") {
-        throw new Error(
-          "action must be one of: list, invoke, setValue, selection. To move the keyboard focus, click the " +
-            "target with computer_click.",
-        );
+        throw new Error(ui.vldActionEnum);
       }
       const refRaw = args["ref"];
       // ref 是**不透明 token**（"g12:r3"）：工具层只检查形状，代次校验在桥里（它才知道最近一次 list 是哪一代）。
@@ -612,22 +619,15 @@ export function createComputerUseTools(broker: RequestBroker, sessionId: string)
             : undefined;
       const name = typeof args["name"] === "string" ? args["name"].trim() : "";
       if (ref === undefined && name === "") {
-        throw new Error(
-          "Pass ref (the token from the latest list of that window, like \"g12:r3\") or name (part of the " +
-            "control's accessible name).",
-        );
+        throw new Error(ui.vldRefOrName);
       }
       // 与 bridge-client 的 UIA_REF_TOKEN 同一个形状（两半都是正整数；0 不是合法的代次 / 序号）
       if (ref !== undefined && !/^g[1-9][0-9]*:r[1-9][0-9]*$/.test(ref)) {
-        throw new Error(
-          "ref is a token copied from the latest list, like \"g12:r3\" (g = which list of that window, r = " +
-            "position in it). A bare number is not a ref any more: run action list on that window and copy the " +
-            "token.",
-        );
+        throw new Error(ui.vldRefShape);
       }
       const value = args["value"];
       if (rawAction === "setValue" && typeof value !== "string") {
-        throw new Error("setValue needs value: the text to write into the control (empty string clears it).");
+        throw new Error(ui.vldSetValueNeedsValue);
       }
       const result = await call(
         {

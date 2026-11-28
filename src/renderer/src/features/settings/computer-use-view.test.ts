@@ -8,6 +8,7 @@ import {
   computerUseBackendChoices,
 } from "../../../../shared/computer-use.ts";
 import type { AppSettings } from "../../../../shared/settings.ts";
+import { computerUseUiTexts } from "../../../../shared/computer-use-texts.ts";
 import { en } from "../../messages-en.ts";
 import { zh } from "../../messages-zh.ts";
 import {
@@ -24,6 +25,10 @@ import {
   probeBlocksStart,
   probeVisual,
   sandboxControl,
+  sandboxStatusPollMs,
+  sameSandboxStatus,
+  SANDBOX_STATUS_POLL_BUSY_MS,
+  SANDBOX_STATUS_POLL_IDLE_MS,
   shotFromResult,
   shotMeta,
   statusVisual,
@@ -261,6 +266,61 @@ describe("电脑使用 · 出网开关在三个后端上能不能动", () => {
   });
 });
 
+/**
+ * 状态兜底轮询（2026-11-28 真机 P0）。
+ *
+ * 事件不是唯一真相：QEMU 那条事件没接上，VM 起来了界面还停在「未启动」，「关闭」灰着，
+ * 用户停不掉机器。派生层这里钉两件事——非稳态要快（1–2 s），稳态也不能不轮询
+ * （漏事件的现场正是「界面说 off、实际在跑」）；以及「状态没变就不 setState」。
+ */
+describe("电脑使用 · 状态兜底轮询", () => {
+  test("非稳态（启动中 / 运行中 / 关闭中）与刚点完动作：1–2 秒一次", () => {
+    for (const state of ["starting", "running", "stopping"] as const) {
+      const ms = sandboxStatusPollMs(state, false);
+      assert.ok(ms <= 2_000 && ms >= 1_000, `${state}: ${String(ms)}`);
+    }
+    // 刚点完动作：即使当前还是 off，也要按快档问（事件可能还没到）
+    assert.ok(sandboxStatusPollMs("off", true) <= 2_000);
+    assert.equal(sandboxStatusPollMs("off", true), SANDBOX_STATUS_POLL_BUSY_MS);
+  });
+
+  test("稳态也轮询，周期有限且不长——漏一条事件时用户最多等这么久就能点「关闭」", () => {
+    for (const state of ["off", "error"] as const) {
+      const ms = sandboxStatusPollMs(state, false);
+      assert.equal(ms, SANDBOX_STATUS_POLL_IDLE_MS);
+      assert.ok(ms > 0 && ms <= 10_000, `${state}: ${String(ms)}`);
+    }
+    // 两项常量本身也要有约束（0 / 负值会让 setInterval 疯狂打 IPC）
+    assert.ok(SANDBOX_STATUS_POLL_BUSY_MS > 0 && SANDBOX_STATUS_POLL_IDLE_MS > 0);
+    assert.ok(SANDBOX_STATUS_POLL_BUSY_MS < SANDBOX_STATUS_POLL_IDLE_MS, "快档必须比慢档快");
+  });
+
+  test("sameSandboxStatus：真变了就不等，没变就不 setState（轮询不能每 1.5 秒白重渲染）", () => {
+    assert.equal(sameSandboxStatus({ state: "off" }, { state: "off" }), true);
+    assert.equal(sameSandboxStatus({ state: "off" }, { state: "running", startedAt: 1, bridgeVersion: "x" }), false);
+    assert.equal(
+      sameSandboxStatus(
+        { state: "running", startedAt: 1, bridgeVersion: "x", backend: "qemu" },
+        { state: "running", startedAt: 1, bridgeVersion: "x", backend: "qemu" },
+      ),
+      true,
+      "同一份真值的两次拉取不该触发重渲染",
+    );
+    assert.equal(
+      sameSandboxStatus(
+        { state: "running", startedAt: 1, bridgeVersion: "x", backend: "wsb" },
+        { state: "running", startedAt: 1, bridgeVersion: "x", backend: "qemu" },
+      ),
+      false,
+    );
+    assert.equal(
+      sameSandboxStatus({ state: "error", message: "a" }, { state: "error", message: "b" }),
+      false,
+      "错误原话换了（重试失败的原因不同）也要刷",
+    );
+  });
+});
+
 describe("电脑使用 · 沙箱浏览器", () => {
   const settings = (browser?: "edge" | "chrome" | "brave" | "chromium" | "auto"): AppSettings =>
     browser === undefined
@@ -408,5 +468,41 @@ describe("设置页 · 隔离后端（开发者门）", () => {
       // 换后端的补丁只发 backend 一个键，不碰 allowNetwork / browser
       assert.deepEqual(backendPatch(saved), { computerUse: { backend: saved } });
     }
+  });
+});
+
+/**
+ * 设置页派生层「按语言取到对应的那几句」（2026-11-28 双语）。
+ *
+ * 主进程把 `guidance` 交给人话、这里把它拆成行——中间不许再拼字，也不许换语言。
+ * 所以给定 en / zh 两份主进程文案，派生出来的行必须逐条来自对应的那一份。
+ */
+describe("设置页派生层：guidance 跟界面语言走", () => {
+  test("英文：拆出来的每一行都是英文，且无 CJK", () => {
+    const texts = computerUseUiTexts("en");
+    const visual = probeVisual(
+      probeResult({
+        ready: false,
+        featureState: "disabled",
+        guidance: [texts.guidanceHomeEdition, texts.guidanceVirtualizationOff].join(String.fromCharCode(10)),
+      }),
+    );
+    assert.equal(visual.kind, "not-ready");
+    const lines = visual.kind === "not-ready" ? visual.guidance : [];
+    assert.equal(lines.length, 2);
+    for (const line of lines) assert.doesNotMatch(line, /[一-鿿]/);
+  });
+
+  test("中文：同一份结构下逐条是中文原文", () => {
+    const texts = computerUseUiTexts("zh");
+    const visual = probeVisual(
+      probeResult({
+        ready: false,
+        featureState: "disabled",
+        guidance: [texts.guidanceHomeEdition, texts.guidanceVirtualizationOff].join(String.fromCharCode(10)),
+      }),
+    );
+    const lines = visual.kind === "not-ready" ? visual.guidance : [];
+    assert.deepEqual(lines, [texts.guidanceHomeEdition, texts.guidanceVirtualizationOff]);
   });
 });

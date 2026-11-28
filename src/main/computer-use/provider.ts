@@ -22,6 +22,7 @@ import type {
 } from "../../shared/computer-use.ts";
 import type { ComputerUseGuest } from "./agent-requests.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
+import { cuTexts } from "./ui-language.ts";
 
 /**
  * 后端 id。`wsb` / `isolation-session` 是设置页可选的两个（shared 的 ComputerUseBackend）；
@@ -105,12 +106,44 @@ export interface SandboxProvider extends ComputerUseGuest {
   guestCommandReply(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestCommandReply>;
   /** 带 JPEG 兄弟文件的命令（cdp-shot / 像素截图共用） */
   guestShot(command: ComputerUseGuestCommand, fields: Record<string, unknown>): Promise<GuestShotReply>;
+  /**
+   * **可选**：状态迁移的推送。实现了的后端自己发，门面（runtime.ts）把它接到
+   * deps.onStatus（= index.ts 的 broadcastComputerUseStatus）。
+   *
+   * 为什么是可选而不是人人必备：WSB / L2b 不是门面造的，它们在 index.ts 里各自接了
+   * 自己的 onStatus；只有门面亲手造的 QEMU 需要这条接线。**没有实现 ≠ 不用推**：
+   * 谁在别处推了，就在那边推完整（P0 就是「三个后端里有一个谁也没接」）。
+   */
+  subscribeStatus?(listener: (status: SandboxStatus) => void): void;
   /** 应用退出时的总清理（WSB 是同步的、其余是异步的，所以两边都允许） */
   dispose(): void | Promise<void>;
 }
 
 /** 一个后端都没在跑时，车道方法回给用户/模型的话（三个后端同源，别各写一份） */
-export const SANDBOX_NOT_RUNNING = "隔离桌面没有在运行——先在「设置 › 实验功能 › 电脑使用」里启动它";
+export function sandboxNotRunningText(): string {
+  return cuTexts().sandboxNotRunningHint;
+}
+
+/**
+ * 后端**在跑/在起，但还没就绪**时回给模型的话（2026-11-28 验收 P3-2）。
+ *
+ * 为什么需要它：runtime 只判「后端对象在不在」（state !== "off"），
+ * 于是 starting / stopping / error 三态都会把命令下发给一个还没有桥的控制器，
+ * 回执变成「没找到标题包含…的窗口」——模型读到的是一个**窗口名**，而不是真正的原因。
+ * 统一成「先原因、后建议」，六个 computer_* 工具与 sandbox_* 都走这一句。
+ *
+ * 文案里先说不存在什么（桥 / 运行中的桌面），再说下一步；不给「换一个窗口」这种
+ * 在错误前提下才成立的建议。
+ */
+export function sandboxReadinessError(state: SandboxStatus["state"]): string {
+  const texts = cuTexts();
+  if (state === "starting") return texts.sandboxStartingHint;
+  if (state === "stopping") return texts.sandboxStoppingHint;
+  if (state === "error") return texts.sandboxErrorStateHint;
+  return texts.sandboxNotRunningHint;
+}
 
 /** 未实现的后端（P3 的 QEMU 空位）统一用这句话，接上实现时删掉 */
-export const SANDBOX_NOT_IMPLEMENTED = "这个隔离后端还没接上（P3-2 才实现）";
+export function sandboxNotImplementedText(): string {
+  return cuTexts().sandboxNotImplemented;
+}

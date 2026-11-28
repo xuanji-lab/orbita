@@ -20,7 +20,12 @@ import { splitUserTextBlocks } from "./prompt-attachments.ts";
 import type { FileTurnRecord, FileTurnView, RevertRecord, UndoRecord } from "./revert.ts";
 import type { IntentAskView, IntentSelectedView, IntentUsageCount, RecallStageCell } from "./intent-recall.ts";
 import type { IntentConfirmAnswer } from "./intent-confirm.ts";
-import { parseComputerUseConsent, type ComputerUseConsent } from "./computer-use.ts";
+import {
+  parseComputerUseConsent,
+  parseComputerUseConsentSource,
+  type ComputerUseConsent,
+  type ComputerUseConsentSource,
+} from "./computer-use.ts";
 
 /** 标题上限。超出截断加省略号——标题要在 288px 的侧栏里一行放得下。 */
 export const SESSION_TITLE_MAX = 60;
@@ -365,6 +370,14 @@ export interface SessionMeta {
    * 真正的闸门在主进程（main/computer-use/consent.ts），字段只是持久化的决定。
    */
   computerUseConsent?: ComputerUseConsent;
+  /**
+   * 这条授权是怎么来的（2026-11-28 验收 P3-2）：`answered`（用户亲手点的）/
+   * `timeout`（120s 没人回答）/ `unavailable`（窗口全关、没人可问）。
+   * **与 computerUseConsent 同一次原子写**——刷新 / 重开之后记录行还要能分出
+   * 「你拒绝了」与「没人回答」，只存 denied 会把后者永久说成前者。
+   * 缺省（老会话文件没有这个键）= `answered`：解析时丢键，读的一方按 answered 兜底。
+   */
+  computerUseConsentSource?: ComputerUseConsentSource;
   /**
    * 这条会话自己的自动压缩开关（2026-11-24）：false = 不自动压缩，只认手动 `/compact`——编排入口页
    * 「新开专门的会话」开出来的会话，要的是一条上下文干净、只装这件事的会话，宁可满了提醒换一条，
@@ -730,6 +743,8 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
   const automationId = str(value["automationId"]);
   const automationRun = parseAutomationRunLabel(value["automationRun"]);
   const attribution = parseAttribution(value["attribution"]);
+  const computerUseConsent = parseComputerUseConsent(value["computerUseConsent"]);
+  const computerUseConsentSource = parseComputerUseConsentSource(value["computerUseConsentSource"]);
 
   return {
     id,
@@ -779,9 +794,9 @@ export function parseSessionMeta(raw: unknown): SessionMeta | null {
     // 会话级自动压缩开关：只认布尔，缺席 = 跟随全局
     ...(value["autoCompact"] === true || value["autoCompact"] === false ? { autoCompact: value["autoCompact"] } : {}),
     // 电脑使用授权：坏值 / 缺席都当 unset——老会话不会因加字段就凭空获得桌面权限
-    ...(parseComputerUseConsent(value["computerUseConsent"]) === "unset"
-      ? {}
-      : { computerUseConsent: parseComputerUseConsent(value["computerUseConsent"]) }),
+    ...(computerUseConsent === "unset" ? {} : { computerUseConsent }),
+    // 结局原因只随非 unset 的授权保留：unset 时它是上一局的残影，读出来只会误导
+    ...(computerUseConsent === "unset" || computerUseConsentSource === null ? {} : { computerUseConsentSource }),
     createdAt,
     updatedAt: typeof value["updatedAt"] === "number" ? value["updatedAt"] : createdAt,
   };

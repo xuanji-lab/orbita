@@ -1093,7 +1093,7 @@ export const zh: Messages = {
     // guidance——同一张卡里逐条列在探针行下面，这里只给徽标与一句指路
     isolationTier: "隔离档位",
     isolationTierInfo:
-      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但**没有真实的鼠标键盘**——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3 Linux 桌面虚拟机同样只在 Windows 上（宿主侧走 Windows 的虚拟化）。",
+      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但没有真实的鼠标键盘——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3 Linux 桌面虚拟机同样只在 Windows 上（宿主侧走 Windows 的虚拟化）。",
     tierFallback: "到不了更高档，原因见上方几条",
     tiers: {
       l1: "L1 浏览器档",
@@ -1156,7 +1156,7 @@ export const zh: Messages = {
     browserInfo:
       "智能体在沙箱里用哪个浏览器打开网页。默认 Edge——沙箱镜像自带它，不用额外准备，启动到 CDP 就绪也比从宿主映射进来的 Chrome 快一秒左右。",
     browserBelow:
-      "Chrome / Brave / Chromium 不在沙箱镜像里：需要先把它们映射或拷贝进沙箱，否则这次会自动回退 Edge（工具回执里会写明）。改动在下一次打开网页时生效。",
+      "Chrome / Brave / Chromium 不在沙箱镜像里：需要先把它们映射或拷贝进沙箱，否则这次会自动回退 Edge（工具回执里会写明）——这一行仍显示你选的那个，沙箱里跑的却是 Edge。改动在下一次打开网页时生效。",
     browserAria: "沙箱里用哪个浏览器",
     browserAuto: "自动",
     // 「最多三分钟」对着 src/main/computer-use/sandbox.ts 的 BRIDGE_READY_TIMEOUT_MS（180s）；
@@ -1197,7 +1197,7 @@ export const zh: Messages = {
     shotAlt: "沙箱桌面截图",
     /*
      * 会话级同意书（2026-11-27）：流里问一次（甲），答完后流里留一条记录 + 输入框上方
-     * 一条安静的状态行（乙）。拒绝原文来自 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT——
+     * 一条安静的状态行（乙）。拒绝原文来自 shared 的 computerUseConsentTexts（按界面语言取）——
      * 与模型收到的那句是同一句。
      */
     consentAsk: "允许操作这台沙箱桌面？",
@@ -1206,6 +1206,7 @@ export const zh: Messages = {
     consentDeny: "拒绝",
     consentAllowedRecord: "已允许，本会话内不再询问",
     consentDeniedRecord: "已拒绝，本会话内不再操作电脑",
+    consentUnansweredRecord: "没有人回答，已按拒绝处理 · 需要时请重新允许",
     consentRevoke: "撤销",
     consentToldModel: (text: string) => `已告知模型：${text}`,
     consentStatusAllowed: "已允许操作沙箱桌面（本会话）",
@@ -1213,8 +1214,11 @@ export const zh: Messages = {
     emergencyGroup: "安全",
     emergencyHotkey: "急停热键",
     emergencyHotkeyInfo:
-      "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。**不关闭沙箱**——现场留着给你看。要再用需要重新授权。",
+      "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。不关闭沙箱——现场留着给你看。要再用需要重新授权。",
     emergencyRegistered: "已注册，随时可用",
+    /** 主选被占用、降级到候选键位时说清「现在生效的是哪一个」（2026-11-28 验收 P2-2） */
+    emergencyFallback: (preferred: string, active: string) =>
+      `主快捷键 ${preferred} 被其它应用占用，已改用 ${active}`,
     emergencyUnavailable: (error) => `不可用：${error}。请关掉占用这个快捷键的应用后重启本应用。`,
     emergencyStopped: "已急停：这一轮已经停下，本会话的电脑使用授权已撤销。沙箱没有关闭，画面还在。",
   },

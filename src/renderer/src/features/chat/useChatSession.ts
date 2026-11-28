@@ -6,7 +6,7 @@ import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
-import type { ComputerUseConsent } from "@shared/computer-use";
+import type { ComputerUseConsent, ComputerUseConsentSource } from "@shared/computer-use";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import { delegateOrderFromTranscript, orderForDelivery, type HeldReport } from "./channel-hold.ts";
 import { deliverChannelSubmission } from "./channel-delivery.ts";
@@ -42,6 +42,7 @@ import {
   sameModel,
 } from "./session-states.ts";
 import { LOADING, READY, failed, type LoadState } from "./load-state.ts";
+import { effectiveConsentSource } from "./computer-consent.ts";
 import { createProgressCoalescer } from "./progress-coalescer.ts";
 import { recordToolFrame } from "./tool-results.ts";
 import {
@@ -424,6 +425,8 @@ export interface ChatSession {
    * allowed / denied 只能由主进程栅门在用户回答后落盘，这里没有“提拔”的回调。
    */
   computerUseConsent: ComputerUseConsent;
+  /** 这条授权怎么来的（answered / timeout / unavailable / …）；null = 盘上读回的旧值，分不出来 */
+  computerUseConsentSource: ComputerUseConsentSource | null;
   /** 挂起的授权确认（确认行用）；null = 没有 */
   computerUseConsentAsk: Extract<AgentEvent, { type: "computerUseConsentAsk" }> | null;
   /** 回答挂起的确认行（允许 / 拒绝）；陈旧请求号由主进程丢弃 */
@@ -3292,6 +3295,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   // 稳定化，否则 ChatView 的 memo 转录列每次渲染都被新引用击穿，隔离形同虚设
   const transcript = useMemo(() => selectTranscript(entry.transcript), [entry.transcript]);
 
+  /** 当前查看的那条会话的授权值（实时 > 盘上 > unset）：状态行与记录行的同一条真值 */
+  const viewedConsent: ComputerUseConsent = entry.computerUseConsent ?? opened?.computerUseConsent ?? "unset";
+
   return {
     sessionId,
     transcript,
@@ -3338,8 +3344,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     pendingEcho: entry.pendingEcho,
     intentAsk: entry.intentAsk,
     answerIntentConfirm: engine.answerIntentConfirm,
-    // 授权：【实时镜像 > 盘上 meta】；盘上没有这个字段时就是 unset（还没问过）
-    computerUseConsent: entry.computerUseConsent ?? opened?.computerUseConsent ?? "unset",
+    // 授权：【实时镜像 > 盘上 meta】；盘上没有这个字段时就是 unset（还没问过）；
+    // 结局原因同理（与授权值同一次写进 meta），刷新后仍能分出「没人回答」。
+    computerUseConsent: viewedConsent,
+    computerUseConsentSource: effectiveConsentSource(
+      viewedConsent,
+      entry.computerUseConsentSource,
+      opened?.computerUseConsentSource ?? null,
+    ),
     computerUseConsentAsk: entry.computerUseConsentAsk,
     answerComputerUseConsent: engine.answerComputerUseConsent,
     revokeComputerUseConsent,

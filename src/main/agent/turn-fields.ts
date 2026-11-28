@@ -12,7 +12,7 @@ import type {
   CompactAgentInput,
 } from "../../shared/agent-ipc.ts";
 import type { AppSettings, CompactionSetting, Language } from "../../shared/settings.ts";
-import { effectiveAllowNetwork, effectiveComputerUseBackend } from "../../shared/settings.ts";
+import { effectiveAllowNetwork, effectiveComputerUseBackend, effectiveLanguage } from "../../shared/settings.ts";
 import { backendNetworkControl, type ComputerUseRunningFacts } from "../../shared/computer-use.ts";
 import { computerUsePlatformSupport } from "../../shared/computer-use-platform.ts";
 import type { McpServer } from "../../shared/mcp.ts";
@@ -49,6 +49,8 @@ export function computerUseTurnContext(
     // 两个事实分开算：用户选了什么（上一行）与这个后端做不做得到（这一行）。
     // 「在跑的是断不了网的 L2b」时得到的是「断不了网」那句，不是「你没有网」。
     networkControlled: backendNetworkControl(backend) === "enforced",
+    // 界面语言：工具回执正文与它同一口径（回执也显示给用户）
+    uiLanguage: effectiveLanguage(settings?.language),
   };
 }
 

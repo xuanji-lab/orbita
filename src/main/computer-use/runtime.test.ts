@@ -25,20 +25,33 @@ import type { IsolationSessionController } from "./isolation-session.ts";
 import type { GuestCommandReply, GuestShotReply } from "./sandbox.ts";
 
 /** 一个只有状态机的假控制器：状态直接给，行为只记调用 */
-function fakeController(name: "wsb" | "iso", state: SandboxState = "off") {
+function fakeController(
+  name: "wsb" | "iso" | "qemu",
+  state: SandboxState = "off",
+  options: { failStart?: boolean } = {},
+) {
   const calls: string[] = [];
   let current: SandboxState = state;
+  const id: BackendController["id"] = name === "wsb" ? "wsb" : name === "iso" ? "isolation-session" : "qemu";
+  /** 状态迁移的订阅者（门面接 deps.onStatus 用；真 provider 是同一张表，见 qemu.ts） */
+  const listeners: Array<(status: SandboxStatus) => void> = [];
+  const publish = (next: SandboxState): void => {
+    current = next;
+    for (const listener of listeners) listener(status());
+  };
   const status = (): SandboxStatus =>
     current === "running"
-      ? { state: "running", startedAt: 1, bridgeVersion: "0.14.0", backend: name === "wsb" ? "wsb" : "isolation-session" }
+      ? { state: "running", startedAt: 1, bridgeVersion: "0.14.0", backend: id }
       : current === "off"
         ? { state: "off" }
         : current === "error"
-          ? { state: "error", message: "假的" }
-          : { state: "starting", startedAt: 1 };
+          ? { state: "error", message: "假的", backend: id }
+          : current === "stopping"
+            ? { state: "stopping" }
+            : { state: "starting", startedAt: 1, backend: id };
   const controller: BackendController = {
     // provider 面：假控制器也如实声明自己是谁、能做什么、桌面怎么算（与真控制器同一个形状）
-    id: name === "wsb" ? "wsb" : "isolation-session",
+    id,
     capabilities: {
       gui: true,
       realPointer: name === "wsb",
@@ -53,16 +66,27 @@ function fakeController(name: "wsb" | "iso", state: SandboxState = "off") {
       snapshot: "none",
     },
     desktopKey: (sessionId: string) =>
-      name === "wsb" ? COMPUTER_USE_DESKTOP_KEY : sessionDesktopKey(sessionId),
+      name === "iso" ? sessionDesktopKey(sessionId) : COMPUTER_USE_DESKTOP_KEY,
     status,
+    /** 真 provider 也提供它（门面给注入的 provider 接线用）；假件与真件同一个形状 */
+    subscribeStatus: (listener: (status: SandboxStatus) => void) => {
+      listeners.push(listener);
+    },
     start: async () => {
       calls.push("start");
-      current = "running";
+      // 与真 provider 一样**逐次迁移都发**：门面漏接 deps.onStatus 时，这两条会消失
+      publish("starting");
+      if (options.failStart === true) {
+        publish("error");
+        return { ok: false, error: "假的启动失败" };
+      }
+      publish("running");
       return { ok: true };
     },
     stop: async () => {
       calls.push("stop");
-      current = "off";
+      publish("stopping");
+      publish("off");
       return { ok: true };
     },
     screenshot: async () => {
@@ -256,6 +280,50 @@ describe("运行时门面", () => {
     assert.equal(await runtime.runningFacts(), null);
   });
 
+  /**
+   * 真机 P0（2026-11-28）：QEMU 后端起起来了，设置页一直「未启动」、「关闭」灰着——
+   * 主进程一条 computer-use:status 都没推，因为门面没把 qemu 的迁移接到 deps.onStatus。
+   * 下面两条就是那条线：**把 runtime.ts 里那句 subscribeStatus 删掉，它们必红**。
+   */
+  it("注入的 qemu provider：启动的每次迁移都经门面广播（starting → running）", async () => {
+    const wsb = fakeController("wsb");
+    const iso = fakeController("iso");
+    const qemu = fakeController("qemu");
+    const seen: string[] = [];
+    const runtime = createComputerUseRuntime({
+      wsb: { ...wsb.controller, probe: async () => probeResult() },
+      isolation: iso.controller as unknown as IsolationSessionController,
+      backend: () => "qemu",
+      devBackends: () => true,
+      qemu: qemu.controller,
+      onStatus: (status) => seen.push(status.state),
+      probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    assert.deepEqual(await runtime.start(), { ok: true });
+    assert.deepEqual(seen, ["starting", "running"], "起完必须已经推过两条：界面靠它把「关闭」点亮");
+    await runtime.stop();
+    assert.deepEqual(seen, ["starting", "running", "stopping", "off"]);
+  });
+
+  it("注入的 qemu provider：启动失败也推（starting → error），界面才不是停在启动中", async () => {
+    const wsb = fakeController("wsb");
+    const iso = fakeController("iso");
+    const qemu = fakeController("qemu", "off", { failStart: true });
+    const seen: string[] = [];
+    const runtime = createComputerUseRuntime({
+      wsb: { ...wsb.controller, probe: async () => probeResult() },
+      isolation: iso.controller as unknown as IsolationSessionController,
+      backend: () => "qemu",
+      devBackends: () => true,
+      qemu: qemu.controller,
+      onStatus: (status) => seen.push(status.state),
+      probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+    });
+    const started = await runtime.start();
+    assert.equal(started.ok, false);
+    assert.deepEqual(seen, ["starting", "error"]);
+  });
+
   it("一个后端都没跑时，车道方法回一句能转告用户的话（不抛、不挂）", async () => {
     const wsb = fakeController("wsb");
     const iso = fakeController("iso");
@@ -270,6 +338,31 @@ describe("运行时门面", () => {
     assert.match(shot.ok === false ? shot.error : "", /没有在运行/);
     const cmd = await runtime.guestCommand("ping", {});
     assert.equal(cmd.ok, false);
+  });
+
+  it("后端在 starting / stopping / error：先回「没就绪」的原因，不发命令、不提窗口名（P3-2）", async () => {
+    for (const state of ["starting", "error"] as const) {
+      const wsb = fakeController("wsb", state);
+      const iso = fakeController("iso");
+      const runtime = createComputerUseRuntime({
+        wsb: { ...wsb.controller, probe: async () => probeResult() },
+        isolation: iso.controller as unknown as IsolationSessionController,
+        backend: () => "wsb",
+        probeIsolation: async () => ({ available: true, reason: null, nodeVersion: "24.21.0", nodeOk: true }),
+      });
+      const uia = await runtime.uiaList({ title: "记事本" });
+      assert.equal(uia.ok, false, state);
+      const message = uia.ok === false ? uia.error : "";
+      // 第一句就是原因：没有在启动 / 出错，而不是「没找到标题包含…的窗口」
+      assert.match(message, state === "starting" ? /还在启动/ : /错误状态/, state);
+      assert.doesNotMatch(message, /没找到标题包含/, state);
+      // 命令没有下发到那个后端
+      assert.deepEqual(wsb.calls, [], state);
+      // 截图同一个口径
+      const shot = await runtime.screenshot();
+      assert.equal(shot.ok, false, state);
+      assert.match(shot.ok === false ? shot.error : "", state === "starting" ? /还在启动/ : /错误状态/, state);
+    }
   });
 
   it("车道方法委托给正在跑的那只（不多发一份）", async () => {
