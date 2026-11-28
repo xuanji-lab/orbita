@@ -6,10 +6,13 @@
  * 里有没有它下一步要的信息。坐标换算不在这里（工具层做），所以这里的 x/y 都是物理像素，
  * 原样下发即可。
  */
-import { test, describe } from "node:test";
+import { beforeEach, test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { applyComputerUseRequest, type ComputerUseGuest } from "./agent-requests.ts";
-import { COMPUTER_USE_DELIVERY_HINTS, COMPUTER_USE_NO_EVIDENCE_HINT } from "../../shared/computer-use.ts";
+import { computerUseUiTexts } from "../../shared/computer-use-texts.ts";
+
+/** 这些用例断言英文回执：交付说明与「拿不到读回」那句都从同一张表的英文那份取 */
+const EN_TEXTS = computerUseUiTexts("en");
 import type {
   ComputerUseGuestCommand,
   ComputerUseScreenshotResult,
@@ -22,6 +25,10 @@ import type {
 import type { GuestCommandReply } from "./sandbox.ts";
 import type { SandboxCapabilities } from "./provider.ts";
 import { QEMU_CAPABILITIES } from "./qemu.ts";
+import { setComputerUseUiLanguage } from "./ui-language.ts";
+
+/** 这些用例写的是英文回执（改动前的样子）：先把界面语言固定成 en；中文那一套另有专门的用例 */
+beforeEach(() => setComputerUseUiLanguage("en"));
 
 interface WindowShotFields {
   hwnd?: number;
@@ -264,7 +271,7 @@ describe("applyComputerUseRequest", () => {
       assert.match(outcome.text, /"admission":"bypassed","targetExe":"notepad.exe"/);
       assert.match(outcome.text, /only observes and logs it/);
       // 原有那句不能丢：模型仍要知道「去看一张图」
-      assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
+      assert.ok(outcome.text.includes(EN_TEXTS.deliveryUnverifiable));
     }
 
     const owned = fakeGuest({
@@ -294,9 +301,9 @@ describe("applyComputerUseRequest", () => {
     assert.equal(dispatchedOutcome.ok && dispatchedOutcome.delivery, "unverifiable");
     if (dispatchedOutcome.ok) {
       // 关系断言：回执正文里那句话 === 单一来源里的那一句
-      assert.ok(dispatchedOutcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
-      assert.match(dispatchedOutcome.text, /先截一张图/);
-      assert.match(dispatchedOutcome.text, /不要立刻重放/);
+      assert.ok(dispatchedOutcome.text.includes(EN_TEXTS.deliveryUnverifiable));
+      assert.match(dispatchedOutcome.text, /take a screenshot/);
+      assert.match(dispatchedOutcome.text, /Do not immediately repeat the same action/);
     }
 
     // 新值 unverifiable：与老值落同一档，回执逐字一致
@@ -313,7 +320,7 @@ describe("applyComputerUseRequest", () => {
     const appliedOutcome = await run(applied.guest, { action: "type", text: "x" });
     assert.equal(appliedOutcome.ok && appliedOutcome.delivery, "unverifiable");
     if (appliedOutcome.ok) {
-      assert.ok(appliedOutcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
+      assert.ok(appliedOutcome.text.includes(EN_TEXTS.deliveryUnverifiable));
       assert.doesNotMatch(appliedOutcome.text, /动作已经生效/);
     }
 
@@ -998,12 +1005,12 @@ describe("applyComputerUseRequest：按后端声明的证据级别门控档位",
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "unverifiable");
-    // 单一来源：正文里那句话 === shared 的 COMPUTER_USE_NO_EVIDENCE_HINT
-    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
-    assert.match(outcome.text, /拿不到任何读回/);
+    // 单一来源：正文里那句话 === 语言表里那句（英文那份）
+    assert.ok(outcome.text.includes(EN_TEXTS.noEvidenceHint));
+    assert.match(outcome.text, /can never produce any read-back/);
     assert.match(outcome.text, /computer_screenshot/);
     // 五档那句也在（模型仍然要知道「不要立刻重放」）
-    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.unverifiable));
+    assert.ok(outcome.text.includes(EN_TEXTS.deliveryUnverifiable));
     // 绝不能出现「已确认生效」
     assert.doesNotMatch(outcome.text, /动作已经生效/);
   });
@@ -1014,7 +1021,7 @@ describe("applyComputerUseRequest：按后端声明的证据级别门控档位",
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "unverifiable");
-    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+    assert.ok(outcome.text.includes(EN_TEXTS.noEvidenceHint));
     assert.doesNotMatch(outcome.text, /读回的值没变/);
   });
 
@@ -1026,7 +1033,7 @@ describe("applyComputerUseRequest：按后端声明的证据级别门控档位",
       assert.equal(unverifiable.delivery, "unverifiable");
       // refused/unverifiable 不重复追加（那句话只在能确认的档位被降级后才有信息量）——
       // 但 unverifiable 本身也要那句：这类后端永远拿不到读回，模型不能等。
-      assert.ok(unverifiable.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+      assert.ok(unverifiable.text.includes(EN_TEXTS.noEvidenceHint));
     }
 
     const refused = fakeGuest({
@@ -1053,7 +1060,7 @@ describe("applyComputerUseRequest：按后端声明的证据级别门控档位",
       assert.equal(outcome.ok, true);
       if (!outcome.ok) continue;
       assert.equal(outcome.delivery, "suspected_noop", "拿不到能力不等于没有证据能力");
-      assert.equal(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT), false);
+      assert.equal(outcome.text.includes(EN_TEXTS.noEvidenceHint), false);
     }
   });
 
@@ -1064,7 +1071,7 @@ describe("applyComputerUseRequest：按后端声明的证据级别门控档位",
       assert.equal(outcome.ok, true);
       if (!outcome.ok) continue;
       assert.equal(outcome.delivery, "suspected_noop", evidence);
-      assert.equal(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT), false, evidence);
+      assert.equal(outcome.text.includes(EN_TEXTS.noEvidenceHint), false, evidence);
     }
   });
 
@@ -1086,7 +1093,7 @@ describe("applyComputerUseRequest：按后端声明的证据级别门控档位",
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "unverifiable");
-    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+    assert.ok(outcome.text.includes(EN_TEXTS.noEvidenceHint));
   });
 });
 
@@ -1112,7 +1119,7 @@ describe("applyComputerUseRequest：把桥的 evidence 传进降级闸门", () =
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "confirmed");
-    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.confirmed));
+    assert.ok(outcome.text.includes(EN_TEXTS.deliveryConfirmed));
   });
 
   test("证据形状不对 / 缺字段 → 当作没有证据（confirmed 降档，但不抛错）", async () => {
@@ -1152,7 +1159,7 @@ describe("applyComputerUseRequest：把桥的 evidence 传进降级闸门", () =
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "unverifiable");
-    assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT));
+    assert.ok(outcome.text.includes(EN_TEXTS.noEvidenceHint));
   });
 });
 
@@ -1179,8 +1186,10 @@ describe("applyComputerUseRequest：partial（桥 0.15.0 真的会发）", () =>
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "partial");
-    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.partial));
-    assert.ok(outcome.text.includes(note), "桥的 note 必须进正文（否则 partial 的原因模型看不见）");
+    assert.ok(outcome.text.includes(EN_TEXTS.deliveryPartial));
+    // 桥的 note 是中文，英文界面下由 guestNoteText 翻成英文：正文里要有那句（而不是原文）
+    assert.ok(outcome.text.includes("3 of 9"), "桥的 note 必须进正文（否则 partial 的原因模型看不见）");
+    assert.doesNotMatch(outcome.text, /[一-鿿]/, "英文界面的正文不许夹中文");
   });
 
   test("partial 不被「没证据」那道闸门降档（它不是确认档）", async () => {
@@ -1204,7 +1213,7 @@ describe("applyComputerUseRequest：partial（桥 0.15.0 真的会发）", () =>
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "partial");
-    assert.ok(outcome.text.includes(note));
+    assert.ok(outcome.text.includes("3 of 9"));
   });
 
   test("没有 note 就一个字都不加（不凭空编「补松开了什么」）", async () => {
@@ -1251,7 +1260,7 @@ describe("applyComputerUseRequest：uia-act setValue 的读回档位（桥 0.15.
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "confirmed");
-    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.confirmed));
+    assert.ok(outcome.text.includes(EN_TEXTS.deliveryConfirmed));
   });
 
   test("读回 != 期望：suspected_noop 原样交给模型（换做法，不原样重试）", async () => {
@@ -1267,7 +1276,7 @@ describe("applyComputerUseRequest：uia-act setValue 的读回档位（桥 0.15.
     assert.equal(outcome.ok, true);
     if (!outcome.ok) return;
     assert.equal(outcome.delivery, "suspected_noop");
-    assert.ok(outcome.text.includes(COMPUTER_USE_DELIVERY_HINTS.suspected_noop));
+    assert.ok(outcome.text.includes(EN_TEXTS.deliverySuspectedNoop));
   });
 
   test("桥说 confirmed 但没发证据 → 降成 unverifiable（老桥 / 伪造证据都过不去）", async () => {
@@ -1313,7 +1322,7 @@ describe("applyComputerUseRequest：uia-act setValue 的读回档位（桥 0.15.
       assert.equal(outcome.ok, true, delivery);
       if (!outcome.ok) continue;
       assert.equal(outcome.delivery, "unverifiable", delivery);
-      assert.ok(outcome.text.includes(COMPUTER_USE_NO_EVIDENCE_HINT), delivery);
+      assert.ok(outcome.text.includes(EN_TEXTS.noEvidenceHint), delivery);
     }
   });
 
@@ -1325,5 +1334,70 @@ describe("applyComputerUseRequest：uia-act setValue 的读回档位（桥 0.15.
     assert.equal("delivery" in outcome, false);
     assert.match(outcome.text, /^Invoked "Close"/);
     assert.doesNotMatch(outcome.text, /读回/);
+  });
+});
+
+// ── 回执正文的双语（2026-11-28 真机验收 P1）───────────────────────────────
+
+/**
+ * 「中文界面里不许出现整句英文」的判据：英文虚词（` the ` ` and ` ` is `…）只属于英文句子，
+ * 中文句子里不会出现它们；专名（WSB / QEMU / Edge / L2b / CDP / sandbox_observe）不受影响。
+ */
+const ENGLISH_PROSE = [" the ", " and ", " is ", " are ", " to ", " of ", " you ", " this ", " with ", " not "];
+
+function assertNoEnglishProse(text: string, where: string): void {
+  for (const word of ENGLISH_PROSE) {
+    assert.equal(text.includes(word), false, `${where} 里有英文虚词「${word.trim()}」：${text.slice(0, 200)}`);
+  }
+  assert.match(text, /[一-鿿]/, `${where} 里一个汉字都没有：${text.slice(0, 200)}`);
+}
+
+describe("回执正文跟界面语言走（中文界面不许出现整句英文）", () => {
+  test("像素车道：截图 / 点击 / 打字 / 按键 / 滚动", async () => {
+    setComputerUseUiLanguage("zh");
+    try {
+      const { guest } = fakeGuest({});
+      const shot = await run(guest, { action: "screenshot" });
+      const click = await run(guest, { action: "click", x: 10, y: 20 });
+      const typed = await run(guest, { action: "type", text: "你好" });
+      const key = await run(guest, { action: "key", key: "enter" });
+      const scroll = await run(guest, { action: "scroll", x: 1, y: 2, deltaY: -3 });
+      for (const [name, outcome] of [
+        ["截图", shot],
+        ["点击", click],
+        ["打字", typed],
+        ["按键", key],
+        ["滚动", scroll],
+      ] as const) {
+        assert.equal(outcome.ok, true, `${name}：${outcome.ok ? "" : outcome.error}`);
+        if (outcome.ok) assertNoEnglishProse(outcome.text, name);
+      }
+      // 下一步指引两语都要有：中文这句要指向重新截图
+      assert.match(shot.ok ? shot.text : "", /截图/);
+    } finally {
+      setComputerUseUiLanguage("en");
+    }
+  });
+
+  test("UIA 车道：list 的标题行与结尾指引、act 的正文", async () => {
+    setComputerUseUiLanguage("zh");
+    try {
+      const list = await run(fakeGuest({}).guest, { action: "uia-list", window: 4321 });
+      assert.equal(list.ok, true);
+      if (list.ok) {
+        assertNoEnglishProse(list.text, "uia-list");
+        assert.match(list.text, /computer_uia/); // 动作指引用工具名，两种语言都保留
+      }
+      const act = await run(fakeGuest({}).guest, {
+        action: "uia-act",
+        window: 4321,
+        name: "Close",
+        perform: "invoke",
+      });
+      assert.equal(act.ok, true);
+      if (act.ok) assertNoEnglishProse(act.text, "uia-act");
+    } finally {
+      setComputerUseUiLanguage("en");
+    }
   });
 });

@@ -90,6 +90,62 @@ const SAMPLE_ARGS: Partial<Record<keyof ComputerUseUiTexts, unknown[][]>> = {
   leaseRevoked: [["stopped"]],
   leaseBusy: [["Kimi"]],
   guestErrorGenericCode: [["net::ERR_CONNECTION_RESET"]],
+  // ── 回执正文（computer-use-receipt-texts.ts）：样本实参由脚本按参数个数生成 ──
+  rcptNavOpened: [["sample", 1, true, "sample"]],
+  rcptObserveTitleLine: [["sample", 1]],
+  rcptElementsHeader: [[1]],
+  rcptObserveTruncated: [["sample", 1]],
+  rcptElementLine: [["sample", 1, true, "sample", 1, true, "sample"]],
+  rcptClickDone: [["sample", 1, true, "sample", 1, true]],
+  rcptTypeDone: [["sample", 1, true, "sample", 1]],
+  rcptExtractTotal: [[1]],
+  rcptExtractTruncated: [["sample", 1]],
+  rcptWaitSettled: [["sample"]],
+  rcptWaitAppeared: [["sample", 1]],
+  rcptWaitMissing: [["sample", 1]],
+  rcptShotPage: [["sample", 1, true, "sample", 1, true]],
+  rcptUploadAttached: [["sample", 1, true]],
+  rcptDownloadNone: [["sample", 1]],
+  rcptDownloadDone: [["sample", 1, true]],
+  rcptTabsHeader: [["sample"]],
+  rcptTabsSwitched: [["sample"]],
+  rcptDesktopShot: [["sample", 1, true, "sample"]],
+  rcptWindowShot: [["sample", 1, true, "sample", 1, true]],
+  rcptClickSent: [["sample", 1, true]],
+  rcptTypedChars: [["sample"]],
+  rcptKeyPressed: [["sample"]],
+  rcptScrolled: [["sample", 1, true]],
+  rcptAdmission: [["sample", 1, true]],
+  rcptDeferred: [["sample"]],
+  rcptCandidates: [["sample"]],
+  rcptWindowMinimized: [["sample"]],
+  rcptUiaActWarningLabel: [["sample"]],
+  rcptUiaGoneLine: [["sample", "sample"]],
+  rcptUiaGoneUnnamed: [["sample"]],
+  rcptUiaNoTitle: [["sample"]],
+  rcptUiaItemSupports: [["sample"]],
+  rcptUiaItemAt: [["sample"]],
+  rcptUiaListHead: [["sample", 1, true, "sample", 1]],
+  rcptUiaDiffHead: [["sample", 1, true, "sample", 1, true, "sample", 1, true]],
+  rcptUiaTail: [["sample", 1]],
+  rcptUiaPasswordNote: [["sample"]],
+  rcptUiaEditNote: [["sample"]],
+  rcptUiaNoteLine: [["sample"]],
+  rcptUiaItemUnnamed: [["sample"]],
+  rcptUiaChangeChanged: [["sample"]],
+  rcptUiaVerbInvoke: [["sample"]],
+  rcptUiaVerbSetValue: [["sample"]],
+  rcptUiaVerbSelection: [["sample"]],
+  rcptUiaActHead: [["sample", 1, true, "sample", 1, true]],
+  rcptUiaActFooter: [["sample"]],
+  rcptCaptureMasked: [["sample"]],
+  rcptCaptureStale: [["sample", 1]],
+  rcptShotMaskClean: [["sample"]],
+  rcptShotMaskNothingCovered: [["sample"]],
+  rcptShotMaskCovered: [["sample", 1]],
+  rcptShotMaskMissing: [["sample"]],
+  rcptShotMaskBridgeSaid: [["sample"]],
+  rcptPointOutside: [["sample", 1, true, "sample"]],
 };
 
 /** 把一份表摊成 `键 → 该键产出的全部文本`（函数按样本实参调一遍） */
@@ -176,12 +232,28 @@ describe("英文纯净守卫：英文那半边不许出现任何 CJK", () => {
   });
 });
 
+/**
+ * 只由标点/分隔符构成的键：它们本来就是排版用的（中文「，」「、」，英文 ", "），
+ * 按「必须有汉字」判会误报。**只允许这几个键**——别的键出现「一个汉字都没有」仍然是漏翻译。
+ */
+const PUNCTUATION_ONLY_KEYS = new Set(["rcptUiaStateSeparator", "rcptUiaFlagJoiner"]);
+
 describe("中文纯净守卫：中文那半边不许留整句英文", () => {
-  test("每句都有中文", () => {
+  test("每句都有中文（纯分隔符的键除外）", () => {
     for (const [key, texts] of flatten(computerUseUiTexts("zh"))) {
+      if (PUNCTUATION_ONLY_KEYS.has(key)) continue;
       texts.forEach((text, index) => {
         assert.match(text, CJK, `${key}[${index}] 里一个汉字都没有：${text}`);
       });
+    }
+  });
+
+  test("纯分隔符的键确实只有分隔符（不许借这个名单塞英文）", () => {
+    const zh = computerUseUiTexts("zh");
+    for (const key of PUNCTUATION_ONLY_KEYS) {
+      const value = zh[key as keyof typeof zh];
+      assert.equal(typeof value, "string", `${key} 应当是字符串`);
+      assert.doesNotMatch(String(value), /[A-Za-z0-9]/, `${key} 里不许有字母数字`);
     }
   });
 

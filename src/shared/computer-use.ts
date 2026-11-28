@@ -1,3 +1,5 @@
+import { computerUseReceiptTexts, type ComputerUseReceiptTexts } from "./computer-use-receipt-texts.ts";
+
 /**
  * computer use（Windows 沙箱隔离环境）契约 —— IPC 四层的第 1 层。
  *
@@ -11,7 +13,7 @@
  *
  * 出网：.wsb 的 <Networking> 缺省是 Default（沙箱能上网）。v1 要的就是网页自动化，所以这是
  * **有意放开的攻击面**：沙箱内的进程（含 agent 打开的网页）能访问网络与宿主所在内网，
- * 别把它当成「防网络的隔离层」。设置 › 实验功能 › 电脑使用 里有「允许沙箱出网」开关
+ * 别把它当成「防网络的隔离层」。设置 › 电脑使用 里有「允许沙箱出网」开关
  * （缺省值见 COMPUTER_USE_DEFAULT_ALLOW_NETWORK，即开）：关掉后 .wsb 渲染成
  * <Networking>Disable</Networking>，沙箱里只剩本地桌面自动化。.wsb 只在启动时渲染一次，
  * 所以这个改动**只对下一次启动生效**，运行中的 VM 仍按它启动时的设置（设置页常驻一行说明这件事）。
@@ -504,29 +506,33 @@ export function computerUseMaskLabel(language: string | undefined): string {
 /**
  * 给模型的那**一句话**：检查了几个帧、盖住几个字段；**没到的帧逐条点名**——模型据此才知道
  * 图里哪一块（可能是明文）不可信。老桥（mask === undefined）回空串。
+ *
+ * 2026-11-28 起跟界面语言走（回执是给用户看的，模型也读）：中文界面给中文句，英文界面给英文句。
  */
-export function computerUseShotMaskNote(mask: ComputerUseShotMask | undefined): string {
+export function computerUseShotMaskNote(
+  mask: ComputerUseShotMask | undefined,
+  texts: ComputerUseReceiptTexts = computerUseReceiptTexts("en"),
+): string {
   if (mask === undefined) return "";
-  const frames = `${mask.framesChecked} frame${mask.framesChecked === 1 ? "" : "s"}`;
-  const fields = `${mask.fieldsCovered} password field${mask.fieldsCovered === 1 ? "" : "s"}`;
+  const zh = texts === computerUseReceiptTexts("zh");
+  const frames = zh ? `${mask.framesChecked} 帧` : `${mask.framesChecked} frame${mask.framesChecked === 1 ? "" : "s"}`;
+  const fields = zh
+    ? `${mask.fieldsCovered} 个密码框`
+    : `${mask.fieldsCovered} password field${mask.fieldsCovered === 1 ? "" : "s"}`;
   // 一帧都没检查（预算闸 / 枚举失败）时**不许**说「没有密码字段」：那是「检查过且干净」的意思，
   // 而事实是这张图根本没被检查过。两句话说的不是一件事，模型据此决定要不要信这张图。
   const base =
     mask.framesChecked === 0
-      ? " Before the capture it skipped the password-field check; this image has not been checked for password fields."
+      ? texts.rcptShotMaskUnchecked
       : mask.fieldsCovered === 0 && mask.missing.length === 0
-        ? ` Before the capture it checked ${frames} and found no password field to cover.`
+        ? texts.rcptShotMaskClean(frames)
         : mask.fieldsCovered === 0
-          ? ` Before the capture it checked ${frames} and covered no password field.`
-          : ` Before the capture it checked ${frames} and covered ${fields} with an opaque overlay.`;
+          ? texts.rcptShotMaskNothingCovered(frames)
+          : texts.rcptShotMaskCovered(frames, fields);
   const hidden = mask.missingTotal - mask.missing.length;
-  const missing =
-    mask.missing.length === 0
-      ? ""
-      : ` Frames it could not reach (everything visible inside them is visible in this image): ${mask.missing.join(
-          "; ",
-        )}${hidden > 0 ? `; and ${hidden} more not listed` : ""}.`;
-  const error = mask.error === undefined ? "" : ` The bridge said: ${mask.error}`;
+  const more = hidden > 0 ? (zh ? `；另有 ${hidden} 个未列出` : `; and ${hidden} more not listed`) : "";
+  const missing = mask.missing.length === 0 ? "" : texts.rcptShotMaskMissing(`${mask.missing.join("; ")}${more}`);
+  const error = mask.error === undefined ? "" : texts.rcptShotMaskBridgeSaid(mask.error);
   return base + missing + error;
 }
 
@@ -808,7 +814,7 @@ export const computerUseLeaseErrors = {
   /** 沙箱被停 / 进 error */
   revoked: (reason: string): string =>
     `沙箱已经关闭（${reason}），操作权全部作废，这条命令没有下发。` +
-    "不要重试：先在「设置 › 实验功能 › 电脑使用」里重新启动沙箱，再从头开始。",
+    "不要重试：先在「设置 › 电脑使用」里重新启动沙箱，再从头开始。",
   /**
    * 不排队的资源被另一个会话持有。浏览器键按会话切分，正常走不到这里；这条只兜
    * 「调用方给错了键」的编程错误——仍然给一句模型能转告用户的话，而不是抛异常。
@@ -2116,7 +2122,23 @@ export function computerUseAudit(
   args: Record<string, unknown>,
   at: number = Date.now(),
 ): ComputerUseAudit {
-  return { action, args, at, inputOrigin: "agent" };
+  return { action, args: redactAuditArgs(args), at, inputOrigin: "agent" };
+}
+
+/**
+ * 审计入参的**脱敏**：正文字段（`text`）不落盘，只留字符数。
+ *
+ * 为什么必须在这里做：`details.computerUse` 会随工具结果写进会话 JSONL——`computer_type` /
+ * `sandbox_type` 的正文在登录页上就是密码，留一份等于把密码永久写进会话盘（2026-11-28
+ * 真机验收发现 JSONL 里还有两处命中：`.input.text` 是模型自己的调用参数、**无法避免**；
+ * `.details.computerUse.args.text` 是我们自己又存的一份，删掉的就是它）。
+ *
+ * 只认 `text` 一个键：其它入参是坐标、选择器、窗口标识，排障需要它们。
+ */
+function redactAuditArgs(args: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(args, "text")) return args;
+  const { text, ...rest } = args;
+  return { ...rest, textChars: typeof text === "string" ? text.length : 0 };
 }
 
 /**
@@ -2129,39 +2151,24 @@ export function computerUseAudit(
  * 没有密码框且清单是新的（`maskListed && !maskStale && maskedRegions === 0`）什么都不说：
  * 正常截图一个字都不该变——那些文案已经在真实会话里被稳住了。
  */
-export function captureNote(capture: ComputerUseCaptureInfo | undefined): string {
+export function captureNote(
+  capture: ComputerUseCaptureInfo | undefined,
+  texts: ComputerUseReceiptTexts = computerUseReceiptTexts("en"),
+): string {
   if (capture === undefined) return "";
   let note = "";
   if (capture.maskedRegions > 0) {
-    const fields = capture.maskedRegions === 1 ? "field" : "fields";
-    note +=
-      ` ${capture.maskedRegions} password ${fields} in this image ${capture.maskedRegions === 1 ? "was" : "were"} ` +
-      "blacked out — a password must never reach you, and the black block is deliberate. Do not try to read it; " +
-      "if you need a password, ask the user.";
+    note += texts.rcptCaptureMasked(capture.maskedRegions);
   } else if (capture.maskStale) {
     const ageSeconds = Math.max(0, Math.round(capture.maskCacheAgeMs / 1000));
-    note +=
-      " WARNING: this image is NOT masked. The last computer_uia list of what you captured is " +
-      `${ageSeconds}s old, and password field positions are only remembered for ` +
-      `${COMPUTER_USE_MASK_CACHE_MAX_AGE_MS / 1000}s — so if a password field is visible in this image, ` +
-      "do not read it. Run computer_uia list on that window again, then take the screenshot again.";
+    note += texts.rcptCaptureStale(ageSeconds, COMPUTER_USE_MASK_CACHE_MAX_AGE_MS / 1000);
   } else if (!capture.maskListed) {
-    note +=
-      " WARNING: this image is NOT masked — nothing has been listed with computer_uia yet, so password fields " +
-      "could not be found and covered. If a password field is visible in this image, do not read it. " +
-      "Run computer_uia list on that window first, then take the screenshot again.";
+    note += texts.rcptCaptureNotListed;
   }
   // P2-2 的那半句实话：桌面车道只认 UIA 的 IsPassword。网页里点过「显示密码」的框已经被翻成
   // 普通输入框，**在本次 list 之前**就翻开的那种桌面车道根本没见过——不能装作能遮。
-  note +=
-    " This is the desktop lane: it knows password fields only from the last computer_uia list, so a web page " +
-    "field already switched to plain text by \"show password\" before that list is invisible to it — for web " +
-    "pages use sandbox_screenshot, which masks by DOM.";
-  if (capture.userTyping) {
-    note +=
-      " A person was typing in the sandbox while this was captured (their input takes priority over yours), " +
-      "so parts of the image may already be out of date.";
-  }
+  note += texts.rcptCaptureDesktopLane;
+  if (capture.userTyping) note += texts.rcptCaptureUserTyping;
   return note;
 }
 

@@ -66,16 +66,17 @@ function isNotRunning(cause: unknown): boolean {
   return NOT_RUNNING_MARKERS.some((marker) => message.includes(marker));
 }
 
-/** 降级指引：只有模型看得到它，不写这句它就会重试同一个动作 */
-const FALLBACK_HINT =
-  "If CDP keeps failing, fall back to the pixel tools: computer_screenshot to see the sandbox desktop, " +
-  "computer_click / computer_type / computer_key to drive it. They do not need the browser's debugging port.";
-
-/** 把底层失败翻成带下一步的人话（已经带了指引就不再叠一遍） */
+/**
+ * 把底层失败翻成带下一步的人话（已经带了指引就不再叠一遍）。
+ *
+ * 降级指引从表里取（两种语言各一份）——以前是硬编码英文，拼到中文「没有在运行」那句后面
+ * 就成了中英混排（2026-11-28 真机验收 P2）。
+ */
 function browserFailure(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (message.includes("computer_screenshot") || message.includes("computer_click")) return message;
-  return `${message}. ${FALLBACK_HINT}`;
+  // 已经是完整句子（桥的错误 / 表里的句子）时不要再补一个句号
+  return message.endsWith(".") ? `${message} ${cuTexts().cdpFallbackHint}` : `${message}. ${cuTexts().cdpFallbackHint}`;
 }
 
 /**
@@ -472,11 +473,12 @@ async function dispatchSandboxBrowserRequest(
         const ms = number(resp["ms"]);
         return {
           ok: true,
-          text:
-            `Opened ${url === "" ? request.url : url}${title === "" ? "" : ` ("${title}")`} in the sandbox browser` +
-            `${ms === undefined ? "" : ` in ${ms} ms`}. ${warning === "" ? "" : `${warning} `}` +
-            "Call sandbox_observe to see what is on the page; its selectors stay valid until the page navigates. " +
-            "This browser is the isolated sandbox one — it has none of the user's sign-in state and no CAPTCHA help.",
+          text: cuTexts().rcptNavOpened(
+            url === "" ? request.url : url,
+            title,
+            ms === undefined ? "" : `${ms} ms`,
+            warning,
+          ),
         };
       }
       case "sandbox-observe": {
@@ -490,20 +492,16 @@ async function dispatchSandboxBrowserRequest(
         const body = text(resp["text"]).trim();
         const total = number(resp["totalTextLength"]);
         const truncated = resp["truncated"] === true;
-        const list =
-          elements.length === 0
-            ? "(no interactive elements matched — the page may still be loading: sandbox_wait for a selector, " +
-              "or sandbox_screenshot to look at it)"
-            : elements.map(formatElement).join("\n");
+        const texts = cuTexts();
+        const list = elements.length === 0 ? texts.rcptObserveNoElements : elements.map(formatElement).join("\n");
         return {
           ok: true,
           text:
-            `URL: ${text(resp["url"])}\nTitle: ${text(resp["title"])}\n\n` +
-            `${body === "" ? "(the page has no visible text)" : body}\n\n` +
-            `Interactive elements (${elements.length}):\n${list}` +
-            (truncated && total !== undefined ? `\n\n[page text truncated: showing ${body.length} of ${total} characters]` : "") +
-            "\n\nPass a selector to sandbox_click / sandbox_type / sandbox_extract. Selectors are positional and " +
-            "expire when the page navigates — observe again after a navigation.",
+            `${texts.rcptObserveTitleLine(text(resp["url"]), text(resp["title"]))}\n\n` +
+            `${body === "" ? texts.rcptObserveNoText : body}\n\n` +
+            `${texts.rcptElementsHeader(elements.length)}\n${list}` +
+            (truncated && total !== undefined ? `\n\n${texts.rcptObserveTruncated(body.length, total)}` : "") +
+            `\n\n${texts.rcptObserveFooter}`,
         };
       }
       case "sandbox-click": {
@@ -512,11 +510,14 @@ async function dispatchSandboxBrowserRequest(
         const label = text(resp["text"]);
         return {
           ok: true,
-          text:
-            `Clicked ${tag === "" ? "the element" : `<${tag}>`}${label === "" ? "" : ` "${label}"`} ` +
-            `(selector ${request.selector}) at (${number(resp["x"]) ?? "?"}, ${number(resp["y"]) ?? "?"}). ` +
-            `The page is now at ${text(resp["url"])}. Call sandbox_observe to see what changed — ` +
-            "selectors from before the click may no longer match.",
+          text: cuTexts().rcptClickDone(
+            tag,
+            label,
+            request.selector,
+            String(number(resp["x"]) ?? "?"),
+            String(number(resp["y"]) ?? "?"),
+            text(resp["url"]),
+          ),
         };
       }
       case "sandbox-type": {
@@ -538,14 +539,7 @@ async function dispatchSandboxBrowserRequest(
         const submitted = resp["submitted"] === true;
         return {
           ok: true,
-          text:
-            `Typed ${chars} character(s) into ${request.selector}` +
-            `${request.clear === false ? " (appended, the old value was kept)" : ""}. ` +
-            (fieldChars === undefined || fieldChars < 0
-              ? "The field now holds the typed text (its content is not echoed back)."
-              : `The field now holds ${fieldChars} character(s) (the content is not echoed back).`) +
-            (submitted ? " Enter was pressed to submit." : "") +
-            " Call sandbox_observe (or sandbox_wait for the next page) to see the result.",
+          text: cuTexts().rcptTypeDone(chars, request.selector, request.clear === false, fieldChars, submitted),
         };
       }
       case "sandbox-extract": {
@@ -559,17 +553,18 @@ async function dispatchSandboxBrowserRequest(
         const total = number(resp["totalLength"]);
         const truncated = resp["truncated"] === true;
         const warning = text(resp["warning"]);
+        const texts = cuTexts();
         if (body === "" && warning === "" && request.selector === undefined) {
-          return { ok: true, text: "The page has no visible text (it may still be loading — try sandbox_wait)." };
+          return { ok: true, text: texts.rcptExtractNoText };
         }
         return {
           ok: true,
           text:
-            (body === "" ? "(no text matched)" : body) +
+            (body === "" ? texts.rcptExtractNothingMatched : body) +
             (warning === "" ? "" : `\n\n[${warning}]`) +
             (total === undefined
               ? ""
-              : `\n\n[${total} character(s) in total${truncated ? `, showing the first ${body.length}` : ""}]`),
+              : `\n\n${truncated ? texts.rcptExtractTruncated(total, body.length) : texts.rcptExtractTotal(total)}`),
         };
       }
       case "sandbox-wait": {
@@ -581,22 +576,14 @@ async function dispatchSandboxBrowserRequest(
         const appeared = resp["appeared"] === true;
         const waitedMs = number(resp["waitedMs"]);
         const waited = waitedMs === undefined ? "a while" : `${waitedMs} ms`;
+        const texts = cuTexts();
         if (request.selector === undefined) {
-          return { ok: true, text: `Waited ${waited}. The page has had time to settle — sandbox_observe it now.` };
+          return { ok: true, text: texts.rcptWaitSettled(waited) };
         }
         if (appeared) {
-          return {
-            ok: true,
-            text: `Element ${request.selector} appeared after ${waited}. Call sandbox_observe to get its selector and neighbours.`,
-          };
+          return { ok: true, text: texts.rcptWaitAppeared(request.selector, waited) };
         }
-        return {
-          ok: true,
-          text:
-            `Element ${request.selector} did not appear within ${waited}. Either the selector is wrong ` +
-            "(sandbox_observe shows the ones that exist) or the page needs more time (call sandbox_wait again, " +
-            "or sandbox_screenshot to see what is on screen).",
-        };
+        return { ok: true, text: texts.rcptWaitMissing(request.selector, waited) };
       }
       case "sandbox-screenshot": {
         const maxWidth = request.maxWidth ?? COMPUTER_USE_SHOT_MAX_WIDTH;
@@ -608,15 +595,21 @@ async function dispatchSandboxBrowserRequest(
         if (width === undefined || height === undefined || nativeWidth === undefined || nativeHeight === undefined) {
           throw new Error(cuTexts().browserShotShape);
         }
+        const texts = cuTexts();
         return {
           ok: true,
           text:
-            `Screenshot of the page at ${text(shot.resp["url"])}${text(shot.resp["title"]) === "" ? "" : ` ("${text(shot.resp["title"])}")`}: ` +
-            `the image is ${width}×${height}, the page viewport is ${nativeWidth}×${nativeHeight} CSS pixels.` +
+            texts.rcptShotPage(
+              text(shot.resp["url"]),
+              text(shot.resp["title"]),
+              width,
+              height,
+              nativeWidth,
+              nativeHeight,
+            ) +
             // 遮罩的实话：盖了几块、盖到哪一层；降级时明说跨源 iframe 没遮（老桥没有这几个字段就不添话）
-            computerUseShotMaskNote(computerUseShotMask(shot.resp)) +
-            " Prefer sandbox_observe / sandbox_click (DOM level) over reading things off the image; " +
-            "computer_click can also hit the browser window as a last resort, but it has no idea what is under the pointer.",
+            computerUseShotMaskNote(computerUseShotMask(shot.resp), texts) +
+            ` ${texts.rcptShotPageFooter}`,
           shot: {
             data: Buffer.from(shot.jpeg).toString("base64"),
             width,
@@ -636,11 +629,7 @@ async function dispatchSandboxBrowserRequest(
         );
         return {
           ok: true,
-          text:
-            `Attached "${prepared.fileName}" to the file input ${request.selector} ` +
-            `(the page sees it as "${text(resp["fileName"])}"). ` +
-            "The file was copied into the sandbox's mapped folder first — the original on the host is untouched. " +
-            "If the page needs a submit button pressed, do that with sandbox_click.",
+          text: cuTexts().rcptUploadAttached(prepared.fileName, request.selector, text(resp["fileName"])),
         };
       }
       case "sandbox-download": {
@@ -653,20 +642,17 @@ async function dispatchSandboxBrowserRequest(
         );
         const names = stringArray(resp["files"]);
         const paths = await cdp.resolveDownloads(target.hostDir, names);
+        const texts = cuTexts();
         if (paths.length === 0) {
-          return {
-            ok: true,
-            text:
-              `Clicked ${request.selector} but no file landed in the download folder (${target.hostDir}) within 20 s. ` +
-              "The link may open a page instead of downloading one — sandbox_observe it, or check sandbox_screenshot.",
-          };
+          return { ok: true, text: texts.rcptDownloadNone(request.selector, target.hostDir) };
         }
         return {
           ok: true,
-          text:
-            `Downloaded ${paths.length} file(s) by clicking ${request.selector}. They are on the host at:\n` +
-            paths.map((path) => `- ${path}`).join("\n") +
-            "\nUse them directly with your file tools (read_pdf, read, …).",
+          text: texts.rcptDownloadDone(
+            paths.length,
+            request.selector,
+            paths.map((path) => `- ${path}`).join("\n"),
+          ),
         };
       }
       case "sandbox-tabs": {
@@ -680,17 +666,17 @@ async function dispatchSandboxBrowserRequest(
         );
         const tabs = parseTabs(resp["tabs"]);
         const active = number(resp["active"]);
+        const texts = cuTexts();
         const lines = tabs.map((tab) =>
-          `${tab.active ? "* " : "  "}[${tab.index}] ${tab.title === "" ? "(untitled)" : tab.title} — ${tab.url}`,
+          `${tab.active ? "* " : "  "}[${tab.index}] ${tab.title === "" ? texts.rcptTabsUntitled : tab.title} — ${tab.url}`,
         );
         return {
           ok: true,
           text:
-            `${tabs.length} tab(s) in the sandbox browser (the * is the one you are acting on):\n` +
-            `${lines.length === 0 ? "(none)" : lines.join("\n")}\n` +
-            (op === "switch" ? `Switched to tab ${active ?? "?"}. ` : "") +
-            "A popup or a target=_blank link opens a new tab without switching to it — list them here and switch " +
-            "when you actually need that page. Selectors from the old tab do not apply to the new one: observe again.",
+            `${texts.rcptTabsHeader(tabs.length)}\n` +
+            `${lines.length === 0 ? texts.rcptTabsNone : lines.join("\n")}\n` +
+            (op === "switch" ? texts.rcptTabsSwitched(String(active ?? "?")) : "") +
+            texts.rcptTabsFooter,
         };
       }
       default:
@@ -769,7 +755,6 @@ function parseElements(value: unknown): SandboxElement[] {
 
 function formatElement(element: SandboxElement): string {
   const role = element.role === "" ? "" : ` role=${element.role}`;
-  const editable = element.editable ? " [editable]" : "";
   const label = element.text === "" ? "" : ` "${element.text}"`;
-  return `- ${element.tag}${role}${editable}: selector ${element.selector}${label} at (${element.x}, ${element.y})`;
+  return cuTexts().rcptElementLine(element.tag, role, element.editable, element.selector, label, element.x, element.y);
 }

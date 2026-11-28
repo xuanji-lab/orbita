@@ -52,7 +52,7 @@ function outboundNetworkIsOff(facts: SandboxNetworkFacts): boolean {
  * 写英文是跟其它工具描述一致——模型读工具描述的语言不是用户界面语言。
  */
 const SANDBOX_NO_NETWORK =
-  "**This sandbox has no outbound network** (Settings › Experimental features › Computer use › Sandbox › " +
+  "**This sandbox has no outbound network** (Settings › Computer use › " +
   "\"Allow network access\" is off): pages will not load, and that is the setting — not the site, not the URL, " +
   "and not your selectors. Do not retry the navigation or try other addresses, and do not blame the page. " +
   "Desktop and file work in the sandbox is unaffected. If the task really needs the web, ask the user to turn " +
@@ -65,16 +65,28 @@ const SANDBOX_NO_NETWORK =
  * 只讲三件真事：用户的要求、这台机器能否断网、以及由此该怎么做事。
  */
 const SANDBOX_NETWORK_UNCONTROLLED =
-  "The user turned off Settings › Experimental features › Computer use › Sandbox › \"Allow network access\", " +
+  "The user turned off Settings › Computer use › Sandbox › \"Allow network access\", " +
   "but this isolation backend runs in a separate logon session on the user's own computer and cannot block " +
   "its network — assume the machine's network is reachable. Don't browse unless the task needs it.";
 
-/** 失败文案里替换掉「可能」的那句确定性结论（中文，跟 guest 桥回的人话同一种语言） */
-const NETWORK_FAILURE_OFF =
-  "确定原因（宿主设置，不是猜测）：沙箱当前被设置为**不允许出网**（设置 › 实验功能 › 电脑使用 › " +
-  "允许沙箱出网 = 关），所以这个地址打不开——这是设置，不是网站的问题。**不要换地址、不要换站点，" +
-  "也别改用宿主机浏览器绕过去**：结果会一样。要用网络请让用户在设置里打开「允许沙箱出网」" +
+/**
+ * 失败文案里替换掉「可能」的那句确定性结论。
+ *
+ * 2026-11-28 起两种语言各一份：回执是给用户看的（模型也读），中文界面里挂一段英文（或反过来）
+ * 都是夹生字。中文那份以前就是这里的中文常量。
+ */
+const NETWORK_FAILURE_OFF_ZH =
+  "确定原因（宿主设置，不是猜测）：沙箱当前被设置为不允许出网（设置 › 电脑使用 › " +
+  "允许沙箱出网 = 关），所以这个地址打不开——这是设置，不是网站的问题。不要换地址、不要换站点，" +
+  "也不要改用宿主机浏览器绕过去：结果会一样。要用网络请让用户在设置里打开「允许沙箱出网」" +
   "（下次启动沙箱时生效）。";
+
+const NETWORK_FAILURE_OFF_EN =
+  "That is the cause (a host setting, not a guess): this sandbox is set to have no outbound network " +
+  "(Settings › Computer use › Allow network access is off), so this address cannot load — it is the setting, " +
+  "not the site. Do not try other addresses or other sites, and do not route around it with the host browser: " +
+  "the result will be the same. If the task needs the web, ask the user to turn that setting on (it applies the " +
+  "next time the sandbox starts).";
 
 /**
  * guest 桥那句通用的「怎么确认」建议（guest-bridge/Cdp.cs 的 NavErrorMessage，两份代码各一份）。
@@ -117,8 +129,8 @@ export function computerUseNetworkGuideline(computerUse: ComputerUseTurnContext 
   }
   return [
     "<orbita-sandbox-network>",
-    "This sandbox is set to **no outbound network** (the user turned off Settings › Experimental " +
-      "features › Computer use › Sandbox › \"Allow network access\"). Web pages in it will not load: that is " +
+    "This sandbox is set to **no outbound network** (the user turned off Settings › Computer use › " +
+      "\"Allow network access\"). Web pages in it will not load: that is " +
       "the setting, not the site. Do not retry a failed sandbox_navigate, do not try other URLs to see whether " +
       "the network is back, and do not silently move the same web task to another tool. Tell the user the " +
       "sandbox has no network and that turning it on applies the next time the sandbox starts. Local desktop " +
@@ -155,11 +167,18 @@ export function computerUseBudgetGuideline(): string {
  *
  * 原样返回必须是**同一份字符串**：调用点直接抛它，开着出网时模型看到的一个字都不变。
  */
-export function networkFailureError(message: string, facts: SandboxNetworkFacts): string {
+export function networkFailureError(
+  message: string,
+  facts: SandboxNetworkFacts,
+  uiLanguage: "zh" | "en" = "en",
+): string {
   if (!outboundNetworkIsOff(facts)) return message;
   if (!NETWORK_ERROR_CODES.test(message)) return message;
-  // 先摘掉 guest 那句「换一个一定能打开的地址试一次」，再追加确定结论：
-  // 留它在前面就是自相矛盾（换地址必然再失败一次），而模型先读到的往往是第一段。
+  // 先摘掉 guest 那句「换一个一定能打开的地址试一次」，再追加确定结论：留它在前面就是自相矛盾
+  //（换地址必然再失败一次），而模型先读到的往往是第一段。桥那句是中文（桥不跟语言走）：
+  // 中文界面下摘得掉；英文界面下桥的回执已被宿主映射成英文，那句不会出现——两种情形都不留矛盾。
   const cleaned = message.split(GUEST_CONFIRM_ADVICE).join("");
-  return `${cleaned}\n\n${NETWORK_FAILURE_OFF}`;
+  const conclusion = uiLanguage === "zh" ? NETWORK_FAILURE_OFF_ZH : NETWORK_FAILURE_OFF_EN;
+  // 两句之间空一行（与 guest 回执的排版一致）：用 join 而不是模板串，免得换行符被编辑器吃掉
+  return [cleaned, conclusion].join(String.fromCharCode(10, 10));
 }

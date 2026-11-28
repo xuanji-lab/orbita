@@ -891,6 +891,12 @@ export interface ComputerUseTurnContext {
    * 由主进程用「设置里的 backend + allowNetwork」算好，agent 进程不自己读设置。
    */
   networkControlled: boolean;
+  /**
+   * 界面语言（`effectiveLanguage(settings.language)`，2026-11-28）。工具回执的正文要跟它走：
+   * 回执是给用户看的（「已在沙箱浏览器里打开…」「已输入 12 个字符」），中文界面里出现整句英文
+   * 就是夹生字。**缺席按 `en`**（与界面缺省一致，也与这些句子改动前的样子一致）。
+   */
+  uiLanguage?: "zh" | "en";
 }
 
 /**

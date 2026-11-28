@@ -22,6 +22,7 @@
  * 都不变，开关关着但后端断不了网（L2b）时得到的是另一句短话（computer-network.ts）。
  */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { computerUseUiTexts, type ComputerUseUiTexts } from "../shared/computer-use-texts.ts";
 import { RequestBroker } from "./request-broker.ts";
 import { networkFailureError, sandboxNetworkNote, type SandboxNetworkFacts } from "./computer-network.ts";
 import {
@@ -129,7 +130,10 @@ export function createSandboxBrowserTools(
    * 只影响描述与失败文案，不改变任何请求。成对传——两个相邻布尔位置参数太容易写反。
    */
   network: SandboxNetworkFacts,
+  /** 界面语言（`ComputerUseTurnContext.uiLanguage`）：回执正文跟它走；缺省 en */
+  uiLanguage: "zh" | "en" = "en",
 ): ToolDefinition[] {
+  const ui = computerUseUiTexts(uiLanguage);
   /**
    * 发请求并等回执；**这一轮被停掉（signal abort）就立刻放手**——pi 等工具返回才结束一轮，
    * 不放手的话「停止」按钮会失灵（browser-tools.ts / computer-tools.ts 同款）。
@@ -153,7 +157,7 @@ export function createSandboxBrowserTools(
               signal.addEventListener("abort", () => reject(new Error("Stopped")), { once: true }),
             ),
           ]);
-    if (!result.ok) throw new Error(networkFailureError(result.error, network));
+    if (!result.ok) throw new Error(networkFailureError(result.error, network, uiLanguage));
     return result;
   };
 
@@ -200,7 +204,7 @@ export function createSandboxBrowserTools(
     } as never,
     async execute(_toolCallId, params, signal) {
       const url = (params as Record<string, unknown> | undefined)?.["url"];
-      if (typeof url !== "string" || url.trim() === "") throw new Error("url is required");
+      if (typeof url !== "string" || url.trim() === "") throw new Error(ui.vldUrlRequired);
       const result = await call({ action: "sandbox-navigate", url: url.trim() }, signal, NAVIGATE_TIMEOUT_MS);
       return textOnly(result);
     },
@@ -271,7 +275,7 @@ export function createSandboxBrowserTools(
     } as never,
     async execute(_toolCallId, params, signal) {
       const args = (params ?? {}) as Record<string, unknown>;
-      const selector = requiredSelector(args);
+      const selector = requiredSelector(args, ui);
       const element = optionalString(args["element"]);
       const result = await call(
         { action: "sandbox-click", selector, ...(element === undefined ? {} : { element }) },
@@ -317,9 +321,9 @@ export function createSandboxBrowserTools(
     } as never,
     async execute(_toolCallId, params, signal) {
       const args = (params ?? {}) as Record<string, unknown>;
-      const selector = requiredSelector(args);
+      const selector = requiredSelector(args, ui);
       const value = args["text"];
-      if (typeof value !== "string") throw new Error("text is required");
+      if (typeof value !== "string") throw new Error(ui.vldTextRequired);
       const element = optionalString(args["element"]);
       const result = await call(
         {
@@ -403,7 +407,7 @@ export function createSandboxBrowserTools(
       const ms = numberOf(args["ms"]);
       const timeoutMs = numberOf(args["timeoutMs"]);
       if (selector === undefined && ms === undefined) {
-        throw new Error("Pass a selector, or ms to just wait. Without either there is nothing to wait for.");
+        throw new Error(ui.vldWaitNeedsSelectorOrMs);
       }
       const result = await call(
         {
@@ -440,7 +444,7 @@ export function createSandboxBrowserTools(
     async execute(_toolCallId, _params, signal) {
       const result = await call({ action: "sandbox-screenshot" }, signal);
       const shot = result.shot;
-      if (shot === undefined) throw new Error("sandbox-screenshot 回执里没有图（主进程与契约不一致）");
+      if (shot === undefined) throw new Error(ui.rcptBrowserShotMissingImage);
       return {
         content: [
           { type: "text" as const, text: result.text },
@@ -476,9 +480,9 @@ export function createSandboxBrowserTools(
     } as never,
     async execute(_toolCallId, params, signal) {
       const args = (params ?? {}) as Record<string, unknown>;
-      const selector = requiredSelector(args);
+      const selector = requiredSelector(args, ui);
       const filePath = args["path"];
-      if (typeof filePath !== "string" || filePath.trim() === "") throw new Error("path is required");
+      if (typeof filePath !== "string" || filePath.trim() === "") throw new Error(ui.vldPathRequired);
       const element = optionalString(args["element"]);
       const result = await call(
         {
@@ -525,7 +529,7 @@ export function createSandboxBrowserTools(
     } as never,
     async execute(_toolCallId, params, signal) {
       const args = (params ?? {}) as Record<string, unknown>;
-      const selector = requiredSelector(args);
+      const selector = requiredSelector(args, ui);
       const dir = optionalString(args["dir"]);
       const element = optionalString(args["element"]);
       // 下载是「guest 点一下 + 等文件落盘（20s）+ 宿主等同步（5s）」，比普通命令长
@@ -563,7 +567,7 @@ export function createSandboxBrowserTools(
     async execute(_toolCallId, params, signal) {
       const args = (params ?? {}) as Record<string, unknown>;
       const op = args["op"] === "switch" ? "switch" : args["op"] === "list" || args["op"] === undefined ? "list" : undefined;
-      if (op === undefined) throw new Error('op must be "list" or "switch".');
+      if (op === undefined) throw new Error(ui.vldTabsOp);
       const index = numberOf(args["index"]);
       const result = await call(
         {
@@ -598,12 +602,10 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 }
 
-function requiredSelector(args: Record<string, unknown>): string {
+function requiredSelector(args: Record<string, unknown>, ui: ComputerUseUiTexts): string {
   const selector = optionalString(args["selector"]);
   if (selector === undefined) {
-    throw new Error(
-      "selector is required. Call sandbox_observe first — it lists the selectors that exist on the page.",
-    );
+    throw new Error(ui.vldSelectorRequired);
   }
   return selector;
 }

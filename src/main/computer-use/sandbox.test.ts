@@ -1987,7 +1987,7 @@ describe("guest 命令下发", () => {
       const result = await harness.controller.guestCommand("click", { x: 1, y: 2 });
       assert.equal(result.ok, false);
       assert.ok(result.ok === false && /没有在运行/.test(result.error));
-      assert.ok(result.ok === false && /设置 › 实验功能 › 电脑使用/.test(result.error));
+      assert.ok(result.ok === false && /设置 › 电脑使用/.test(result.error));
       assert.deepEqual(harness.requests, [], "闸门在写文件之前，不该有任何请求");
     } finally {
       await harness.close();
