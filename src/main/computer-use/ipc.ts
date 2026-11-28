@@ -1,0 +1,143 @@
+/**
+ * computer use 的 IPC —— 四层契约的第 2 层。
+ * 四个入口都是 renderer 发起、主进程执行；沙箱状态机每次迁移经 computerUseStatus 推给
+ * renderer（主窗口广播，同 channel 域的 broadcastChannelEvent 形态）。
+ * PR1 只落这层与契约层；preload / renderer 面（第 3、4 层）随 renderer 刀接上。
+ */
+import { ipcMain } from "electron";
+import { mainWindows } from "../window/main-windows.ts";
+import {
+  computerUseBackendChoices,
+  computerUseChannels,
+  devBackendsEnabled,
+  type ComputerUseBackendChoice,
+  type ComputerUseProbeResult,
+  type ComputerUseScreenshotResult,
+  type ComputerUseStartResult,
+  type ComputerUseStopResult,
+  type EmergencyStopStatus,
+  type SandboxStatus,
+  type ComputerUseLeaseStatus,
+} from "../../shared/computer-use.ts";
+import type { EmergencyStopController } from "./emergency-stop.ts";
+import { desktopLeaseStatus, type ComputerUseLease } from "./lease.ts";
+
+/**
+ * IPC 真正要的那几个方法。**收窄成接口而不是吃 SandboxController**：现在有两个后端
+ * （WSB 与 IsolationSession），renderer 面对的是运行时门面；测试注入一个只有
+ * 这四个方法的假控制器就够。两个控制器结构上都满足它。
+ */
+export interface ComputerUseIpcController {
+  probe(): Promise<ComputerUseProbeResult>;
+  status(): SandboxStatus;
+  start(): Promise<ComputerUseStartResult>;
+  stop(): Promise<ComputerUseStopResult>;
+  screenshot(maxWidth?: number): Promise<ComputerUseScreenshotResult>;
+}
+
+/**
+ * 停沙箱前的收尾钩子（可选）。PR3 用它把沙箱里的 Edge 先停掉：`cdp-stop` 只杀我们自己
+ * 记录的那个进程树，桥已经不响应就算了——沙箱销毁会带走整个 VM。
+ * **不做成等待**：停沙箱是用户按的按钮，不能被一条浏览器命令拖住 45 秒。
+ */
+export interface ComputerUseIpcHooks {
+  beforeStop?: () => void;
+  /**
+   * 设置页要的可选后端列表。缺省读 `ORBITA_CU_DEV_BACKENDS`（缺席 = 只有 wsb / isolation-session）。
+   * 主进程在接线处显式传一份，单测与其它调用方不必给。
+   */
+  backends?: () => readonly ComputerUseBackendChoice[];
+}
+
+/**
+ * 会话授权的回答口（第四层的回答落到这里）。挂起表与落盘都在
+ * `main/computer-use/consent.ts`，IPC 只做形状洗白再转交。
+ *
+ * 回答只有两种：`allowed` / `denied`。传别的（形状不对）一律丢弃并回 false——
+ * 陈旧应答 / 坏载荷绝不能被当成「允许」。
+ */
+export interface ComputerUseConsentIpc {
+  answer: (requestId: string, decision: "allowed" | "denied") => boolean;
+}
+
+export function registerComputerUseIpc(
+  controller: ComputerUseIpcController,
+  hooks: ComputerUseIpcHooks = {},
+  /**
+   * 急停热键的控制器（optional：旧测试 / 未接线的场景没有它）。设置页问注册状态，
+   * 失败时如实显示「被占用」，不假装保护存在。
+   */
+  emergencyStop?: EmergencyStopController,
+  /**
+   * 桌面租约（optional：没有它时「归属」回空闲）。设置页的「正在被谁使用」读它，
+   * 不另写一套状态——真源是 dispatch 拿锁用的同一份租约。
+   */
+  lease?: ComputerUseLease,
+  /**
+   * 会话授权的回答口（optional：旧测试 / 未接线的场景没有它——那时挂起的提问不存在，
+   * 回答什么都是过时的）。返回是否真的结掉了一次挂起：renderer 不需要这个回执，
+   * 状态变化走 `computerUseConsentState` 广播（所有窗口同步）。
+   */
+  consent?: ComputerUseConsentIpc,
+): void {
+  ipcMain.handle(computerUseChannels.computerUseProbe, (): Promise<ComputerUseProbeResult> => controller.probe());
+  /**
+   * 可选后端列表（只读）。每次现算：开发者开关是启动时的环境变量，变了要重启应用，
+   * 所以这里不缓存也无需订阅。
+   */
+  const backends = hooks.backends ?? (() => computerUseBackendChoices(devBackendsEnabled(process.env)));
+  ipcMain.handle(
+    computerUseChannels.computerUseBackends,
+    (): readonly ComputerUseBackendChoice[] => backends(),
+  );
+  ipcMain.handle(computerUseChannels.computerUseStatusGet, (): SandboxStatus => controller.status());
+  ipcMain.handle(
+    computerUseChannels.computerUseStart,
+    (): Promise<ComputerUseStartResult> => controller.start(),
+  );
+  ipcMain.handle(computerUseChannels.computerUseStop, (): Promise<ComputerUseStopResult> => {
+    hooks.beforeStop?.();
+    return controller.stop();
+  });
+  ipcMain.handle(
+    computerUseChannels.computerUseScreenshot,
+    (_event, maxWidth: unknown): Promise<ComputerUseScreenshotResult> =>
+      controller.screenshot(typeof maxWidth === "number" ? maxWidth : undefined),
+  );
+  ipcMain.handle(
+    computerUseChannels.computerUseEmergencyStopState,
+    (): EmergencyStopStatus =>
+      emergencyStop?.status() ?? {
+        accelerator: "",
+        registered: false,
+        error: "急停没有接线（主进程未注册热键）",
+      },
+  );
+  /**
+   * 桌面现在归谁（设置页「沙箱归属」）。每次现算：租约会因 idle / 硬上限 / 沙箱关闭
+   * 在这里说话之前就已经无主，缓存一份就会让设置页继续显示一个已经结束的持有者。
+   */
+  ipcMain.handle(
+    computerUseChannels.computerUseLeaseStatus,
+    (): ComputerUseLeaseStatus => (lease === undefined ? null : desktopLeaseStatus(lease)),
+  );
+  /**
+   * 会话授权的回答（确认行 / 输入框上方状态行）。入口只认两个字符串：别的值当坏载荷丢掉。
+   * 返回 void：不管结没结，界面都听 `computerUseConsentState`（按 requestId 清挂起行）。
+   */
+  ipcMain.handle(
+    computerUseChannels.computerUseConsentAnswer,
+    (_event, requestId: unknown, decision: unknown): void => {
+      if (consent === undefined || typeof requestId !== "string" || requestId === "") return;
+      if (decision !== "allowed" && decision !== "denied") return;
+      consent.answer(requestId, decision);
+    },
+  );
+}
+
+/** 主进程 → 所有主窗口：沙箱状态迁移。renderer 冷启动按 off 画（沙箱不跨应用存活）。 */
+export function broadcastComputerUseStatus(status: SandboxStatus): void {
+  for (const window of mainWindows.list()) {
+    window.webContents.send(computerUseChannels.computerUseStatus, status);
+  }
+}

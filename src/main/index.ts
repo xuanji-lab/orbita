@@ -11,13 +11,23 @@ import { applySubAgentRequest } from "./planet/sub-agent-requests.ts";
 import { preferIPv4 } from "../shared/dial-v4.ts";
 import { CATALOG_CACHE_ENV } from "../shared/agent-ipc.ts";
 import { catalogIdsOfProviders } from "../shared/known-providers.ts";
-import { app, BrowserWindow, nativeTheme, powerMonitor, powerSaveBlocker, shell, type WebPreferences } from "electron";
+import { app, BrowserWindow, globalShortcut, nativeTheme, powerMonitor, powerSaveBlocker, shell, type WebPreferences } from "electron";
 import { randomUUID } from "node:crypto";
 import { cpus, homedir, totalmem } from "node:os";
 import { join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import type { SessionPhase } from "@earendil-works/pi-protocol";
 import { resolveAvatarModel } from "../shared/planet-avatar.ts";
-import { effectiveLanguage, lastUsedPair, type Language, type ThemePreference } from "../shared/settings.ts";
+import {
+  effectiveAllowNetwork,
+  effectiveComputerUseBackend,
+  effectiveGuestAllowExe,
+  effectiveGuestBrowser,
+  effectiveLanguage,
+  lastUsedPair,
+  type Language,
+  type ThemePreference,
+} from "../shared/settings.ts"
 import { AgentHost, resolveRuntimePath } from "./agent/host.ts";
 import { agentEnv, bundledBinDir } from "./agent/search-bins.ts";
 import { PI_PACKAGE_DIR_ENV, piPackageDir } from "./agent/pi-package.ts";
@@ -44,7 +54,7 @@ import {
 import { MemoryTurnTracker } from "./memory/turn-tracker.ts";
 import { MemoryHistoryJob, parseHistoryStatus } from "./memory/history-job.ts";
 import { EpisodeStore, EPISODE_IDLE_CLOSE_MS } from "../memory/episodes.ts";
-import { writeJsonAtomic } from "./atomic-write.ts";
+import { writeJsonAtomic, writeTextAtomic } from "./atomic-write.ts";
 import { isNotFound } from "./fs-errors.ts";
 import { choreModelPayload } from "./memory/chore.ts";
 import { llamaServerCandidates } from "./memory/llama-bin.ts";
@@ -134,6 +144,32 @@ import { registerRightPanelMemoryIpc } from "./right-panel-memory/ipc.ts";
 import { RightPanelMemoryStore } from "./right-panel-memory/store.ts";
 import { isSystemHandoffLink, isWebLink } from "./browser/address.ts";
 import { BrowserSandbox } from "./browser/sandbox.ts";
+import { windowsSandboxExePath } from "./computer-use/capability.ts";
+import { broadcastComputerUseStatus, registerComputerUseIpc } from "./computer-use/ipc.ts";
+import { createEmergencyStop } from "./computer-use/emergency-stop.ts";
+import { buildCloseSandboxWindowScript } from "./computer-use/close-window-script.ts";
+import { sendGuestCommand } from "./computer-use/bridge-client.ts";
+import {
+  BRIDGE_INFO_FILE,
+  COMPUTER_USE_SHUTDOWN_REQUEST_FILE,
+  computerUseBackendChoices,
+  computerUseBlockedReason,
+  computerUseGuestCommands,
+  devBackendsEnabled,
+  parseComputerUseConsent,
+  type ComputerUseTurnOrigin,
+} from "../shared/computer-use.ts";
+import { ComputerUseConsentWaiter, createComputerUseConsentGate } from "./computer-use/consent.ts";
+
+import { parseSandboxProcesses, type SandboxProcessInfo } from "./computer-use/process-list.ts";
+import { SandboxController } from "./computer-use/sandbox.ts";
+import { IsolationSessionController } from "./computer-use/isolation-session.ts";
+import { createMxcSdk } from "./computer-use/mxc-sdk.ts";
+import { createComputerUseRuntime } from "./computer-use/runtime.ts";
+import { applyComputerUseRequest } from "./computer-use/agent-requests.ts";
+import { applySandboxBrowserRequest, CdpSession } from "./computer-use/cdp.ts";
+import { createComputerUseDispatcher } from "./computer-use/dispatch.ts";
+import { createComputerUseLease } from "./computer-use/lease.ts";
 import { PAGE_BACKGROUNDS, pageBackgroundColor } from "./browser/page-background.ts";
 import { applyBrowserRequest } from "./browser/agent-requests.ts";
 import { applyTerminalRequest } from "./terminal/agent-requests.ts";
@@ -469,6 +505,43 @@ void app.whenReady().then(async () => {
     onLogSeeded: (id, records, logBytes) => statusDigests.seed(id, records, logBytes),
     onRemoved: (id) => void statusDigests.remove(id),
   });
+  /**
+   * 电脑使用的会话授权（2026-11-27）：提问表 + 栅门。位置在 sessions 之后、窗口接线之前——
+   * 栅门读写会话 meta，而主窗口全关时要先把挂起的提问按拒绝结掉（onLastClosed，下面）。
+   * 提问走 `agent:event` 的同一条广播通道（与 intentAsk / 急停一致），回答走
+   * `computer-use:consent-answer`（registerComputerUseIpc 注册）。
+   */
+  /**
+   * 每条会话**当前这一轮**是谁发起的（2026-11-27 验收后）。值只由开轮处写（registerAgentIpc 的
+   * submitTurn / interrupt），闸门只读——发起者是主进程本来就知道的事实，不需要另开一条 IPC。
+   * 缺席按 `user` 算：用户手点的轮是默认路径，自动化会在开轮时显式写 `automation`。
+   */
+  const computerUseTurnOrigins = new Map<string, ComputerUseTurnOrigin>();
+  const computerUseConsentWaiter = new ComputerUseConsentWaiter({
+    send: (event) => broadcastAgentEvent(event),
+    // 本轮结束 / 会话删除：把确认行从界面上撤下（不是拒绝，没有写 meta）
+    notifyCancelled: (event) => broadcastAgentEvent(event),
+  });
+  const computerUseConsentGate = createComputerUseConsentGate({
+    // 一次读盘拿齐「授权值 + 用户能不能看到并回答」：后者由 shared 的唯一判据
+    // computerUseBlockedReason(会话身份, 这一轮的发起者) 算。发起者由开轮处记在
+    // computerUseTurnOrigins（见 registerAgentIpc 的 setTurnOrigin）。
+    read: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId);
+      if (meta === null) return null;
+      return {
+        consent: parseComputerUseConsent(meta.computerUseConsent),
+        blockedReason: computerUseBlockedReason(meta, computerUseTurnOrigins.get(sessionId) ?? "user"),
+      };
+    },
+    // write 回「真的落下了没」：`update` 对已删会话静默 no-op，不能把它当成功
+    write: (sessionId, consent) => sessions.setComputerUseConsent(sessionId, consent),
+    ask: (sessionId, action) => computerUseConsentWaiter.ask(sessionId, action),
+    // 没人能回答就不问：窗口全关 / 只剩无界面的自动化时提问只会等到 120s 超时，
+    // 不如当场按拒绝落库（fail closed 的结果一样，代价更小）。
+    canAsk: () => mainWindows.list().length > 0,
+    notify: (event) => broadcastAgentEvent(event),
+  });
   // 语音：听写 + 通话的合成与录音（录音写进会话工作台，所以排在 SessionStore 之后）
   registerVoiceIpc(
     new VoiceStore(configDir, secrets),
@@ -553,7 +626,452 @@ void app.whenReady().then(async () => {
     appVersion: app.getVersion(),
   });
   registerBrowserIpc(browserSandbox, settings, configDir);
-  mainWindows.onLastClosed(() => browserSandbox.dispose());
+  mainWindows.onLastClosed(() => {
+    // 窗口全关 = 没有人能回答授权提问：按**拒绝**结掉（与「本轮结束」不同，这条路上
+    // 「没人能答」本身就是拒绝）。紧接着应用会退出，这次写可能是 best-effort——
+    // 退不掉也是 fail closed（下次启动仍是 unset，会重新问一次）。
+    computerUseConsentWaiter.abandonAll();
+    browserSandbox.dispose();
+  });
+
+  /*
+   * computer use v1（PR1 主进程部分）：Windows 沙箱生命周期 + 手动「看一眼」截图。
+   * guest 桥目录：开发 = 仓库 guest-bridge/bin（bun run build:bridge 出 exe），
+   * 打包 = resources/guest-bridge（electron-builder extraResources，见 package.json）。
+   * spawnSandbox 只在这里真接——测试全走假进程，沙箱窗口是用户可见面。
+   */
+  const sandboxExePath = windowsSandboxExePath();
+  /**
+   * 按 PID 杀整棵沙箱进程树（`taskkill /T /F`，与 spawnSandbox 里那套同一份火力）。
+   * 抽成独立函数是因为 stop() 的收尾链在「第一次 kill 没确认退出」时还要再打一次；
+   * 那时手上只有 pid，没有 child 对象。
+   * onFailure 只在第一次 kill 用（那里还拿得到 child，可以退回单进程杀）；升级那次不传，
+   * 失败交给收尾链的下一个窗口留痕迹。
+   */
+  const killTreeByPid = (pid: number, onFailure?: () => void): void => {
+    try {
+      const taskkill = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.on("error", () => onFailure?.());
+      taskkill.on("exit", (code) => {
+        if (code !== 0) onFailure?.();
+      });
+    } catch {
+      onFailure?.();
+    }
+  };
+
+  /**
+   * 现在宿主上有哪些沙箱侧进程（**只观测，不杀**）。
+   *
+   * 三类镜像名来自 2026-10-23 真机实测：新沙箱架构下 WindowsSandbox.exe 只是启动器，
+   * 沙箱本体活在 WindowsSandboxServer / WindowsSandboxRemoteSession / vmwp 里。
+   * 控制器拿「启动前基线」做差集，才知道哪些是我们这只（而不是同机上别人的沙箱）；
+   * 带镜像名是为了挑出 RemoteSession 去**优雅关窗**（只认 PID 的话发不了 WM_CLOSE）。
+   * 只读 tasklist；杀仍走 killTreeByPid（taskkill /T /F）——不按镜像名杀（仓规）。
+   */
+  const listSandboxProcesses = (): SandboxProcessInfo[] => {
+    if (process.platform !== "win32") return [];
+    try {
+      const listed = spawnSync("tasklist", ["/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5_000,
+      });
+      if (listed.status !== 0 || typeof listed.stdout !== "string") return [];
+      return parseSandboxProcesses(listed.stdout);
+    } catch {
+      // 观测失败当成「看不见」：宁可走旧路径，也不让启动 / 关闭被观测拖坐
+      return [];
+    }
+  };
+
+  /**
+   * 关掉沙箱窗口（等价用户点 X 并按下确认框的 Ok）。**不能改成 taskkill。**
+   *
+   * 2026-10-23 真机验收：直接 taskkill 能杀掉 Server / RemoteSession，但 VM 不退——
+   * vmwp.exe + vmmemWindowsSandbox（各 ~3.5GB）继续占着内存，vmwp 自己 taskkill 是拒绝访问，
+   * 不带 /F 打 RemoteSession 则完全无效（它不是控制台进程）；泄漏攒多了会报
+   * 「与该服务器建立的会话太多」，新沙箱都起不来。
+   * 而走「关窗 → 替用户按 Ok」的路子，9~12 秒内整条链自行退出、VM 内存释放。
+   *
+   * 2026-11-13 起它只是**第二级兜底**（首选是让 guest 自己关机）：真机诊断显示这个脚本
+   * 33 秒里 18.7 秒花在 `Add-Type System.Windows.Forms`、PowerShell 启动另要 5–29 秒，
+   * 45 秒预算在忙机器上必然穿。本条只在「桥没起来 / 老桥不认 shutdown」时跑。
+   *
+   * **异步 spawn 而不是 spawnSync**：脚本最长跑 45 秒，同步调用会把主进程（窗口、IPC）
+   * 一起冻住 45 秒。日志留痕照旧：退出码区分「守规矩没发键」与「确认框没按到」。
+   * 失败不抛：控制器看到异常会退回强杀链。
+   */
+  const closeSandboxWindow = (pid: number): Promise<void> =>
+    new Promise((resolve) => {
+      if (process.platform !== "win32") {
+        resolve();
+        return;
+      }
+      const startedAt = Date.now();
+      let settled = false;
+      const settle = (status: number | null, error: Error | undefined, signal: NodeJS.Signals | null): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (status === 0) {
+          resolve();
+          return;
+        }
+        const reason =
+          status === 2
+            ? "前台不是这只沙箱，守规矩没发键"
+            : status === 3
+              ? "确认框没按到 Ok"
+              : error !== undefined
+                ? `脚本没跑起来（${error.message}）`
+                : `脚本异常退出（signal ${String(signal)}）`;
+        console.warn(
+          `[computer-use] 关窗脚本退出码 ${String(status)}（${reason}，${Date.now() - startedAt}ms），交由强杀兜底（pid ${pid}）`,
+        );
+        resolve();
+      };
+      const child = spawn(
+        "powershell",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", buildCloseSandboxWindowScript(pid)],
+        { stdio: "ignore", windowsHide: true },
+      );
+      // 45 秒硬上限（同以前的 spawnSync timeout）：超时就杀掉它，文件已经落了就不管了
+      const timer = setTimeout(() => settle(3, undefined, null), 45_000);
+      child.on("error", (cause) => settle(null, cause, null));
+      child.on("exit", (code, signal) => settle(code, undefined, signal));
+    });
+
+  /**
+   * 让 guest 自己关机（关沙箱的首选路径，2026-11-13 真机验收）：
+   *   ① 原子写 `out/shutdown.request`——「刚起就关」时命令通道还没通，桥登入后第一件事
+   *      就是读这个文件并关机（guest-bridge 0.13.0 的 ConsumeShutdownRequest）；
+   *   ② 再发一条 `shutdown` 命令：桥已经在跑时走这条路（真机回执 29ms）。
+   * 第 2 步超时 5 秒是有意的：VM 一关，回执可能永远不来，不能在这里等 30 秒。
+   * 失败只记日志——调用方还会等进程消失，等不到才退到关窗 / 强杀。
+   */
+  const requestGuestShutdown = async (outDir: string): Promise<void> => {
+    if (process.platform !== "win32") return;
+    try {
+      await writeTextAtomic(join(outDir, COMPUTER_USE_SHUTDOWN_REQUEST_FILE), new Date().toISOString());
+    } catch (cause: unknown) {
+      console.warn(`[computer-use] 写关机请求失败：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    // 桥还没通告（刚起就关）时不用发命令：文件已经在了，桥登入第一件事就是读它；
+    // 发也只会白等一轮 5 秒超时（文件通道 + TCP 探活）。bridge.json 在 = 桥真的活着，才值得发。
+    if (!existsSync(join(outDir, BRIDGE_INFO_FILE))) return;
+    try {
+      await sendGuestCommand(outDir, computerUseGuestCommands.shutdown, {}, 5_000);
+    } catch (cause: unknown) {
+      // 桥还没登入 / 已经开机关机了：都正常，主路径靠那个文件
+      console.warn(`[computer-use] shutdown 命令没送到 guest：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  };
+
+
+  const wsbComputerUse = new SandboxController({
+    computerUseDir: join(configDir, "computer-use"),
+    bridgeDir: app.isPackaged
+      ? join(process.resourcesPath, "guest-bridge")
+      : join(app.getAppPath(), "guest-bridge", "bin"),
+    sandboxExePath,
+    /**
+     * 沙箱进程适配。**关闭必须杀整棵树**：spawn 出来的 WindowsSandbox.exe 是 launcher，
+     * 看得见的沙箱窗口是它的子进程 WindowsSandboxClient.exe——只杀 launcher 会留下
+     * 孤儿窗口，VM 一拆它就弹「与沙盒的连接已丢失 0x80072746」（2026-10-12 实测）。
+     * taskkill /T 是异步火力覆盖（同 terminal/runtime.ts 的杀树纪律）；它起不来 /
+     * 失败时退回单进程杀——宁可退化回孤儿窗口，也不能让「关闭」本身失效。
+     */
+    spawnSandbox: (wsbPath) => {
+      const child = spawn(sandboxExePath, [wsbPath], { stdio: "ignore" });
+      const killChild = child.kill.bind(child);
+      const killTree = (): boolean => {
+        const pid = child.pid;
+        if (pid === undefined) return killChild();
+        killTreeByPid(pid, () => {
+          try {
+            killChild();
+          } catch {
+            // 进程已退出
+          }
+        });
+        return true;
+      };
+      return Object.assign(child, { kill: killTree });
+    },
+    /**
+     * 沙箱出网（设置 › 实验功能 › 电脑使用）。**每次启动读一次**：.wsb 只在 start() 里渲染，
+     * 运行中的 VM 改不了网络，所以这里不做推送、不自动重启（重启会砸掉正在跑的网页自动化）。
+     * 读的是同一个 SettingsStore（有缓存），不新开一套读写。
+     */
+    allowNetwork: async () => effectiveAllowNetwork(await settings.read()),
+    /**
+     * 应用级准入白名单（intra-guest 判定用）：内置 msedge.exe ∪ 设置里的 allowedApps。
+     * **每条做准入判定的命令现读一次**（不写 .wsb、不用重启沙箱）：改设置下一条点击就生效。
+     * SettingsStore 有缓存，命中时只是一次对象读取。
+     */
+    allowedApps: async () => effectiveGuestAllowExe(await settings.read()),
+    // 升级杀：第一次 kill 在兜底窗口内没换来退出时，按 PID 再打一次进程树
+    killTreeByPid,
+    /**
+     * 观测沙箱侧进程（只读，不杀）。
+     *
+     * 2026-10-23（Windows 更新后的新沙箱架构）实测：`WindowsSandbox.exe` 只是启动器——
+     * spawn 后 **0 秒就以 code 0 退出**，把 VM 交给 `WindowsSandboxServer`；真正占着 ~2.5GB
+     * 的是 `WindowsSandboxServer.exe` / `WindowsSandboxRemoteSession.exe` / `vmwp.exe`。
+     * 于是 stop 时 child 早就为 null、没有 PID 可杀（第二天主会话得手动 taskkill /T /F 清）。
+     * 这里只提供「现在有哪些沙箱侧进程」的观测，由控制器拿**启动前基线**做差集认出我们
+     * 自己那只；杀掉仍然走上面的 killTreeByPid（taskkill /T /F）——**不按镜像名杀**（仓规）。
+     */
+    listSandboxProcesses,
+    // 优雅关窗：强杀窗口会把 VM 留给宿主（真机实测 3.4GB 不释放），见 closeSandboxWindow 的注释
+    closeSandboxWindow,
+    // 首选：让 guest 自己关机（VM 停了窗口自然消失，不碰确认框）
+    requestGuestShutdown,
+    onStatus: (status) => {
+      /*
+       * 沙箱没了（用户停 / 启动失败 / 运行中崩了），手上那把「桌面归谁」的租约一并作废：
+       * 持有者与排队者都是等着用同一个已经不存在的东西，留着只会让排队的会话排满
+       * 30 秒后收到一句「被某个会话占着」——那是一个不成立的原因。
+       * 这一顿用 ComputerUseLease（定义在 computer-use/lease.ts）。浏览器键也一起作废——
+       * 浏览器在沙箱里，沙箱没了它们就不存在了。
+       */
+      if (status.state === "off" || status.state === "error") {
+        computerUseLease.revoke(status.state === "off" ? "沙箱已停止" : "沙箱出错");
+      }
+      broadcastComputerUseStatus(status);
+    },
+  });
+  /**
+   * 沙箱里的资源归谁：一块桌面归一个会话（理由与状态机见 computer-use/lease.ts），
+   * 每个会话自己的浏览器归它自己（不占桌面）。
+   * 放在 SandboxController 之前声明——控制器的 onStatus 要引用它（TDZ：onStatus 只会在
+   * 后面的迁移中执行，但读到变量本身仍需要先声明）。
+   */
+  const computerUseLease = createComputerUseLease({
+    clock: { now: () => Date.now(), setTimeout: (callback, ms) => {
+      const timer = setTimeout(callback, ms);
+      return () => clearTimeout(timer);
+    } },
+    onEvent: (event) => {
+      if (event.type === "acquired") {
+        console.log(
+          `[computer-use] ${event.key} 交给「${event.title || event.sessionId}」（等了 ${String(event.waitedMs)}ms，后面排 ${String(event.queueDepth)} 个）`,
+        );
+        return;
+      }
+      if (event.type === "released") {
+        console.log(
+          `[computer-use] ${event.key} 收回（「${event.title || event.sessionId}」，原因 ${event.reason}，持有了 ${String(event.heldMs)}ms）`,
+        );
+        // 硬上限强制收回：持有者下一条命令不该因为「锁空着」就静默拿到——
+        // 它已经在一个被裁定为「占得太久」的轮次里了，要让它把这句话转告用户。
+        // 只有桌面键有硬上限，浏览器键永远不会走到这个分支。
+        if (event.reason === "holdExpired") computerUseDispatch.noteHoldExpired(event.sessionId);
+        return;
+      }
+      if (event.type === "revoked") {
+        console.log(
+          `[computer-use] 租约全部作废：${event.reason}（${String(event.keys)} 个资源键，清掉 ${String(event.droppedWaiters)} 个等待者）`,
+        );
+        return;
+      }
+      if (event.type === "rejected") {
+        console.warn(`[computer-use] 没拿到 ${event.key}：${event.sessionId}（${event.cause}）`);
+      }
+    },
+  });
+  /**
+   * 运行时门面：两个隔离后端（L2 Windows 沙箱 / L2b 多会话隔离）选一个。
+   *
+   * L2b 的依赖（MXC 的 IsolationSession）是**可选**的：它的 SDK 会加载一个原生 DLL，
+   * 所以只在真正探测/启动时碰它（createMxcSdk 内部就是那个边界）；没装 / Node 不够 / 非
+   * Windows 时它只回一句带原因的话，不影响 L2 与 L1。
+   *
+   * `backend` 每次 start 现读设置：改档位不改正在跑的那一只（与出网开关同一条纪律——
+   * 运行中的隔离环境改不了形态，只能下次启动生效）。
+   */
+  const computerUseIsolation = new IsolationSessionController({
+    bridgeDir: app.isPackaged
+      ? join(process.resourcesPath, "guest-bridge")
+      : join(app.getAppPath(), "guest-bridge", "bin"),
+    sdk: createMxcSdk(),
+    // 清理验证要判「agent 账号真的没了」：工作区之外，profile 目录也必须消失
+    usersRoot: join(process.env.SystemDrive ?? "C:", "Users"),
+    allowedApps: async () => effectiveGuestAllowExe(await settings.read()),
+    onStatus: (status) => {
+      // 与 L2 同一条纪律：隔离环境没了，桌面租约一并作废（排队者等的是一个不存在的东西）
+      if (status.state === "off" || status.state === "error") {
+        computerUseLease.revoke(status.state === "off" ? "隔离会话已停止" : "隔离会话出错");
+      }
+      broadcastComputerUseStatus(status);
+    },
+  });
+  /**
+   * 开发者后端（qemu）的开关：默认关，只有以 ORBITA_CU_DEV_BACKENDS=1 启动应用才开。
+   * 启动时读一次：它在本次运行里不会变（环境变量不热更新）。两处消费同一个值——
+   * 运行时门面的 start 闸门与设置页拿到的可选列表，不能一处开一处关。
+   */
+  const computerUseDevBackends = devBackendsEnabled(process.env);
+  const computerUse = createComputerUseRuntime({
+    wsb: wsbComputerUse,
+    isolation: computerUseIsolation,
+    backend: async () => effectiveComputerUseBackend(await settings.read()),
+    devBackends: () => computerUseDevBackends,
+    /**
+     * L3（QEMU）的断网：同一份设置、同一个读取点（WSB 的那份在控制器自身）。
+     * L2b 读不读它都一样——它断不了网（shared/computer-use.ts 的 backendNetworkControl），
+     * 提示词也因此不会对它说「你没网」。
+     */
+    allowNetwork: async () => effectiveAllowNetwork(await settings.read()),
+    probeIsolation: () => computerUseIsolation.probe(),
+  });
+  /**
+   * CDP 浏览器通道（PR3）：沙箱里有几个浏览器实例的会话级状态。
+   *
+   * v1.5-1 起**一个 agent 会话一个浏览器**（不再是全员共用一份）：宿主这一侧按会话记「起没起」
+   * 的缓存，每条 `cdp-*` 都带 session 字段；WebSocket、标签页、选择器表全在 guest 桥里。
+   * outDir 与 SandboxController 的映射输出目录是同一个：`<userData>/computer-use/out` ↔
+   * guest 的 `C:\orbita-out`。
+   * 用闭包转一道而不是直接传 controller：CdpGuest 只需要两个方法，测试注入假桥足够。
+   *
+   * 第三个参数是沙箱浏览器的选择（设置 › 电脑使用 › 沙箱浏览器）：与 allowedApps 同一条路——
+   * 每条 cdp-start 现读一次设置（SettingsStore 有缓存），改了下一次拉起就生效。
+   * 不写 .wsb、不用重启沙箱：浏览器是在 guest 里被拉起来的，不属于 VM 的网络/配置。
+   */
+  const cdp = new CdpSession(
+    {
+      guestCommandReply: (command, fields) => computerUse.guestCommandReply(command, fields),
+      guestShot: (command, fields) => computerUse.guestShot(command, fields),
+    },
+    join(configDir, "computer-use", "out"),
+    async () => effectiveGuestBrowser(await settings.read()),
+  );
+
+  /**
+   * computer_* / sandbox_* 下发前的唯一入口：按动作选资源键（桌面独占 / 每会话浏览器），
+   * 要不到就回一句人话，要到了才下发。键的选择与硬上限的收尾都在 dispatch.ts 里——
+   * 这样「sandbox_* 在别人持桌面时照常下发」这条回归才有地方可测（它不碰 electron）。
+   * 按窗口截图（computer_screenshot + window）与 UIA 车道（uia-list / uia-act）**不取任何键**：
+   * 前者读窗口自己的 surface，被遮挡也能拍、不抢焦点；后者直接调控件的 UIA 模式，AutoSetFocus
+   * 关掉之后不移动前台焦点（focus 动作已被删——它动的是桌面级焦点）。两条都不依赖
+   * 「屏幕上现在是什么」，所以不占桌面独占（理由见 dispatch.ts 与 shared/computer-use.ts）。
+   *
+   * 标题只是文案素材：拿不到锁时的错误要说出**占用者是谁**，不然模型无法转告用户
+   * （「被占据了」而不说是谁，用户也没法处置）。读不出 meta（会话刚建、已删）就退成空串，
+   * 租约那边不会塞一对空引号。
+   */
+  const computerUseDispatch = createComputerUseDispatcher({
+    lease: computerUseLease,
+    titleOf: async (sessionId) => {
+      const meta = await sessions.readMeta(sessionId).catch(() => null);
+      return meta?.title ?? "";
+    },
+    /**
+     * 第四个参数是**当前在跑那个后端**的能力声明：agent-requests 按它的 evidence 门控交付档位
+     * （没有读回的后端——L3 的 Linux 桌面——永不出 confirmed / suspected_noop）。没在跑时
+     * capabilities() 为 null，闸门不拦也不猜（与改之前一致）。
+     */
+    runPixels: (sessionId, request) =>
+      applyComputerUseRequest(computerUse, sessionId, request, computerUse.capabilities()),
+    /**
+     * 浏览器通道。**L2b 里上传/下载目前不支持**：桥把映射目录写死在 `C:\orbita-out`，而
+     * 独立会话里没有那个目录（它的映射目录是自己的工作区）。让它发下去会「成功」——
+     * 文件落在会话内部、宿主永远拿不到——所以在这里就拒，并告诉模型换路。
+     */
+    runBrowser: (sessionId, request) => {
+      // 按后端声明判断，不按 id 猜：`sandboxFiles: false` 的后端（L2b）guest 里没有宿主那份
+      // 映射目录，发下去会「成功」而文件落在 guest 内部、宿主永远拿不到。没在跑时 capabilities
+      // 为 null，闸门不拦（与改动前一致：那时 cdp 自己会回「沙箱没在跑」）。
+      if (
+        computerUse.capabilities()?.sandboxFiles === false &&
+        (request.action === "sandbox-upload" || request.action === "sandbox-download")
+      ) {
+        return Promise.resolve({
+          ok: false,
+          error:
+            "这个隔离档位（多会话隔离）暂不支持文件上传/下载：会话里的映射目录与宿主不同路径。" +
+            "导航、点击、输入、截图与读页面都可用；要传文件请改用内置浏览器，或切回 Windows 沙箱档。",
+        });
+      }
+      return applySandboxBrowserRequest(cdp, sessionId, request);
+    },
+    // 桌面租约的粒度跟着后端：L2 一块共享屏幕（全局），L2b 每会话一个桌面（见 runtime.ts）
+    desktopKey: (sessionId) => computerUse.desktopKey(sessionId),
+  });
+  /**
+   * 急停热键（computer use PR4）：`Control+Alt+Shift+Escape`。沙箱窗口在前台时用户够不到
+   * Orbita 的停止按钮，这个热键必须真的能注册上——注册失败（被别的应用占用）时
+   * 设置页会如实显示「不可用」，不假装保护存在。
+   *
+   * 按下后三件事（顺序即语义）：
+   *   1. 正在跑的会话逐个中止（给 agent 发 abort，与「停止」同一条链）；
+   *   2. **撕掉电脑使用授权**：所有非 unset 的会话 `computerUseConsent` 复位成 unset；
+   *      挂起中的授权提问按 **cancelled** 结掉（不写盘——用户没有表态，不是拒绝）。
+   *      （不是 PermissionMode，只是本会话的桌面许可）
+   *   3. 广播给 renderer 显示「已急停」。
+   * **不关沙箱**：现场留给用户看，关沙箱是设置页里另一个动作。
+   *
+   * `phases` / `agentHost` 在本行下面才声明——onTrigger 只在按键时执行，那时已初始化
+   * （与 mcpIpc / delegate 的 TDZ 说明同一条约定）。
+   */
+  /**
+   * 热键注册早于 `phases` / `agentHost` 的创建（它们在下面）。启动那几毫秒里按下热键
+   * 不能去碰还没初始化的 const（TDZ 会抛 ReferenceError）：置位前按键直接忽略——
+   * 那时也没有轮可停。
+   */
+  let emergencyStopReady = false;
+  const emergencyStop = createEmergencyStop({
+    register: (accelerator, callback) => globalShortcut.register(accelerator, callback),
+    unregister: (accelerator) => globalShortcut.unregister(accelerator),
+    onTrigger: () => {
+      if (!emergencyStopReady) return;
+      const at = Date.now();
+      const runningSessions = [...phases.entries()]
+        .filter(([, phase]) => phase !== "idle")
+        .map(([id]) => id);
+      for (const sessionId of runningSessions) agentHost.abortIfRunning(sessionId);
+      /*
+       * 急停要**彻底撕掉电脑使用授权**（2026-11-27；验收后修正）：
+       *   1. 挂起的提问先按 **cancelled** 结掉（不写 meta）——把 cancel 放在 reset 之后写、
+       *      或者让 cancel 写 denied，会让最终值变成 denied（"以后不再问"），与急停相反；
+       *   2. **所有**非 unset 的会话复位成 unset：急停是全局按钮，它的语义是「我不想再让
+       *      这台桌面被动」——只复位在跑的会话会留下一个刚点过允许、正空闲的会话，下一轮
+       *      直接用、不再问（E 段验收指出的差距）。
+       * 两道写都在各自的 meta 写链上，但 canceled 的那支**不写**，所以最终值只可能是
+       * reset 写的 unset。
+       */
+      computerUseConsentWaiter.cancelAll();
+      void (async () => {
+        const all = await sessions.list().catch(() => []);
+        for (const meta of all) {
+          if (parseComputerUseConsent(meta.computerUseConsent) === "unset") continue;
+          await computerUseConsentGate.reset(meta.id, "emergency-stop");
+        }
+      })();
+      broadcastAgentEvent({ type: "computerUseEmergencyStop", at, sessionIds: runningSessions });
+    },
+  });
+  // 与急停控制器一起注册（IPC 只能注册一次）：hooks 是 PR3 的停沙箱收尾——用户停沙箱时先把
+  // 里面的浏览器逐个会话停掉（best effort、不等待：不能用一串浏览器命令拖住停沙箱按钮；
+  // 桥已经死了就算了，VM 销毁会带走整个进程树）。
+  // 租约也交给它：设置页「沙箱归属」一行读的是 dispatch 拿锁用的同一份桌面租约。
+  registerComputerUseIpc(
+    computerUse,
+    {
+      beforeStop: () => {
+        void cdp.stopAll();
+      },
+      backends: () => computerUseBackendChoices(computerUseDevBackends),
+    },
+    emergencyStop,
+    computerUseLease,
+    // 确认行 / 状态行的回答：只有 allowed / denied 两种，由 IPC 入口洗过再进来
+    { answer: (requestId, decision) => computerUseConsentWaiter.answer(requestId, decision === "allowed") },
+  );
 
   // 子会话：主进程按 phase 事件维护的活会话状态——channel/requests.ts 靠它判断
   // 投递目标此刻是不是空闲（空闲退化 submit，在跑才 steer）
@@ -774,8 +1292,31 @@ void app.whenReady().then(async () => {
     // 只旁听，不 return：事件照常往下 record + broadcast
     automationScheduler.onAgentEvent(event);
     // 这一轮停了（完成、被用户停掉、出错）：还挂着的交接按取消结掉——等它的那次工具调用已经不在了
-    if (event.type === "phase" && event.phase === "idle") browserSandbox.cancelSessionHandoff(event.sessionId);
-    if (event.type === "failed" && event.sessionId === null) closeChannelsForLostProcess();
+    if (event.type === "phase" && event.phase === "idle") {
+      browserSandbox.cancelSessionHandoff(event.sessionId);
+      /*
+       * 电脑使用授权挂起的提问一并作废（2026-11-27 验收 P1）：这一轮已经结束，
+       * 那个提问不可能再被回答。**按 cancelled 结，不按 denied**——用户没有表态；
+       * 按 denied 结会让停轮之后迟迟点在确认行上的「允许」真的执行一个已不存在的
+       * 动作，并会在 120s 后把从没拒绝过的会话永久写成 denied。
+       */
+      computerUseConsentWaiter.cancel(event.sessionId);
+      /*
+       * 沙箱资源也一并让出来：轮次结束 = 这一轮不再需要它们了。abort 与急停走的都是这里
+       * （abortCycle 的收尾最终发 idle，非 preempt 的预抢跑才不发），所以不需要在三条
+       * 路径上各接一次。桌面键与这个会话的浏览器键一起放：不主动放的话，下一个会话要白白
+       * 等到 idle 线 60s 或硬上限 15min。浏览器键下一次 sandbox_* 再 acquire 是立刻成功的。
+       */
+      computerUseLease.releaseSession(event.sessionId);
+    }
+    if (event.type === "failed" && event.sessionId === null) {
+      // agent 进程整个没了：所有租约持有者与等待者都不存在了（工具调用已随进程消失），
+      // 留着只会让下一个会话排满 30 秒再报一句「被某个会话占着」
+      computerUseLease.revoke("agent 进程退出");
+      // 挂起的授权提问也没人再回答了：按 cancelled 结掉（不写 meta），renderer 收行
+      computerUseConsentWaiter.cancelAll();
+      closeChannelsForLostProcess();
+    }
     // B-1：agent 的 read_task——读盘在主进程（SessionStore），回执带简报全文与任务卡。
     // 通道账本一并传进去：子会话每一轮的开头是通道消息，正文在那里。
     // 任何路径都必须回执（同 delegateRequest）：读盘抛错没有 catch 的话，agent 进程里的
@@ -825,6 +1366,35 @@ void app.whenReady().then(async () => {
         .then((outcome) => agentHost.answerTerminal(event.requestId, outcome))
         .catch((cause: unknown) =>
           agentHost.answerTerminal(event.requestId, {
+            ok: false,
+            error: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      return;
+    }
+    // computer use：agent 的沙箱工具。
+    //   computer_*（PR2）→ 像素注入，走 SandboxController；
+    //   sandbox_*（PR3）→ 沙箱内 Edge 的 CDP 语义命令，走 CdpSession。
+    // 两条通道都**只有 agent 进程看得见**（renderer 面只有 PR1 那四个入口）。
+    // **先要租约再下发**：沙箱是一份、会话可以多个，不锁就是两条动作序列交错而两边
+    // 都收到「成功」（三种可复现的错法写在 lease.ts 头部）。拿不到就不下发，直接回一句
+    // 人话给模型——它看不见 UI，不会自己想到「另一个会话占着」。
+    // 同样任何路径都回执：挂着不回，agent 进程里那次工具调用永远等下去。
+    if (event.type === "computerUseRequest") {
+      // 授权栅门（2026-11-27）：**所有**电脑工具（computer_* 像素/UIA + sandbox_* 浏览器）
+      // 下发前先过会话授权——包括只读截图（它把用户沙箱桌面上的画面交给模型）。
+      // unset → 问一次并挂起；denied → 当场回那句固定文本，不执行；没人能回答按 denied 落库。
+      // 栅门只做裁决，真的拒绝文案在 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT（唯一来源）。
+      void computerUseConsentGate
+        .ensure(event.sessionId, event.request.action)
+        .then((verdict) =>
+          verdict.ok
+            ? computerUseDispatch.dispatch(event.sessionId, event.request)
+            : ({ ok: false, error: verdict.error } as const),
+        )
+        .then((outcome) => agentHost.answerComputerUse(event.requestId, outcome))
+        .catch((cause: unknown) =>
+          agentHost.answerComputerUse(event.requestId, {
             ok: false,
             error: cause instanceof Error ? cause.message : String(cause),
           }),
@@ -947,6 +1517,8 @@ void app.whenReady().then(async () => {
     broadcastAgentEvent(event);
     // 目录联网刷新只刷用户已添加的服务商用到的目录（审核 F-1）：每次拉起 agent 进程时现读一次
   }, async () => catalogIdsOfProviders(await providers.load()));
+  // 急停热键此时可以真正干活了（phases / agentHost 都已就绪）
+  emergencyStopReady = true;
   // MCP 的 IPC 面（1-1 起含热重载）。reload 回调闭包引用 agentHost——
   // 事件回调只在事件到达时执行，那时两边都已定义，不存在 TDZ 问题
   const mcpIpc = registerMcpIpc(mcp, workspaces, () => agentHost.mcpReload());
@@ -1207,6 +1779,13 @@ void app.whenReady().then(async () => {
       agentHost.disposeSession(id);
       // 会话删了，它在受管浏览器里的 agent tab 也一并关掉；意图存档与记忆的尾账也丢
       browserSandbox.closeSessionTab(id);
+      // 正在等授权的提问也跟着作废（按 cancelled 结，不写 meta——会话都没了）
+      computerUseConsentWaiter.cancel(id);
+      computerUseTurnOrigins.delete(id);
+      // 沙箱资源：它是持有者就让出来，还在排队就把位置撤掉（否则队列名额白白被占了）；
+      // 桌面键与这个会话的浏览器键一起放。硬上限标记也一并忘掉。
+      computerUseLease.releaseSession(id);
+      computerUseDispatch.forget(id);
       intentIngest.forget(id);
       memoryTurns.forget(id);
     },
@@ -1408,6 +1987,19 @@ void app.whenReady().then(async () => {
       for (const [sessionId, phase] of phases) if (phase !== "idle") live[sessionId] = phase;
       return live;
     },
+    // 出网那对值要看**正在跑的那只**（后端与开关都是下次启动才生效）：设置里选 wsb、
+    // 实际跑着 L2b 时，按设置算会告诉模型「你没有出网」——而它就在本机的网络上。
+    () => computerUse.runningFacts(),
+    /**
+     * 上一轮被放弃时（停止 / interrupt 抢跑 / 新 submit 抢跑）的通知。
+     * **抢跑不发 idle**（runtime 的 preempt 语义），所以只等 phase idle 会漏掉 interrupt
+     * 这条路——挂起的授权提问会活到新一轮里，用户点“允许”就能让一个已经不存在的动作
+     * 真的下发（2026-11-27 验收 P1）。这里与会话删除同一条语义：按 cancelled 结掉。
+     */
+    (sessionId) => computerUseConsentWaiter.cancel(sessionId),
+    // 这一轮是谁发起的（闸门据此判「用户此刻能不能回答」）：自动化开轮时写 automation，
+    // 其余（renderer 手点 submit / interrupt / compact）写 user。
+    (sessionId, origin) => computerUseTurnOrigins.set(sessionId, origin),
   );
   // 子会话：派出 / 发信 / 代父发言 / 终止的依赖注入（channel/requests.ts 的纯核 + 这里的胶水）。
   // submitTurn 拿 agentIpc 刚返回的那个函数——子首轮与父→子空闲投递不重新拼一遍
@@ -1435,7 +2027,9 @@ void app.whenReady().then(async () => {
         providers: await providers.list(),
       });
     },
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 幕后 / 编排投递的轮次：会话身份（backstage / parentId）已经把它们挡在闸门外，
+    // 这里仍标 channel——发起者是机器，不写成 user（免得以后判据变严时漏挡）
+    submitTurn: (input) => agentIpc.submitTurn(input, "channel"),
     abort: (sessionId) => agentHost.abort(sessionId),
     runScript: execPluginScript,
     loadImage: loadSurface,
@@ -1449,7 +2043,9 @@ void app.whenReady().then(async () => {
     channels,
     providers,
     settings,
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 幕后 / 编排投递的轮次：会话身份（backstage / parentId）已经把它们挡在闸门外，
+    // 这里仍标 channel——发起者是机器，不写成 user（免得以后判据变严时漏挡）
+    submitTurn: (input) => agentIpc.submitTurn(input, "channel"),
     steer: (sessionId, text, delivery) => agentHost.steer(sessionId, text, delivery),
     abort: (sessionId) => agentHost.abort(sessionId),
     cancelBrowserHandoff: (sessionId) => browserSandbox.cancelSessionHandoff(sessionId),
@@ -1493,7 +2089,8 @@ void app.whenReady().then(async () => {
     providers,
     settings,
     workspaces,
-    submitTurn: (input) => agentIpc.submitTurn(input),
+    // 自动化发起的轮次（含 this_session 投回用户会话）：电脑使用闸门据此不弹看不见的授权
+    submitTurn: (input) => agentIpc.submitTurn(input, "automation"),
   };
   const automationScheduler = new AutomationScheduler({
     store: automationStore,
@@ -1573,6 +2170,31 @@ void app.whenReady().then(async () => {
     memoryHost.stop();
     // 关窗口全杀：runtime 逐个 taskkill 进程树（dev server 的孙进程不留占端口）
     terminals.dispose();
+    // 隔离环境是我们起的（VM 或 OS 会话）：应用退出时一并带走，别给用户留一个孤儿会话 /
+    // 一个还活着的 agent 账号。L2b 的收尾链是异步的（stop + deprovision + 验证），
+    // 不 await：退出路径不能被 OS 回收时间拖住，但会话自己会被注销。
+    void computerUse.dispose();
+    // 租约只在内存里（见 lease.ts 头部：落盘会留下没人能放掉的死锁）；退出前把定时器收掉，
+    // 不给进程留一个拽着退出 30s 的句柄
+    computerUseLease.revoke("应用退出");
+    /*
+     * 审计：一行账把「桌面到底挤不挤」留在日志里（v1.5-2 要用真实数据决定后续路线）。
+     * 只在真有人用过沙箱时才打——没人用过就没数字可报。
+     */
+    const leaseStats = computerUseLease.stats();
+    if (leaseStats.length > 0) {
+      console.log(
+        "[computer-use] 租约统计（应用退出）：" +
+          leaseStats
+            .map(
+              (row) =>
+                `${row.key} 拿到 ${String(row.acquired)} 次 / 等 ${String(Math.round(row.averageWaitMs))}ms / 持有 ${String(Math.round(row.averageHeldMs))}ms / 拒 ${String(row.rejected)} 次`,
+            )
+            .join("；"),
+      );
+    }
+    // 全局热键显式注销（Electron 退出时也会清，但释放时机不该靠它）
+    emergencyStop.dispose();
   });
 
   /**

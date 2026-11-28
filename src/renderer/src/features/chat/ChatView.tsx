@@ -230,6 +230,14 @@ import { RevertPreviewBar } from "./RevertPreviewBar";
 import { collectCitations } from "./citation-markers.ts";
 import { CitationTableContext } from "./citation-context.ts";
 import { RevertPreviewContext, type RevertPreview } from "./revert-preview.ts";
+import {
+  ComputerUseConsentAskFallback,
+  ComputerUseConsentContext,
+  ComputerUseConsentStatusLine,
+  ComputerUseConsentTail,
+  type ComputerUseConsentContextValue,
+} from "./ComputerUseConsent";
+import { firstComputerUseToolCallId, groupHoldsPendingAsk, pendingComputerUseToolCallId } from "./computer-consent.ts";
 import { AutomationRunBar } from "../automation/AutomationRunBar";
 import { AutomationToolLine } from "../automation/AutomationToolLine";
 import { AutomationWakeLine } from "../automation/AutomationWakeLine";
@@ -1683,6 +1691,61 @@ function ChatViewBody(props: {
       />
     );
 
+  /**
+   * 电脑使用授权（甲 / 乙 两张 UI 的共享上下文，2026-11-27）。
+   * 挂点从转录派生（computer-consent.ts 的纯函数）：确认行挂正在跑的那条电脑工具调用，
+   * 记录行挂本会话第一处电脑工具调用。context 只在这一层建一次——工具行是 memo 化的，
+   * 逐帧新建对象会打穿整列。
+   */
+  const consent = session.computerUseConsent;
+  const consentAsk = session.computerUseConsentAsk;
+  const consentTriggerToolId = useMemo(() => firstComputerUseToolCallId(session.transcript), [session.transcript]);
+  const consentAskToolId = useMemo(
+    () => (consentAsk === null ? null : pendingComputerUseToolCallId(session.transcript)),
+    [consentAsk, session.transcript],
+  );
+  /**
+   * 行内「确认行已经画了」的登记表（2026-11-27 真机验收）：兜底位据此避让。
+   * 之前是「ask 带 toolCallId 就让位」，可行内可能根本没画（被挡住的行不在跑、或被折进工具组）
+   * ——两处都让位 = 两处都不画，七次提问全部超时。现在行内登记、兜底位只认登记。
+   */
+  const [drawnAskIds, setDrawnAskIds] = useState<ReadonlySet<string>>(() => new Set());
+  const claimAsk = useCallback((requestId: string) => {
+    setDrawnAskIds((prev) => (prev.has(requestId) ? prev : new Set(prev).add(requestId)));
+  }, []);
+  const releaseAsk = useCallback((requestId: string) => {
+    setDrawnAskIds((prev) => {
+      if (!prev.has(requestId)) return prev;
+      const next = new Set(prev);
+      next.delete(requestId);
+      return next;
+    });
+  }, []);
+  const consentCtx = useMemo<ComputerUseConsentContextValue>(
+    () => ({
+      consent,
+      ask: consentAsk,
+      triggerToolCallId: consentTriggerToolId,
+      askToolCallId: consentAskToolId,
+      drawnAskIds,
+      claimAsk,
+      releaseAsk,
+      onAnswer: session.answerComputerUseConsent,
+      onRevoke: session.revokeComputerUseConsent,
+    }),
+    [
+      consent,
+      consentAsk,
+      consentTriggerToolId,
+      consentAskToolId,
+      drawnAskIds,
+      claimAsk,
+      releaseAsk,
+      session.answerComputerUseConsent,
+      session.revokeComputerUseConsent,
+    ],
+  );
+
   const composer = (
     <Composer
       value={session.draft}
@@ -1784,6 +1847,8 @@ function ChatViewBody(props: {
         )
       )}
       {session.error !== null && <Notice tone="bad">{session.error}</Notice>}
+      {/* 急停（全局热键）：提示会自动收掉——它不是持续状态。 */}
+      {session.estopAt !== null && <Notice tone="bad">{t.computerUse.emergencyStopped}</Notice>}
       {mainRebuilt && !homeActive && <Notice icon="info">{t.agents.mainRebuilt}</Notice>}
       {/* 不自动压缩的会话快满了：输入框上方说一句（用量环菜单里有同一句与开关） */}
       {!homeActive && autoCompactOf(session) === false && contextRing(session.stats, t).tone === "danger" && (
@@ -2045,6 +2110,9 @@ function ChatViewBody(props: {
 
   return (
     <>
+      {/* 电脑使用授权：确认行 / 记录行（流内）与状态行（输入框上方）都从这里取状态与回调；
+          context 包住整个 Pane——页脚的状态行与转录里的工具行是两棵子树 */}
+      <ComputerUseConsentContext.Provider value={consentCtx}>
       <Pane
         title={session.opened?.title || (sessionTitle(session.transcript) ?? t.common.newTask)}
         badge={openId.slice(0, 6)}
@@ -2112,6 +2180,12 @@ function ChatViewBody(props: {
             */}
             {hideComposer !== true && (
               <>
+                {/* 电脑使用授权（乙，2026-11-27）：已允许时输入框上方一条低对比状态行，撤销永远在手边；
+                    未授权不出现（那一条由流里的确认行负责，不两处同时喊） */}
+                <ComputerUseConsentStatusLine />
+                {/* 确认行的兜底位：转录里找不到在跑的电脑工具调用时（重开 / 工具行已折走），
+                    让用户仍然答得上——否则主进程要等到 120s 超时才按拒绝收口 */}
+                <ComputerUseConsentAskFallback />
                 {/* 子会话交回了 N 件：先攒在这里、不替用户开一轮（channel-hold.ts）；与排队条同一层 */}
                 {openId !== "" && <ChannelHoldBar sessionId={openId} onOpenPanel={props.onOpenSubSessionsList} />}
                 {/* 通话条：输入框正上方，与排队条同一配方；不在通话也没问题要说时不占位 */}
@@ -2172,6 +2246,7 @@ function ChatViewBody(props: {
         />
         </RevertPreviewContext.Provider>
       </Pane>
+      </ComputerUseConsentContext.Provider>
     </>
   );
 }
@@ -5057,6 +5132,26 @@ function TurnProcessLine(props: {
   const { unit } = props;
   const [open, setOpen] = useFoldState(`proc:${unit.key}`);
   const live = unit.live && !unit.answering;
+  /**
+   * 电脑使用授权挂起时，这一块**强制展开**：被挡住的调用就是下面「正在做的那一步」，
+   * 确认行生在它里面；块折着，用户就只看到一行「用工具…」——2026-11-27 真机验收的
+   * 七次 120s 超时就是这么来的。ask 一结（askToolCallId 变 null）就恢复用户原来的展开态。
+   */
+  const consentCtx = useContext(ComputerUseConsentContext);
+  const askToolCallId = consentCtx?.askToolCallId ?? null;
+  const stepCallIds = processCalls(unit.steps).map((call) => call.toolCallId);
+  const holdsPendingAsk = groupHoldsPendingAsk(stepCallIds, askToolCallId);
+  /**
+   * 已答完的**记录行**也生在工具行里：授权那一答之后，这一块不能立刻折回去——
+   * 否则用户刚点的「允许」连一条记录都看不见（2026-11-27 真机验收第二轮）。
+   * 只对**活着的这一块**生效（记录挂在本会话第一处电脑调用上，后续轮的块不在其中），
+   * 也不会把历史轮次全部展开。撤销（unset）后自然收起。
+   */
+  const holdsConsentRecord =
+    (consentCtx?.consent ?? "unset") !== "unset" &&
+    consentCtx?.triggerToolCallId != null &&
+    stepCallIds.includes(consentCtx.triggerToolCallId);
+  const shownOpen = open || holdsPendingAsk || holdsConsentRecord;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!unit.live) return;
@@ -5128,19 +5223,24 @@ function TurnProcessLine(props: {
           {runMs !== null && <span className="proc-time">{formatRunClock(runMs)}</span>}
         </div>
         {(tail !== null || slow) && <div className={slow ? "proc-now-tail slow" : "proc-now-tail"}>{slow ? t.chat.processSlow : tail}</div>}
+        {/* 这一行就是被闸门挡住的那次调用：确认行生在它下面（甲的行内位置）。
+            块被强制展开时用户看到的正是这里；行内画了会向上下文登记，兜底位就不再重复画。 */}
+        {current.kind === "tool" && askToolCallId === current.call.toolCallId && (
+          <ComputerUseConsentTail toolCallId={current.call.toolCallId} />
+        )}
       </li>
     );
     return (
       <div className="proc-live-wrap">
-        <button type="button" className="proc-live" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <button type="button" className="proc-live" aria-expanded={shownOpen} onClick={() => setOpen((value) => !value)}>
           <div className="proc-who">
             <span className="proc-doing orbita-breath">
-              <InlineMarks text={open ? t.chat.processLiveWorking : doing} />…
+              <InlineMarks text={shownOpen ? t.chat.processLiveWorking : doing} />…
             </span>
             {elapsed !== null && <span className="proc-time">{formatRunClock(elapsed)}</span>}
-            <Icon name={open ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
+            <Icon name={shownOpen ? "chevron-down" : "chevron-right"} size={13} strokeWidth={1.8} />
           </div>
-          {!open && (
+          {!shownOpen && (
             <>
               <div className="proc-idea">
                 {idea !== null && (
@@ -5156,7 +5256,7 @@ function TurnProcessLine(props: {
             </>
           )}
         </button>
-        {open && (
+        {shownOpen && (
           <GoalChangeContext.Provider value={goalChanges}>
             <LiveExpanded
               steps={unit.steps}
@@ -5220,6 +5320,18 @@ function TurnProcessLine(props: {
           {!open && images.length > 0 && <ProcessThumbs images={images} />}
         </span>
       </CollapseRow>
+      {/*
+       * 授权记录行（甲的记录态）：本会话第一处电脑调用就在这一块里、且已经答完——
+       * 落在折叠行下面，收着也看得见。用户刚点完「允许」的那一轮 0.2 秒就结束，
+       * 活的块一落定就折成一行；记录只藏在 ToolLine 里的话，他永远看不到自己点过什么
+       * （2026-11-27 真机验收）。
+       */}
+      {consentCtx !== null &&
+        consentCtx.consent !== "unset" &&
+        consentCtx.triggerToolCallId !== null &&
+        stepCallIds.includes(consentCtx.triggerToolCallId) && (
+          <ComputerUseConsentTail toolCallId={consentCtx.triggerToolCallId} recordOnly />
+        )}
       {open && (
         <GoalChangeContext.Provider value={goalChanges}>
           <ProcessExpanded steps={unit.steps} toolResults={props.toolResults} skills={props.skills} imagesByCall={imagesByCall} plan={props.plan} />
@@ -6145,6 +6257,13 @@ const MARKDOWN_EXPANDED_BODY = {
 // ── 信息区文案（本模块全部用户可见字符串集中在此；英文先行，中文化等真实需求出现再抽字典） ──
 
 /** 工具的类型图标：图标只说「哪一类事」，具体哪个工具由旁边的名字说。 */
+/** computer_type 的入参文本：只认字符串（别的形状工具层会拒，界面上没有可展开的东西） */
+function typedTextOf(input: unknown): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const text = (input as Record<string, unknown>)["text"];
+  return typeof text === "string" ? text : null;
+}
+
 function toolIcon(toolName: string): IconName {
   switch (toolName) {
     case "bash":
@@ -6176,6 +6295,14 @@ function toolIcon(toolName: string): IconName {
     case "browser_type":
     case "browser_press":
       return "globe";
+    // 电脑使用：动作都落在沙箱那台「机器」上（monitor）；截图是看不是操作，单独的图形状
+    case "computer_screenshot":
+      return "image";
+    case "computer_click":
+    case "computer_type":
+    case "computer_key":
+    case "computer_scroll":
+      return "monitor";
     default:
       // 内置命令（builtin-commands.ts）：图标由注册表项给
       // MCP 工具（mcp__server__tool）：专属插头图标——外部能力，与内置工具一眼区分
@@ -6253,6 +6380,13 @@ function ToolLine(props: {
   sessionId?: string;
 }) {
   const t = useT();
+  /**
+   * computer_type 的入参文本**默认折叠**（它是模型打进去的原文，可能含用户输入的
+   * 隐私 / 凭据）：折叠行只报「输入了 N 个字符」，点「展开输入」才铺开。
+   * 转录与 JSONL 都保留明文（本地优先），这一点在设计里是有意的。
+   */
+  const typed = props.toolName === "computer_type" ? typedTextOf(props.input) : null;
+  const [typedOpen, setTypedOpen] = useState(false);
   const [open, setOpen] = useFoldState(`tool:${props.toolCallId}`);
   const { result } = props;
   const failed = result?.status === "error";
@@ -6364,7 +6498,13 @@ function ToolLine(props: {
       ? skillForReadPath((props.input as Record<string, unknown>)["path"] as string, props.skills)
       : null;
   const summary = mcp === null ? summarizeToolResult(result, t) : summarizeMcpResult(result, t);
-  const callSummary = toolCallSummary(props.toolName, props.input);
+  // computer_screenshot 的行内缩略图：结果里的第一张图。点它 = 展开（与行本身的折叠同义）
+  const shotThumb =
+    props.toolName === "computer_screenshot" && result !== undefined
+      ? (result.content.find((block) => block.type === "image") ?? null)
+      : null;
+  // 打字内容不落在折叠行的摘要里：只报字符数（全文在「展开输入」后面）
+  const callSummary = typed !== null ? t.chat.typedChars(typed.length) : toolCallSummary(props.toolName, props.input);
   const builtin = builtinCommand(props.toolName);
   // 留在过程外的行失败：行首说动作（「装插件失败 · 路径不存在」），不露英文工具名
   const outsideFail =
@@ -6560,6 +6700,41 @@ function ToolLine(props: {
             {callLabel}
           </span>
         )}
+        {/* 截图缩略：小图跟在动作行上，点开才看大图（大图在展开体里） */}
+        {shotThumb !== null && shotThumb.type === "image" && (
+          <img
+            src={imageSrc(shotThumb)}
+            alt={t.computerUse.shotAlt}
+            style={{
+              height: 30,
+              maxWidth: 64,
+              objectFit: "cover",
+              borderRadius: "var(--radius-sm)",
+              border: "1px solid var(--color-border-subtle)",
+              flex: "0 0 auto",
+            }}
+          />
+        )}
+        {/* 打字内容的展开开关：不是折叠行的开关（stopPropagation） */}
+        {typed !== null && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setTypedOpen(!typedOpen);
+            }}
+            style={{
+              border: "none",
+              background: "none",
+              padding: 0,
+              cursor: "pointer",
+              ...SLOT.status,
+              color: "var(--color-chat-link)",
+            }}
+          >
+            {typedOpen ? t.chat.hideInput : t.chat.showInput}
+          </button>
+        )}
         {/* 增删统计紧跟文件名（git stat 读法）；与展开后 DiffView 头重复，展开时藏起 */}
         {!open && stats !== null && (
           <span style={SLOT.status}>
@@ -6612,6 +6787,24 @@ function ToolLine(props: {
           </button>
         )}
       </CollapseRow>
+      {/* 打字的原文：默认折叠，展开时按等宽铺开（换行与制表符原样） */}
+      {typed !== null && typedOpen && (
+        <div
+          style={{
+            ...EXPANDED_FRAME,
+            padding: "var(--space-2) var(--space-3)",
+            background: "var(--color-chat-muted-bg)",
+            fontFamily: "var(--font-family-mono)",
+            fontSize: "var(--font-size-sm)",
+            lineHeight: "var(--line-height-code)",
+            color: "var(--color-text-primary)",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {typed}
+        </div>
+      )}
       {/* 活尾预览：跑着的 shell 有流式输出时，折叠行下贴几行末尾——「它在动」
           不展开也看得见。与展开体同一个圆角虚线框（用户 2026-10-12：从开始显示
           活尾的那一刻起就该有框，无框的裸文本像渲染错误）；行也走展开体同一套
@@ -6651,6 +6844,10 @@ function ToolLine(props: {
           images={toolImages}
         />
       )}
+      {/* 电脑使用授权（甲，2026-11-27）：这条工具行若是“正在等授权的那条”，下面长出确认行；
+          若是“本会话第一处电脑工具调用”，答完之后下面留一条记录（已允许 / 已拒绝 + 撤销）。
+          挂在 ToolLine 里而不是另开一种条目：行的折叠 / 分组 / 缩进一个字都不用改。 */}
+      <ComputerUseConsentTail toolCallId={props.toolCallId} />
     </div>
   );
 }
@@ -6916,9 +7113,20 @@ function ToolGroupLine(props: {
   const active = status.running > 0;
   const failed = status.failed > 0;
   const fileCount = group.toolName === "edit" ? editGroupFileCount(group.calls, props.toolResults) : null;
+  /**
+   * 挂起授权的成员不许被折进「用工具…」：确认行生在成员行里，组折着它就看不见
+   * （2026-11-27 真机验收：七次提问全部超时）。命中就**强制展开**，不看用户上次的选择；
+   * 提问一结（ask 清空）就恢复原来的展开态。
+   */
+  const consentCtx = useContext(ComputerUseConsentContext);
+  const forceOpen = groupHoldsPendingAsk(
+    group.calls.map((call) => call.toolCallId),
+    consentCtx?.askToolCallId ?? null,
+  );
+  const shownOpen = open || forceOpen;
   return (
     <div style={{ display: "grid", gap: "var(--space-1)", minWidth: 0 }}>
-      <CollapseRow open={open} onToggle={() => setOpen((value) => !value)}>
+      <CollapseRow open={shownOpen} onToggle={() => setOpen((value) => !value)}>
         <span className={active ? "orbita-breath" : undefined} style={HEAD_WRAP}>
           <span style={{ color: failed ? "var(--color-danger)" : headIconColor(active) }}>
             <Icon
@@ -6929,22 +7137,22 @@ function ToolGroupLine(props: {
           </span>
           <span style={headLabel(active)}>{toolGroupLabel(group.toolName, t)}</span>
         </span>
-        {!open && <span style={SLOT.status}>{toolGroupCountLabel(group.toolName, status.total, t)}</span>}
-        {!open && group.toolName === "edit" && fileCount !== null && (
+        {!shownOpen && <span style={SLOT.status}>{toolGroupCountLabel(group.toolName, status.total, t)}</span>}
+        {!shownOpen && group.toolName === "edit" && fileCount !== null && (
           <span style={SLOT.status}>{t.chat.files(fileCount)}</span>
         )}
-        {!open && failed && (
+        {!shownOpen && failed && (
           <span style={{ ...SLOT.status, color: "var(--color-danger)" }}>
             {t.chat.failedCount(status.failed)}
           </span>
         )}
         {/* 已中断（中性色）：这几次调用从未发生——折了也不能无声消失，但也不染红
             （不是失败，是没跑） */}
-        {!open && status.interrupted > 0 && (
+        {!shownOpen && status.interrupted > 0 && (
           <span style={SLOT.status}>{t.chat.interruptedCount(status.interrupted)}</span>
         )}
       </CollapseRow>
-      {open && (
+      {shownOpen && (
         <div style={{ display: "grid", gap: "var(--space-1)" }}>
           {group.calls.map((call) => (
             <ToolLine

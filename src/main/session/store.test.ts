@@ -429,6 +429,22 @@ describe("SessionStore", () => {
     assert.deepEqual(await store.list(), []);
   });
 
+  /**
+   * 电脑使用授权（2026-11-27）：与其它 setter 的「悄悄不做」不同，它要**回一句到底写没写**。
+   * 闸门把它当 fail-closed 的依据：会话在授权提问挂起期间被删时，写不了就必须拒，
+   * 不能拿“没抛错”当“写成功”（独立验收抓到的 fail-open）。
+   */
+  test("setComputerUseConsent：落盘且读回得到；会话不存在时回 false（不静默当成功）", async () => {
+    await store.ensureSession(meta());
+    assert.equal(await store.setComputerUseConsent(ID, "allowed"), true);
+    const after = await new SessionStore(join(dir, "sessions")).readMeta(ID);
+    assert.equal(after?.computerUseConsent, "allowed");
+    assert.equal(await store.setComputerUseConsent("missing-session", "allowed"), false);
+    // 撤销写回 unset：盘上不再带这个字段（缺席 = unset）
+    assert.equal(await store.setComputerUseConsent(ID, "unset"), true);
+    assert.equal("computerUseConsent" in ((await store.readMeta(ID)) ?? {}), false);
+  });
+
   // 未读标记（2026-10-10 落盘）：标 / 清只动这一个字段；重启后读回还是它
   test("setUnread 标未读与清未读，别的字段不被波及", async () => {
     await store.ensureSession(meta({ pinned: true }));

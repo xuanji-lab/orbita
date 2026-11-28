@@ -7,6 +7,7 @@ import { agentApi } from "./api/agent.ts";
 import { automationApi } from "./api/automation.ts";
 import { boardApi } from "./api/board.ts";
 import { browserApi } from "./api/browser.ts";
+import { computerUseApi } from "./api/computer-use.ts";
 import { channelApi } from "./api/channel.ts";
 import { chatEmbedApi } from "./api/chat-embed.ts";
 import { docsApi } from "./api/docs.ts";
@@ -65,6 +66,7 @@ const api = {
   intent: intentApi,
   browser: browserApi,
   voice: voiceApi,
+  computerUse: computerUseApi,
   panelUsage: panelUsageApi,
   rightPanelMemory: rightPanelMemoryApi,
   /**

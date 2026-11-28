@@ -20,6 +20,13 @@ import type { PromptFileRef, SentFileRef } from "./prompt-attachments.ts";
 import type { ReplyLang } from "./reply-language.ts";
 import type { CompactionSetting, Language } from "./settings.ts";
 import type { BrowserToolOutcome, BrowserToolRequest } from "./browser.ts";
+import type { ComputerUseToolOutcome, ComputerUseToolRequest } from "./computer-use.ts";
+import type {
+  ComputerUseConsentAskCancelledEvent,
+  ComputerUseConsentAskEvent,
+  ComputerUseConsentStateEvent,
+  EmergencyStopBroadcast,
+} from "./computer-use.ts";
 import type { SlidesAgentRequest, SlidesOutcome } from "./slides-export.ts";
 import type { DocAgentRequest, DocOutcome } from "./doc.ts";
 import type { TerminalToolOutcome, TerminalToolRequest } from "./terminal.ts";
@@ -214,6 +221,13 @@ export const ipcChannels = {
    * 用量环菜单里「为这条会话打开 / 关闭自动压缩」用。
    */
   sessionSetAutoCompact: "session:set-auto-compact",
+  /**
+   * 电脑使用的会话授权（2026-11-27）：载荷 (sessionId, 任意) —— **只写回 `"unset"`（撤销）**，
+   * 第二个参数只为占位（handler 不读它）。落 meta（computerUseConsent）。
+   * allowed / denied 只由主进程闸门在用户回答后自己落盘（那一刻只有主进程知道真的发生了
+   * 什么）；这条通道故意不能把字段写成 allowed——界面没有授予权。
+   */
+  sessionSetComputerUseConsent: "session:set-computer-use-consent",
   /**
    * 未读标记（后台跑完还没看）：载荷 `{ at, failed } | null`，null / 缺席即已读。
    * 消费者是侧栏行首竖条与右下角铃铛清单——两处读同一份 meta，重启后仍在。
@@ -841,6 +855,45 @@ export interface ChannelSpeakInput {
 export type ChannelStopInput = ChannelKey;
 
 /**
+ * 电脑使用（computer use）的开轮现场（submit / interrupt / compact 共用）。**主进程从设置
+ * 现读装配**（同其它每轮现读字段的纪律）：agent 进程不读设置文件，只收数据。
+ *
+ * 由原来的 `computerUse: boolean` 长成对象，是因为模型还需要知道**沙箱这次有没有出网**：
+ * 设置里关掉出网后任何网页都打不开，而模型只能从 Chromium 的
+ * `ERR_INTERNET_DISCONNECTED` 里猜原因，于是反复重试导航。这个事实只有主进程知道
+ * （settings.computerUse.allowNetwork，经 effectiveAllowNetwork 兑缺省），所以随开轮命令
+ * 带过来——**同一个设置、同一次读取**，不另开一套设置通道。
+ */
+export interface ComputerUseTurnContext {
+  /** 实验开关 settings.experimentalFeatures["computer-use"]：开着才注册沙箱工具组 */
+  enabled: boolean;
+  /**
+   * 这台机器是不是 Windows（`computerUsePlatformSupport(process.platform).supported`，
+   * 唯一的平台判定在 shared/computer-use-platform.ts）。非 Windows 上**工具组不注册**：
+   * 拒绝文案在那里只能给出「去设置里启动沙箱」，一句永远做不到的建议，模型会反复重试。
+   * 与 enabled 分开两个字段：设置页仍要保留入口与说明（它读的是同一个谓词）。
+   */
+  platformSupported: boolean;
+  /**
+   * 沙箱是否允许出网（`effectiveAllowNetwork`，**缺席即允许**）。false = 宿主渲染的 .wsb
+   * 带 `<Networking>Disable</Networking>`，网页打不开是设置造成的，不是网站的问题。
+   * 只在 enabled 为 true 时有意义（开关关着时沙箱工具根本不注册）。
+   *
+   * **它只说用户选了什么，不说这个后端做不做得到**——两件事分开两个字段。
+   */
+  allowNetwork: boolean;
+  /**
+   * 这个后端能不能真的把出网关掉（`backendNetworkControl`，见 shared/computer-use.ts）：
+   * wsb / qemu 能，isolation-session 不能（它就在用户这台机器的另一个登录会话里）。
+   *
+   * 只有 `allowNetwork === false && networkControlled === true` 时「没有出网」才是事实；
+   * 少了这一格，L2b 上的模型会被通知一件不存在的事（它其实在用户本机的网络上）。
+   * 由主进程用「设置里的 backend + allowNetwork」算好，agent 进程不自己读设置。
+   */
+  networkControlled: boolean;
+}
+
+/**
  * 意图系统（实验功能 intent-system）的开轮装配（submit / interrupt 共用）。
  * **主进程装配**（同 skillsDirs / directories 的纪律）：开关状态、intent-lab 地址、
  * 渠道与模型选择、会话标题都从设置与 meta 现算，agent 进程只收数据。
@@ -985,6 +1038,13 @@ export type AgentCommand =
        */
       backfill?: string[];
       /**
+       * 实验功能「电脑使用」的开关（settings.experimentalFeatures["computer-use"]）。
+       * **主进程从设置装配**（同 pdfCitations）。enabled 为 true 时 runtime 才注册沙箱工具组
+       * （computer_* / sandbox_*）；缺席 = 关——关着时模型根本看不到这些工具（不是执行时才拦）。
+       * allowNetwork 决定提示词里要不要讲「这次沙箱不能上网」。沙箱本身由用户在设置页启停。
+       */
+      computerUse?: ComputerUseTurnContext;
+      /**
        * 记忆系统的轮前召回开关。用户开轮时主进程恒带 true（记忆系统 2026-11-06 转正）——召回对根会话与子会话都生效
        * （子会话读不写，写入门禁在主进程的轮后路径）。缺席 = runtime 不问记忆。
        */
@@ -1114,6 +1174,8 @@ export type AgentCommand =
       intent?: IntentTurnContext;
       /** 待补记的 user 原话尾巴，语义同 submit */
       backfill?: string[];
+      /** 电脑使用：实验开关 + 沙箱出网，语义同 submit */
+      computerUse?: ComputerUseTurnContext;
     }
   | {
       /**
@@ -1172,6 +1234,8 @@ export type AgentCommand =
       gitAttribution?: boolean;
       /** 署名语言，语义同 submit */
       attributionLanguage?: Language;
+      /** 电脑使用：实验开关 + 沙箱出网，语义同 submit */
+      computerUse?: ComputerUseTurnContext;
       /** 「先给我看计划」偏好（settings.planFirst）：主进程每轮现读；缺席 = 关 */
       planFirst?: boolean;
       /** 插件工具的注册开关，语义同 submit */
@@ -1241,6 +1305,8 @@ export type AgentCommand =
   | ({ type: "docResult"; requestId: string } & DocOutcome)
   /** 终端：主进程对 terminalRequest 的回执（browserResult 同款） */
   | ({ type: "terminalResult"; requestId: string } & TerminalToolOutcome)
+  /** computer use：主进程对 computerUseRequest 的回执（browserResult 同款） */
+  | ({ type: "computerUseResult"; requestId: string } & ComputerUseToolOutcome)
   /** 子会话：主进程对 delegateRequest 的回执（requestId 问答，readTaskResult 同款） */
   | ({ type: "delegateResult"; requestId: string } & DelegateOutcome)
   /** 派发参考：主进程对 modelCostsRequest 的回执（readTaskResult 同款 ok 双分支） */
@@ -1531,6 +1597,14 @@ export type AgentEvent =
    */
   | { type: "browserRequest"; requestId: string; sessionId: string; request: BrowserToolRequest }
   /**
+   * computer use：agent 的沙箱像素工具请求（screenshot / click / type / key / scroll，
+   * 形状见 shared/computer-use.ts 的 ComputerUseToolRequest）。**沙箱在主进程**
+   * （SandboxController，browserRequest 同一条边界）：agent 进程只剩「工具定义 →
+   * requestId 问答」一层薄包装。沙箱是应用级一份（不按会话分），sessionId 只为信封一致。
+   * 回 computerUseResult。
+   */
+  | { type: "computerUseRequest"; requestId: string; sessionId: string; request: ComputerUseToolRequest }
+  /**
    * 演示文稿：agent 的 slides_export。PDF / PNG 要主进程开隐藏窗口，所以导出整体在主进程
    * （菜单点导出走同一个实现），agent 进程只剩工具定义 → requestId 问答。回 slidesResult。
    */
@@ -1786,6 +1860,32 @@ export type AgentEvent =
        */
       quota?: QuotaExhaustedHint;
     }
+  /**
+   * 急停（`Control+Alt+Shift+Escape`）：主进程广播，不是 agent 进程发的（`skillsChanged`
+   * 同款：主进程借同一条广播通道）。
+   *
+   * 语义 = 停轮 + **撤销电脑使用授权**（2026-11-27 起：所有非 unset 的会话 `computerUseConsent`
+   * 复位成 `unset`，下一次电脑操作会重新问一次用户；挂起中的提问按 **cancelled** 结掉——
+   * 不写盘，用户没有表态，那不是拒绝）。
+   * **沙箱不关**——现场留着给用户看。
+   */
+  | ({ type: "computerUseEmergencyStop" } & EmergencyStopBroadcast)
+  /* ---------- 电脑使用的会话授权（2026-11-27）：提问与状态两条广播 ---------- */
+  /**
+   * 主进程 → renderer：电脑工具被授权闸门挡住，等用户回答。挂起态不落盘；
+   * 回答走 `computer-use:consent-answer`，状态变化由 `computerUseConsentState` 跟上。
+   */
+  | ComputerUseConsentAskEvent
+  /**
+   * 主进程 → renderer：这一轮结束了，挂起的提问作废（**不是拒绝**，没有写 meta）。
+   * 界面上把确认行撤掉；用户之后再也没机会回答它。
+   */
+  | ComputerUseConsentAskCancelledEvent
+  /**
+   * 主进程 → renderer：某条会话的授权状态变了（回答 / 超时按拒绝 / 撤销 / 急停复位）。
+   * 带着 requestId 时，renderer 按它清掉那张挂起的确认行。
+   */
+  | ComputerUseConsentStateEvent
   /* ---------- 意图系统（实验功能 intent-system）的三条事件 ---------- */
   /**
    * /recall 流式事件的原样透传（心跳除外）：renderer 用 applyRecallEvent 归约成

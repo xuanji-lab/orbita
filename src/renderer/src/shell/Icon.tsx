@@ -118,6 +118,7 @@ import phoneOff from "../../../../design-system/assets/icons/lucide/phone-off.sv
 import audioLines from "../../../../design-system/assets/icons/lucide/audio-lines.svg?raw";
 import volume2 from "../../../../design-system/assets/icons/lucide/volume-2.svg?raw";
 import minus from "../../../../design-system/assets/icons/lucide/minus.svg?raw";
+import monitor from "../../../../design-system/assets/icons/lucide/monitor.svg?raw";
 import pencilLine from "../../../../design-system/assets/icons/lucide/pencil-line.svg?raw";
 import pause from "../../../../design-system/assets/icons/lucide/pause.svg?raw";
 import play from "../../../../design-system/assets/icons/lucide/play.svg?raw";
@@ -274,6 +275,8 @@ const ICONS = {
   "message-circle": messageCircle,
   "message-square": messageSquare,
   mic,
+  // 电脑使用：设置页与状态行的沙箱 / 桌面图标
+  monitor,
   // 编排对话的语音通话（2026-11-24）：通话键、挂断、静音、在听、在说
   "mic-off": micOff,
   phone,

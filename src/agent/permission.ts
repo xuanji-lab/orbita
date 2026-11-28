@@ -4,7 +4,8 @@
  * 2026-11-16 用户定「只留放行」：没有权限档、没有审批卡。这里只剩两件与档位无关的事：
  * 抬命令超时、拦受保护路径（会话记录与 pi 会话库）。两件都不问人。
  */
-import { gatedCommandTimeout } from "../shared/permission.ts";
+import { gatedCommandTimeout, isComputerUseTool } from "../shared/permission.ts";
+import { judgeComputerUseBudget } from "../shared/computer-guard.ts";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { ContextMessage } from "./image-byte-budget.ts";
 
@@ -207,18 +208,49 @@ export interface PiExtensionApi {
 export type ContextBudgetMessage = ContextMessage;
 
 /**
+ * 电脑使用预算在闸门里的外部事实（runtime 注入；测试直接给假值）。
+ * **闸门不认识运行中的轮**——硬限要中断本轮，那是 runtime 的事，所以只能回调。
+ * 2026-11-16「只留放行」后这里只剩预算：授权 / 逐次确认 / 记住一类都随审批体系删了。
+ */
+export interface ComputerUseBudgetHooks {
+  /** 硬限（第 91 次 / 满 20 分钟）：中断本轮。runtime 接 abortCycle */
+  abort: (message: string) => void;
+  /** 时钟。缺省 Date.now；测试注入固定值，让 20 分钟边界可测（不 sleep 20 分钟） */
+  now?: () => number;
+}
+
+/**
  * 生成 `tool_call` 处理器。纯逻辑，可被测试穷尽。
  *
  * protectedPaths 缺席（旧测试、或主进程没给）= 不做禁区检查。
  * 抬超时按 pi 的约定原地改 `event.input`，跑在受保护路径判定之前。
+ * computer 缺席 = 电脑使用工具组没注册（实验开关关着）：不做预算计数。
+ * 一轮一份 gate（runtime 的开轮装配），所以计数天然是**按轮重置**的
+ * （预算口径见 shared/computer-guard.ts：读写件都计入，截图也吃上下文）。
  */
 export function createToolCallGate(
   protectedPaths: readonly string[] = [],
   cwd: string = process.cwd(),
+  computer?: ComputerUseBudgetHooks,
 ) {
+  /** 本轮已尝试的电脑使用次数（软限挡下的重试也计数：那正是硬限要接住的情况） */
+  let computerCalls = 0;
+  /** 本轮第一次 computer_* 的时刻；null = 还没开始（20 分钟从这一步起算，不是从开轮） */
+  let computerStartedAt: number | null = null;
+  const clock = computer?.now ?? (() => Date.now());
   return (event: ToolCallLike): ToolCallGateResult => {
     raiseCommandTimeout(event.toolName, event.input);
     const refusal = protectedPathRefusal(event.toolName, event.input, protectedPaths, cwd);
-    return refusal === null ? {} : { block: true, reason: refusal };
+    if (refusal !== null) return { block: true, reason: refusal };
+    if (computer !== undefined && isComputerUseTool(event.toolName)) {
+      const now = clock();
+      const verdict = judgeComputerUseBudget({ count: computerCalls, startedAt: computerStartedAt, now });
+      // 每一次尝试都计数（含被软限挡下的重试）：第 91 次要能中断本轮
+      computerCalls += 1;
+      if (computerStartedAt === null) computerStartedAt = now;
+      if (verdict.level === "hard") computer.abort(verdict.message);
+      if (verdict.level !== "ok") return { block: true, reason: verdict.message };
+    }
+    return {};
   };
 }

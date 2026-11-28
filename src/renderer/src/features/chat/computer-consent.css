@@ -1,0 +1,138 @@
+/*
+ * 电脑使用授权（2026-11-27）：甲（对话流里的确认行 / 记录行）与乙（输入框上方的状态行）。
+ *
+ * 取值只走设计系统 token：字号 --font-size-*、间距 --space-*、墨色 --color-text-*、
+ * 状态色 --color-success / --color-danger（颜色是第二信号，第一信号是图标与文字）。
+ * 无裸 hex、无 emoji。确认行的「允许」是这一屏唯一的主操作（.btn-accent），其余都是
+ * 安静的文字 / 弱按钮——授权不该抢走对话的注意力。
+ *
+ * 甲不是卡片：没有底色、没有外框——它和工具行同级，落在同一列文字里。
+ * 乙也不铺底：sm 三级墨一行，常驻但几乎不占注意力（原型里的状态行配方）。
+ */
+
+/* ===== 甲：确认行 ===== */
+.cu-ask {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+  padding: var(--space-2) 0 var(--space-1);
+  color: var(--color-text-primary);
+}
+
+.cu-ask-lead {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+
+.cu-ask-q {
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+}
+
+.cu-ask-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: var(--space-1);
+}
+
+.cu-ask-allow {
+  height: var(--control-height-xs);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.cu-ask-deny {
+  height: var(--control-height-xs);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: var(--transition-hover);
+}
+
+.cu-ask-deny:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+/* 「为什么 / 在你回答之前它没有桌面权限」：单独一行，sm 三级墨 */
+.cu-ask-why {
+  flex-basis: 100%;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+  color: var(--color-text-tertiary);
+}
+
+/* ===== 甲：记录行（已答完的定态） ===== */
+.cu-record {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.cu-record-lead {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--color-success);
+}
+
+.cu-record[data-decision="denied"] .cu-record-lead {
+  color: var(--color-danger);
+}
+
+.cu-record-text {
+  color: var(--color-text-tertiary);
+}
+
+/* 「已告知模型：…」单独一行（拒绝时才有）：这句原文就是模型收到的工具错误 */
+.cu-told {
+  flex-basis: 100%;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-ui);
+}
+
+/* ===== 乙：输入框上方的状态行 ===== */
+.cu-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-1) var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.cu-status-lead {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+
+.cu-status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cu-status .notice-exit {
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}

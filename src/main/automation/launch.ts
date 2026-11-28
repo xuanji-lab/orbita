@@ -20,6 +20,7 @@ import {
   type AutomationRunTrigger,
 } from "../../shared/automation.ts";
 import type { SubmitAgentInput } from "../../shared/agent-ipc.ts";
+import type { ComputerUseTurnOrigin } from "../../shared/computer-use.ts";
 import { isProviderEnabled, type ProviderDto } from "../../shared/provider.ts";
 import { UNASSIGNED_MODEL_ID, UNASSIGNED_PROVIDER_ID } from "../../shared/session.ts";
 import type { AppSettings } from "../../shared/settings.ts";
@@ -34,8 +35,13 @@ export interface LaunchDeps {
   providers: { list(): Promise<ProviderDto[]> };
   settings: { read(): Promise<AppSettings> };
   workspaces: { list(): Promise<Workspace[]>; defaultPath(): string };
-  /** `registerAgentIpc` 返回的那个函数——与 delegate、用户发消息共用同一套开轮装配 */
-  submitTurn(input: SubmitAgentInput): Promise<void>;
+  /**
+   * `registerAgentIpc` 返回的那个函数——与 delegate、用户发消息共用同一套开轮装配。
+   * 第二个参数是**这一轮的发起者**：自动化开出来的轮标 `automation`，闸门据此不在
+   * 看不见的轮次里弹电脑使用授权（`this_session` 会把一轮投回用户的会话，那条会话
+   * 本身是主会话，但用户此刻不在看）。
+   */
+  submitTurn(input: SubmitAgentInput, origin?: ComputerUseTurnOrigin): Promise<void>;
 }
 
 export type AutomationModelResult =
@@ -212,24 +218,27 @@ export async function launchAutomationRun(
     updatedAt: input.at,
   });
   try {
-    await deps.submitTurn({
-      sessionId: input.sessionId,
-      cwd,
-      workspaceId,
-      resume: null,
-      providerId: resolved.providerId,
-      modelId: resolved.modelId,
-      thinkingLevel: resolved.thinkingLevel,
-      text: composeAutomationPrompt({
-        title: automation.title,
-        number: input.number,
-        ...(automation.maxRuns === undefined ? {} : { max: automation.maxRuns }),
-        at: input.at,
-        prompt: automation.prompt,
-        ...(automation.lastResult === undefined ? {} : { lastResult: automation.lastResult }),
-        ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
-      }),
-    });
+    await deps.submitTurn(
+      {
+        sessionId: input.sessionId,
+        cwd,
+        workspaceId,
+        resume: null,
+        providerId: resolved.providerId,
+        modelId: resolved.modelId,
+        thinkingLevel: resolved.thinkingLevel,
+        text: composeAutomationPrompt({
+          title: automation.title,
+          number: input.number,
+          ...(automation.maxRuns === undefined ? {} : { max: automation.maxRuns }),
+          at: input.at,
+          prompt: automation.prompt,
+          ...(automation.lastResult === undefined ? {} : { lastResult: automation.lastResult }),
+          ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
+        }),
+      },
+      "automation",
+    );
   } catch (cause) {
     // 失败回滚：刚建的会话不该留下
     await deps.sessions.remove(input.sessionId).catch(() => undefined);
@@ -253,21 +262,24 @@ export async function deliverAutomationRun(
   if (meta.piSessionFile === null) {
     throw new Error("This session cannot be continued (it has no saved agent state), so the task cannot be sent back into it.");
   }
-  await deps.submitTurn({
-    sessionId: meta.id,
-    cwd: meta.cwd,
-    workspaceId: meta.workspaceId,
-    resume: { piSessionFile: meta.piSessionFile },
-    providerId: meta.providerId,
-    modelId: meta.modelId,
-    thinkingLevel: meta.thinkingLevel,
-    text: composeAutomationPrompt({
-      title: automation.title,
-      number: input.number,
-      ...(automation.maxRuns === undefined ? {} : { max: automation.maxRuns }),
-      at: input.at,
-      prompt: automation.prompt,
-      ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
-    }),
-  });
+  await deps.submitTurn(
+    {
+      sessionId: meta.id,
+      cwd: meta.cwd,
+      workspaceId: meta.workspaceId,
+      resume: { piSessionFile: meta.piSessionFile },
+      providerId: meta.providerId,
+      modelId: meta.modelId,
+      thinkingLevel: meta.thinkingLevel,
+      text: composeAutomationPrompt({
+        title: automation.title,
+        number: input.number,
+        ...(automation.maxRuns === undefined ? {} : { max: automation.maxRuns }),
+        at: input.at,
+        prompt: automation.prompt,
+        ...(automation.plugin === undefined ? {} : { plugin: automation.plugin.name }),
+      }),
+    },
+    "automation",
+  );
 }

@@ -6,6 +6,7 @@ import { api } from "../../api";
 import type { IntentRecallRecord } from "@shared/session";
 import type { RecallCardState } from "@shared/intent-recall";
 import type { IntentConfirmDecision } from "@shared/intent-confirm";
+import type { ComputerUseConsent } from "@shared/computer-use";
 import { splitEchoBlocks } from "../../../../shared/prompt-attachments.ts";
 import { delegateOrderFromTranscript, orderForDelivery, type HeldReport } from "./channel-hold.ts";
 import { deliverChannelSubmission } from "./channel-delivery.ts";
@@ -21,6 +22,7 @@ import {
   moveQueued as moveQueuedIn,
   parseCompactCommand,
   removeIntentAsk,
+  removeComputerUseConsentAsk,
   setPendingEcho,
   nextDeliverable,
   prependOlder,
@@ -402,6 +404,11 @@ export interface ChatSession {
    * 草稿写进**新任务槽自己的键**：newTaskIn 之后立刻 setDraft 写的是旧会话的键（闭包里的 draftKey 还是旧的）。
    */
   startTaskWithDraft: (workspace: Workspace | null, text: string) => void;
+  /** 本槽是否正看着一条已经存在的会话（活会话或盘上打开的）；新任务槽为 false */
+  hasSession: boolean;
+  /** 急停命中本会话的时刻（12 秒后自动清）；null = 没有提示 */
+  estopAt: number | null;
+
   /* ---------- 意图系统（实验功能 intent-system） ---------- */
   /** 终态召回卡（实时事件 + 盘上种子；同一 turn 只留最后一张） */
   intentRecalls: readonly IntentRecallRecord[];
@@ -411,6 +418,18 @@ export interface ChatSession {
   intentAsk: Extract<AgentEvent, { type: "intentAsk" }> | null;
   /** 确认卡的回答（对不上号的陈旧应答由 runtime 丢弃） */
   answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /* ---------- 电脑使用的会话授权（2026-11-27） ---------- */
+  /**
+   * 本会话的授权状态：事件镜像 > 盘上 meta > unset。界面只读它——
+   * allowed / denied 只能由主进程栅门在用户回答后落盘，这里没有“提拔”的回调。
+   */
+  computerUseConsent: ComputerUseConsent;
+  /** 挂起的授权确认（确认行用）；null = 没有 */
+  computerUseConsentAsk: Extract<AgentEvent, { type: "computerUseConsentAsk" }> | null;
+  /** 回答挂起的确认行（允许 / 拒绝）；陈旧请求号由主进程丢弃 */
+  answerComputerUseConsent: (requestId: string, decision: "allowed" | "denied") => void;
+  /** 撤销本会话的授权（写回 unset，下一次电脑操作重新问） */
+  revokeComputerUseConsent: () => void;
   /** 会话级召回开关：null = 没有会话（新任务）；undefined = 没开实验功能 */
   intentEnabled: boolean | null | undefined;
   setIntentEnabled: (next: boolean) => void;
@@ -434,6 +453,9 @@ interface ViewHandle {
   /** model 事件回环对齐（C-4）：只对齐正看着那条会话的槽 */
   alignModel(event: { providerId: string; modelId: string }): void;
   alignThinking(event: { providerId: string; modelId: string; level: PiThinkingLevel }): void;
+  /** 急停命中本槽正看着的会话：给一条「已急停」提示（12 秒自动收） */
+  handleEmergencyStop(at: number): void;
+
   /** 正在看/正打开的那条被删了：本槽退回首页 */
   handleRemoved(id: string): void;
   /** 正开着的那条迁到了别的工作区：meta、作用域芯片与 cwd 跟着变 */
@@ -537,6 +559,8 @@ export interface SessionEngine {
   readonly entryOf: (id: string) => SessionEntry | undefined;
   /** 意图确认卡的回答（实验功能 intent-system） */
   readonly answerIntentConfirm: (requestId: string, decision: IntentConfirmDecision) => void;
+  /** 电脑使用授权确认行的回答（requestId 对号；陈旧号由主进程丢弃） */
+  readonly answerComputerUseConsent: (requestId: string, decision: "allowed" | "denied") => void;
   /** 乐观回显：发出即画用户气泡（真回显事件一到即清）。ephemeral */
   readonly setPendingEcho: (id: string, blocks: readonly string[]) => void;
   readonly renameSession: (id: string, title: string) => void;
@@ -1005,6 +1029,14 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
             }
           }
         }
+        // 急停（主进程广播）：命中的会话复位授权标识，并给一条「已急停」提示。
+        // **不关沙箱**（主进程的语义），这里只做界面反馈。
+        if (event.type === "computerUseEmergencyStop") {
+          for (const view of views.current) {
+            const viewed = view.viewedIdRef.current;
+            if (viewed !== null && event.sessionIds.includes(viewed)) view.handleEmergencyStop(event.at);
+          }
+        }
         // 工具耗时在这里记账（事件必经之路）：组折叠时成员行不渲染，渲染驱动会漏
         if (
           event.type === "progress" &&
@@ -1199,6 +1231,19 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     [applyStates],
   );
 
+  /**
+   * 电脑使用授权确认行的回答：先摘掉挂起的那一行（回答即画），再送主进程。
+   * 主进程按 requestId 对号；真正的状态（allowed / denied）由它落盘后广播
+   * `computerUseConsentState`——**这里不自己写状态**（渲染层没有授予权）。
+   */
+  const answerComputerUseConsent = useCallback(
+    (requestId: string, decision: "allowed" | "denied") => {
+      applyStates((prev) => removeComputerUseConsentAsk(prev, requestId));
+      void api.computerUse.answerConsent(requestId, decision);
+    },
+    [applyStates],
+  );
+
   const removeSession = useCallback(
     (id: string) => {
       void api.session.remove(id).then(() => {
@@ -1313,6 +1358,7 @@ export function useChatSessionEngine(providers: ProviderDto[], t: Messages): Ses
     pickedThinkingRef,
     states,
     answerIntentConfirm,
+    answerComputerUseConsent,
     setPendingEcho: setPendingEchoCb,
     statesRef,
     livePhasesReady: livePhases.current.promise,
@@ -1405,6 +1451,9 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
+
+  /** 急停发生的时刻（本槽正看着的会话被命中时置位）；12 秒后自动收掉提示 */
+  const [estopAt, setEstopAt] = useState<number | null>(null);
 
   // 思考档初始 medium：不是新拍的默认，是这些会话一直实际在跑的那一档（pi 出厂默认）
   const [thinkingLevel, setThinkingLevelState] = useState<ThinkingLevel>("medium");
@@ -1602,6 +1651,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
         modelRef.current = next;
         setModel(next);
       },
+      handleEmergencyStop: (at) => setEstopAt(at),
+
       // clamp 真值只认 5 档内的（xhigh/max 是目录未搬运前的边缘，进了也点不到）；
       // 不认识就保持原样——意图档继续显示，下一轮事件再纠
       // 只认当前型号报的：轮中切了型号（新型号下一轮才生效），旧型号此后因改档再报的
@@ -2387,6 +2438,7 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     sessionRef.current = null;
     engine.setError(null);
     setOpened(null);
+    setEstopAt(null);
     // **槽不动**：回首页不等于后台会话停了，它们在各自的槽里继续涨
     // 思考档按规则重算：模型不变，但档位不能沿用刚才打开的那条旧会话的账——
     // 否则「回首页开新任务」看起来会像是继承了上一条会话的思考档
@@ -2732,6 +2784,14 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     [engine, catalog, opened, currentPhase, thinkingLevel, applyNewTaskThinking, applySessionThinking],
   );
 
+  /** 急停提示只留一会儿：它不是持续状态，落在转录上方会长期占位 */
+  useEffect(() => {
+    if (estopAt === null) return;
+    const timer = setTimeout(() => setEstopAt(null), 12_000);
+    return () => clearTimeout(timer);
+  }, [estopAt]);
+
+
   const changeThinkingLevel = useCallback(
     (next: ThinkingLevel) => {
       // 同 chooseModel 的整条规矩：本地即设（UI 即时）→ 记在会话名下（跑着时改不进
@@ -2790,6 +2850,21 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     },
     [opened, engine],
   );
+
+  /**
+   * 撤销本会话的电脑使用授权（乙的状态行 / 甲的记录行都用它）：写回 unset，
+   * 下一次电脑操作重新问。**只说「撤销」**：授予只能来自主进程栅门上的用户回答，
+   * 界面上没有“把状态调成 allowed”的回调。
+   */
+  const revokeComputerUseConsent = useCallback(() => {
+    setOpened((prev) => (prev === null ? prev : { ...prev, computerUseConsent: "unset" }));
+    const id = sessionRef.current ?? (opened !== null ? opened.id : null);
+    if (id === null) return;
+    void api.session
+      .setComputerUseConsent(id)
+      .then(() => engine.reloadSessions())
+      .catch(() => undefined);
+  }, [opened, engine]);
 
   const compact = useCallback((): void => {
     engine.setError(null);
@@ -3263,6 +3338,11 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     pendingEcho: entry.pendingEcho,
     intentAsk: entry.intentAsk,
     answerIntentConfirm: engine.answerIntentConfirm,
+    // 授权：【实时镜像 > 盘上 meta】；盘上没有这个字段时就是 unset（还没问过）
+    computerUseConsent: entry.computerUseConsent ?? opened?.computerUseConsent ?? "unset",
+    computerUseConsentAsk: entry.computerUseConsentAsk,
+    answerComputerUseConsent: engine.answerComputerUseConsent,
+    revokeComputerUseConsent,
     intentEnabled: opened === null ? null : opened.intentEnabled,
     setIntentEnabled,
     workspaces: engine.workspaces,
@@ -3322,6 +3402,8 @@ export function useSessionView(engine: SessionEngine, key: string): ChatSession 
     moveQueuedTo,
     newTask,
     newTaskIn,
+    hasSession: sessionId !== null || opened !== null,
+    estopAt,
     startTaskWithDraft,
   };
 }

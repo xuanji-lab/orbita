@@ -1059,6 +1059,166 @@ export const zh: Messages = {
     handoffBarDone: "完成，交还",
   },
 
+  /** 设置 › 电脑使用（computer-use-view.ts 是它的纯派生层） */
+  computerUse: {
+    /* 平台不支持时的整页替换（2026-11-27）：电脑使用只在 Windows 上存在，非 Windows 上
+       不渲染任何会真去启动沙箱的控件——点了必然失败的那组按钮比一张说明卡更糟。
+       不写「敬请期待」：这不是还没做，是平台不提供（与 capability 的 platformGuidance 同口径） */
+    platformUnsupported: {
+      title: "这台电脑上不能用电脑使用",
+      // 三条按环境各说一句出路；macOS 那条必须点名「今天能用什么」，否则整个功能看起来都没了
+      body: {
+        macos:
+          "电脑使用跑在 Windows 沙箱里，macOS 上没有这个沙箱。macOS 上能用的是内置浏览器那组工具（打开网页 / 读网页 / 点击 / 截图）：网页任务照做，只是不在隔离桌面里。",
+        linux: "电脑使用跑在 Windows 沙箱里，Linux 上没有这个沙箱，也没有可替代的隔离桌面。",
+        other: "电脑使用只在 Windows 上提供，当前平台用不了。",
+      },
+      requirement:
+        "要在 Windows 上用：需要专业版 / 企业版 / 教育版（家庭版没有 Windows 沙箱功能），并在「启用或关闭 Windows 功能」里打开 Windows 沙箱。",
+      // 平台值不明（preload 桥没就绪，api.platform 是空串）：既不给控件也不给卡，只留这一句。
+      // 不说「平台不支持」——那会把一个启动故障归错地方
+      unknown: "界面还没和主进程连上，暂时判断不了这台电脑能不能用电脑使用。重启应用后再看这一页。",
+    },
+    capabilityGroup: "能力检测",
+    sandboxFeature: "沙箱功能",
+    sandboxFeatureInfo:
+      "电脑使用在沙箱里干活——一个一次性的隔离系统，智能体在里面操作网页，你的桌面键鼠与文件都不会被碰；沙箱关闭时里面的一切随之丢弃。",
+    probe: "检测能力",
+    probeIdle: "还没检测过",
+    probing: "检测中…",
+    probeReady: "沙箱可用",
+    probeNotReady: "还未就绪，按下方的步骤手动开启",
+    probeFailed: "检测没跑成",
+    // 隔离档位（shared/computer-use.ts 的 IsolationTier）。到不了更高档的原因就是 probe 的
+    // guidance——同一张卡里逐条列在探针行下面，这里只给徽标与一句指路
+    isolationTier: "隔离档位",
+    isolationTierInfo:
+      "这台机器现在能到哪一档。L1 浏览器档：内置浏览器里的网页自动化，所有平台都有。L2 Windows 沙箱档：沙箱里的鼠标键盘与沙箱内浏览器，需要 Windows 专业版 / 企业版 / 教育版、启用 Windows 沙箱、并开着虚拟化。L2b 多会话隔离档：每个智能体一个独立 OS 会话（彼此看不见窗口），但**没有真实的鼠标键盘**——点击与打字改走 UIA / CDP，Win11 家庭版也能用。L3 Linux 桌面虚拟机同样只在 Windows 上（宿主侧走 Windows 的虚拟化）。",
+    tierFallback: "到不了更高档，原因见上方几条",
+    tiers: {
+      l1: "L1 浏览器档",
+      l2: "L2 Windows 沙箱档",
+      l2b: "L2b 多会话隔离档",
+    },
+    backend: "隔离后端",
+    backendInfo:
+      "沙箱：一份 Windows 沙箱、一个桌面，多个会话共享（鼠标键盘与像素点击完整可用，但窗口互相可见）。多会话隔离：每个会话一个独立 OS 会话，宿主 EnumWindows 看不见、彼此也看不见（隔离更强，但没有真实指针：像素点击 / 打字会被直接拒掉，动作走 UIA、CDP 与截图）。",
+    backendBelow: "改动在下次启动时生效；正在运行的会话仍按启动时的档位。",
+    backendAria: "隔离后端选择",
+    backendLabels: {
+      wsb: "Windows 沙箱（L2）",
+      "isolation-session": "多会话隔离（L2b）",
+      qemu: "Linux 桌面（L3）",
+    },
+    // 开发者后端（qemu）的标记与说明。开关与理由的文案源是 shared/computer-use.ts 的
+    // COMPUTER_USE_DEV_BACKENDS_ENV 与 computerUseDevBackendRefusal；这里只给界面上的三句。
+    backendExperimental: "实验",
+    backendDevBlocked:
+      "当前选的是开发者后端，但它没有启用：需要设置环境变量 ORBITA_CU_DEV_BACKENDS=1 再启动应用，并自备 QEMU 与镜像；启动会被拒绝。",
+    backendDevNote:
+      "开发者后端（实验）：镜像与 QEMU 要自备——先在仓库里跑 scripts/p3-desktop/build-image.mjs 与 scripts/p3-desktop/build-ramdisk.mjs；它只有截图、点击与打字，没有 UIA 控件树、没有浏览器调试口、没有宿主文件映射、也没有快照。",
+    backendDevBlockedStart: "这一档是开发者后端，开关没开：启动会被拒绝（原因见「隔离后端」一行）。",
+    backendListFailed:
+      "读取可选后端列表失败：已回退到默认两档（不含开发者后端），已存的选择没有被改写；重启应用后再试。",
+    isolationSessionRow: "多会话隔离依赖",
+    isolationSessionInfo:
+      "每个智能体一个独立 OS 会话走的是微软官方的 MXC（IsolationSession）：需要一个能加载原生模块的 Node 运行时与 Windows 自带的 IsoSession 服务。不可用时这一行会说是缺什么。",
+    isolationSessionReady: "可用",
+    isolationSessionNode: (version: string, ok: boolean) =>
+      ok ? `Node ${version}（够用）` : `Node ${version}（MXC 要 24.21 以上）`,
+    isolationSessionNoPointer:
+      "这一档没有真实的鼠标键盘，像素点击 / 打字不可用；用 UIA（控件）、CDP（浏览器）或截图代替。",
+    // WSL2 只是能力信号：所有发行版共享同一个轻量虚拟机，不是一个隔离档
+    wsl2: "WSL2",
+    wsl2Info:
+      "只是一个能力信号，不是隔离边界：WSL2 的所有发行版共享同一个轻量虚拟机，里面的东西与你的 Windows 并没有真正隔开，所以它不算一档隔离，也不影响上面的档位。",
+    wsl2States: {
+      available: "可用",
+      unavailable: "没装",
+      unknown: "查不到",
+    },
+    sandboxGroup: "沙箱",
+    sandboxState: "状态",
+    // info 是可悬停的完整解释，below 是常驻的生效时机：运行中点了「关」而沙箱还在联网，
+    // 用户会以为坏了——这件事必须看得见，不能只靠 hover
+    allowNetwork: "允许沙箱出网",
+    allowNetworkInfo:
+      "关掉后沙箱里的进程不能上网，网页打不开，所以网页自动化需要开着；只操作本地桌面 / 文件时可以关。",
+    // 后端断不了网时（L2b）拿来替掉上面那句：在那一档，「关掉就不上网」是句做不到的承诺
+    allowNetworkInfoLocked:
+      "这个后端跑在你自己这台电脑上的独立登录会话里，断不了它的网：它用的就是这台机器的网络，所以这一行只是记下你的意愿，开或关都不会改变什么。",
+    allowNetworkBelow: "改动在下次启动沙箱时生效；正在运行的沙箱仍按启动时的设置。",
+    // 后端做不到断网时（L2b）行底那一句：为什么这一行不可操作。不说「已关闭」——那是假的
+    allowNetworkLocked:
+      "这个后端跑在你自己这台电脑上的独立登录会话里，断不了网：它用的就是你现在的网络，开关开或关都不会改变它。",
+    allowNetworkAria: "沙箱网络访问",
+    browser: "沙箱浏览器",
+    browserInfo:
+      "智能体在沙箱里用哪个浏览器打开网页。默认 Edge——沙箱镜像自带它，不用额外准备，启动到 CDP 就绪也比从宿主映射进来的 Chrome 快一秒左右。",
+    browserBelow:
+      "Chrome / Brave / Chromium 不在沙箱镜像里：需要先把它们映射或拷贝进沙箱，否则这次会自动回退 Edge（工具回执里会写明）。改动在下一次打开网页时生效。",
+    browserAria: "沙箱里用哪个浏览器",
+    browserAuto: "自动",
+    // 「最多三分钟」对着 src/main/computer-use/sandbox.ts 的 BRIDGE_READY_TIMEOUT_MS（180s）；
+    // 改那边就要改这里（冷启动实测可达 105s+，首次还要制备基础镜像）
+    sandboxStateInfo:
+      "启动要等沙箱回头注册（最多三分钟；首次启动要制备基础镜像，明显更慢，等超了直接重试即可）；关闭会丢掉沙箱里的一切。出错之后，「启动」可以直接重试，「关闭」会复位回未启动。",
+    states: {
+      off: "未启动",
+      starting: "启动中…",
+      running: "运行中",
+      stopping: "关闭中…",
+      error: "出错",
+    },
+    // 关闭是「收尾」，不是「出错」：guest 要自己关机、VM 要退，真机实测 19 秒起步、
+    // 刚起就关的情形还要等沙箱登入。这里把「别重复点」说清楚，免得用户以为卡住了
+    stoppingNote: "正在收尾：最多 1–2 分钟。用完的沙箱会整个销毁，窗口自己消失，不用再点第二次。",
+    start: "启动",
+    stop: "关闭",
+    /* 关闭前的一次确认（不提供「不再提示」）：误点就关掉正在跑的会话，回到未启动后沙箱里的一切都没了 */
+    // 与「清除浏览器数据」那条同量级（「退出所有网站？」是 7 字）：42 字塞进行内控件区
+    // 会把「仍然关闭 / 取消」两个按钮压成竖排（2026-11-13 真机截图）。代价写在这一行的 info 里。
+    stopConfirm: "确定关闭沙箱？",
+    stopConfirmAction: "仍然关闭",
+    /* 沙箱归属：同一时间只有一块桌面，多会话时用户要知道谁在用它 */
+    leaseRow: "桌面占用",
+    leaseRowInfo:
+      "沙箱桌面是应用级共享的：同一时间只有一个会话能操作它（像素点击、输入、按键、滚动）。新一轮动作会等前面的会话做完再接上，所以这里显示的是此刻真正持有桌面的那条会话。",
+    leaseIdle: "空闲",
+    leaseBusy: (title, minutes, seconds) => `正在被「${title}」使用（已 ${minutes} 分 ${seconds} 秒）`,
+    leaseUntitled: "未命名会话",
+    shotGroup: "手动截图",
+    shotRow: "沙箱桌面",
+    shotRowInfo: "现在就拍一张沙箱桌面的截图——只在你点击时拍，绝不自动拍。",
+    shot: "看一眼",
+    shotBusy: "拍摄中…",
+    shotNeedsRunning: "沙箱启动后才能看一眼",
+    shotNativeSize: "原始尺寸",
+    shotAlt: "沙箱桌面截图",
+    /*
+     * 会话级同意书（2026-11-27）：流里问一次（甲），答完后流里留一条记录 + 输入框上方
+     * 一条安静的状态行（乙）。拒绝原文来自 shared 的 COMPUTER_USE_CONSENT_DENIED_TEXT——
+     * 与模型收到的那句是同一句。
+     */
+    consentAsk: "允许操作这台沙箱桌面？",
+    consentWhy: "用于截图、点击、输入这类电脑操作。在你回答之前，它拿不到这台桌面。",
+    consentAllow: "允许本会话",
+    consentDeny: "拒绝",
+    consentAllowedRecord: "已允许，本会话内不再询问",
+    consentDeniedRecord: "已拒绝，本会话内不再操作电脑",
+    consentRevoke: "撤销",
+    consentToldModel: (text: string) => `已告知模型：${text}`,
+    consentStatusAllowed: "已允许操作沙箱桌面（本会话）",
+    /* 急停热键（设置页「安全」组）与急停提示 */
+    emergencyGroup: "安全",
+    emergencyHotkey: "急停热键",
+    emergencyHotkeyInfo:
+      "沙箱窗口在前台时也按得到。按下后：中断正在跑的这一轮、撤销本会话的电脑使用授权、此后电脑使用工具一律拒绝。**不关闭沙箱**——现场留着给你看。要再用需要重新授权。",
+    emergencyRegistered: "已注册，随时可用",
+    emergencyUnavailable: (error) => `不可用：${error}。请关掉占用这个快捷键的应用后重启本应用。`,
+    emergencyStopped: "已急停：这一轮已经停下，本会话的电脑使用授权已撤销。沙箱没有关闭，画面还在。",
+  },
+
   drawer: {
     title: "辅助对话",
     filter: "过滤任务…",
@@ -1249,6 +1409,7 @@ export const zh: Messages = {
       plugins: "能力",
       memory: "记忆库",
       experimental: "实验功能",
+      "computer-use": "电脑使用",
     },
     appearance: "外观",
     theme: "主题",
@@ -2131,6 +2292,11 @@ export const zh: Messages = {
     tools: (n) => `工具 ${n}`,
     failedCount: (n) => `${n} 个失败`,
     toolInterrupted: "已中断 · 未执行",
+    /* computer_type 的入参文本默认折叠：它是模型打进去的原文，可能含隐私 / 凭据 */
+    typedChars: (count) => `输入了 ${count} 个字符`,
+    showInput: "展开输入",
+    hideInput: "收起输入",
+    commandCardOpen: "在右栏打开",
     interruptedCount: (n) => `${n} 个已中断`,
     toolRead: "读取",
     toolSearch: "搜索",

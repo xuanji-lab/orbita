@@ -11,7 +11,7 @@ import type { PluginDraftTarget } from "../plugins/plugin-draft.ts";
 import { MemoryLibraryView } from "../memory/MemoryLibraryView";
 import type { MemoryEntryView } from "@shared/memory";
 import { PluginsView } from "../plugins/PluginsView.tsx";
-import type { SettingsTab } from "./settings-tabs.ts";
+import { SETTINGS_TABS, type SettingsTab } from "./settings-tabs.ts";
 import type { ProviderDto } from "@shared/provider";
 import type {
   BrowserImportedSite,
@@ -22,10 +22,32 @@ import type {
 } from "@shared/browser";
 import type { Workspace } from "@shared/workspace";
 import type { DoubaoVoiceConfig, ElevenlabsVoiceConfig, StepfunVoiceConfig, VoiceFailure, DictationProvider, DictationSelection } from "@shared/voice";
+import type { ComputerUseBackendChoice, ComputerUseLeaseStatus, ComputerUseProbeResult, EmergencyStopStatus, SandboxStatus, WslState } from "@shared/computer-use";
+import { COMPUTER_USE_BROWSER_CHOICES, computerUseBackendChoices, type ComputerUseBrowser } from "@shared/computer-use";
+import type { ComputerUsePlatformSupport } from "@shared/computer-use-platform";
 import { playSpeech } from "../voice/speech-playback.ts";
 import { DICTATION_PROVIDERS } from "@shared/voice";
 import { CompactViz } from "./CompactViz";
 import { COMPACTION_CHOICES } from "./compact-viz.ts";
+import {
+  allowNetworkEnabled,
+  allowNetworkPatch,
+  allowNetworkRow,
+  backendChoice,
+  backendChoicesView,
+  backendPatch,
+  browserChoice,
+  browserLabel,
+  browserPatch,
+  computerUsePage,
+  probeBlocksStart,
+  probeVisual,
+  sandboxControl,
+  shotFromResult,
+  shotMeta,
+  statusVisual,
+  type ShotView,
+} from "./computer-use-view.ts";
 import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
@@ -114,6 +136,15 @@ export function SettingsView(props: {
   onCollapseRail: (() => void) | null;
 }) {
   const t = useT();
+  /** 实验功能「电脑使用」（设置原值）：关着时侧栏导航与这一页的内容都藏起来。
+   *  正常操作进不到这个门：App 的 settingsTab 只由侧栏导航行改写，导航行已过滤。
+   *  这里再拦一道是兼容盘上手改 settings.json 的情形——页头与内容各自退回通用页。 */
+  const computerUse = props.settings.experimentalFeatures?.["computer-use"] === true;
+  /** 这一页画控件还是警示卡：平台判定读 shared 的同一个谓词（与主进程 / agent 工具注册同源） */
+  const cuPage = computerUsePage(api.platform);
+  const active =
+    SETTINGS_TABS.find((tab) => tab.id === props.tab && (tab.id !== "computer-use" || computerUse)) ??
+    SETTINGS_TABS[0];
   /**
    * Migration 的状态（扫描结果、勾选、去向）**跨 tab 保留**：用户为了三步清单要跳去
    * Providers / General 再回来，每次回来都重扫就又回到「懵逼」（wafo 2026-09-28）。
@@ -168,6 +199,25 @@ export function SettingsView(props: {
       ) : props.tab === "voice" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
           <VoiceSettings />
+        </div>
+      ) : props.tab === "computer-use" && computerUse ? (
+        <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
+          {/* 平台闸门（2026-11-27）：非 Windows 上整页换说明卡，一个启动按钮都不画——
+              那些按钮在那边点了必然失败（主进程 start() 与 agent 工具注册读同一个谓词）。
+              入口不藏：藏掉会让用户以为页面坏了。平台值不明（preload 桥没就绪）时
+              两样都不给，只留一句中性提示：这时候报「平台不支持」是错误归因 */}
+          {cuPage.kind === "unknown" ? (
+            <div className="set-page">
+              <p className="set-row-hint" role="status">
+                {t.computerUse.platformUnsupported.unknown}
+              </p>
+            </div>
+          ) : cuPage.kind === "unsupported" ? (
+            <ComputerUseUnsupported support={cuPage.support} />
+          ) : (
+            /* 出网开关读写同一份设置（App 的 changeSettings → api.settings.set），不另开通道 */
+            <ComputerUseView settings={props.settings} onChange={props.onSettingsChange} />
+          )}
         </div>
       ) : props.tab === "guide" ? (
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>
@@ -1912,5 +1962,603 @@ function ChatStatusToggle() {
     <SettingRow name={t.chatStatus.toggleName} info={t.chatStatus.toggleInfo}>
       <Switch label={t.chatStatus.toggleName} checked={on} onChange={setOn} />
     </SettingRow>
+  );
+}
+
+// ── 电脑使用视图（自 cu/full 移植，见「设置 › 电脑使用」说明） ──
+// ── 设置 › 电脑使用 ──────────────────────────────────────────────────────
+
+/**
+ * 非 Windows 上的整页说明（2026-11-27）。
+ *
+ * 为什么整页换掉而不是把控件置灰：那边的主进程 start() 一律拒（先报平台那条），agent
+ * 也不再拿到 computer_* / sandbox_*——一组点了必然失败的按钮会把「不支持」误写成「坏了」。
+ * 为什么不把入口藏掉：藏掉同样像坏了，用户会一遍遍找；说明 + 今天你能用什么才诚实。
+ * 正文按 reasonKey 取（平台枚举与文案表的对应由 computer-use-view.test.ts 钉住）。
+ */
+function ComputerUseUnsupported(props: { support: ComputerUsePlatformSupport }) {
+  const t = useT();
+  // reasonKey 为 null 只可能发生在 Windows（supported），这里兜一层 other，不让正文空着
+  const reason = props.support.reasonKey ?? "other";
+  return (
+    <div className="set-page">
+      <section className="cu-unsupported">
+        <h2 className="cu-unsupported-title">
+          <Icon name="triangle-alert" size={16} strokeWidth={1.8} />
+          {t.computerUse.platformUnsupported.title}
+        </h2>
+        <p className="cu-unsupported-body">{t.computerUse.platformUnsupported.body[reason]}</p>
+        <p className="cu-unsupported-body">{t.computerUse.platformUnsupported.requirement}</p>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * 设置 › 电脑使用（PR1）：能力检测、沙箱启停、手动「看一眼」。单独一页而不是
+ * General 里的一行：三组内容与浏览器 / 语音同一档，侧栏入口由 SETTINGS_TABS
+ * 自动长出来。状态不走拉取：主进程每次迁移推 computerUseStatus，冷启动按 off
+ * 画（shared/computer-use.ts 的契约说明——沙箱不跨应用存活）。五态 → 按钮/图标/
+ * 文字的全部换算在 computer-use-view.ts（纯函数层，node --test 直接测）。
+ */
+function ComputerUseView(props: { settings: AppSettings; onChange: (patch: SettingsPatch) => void }) {
+  const t = useT();
+  const [status, setStatus] = useState<SandboxStatus>({ state: "off" });
+  /** 在途的那次点击。只压自己那颗按钮：starting 的 60 秒里 stop 必须随时可点（取消启动） */
+  const [pending, setPending] = useState<"start" | "stop" | null>(null);
+  /** 这次 start / stop 调用的失败原话。与状态机的 error 是两个来源：这个是主进程的 return 值 */
+  const [actionError, setActionError] = useState<string | null>(null);
+  /** 最近一次探测结果。提升到这里：「启动」要不要置灰看它（平台不对时主进程也会拒） */
+  const [probeResult, setProbeResult] = useState<ComputerUseProbeResult | null>(null);
+  /** 桌面现在归谁（租约）；null = 空闲。每秒拉一次——「已 X 分 Y 秒」要跟着走 */
+  const [lease, setLease] = useState<ComputerUseLeaseStatus>(null);
+  /** 关闭沙箱的二次确认：误点就丢掉沙箱里的一切，所以只在第二段才真的调 stop() */
+  const [confirmStop, setConfirmStop] = useState(false);
+  /** 主进程给的可选后端（开发者开关关着时只有两档）。null = 还没拿到 */
+  const [backends, setBackends] = useState<readonly ComputerUseBackendChoice[] | null>(null);
+  /** 拉列表失败：不能静默成「一个后端都没有」——回退到默认两档并在行下说一句人话 */
+  const [backendsError, setBackendsError] = useState(false);
+
+  // onStatus 返回退订函数，正好作 effect 的清理；
+  // 挂载时再拉一次当前值——沙盒是应用级的，离开设置页再回来时组件重挂载，
+  // 只靠迁移推送会一直按 off 画（停不掉正在跑的沙盒）。
+  useEffect(() => {
+    const unsubscribe = api.computerUse.onStatus(setStatus);
+    void api.computerUse.status().then(setStatus);
+    return unsubscribe;
+  }, []);
+
+  /**
+   * 沙箱归属：每秒问一次主进程（数据源是桌面租约本身，不另写一套状态）。
+   * 只有一秒一跳才让「已 X 分 Y 秒」是活的；页面切走时组件卸载，定时器随 effect 清掉。
+   * 失败静默（与状态推送同一条纪律：设置页不该因为一次读数失败弹红字）。
+   */
+  useEffect(() => {
+    let alive = true;
+    const pull = (): void => {
+      void api.computerUse
+        .leaseStatus()
+        .then((next) => {
+          if (alive) setLease(next);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    const timer = setInterval(pull, 1_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  /**
+   * 可选后端列表由主进程给（开发者后端的开关在主进程那边）。拉一次就够：
+   * 环境变量变了要重启应用，这个值在本次运行里不会变。
+   * **失败不能静默**：空列表会让用户看到「一个后端都没有」且无从解释。回退到默认两档
+   * （与开关关闭时同形），并把「读取失败」写在那一行下面；已存的选择一个字不改。
+   */
+  useEffect(() => {
+    let alive = true;
+    void api.computerUse
+      .backends()
+      .then((next) => {
+        if (alive) setBackends(next);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setBackends(computerUseBackendChoices(false));
+        setBackendsError(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // 状态一旦离开可关闭的那几档，第二段确认就没有意义了——收起它，免得下次停在「仍然关闭」上
+  useEffect(() => {
+    if (sandboxControl(status.state, pending).canStop !== true) setConfirmStop(false);
+  }, [status.state, pending]);
+
+  const control = sandboxControl(status.state, pending);
+  const visual = statusVisual(status.state, t);
+  /** 出网开关：缺席 = 允许（UI 自己兜缺省，否则新用户看到 Off、沙箱实际在联网） */
+  const allowNetwork = allowNetworkEnabled(props.settings);
+  /** 沙箱浏览器：缺席 = Edge（同上，UI 自己兜缺省） */
+  const browser = browserChoice(props.settings);
+  /** 隔离后端：缺席 = Windows 沙箱（P2 是可选升级，不是默认路径） */
+  const backend = backendChoice(props.settings);
+  /**
+  /**
+   * 后端行要画的形态：主进程的列表 + 已存值。开关关而存的是 qemu 时不改写设置，
+   * 而是把 qemu 画成「选中 + 锁住」，并给出警示与启动置灰的理由。
+   */
+  const backendView = backends === null ? null : backendChoicesView(backend, backends);
+  /**
+   * 列表读取失败时我们**不知道**开关的真实状态，不能替主进程断言「开发者后端被关」：
+   * 只画回退列表与一句失败说明，「启动」直接交给主进程按环境变量判（它不会骗人）。
+   */
+  const backendDevBlocked = backendsError !== true && backendView?.devBlocked === true;
+  /**
+   * 出网那一行能不能动：L2b 断不了网，所以它上面这一行不可操作并给出原因；
+   * wsb / qemu 照常。**已存的值不动**——只是不让编辑（换回能断网的后端时选择还在）。
+   */
+  const networkRow = allowNetworkRow(backend, t);
+  /** 错误行：在途调用的失败原话优先（更新），其次是状态机停在 error 时的 message。
+      用户中途「关闭」取消启动时主进程回「启动已取消」——如实显示，它解释了为什么
+      沙箱回到了未启动；下一次动作即清掉。 */
+  const errorLine = actionError ?? (status.state === "error" ? status.message : null);
+  /**
+   * 关闭中的常驻说明（2026-11-13）：收尾不是瞬时的（guest 自己关机 + VM 退，真机 19 秒起步；
+   * 刚起就关还要等沙箱登入），以前这段时间什么字也没有，用户以为是卡住了、反复点。
+   * 它不是错误，所以走 note 的普通样式，而不是 set-row-error。
+   */
+  const stoppingNote = status.state === "stopping" ? t.computerUse.stoppingNote : null;
+  /** 开发者后端没开时，启动置灰的原因行（与后端行下的警示同一件事，放在按钮旁边再说一次） */
+  const devBlockedNote = backendDevBlocked ? t.computerUse.backendDevBlockedStart : null;
+
+  const run = (action: "start" | "stop") => {
+    setPending(action);
+    setActionError(null);
+    setConfirmStop(false);
+    const call = action === "start" ? api.computerUse.start() : api.computerUse.stop();
+    void call
+      .then((result) => {
+        if (!result.ok) setActionError(result.error);
+      })
+      .catch((cause: unknown) => setActionError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setPending(null));
+  };
+
+  return (
+    <div className="set-page">
+      <ProbeGroup result={probeResult} onResult={setProbeResult} />
+      <SettingGroup label={t.computerUse.sandboxGroup}>
+        <SettingRow
+          name={t.computerUse.sandboxState}
+          info={t.computerUse.sandboxStateInfo}
+          note={
+            errorLine !== null ? (
+              <span role="alert" className="set-row-error">
+                {errorLine}
+              </span>
+            ) : devBlockedNote !== null ? (
+              <span role="status" className="set-row-note">
+                {devBlockedNote}
+              </span>
+            ) : stoppingNote !== null ? (
+              <span role="status" className="set-row-note">
+                {stoppingNote}
+              </span>
+            ) : undefined
+          }
+        >
+          <span className="set-inline">
+            {/* 状态徽标：图标 + 文字说话，颜色只是第二信号（tone 是视图层给的 CSS 变量） */}
+            <span className="cu-state">
+              <Icon name={visual.icon} size={14} spin={visual.spin} style={{ color: visual.tone }} />
+              {visual.label}
+            </span>
+            {confirmStop ? (
+              /* 第二段：说清代价，再给一次「仍然关闭」。取消是第一序选项（不染 accent），
+                 破坏性动作才用 danger——与「清除浏览器数据」同一套行内确认。 */
+              <>
+                <span className="set-row-hint">{t.computerUse.stopConfirm}</span>
+                <PanelButton danger onClick={() => run("stop")}>
+                  <Icon name="square" size={13} /> {t.computerUse.stopConfirmAction}
+                </PanelButton>
+                <PanelButton onClick={() => setConfirmStop(false)}>{t.common.cancel}</PanelButton>
+              </>
+            ) : (
+              <>
+                <PanelButton
+                  onClick={() => run("start")}
+                  disabled={!control.canStart || probeBlocksStart(probeResult) || backendDevBlocked}
+                >
+                  <Icon name="play" size={13} /> {t.computerUse.start}
+                </PanelButton>
+                <PanelButton onClick={() => setConfirmStop(true)} disabled={!control.canStop}>
+                  <Icon name="square" size={13} /> {t.computerUse.stop}
+                </PanelButton>
+              </>
+            )}
+          </span>
+        </SettingRow>
+        {/* 沙箱归属：多会话时用户要知道现在是谁占着那块桌面（租约状态，每秒刷新）。
+            没人持有时说「空闲」；有主时说标题与已持有的时长——用户据此判断要不要等。 */}
+        <SettingRow name={t.computerUse.leaseRow} info={t.computerUse.leaseRowInfo}>
+          <span className="cu-state">
+            <Icon
+              name={lease === null ? "circle" : "monitor"}
+              size={14}
+              style={{ color: lease === null ? "var(--color-text-tertiary)" : "var(--color-accent)" }}
+            />
+            <span role="status">
+              {lease === null
+                ? t.computerUse.leaseIdle
+                : t.computerUse.leaseBusy(
+                    lease.title === "" ? t.computerUse.leaseUntitled : lease.title,
+                    Math.floor(lease.heldMs / 60_000),
+                    Math.floor(lease.heldMs / 1_000) % 60,
+                  )}
+            </span>
+          </span>
+        </SettingRow>
+        {/* 生效时机常驻在行底：运行中点了「关」而沙箱还在联网，用户会以为坏了——
+            这件事不能只住在 hover 里。后端断不了网时（L2b）行底换成原因，那一行也不可操作：
+            否则用户关掉开关、看到「已关」、而它照样联网——那就是设置骗人。 */}
+        <SettingRow
+          name={t.computerUse.allowNetwork}
+          info={networkRow.editable ? t.computerUse.allowNetworkInfo : t.computerUse.allowNetworkInfoLocked}
+          below={
+            <p className="cu-hint">
+              {networkRow.editable ? t.computerUse.allowNetworkBelow : networkRow.reason}
+            </p>
+          }
+        >
+          {/* 设计系统里没有 Switch，开关就用两个 Chip（与设置页其它布尔项同一个形状）。
+              按钮不因沙箱状态置灰：改的是下次启动时读的 .wsb / VM 参数，运行中也可以先改好 */}
+          <span className="set-chips" role="group" aria-label={t.computerUse.allowNetworkAria}>
+            <Chip
+              active={allowNetwork}
+              disabled={!networkRow.editable}
+              onClick={() => props.onChange(allowNetworkPatch(true))}
+            >
+              {t.common.on}
+            </Chip>
+            <Chip
+              active={!allowNetwork}
+              disabled={!networkRow.editable}
+              onClick={() => props.onChange(allowNetworkPatch(false))}
+            >
+              {t.common.off}
+            </Chip>
+          </span>
+        </SettingRow>
+        {/* 沙箱浏览器：默认 Edge（沙箱自带、零准备成本），Chrome / Brave / Chromium 需要用户先把
+            它们映射进去；没放进去时桥会回退 Edge 并在回执里说明。用 Chip 组而不是 select：这个页里
+            每一个选项集合都是 Chip 组（语言 / 自动压缩 / 归属），没有裸 <select> 的先例，
+            设计系统也不给 select 任何样式。 */}
+        <SettingRow
+          name={t.computerUse.browser}
+          info={t.computerUse.browserInfo}
+          below={<p className="cu-hint">{t.computerUse.browserBelow}</p>}
+        >
+          <span className="set-chips" role="group" aria-label={t.computerUse.browserAria}>
+            {COMPUTER_USE_BROWSER_CHOICES.map((choice) => (
+              <Chip key={choice} active={browser === choice} onClick={() => props.onChange(browserPatch(choice))}>
+                {browserLabel(choice, t.computerUse.browserAuto)}
+              </Chip>
+            ))}
+          </span>
+        </SettingRow>
+        {/*
+          隔离后端：列表由主进程给（`api.computerUse.backends()`）——renderer 不自己硬编码三档。
+          开发者后端（qemu）只在 `ORBITA_CU_DEV_BACKENDS` 开着时出现，并带「实验」文字标记；
+          已存 qemu 而开关关着时**不改写设置**，而是把它画成选中且锁住的一档 + 行下警示，
+          启动按钮同时置灰并说原因（主进程 start 也会拒，这里只是不让人白点一次）。
+        */}
+        <SettingRow
+          name={t.computerUse.backend}
+          info={t.computerUse.backendInfo}
+          below={
+            backendsError ? (
+              <p className="set-row-error" role="alert">
+                {t.computerUse.backendListFailed}
+              </p>
+            ) : backendDevBlocked ? (
+              <p className="set-row-error" role="alert">
+                {t.computerUse.backendDevBlocked}
+              </p>
+            ) : (
+              <>
+                <p className="cu-hint">{t.computerUse.backendBelow}</p>
+                {/* qemu 在列表里就把代价说清楚（不必等选中后才看到）：镜像自备 + 只有截图/点击/打字 */}
+                {backendView?.options.some((option) => option.id === "qemu") && (
+                  <p className="cu-hint">{t.computerUse.backendDevNote}</p>
+                )}
+              </>
+            )
+          }
+        >
+          <span className="set-chips" role="group" aria-label={t.computerUse.backendAria}>
+            {(backendView?.options ?? []).map((option) => (
+              <Chip
+                key={option.id}
+                active={backend === option.id}
+                disabled={option.locked}
+                title={
+                  option.locked
+                    ? backendsError
+                      ? t.computerUse.backendListFailed
+                      : t.computerUse.backendDevBlocked
+                    : undefined
+                }
+                onClick={() => props.onChange(backendPatch(option.id))}
+              >
+                {t.computerUse.backendLabels[option.id]}
+                {option.experimental ? ` · ${t.computerUse.backendExperimental}` : null}
+              </Chip>
+            ))}
+          </span>
+        </SettingRow>
+      </SettingGroup>
+      <LookGroup canScreenshot={control.canScreenshot} running={status.state === "running"} />
+      <GuardGroup />
+    </div>
+  );
+}
+
+/**
+ * 安全组（computer use PR4）：急停热键的**真实可用性**。
+ *
+ * 为什么一定要显示状态：`globalShortcut.register` 被别的应用占用时返回 false 而不是
+ * 抛错——只在控制台留一行的话，用户以为急停能用；真出事时按下去什么都没发生。
+ * 注册失败的文案要能行动（关掉占用的应用后重启）。
+ */
+function GuardGroup() {
+  const t = useT();
+  const [state, setState] = useState<EmergencyStopStatus | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void api.computerUse
+      .emergencyStopState()
+      .then((next) => {
+        if (alive) setState(next);
+      })
+      .catch(() => {
+        if (alive) setFailed(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const note = failed
+    ? "读取热键状态失败（主进程没有回执）"
+    : state === null
+      ? undefined
+      : state.registered
+        ? undefined
+        : t.computerUse.emergencyUnavailable(state.error ?? "");
+
+  return (
+    <SettingGroup label={t.computerUse.emergencyGroup}>
+      <SettingRow
+        name={t.computerUse.emergencyHotkey}
+        info={t.computerUse.emergencyHotkeyInfo}
+        note={
+          note === undefined ? undefined : (
+            <span role={state !== null && !state.registered ? "alert" : undefined} className="set-row-hint">
+              {note}
+            </span>
+          )
+        }
+      >
+        <span className="set-inline">
+          <span className="cu-state">
+            <Icon
+              name={state?.registered === true ? "shield-check" : "triangle-alert"}
+              size={14}
+              style={{ color: state?.registered === true ? "var(--color-success)" : "var(--color-danger)" }}
+            />
+            <code style={{ fontFamily: "var(--font-family-mono)", fontSize: "var(--font-size-sm)" }}>
+              {state?.accelerator ?? "Control+Alt+Shift+Escape"}
+            </code>
+          </span>
+          {state?.registered === true && <span className="set-row-hint">{t.computerUse.emergencyRegistered}</span>}
+        </span>
+      </SettingRow>
+    </SettingGroup>
+  );
+}
+
+/**
+ * WSL2 三种状态 → 图标。它只是旁证不是结论，所以只选图标、不额外上色——
+ * 颜色留给就绪态与危险态（设计系统：图标 + 文字说话，颜色是第二信号）。
+ */
+const WSL_VISUALS: Record<WslState, { icon: IconName }> = {
+  available: { icon: "check" },
+  unavailable: { icon: "circle-off" },
+  unknown: { icon: "circle-help" },
+};
+
+/**
+ * 能力检测：点按钮才查（全部只读，绝不代跑提权命令）；结果保留到下次检测。
+ * 未就绪时逐条铺开主进程的 guidance（那边已组织成人话，这里只拆行）。
+ */
+function ProbeGroup(props: { result: ComputerUseProbeResult | null; onResult: (result: ComputerUseProbeResult) => void }) {
+  const t = useT();
+  const [failed, setFailed] = useState(false);
+  const [probing, setProbing] = useState(false);
+
+  const run = () => {
+    setProbing(true);
+    setFailed(false);
+    void api.computerUse
+      .probe()
+      .then((next) => {
+        props.onResult(next);
+        setProbing(false);
+      })
+      .catch(() => {
+        setProbing(false);
+        setFailed(true);
+      });
+  };
+
+  const visual = props.result === null ? null : probeVisual(props.result);
+  const note =
+    probing ? (
+      <span className="set-row-hint">
+        <Icon name="loader-circle" size={12} spin /> {t.computerUse.probing}
+      </span>
+    ) : failed ? (
+      <span role="alert" className="set-row-error">
+        {t.computerUse.probeFailed}
+      </span>
+    ) : visual === null ? (
+      <span className="set-row-hint">{t.computerUse.probeIdle}</span>
+    ) : visual.kind === "ready" ? (
+      // 就绪：绿色只是第二信号，勾与文字已经在说话（.cu-ready 只把图标染绿）
+      <span role="status" className="set-row-note cu-ready">
+        <Icon name="check" size={12} /> {t.computerUse.probeReady}
+      </span>
+    ) : (
+      <span className="set-row-hint">{t.computerUse.probeNotReady}</span>
+    );
+
+  return (
+    <SettingGroup label={t.computerUse.capabilityGroup}>
+      <SettingRow name={t.computerUse.sandboxFeature} info={t.computerUse.sandboxFeatureInfo} note={note}>
+        <PanelButton onClick={run} disabled={probing}>
+          <Icon name="shield-check" size={13} /> {t.computerUse.probe}
+        </PanelButton>
+      </SettingRow>
+      {/* 指引紧跟在探针那一行下面：它是那一行的结果，也是下面「隔离档位」为什么到不了更高档的原因 */}
+      {visual?.kind === "not-ready" && visual.guidance.length > 0 && (
+        <ul className="cu-guidance">
+          {visual.guidance.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
+      {props.result !== null && (
+        <SettingRow
+          name={t.computerUse.isolationTier}
+          info={t.computerUse.isolationTierInfo}
+          note={
+            props.result.isolationTier === "l2" ? undefined : (
+              <span className="set-row-hint">{t.computerUse.tierFallback}</span>
+            )
+          }
+        >
+          {/* 档位是机器事实，不是可操作项：图标 + 文字，颜色只是第二信号（不借成功绿，那是就绪的专用色） */}
+          <span className="cu-state">
+            <Icon name={props.result.isolationTier === "l1" ? "globe" : "shield-check"} size={14} />
+            {t.computerUse.tiers[props.result.isolationTier]}
+          </span>
+        </SettingRow>
+      )}
+      {/*
+        多会话隔离的依赖检查（L2b）。**不可用时必须说原因**：只把开关画灰，用户没任何办法
+        处置（缺 Node / 缺服务 / 非 Windows 是三件不同的事）。Node 版本单独一行写出来：
+        它是本机最容易踩的那个（MXC 的 native stdio 要 24.21+，而很多发行版还是 24.14）。
+      */}
+      {props.result !== null && props.result.platformOk && (
+        <SettingRow
+          name={t.computerUse.isolationSessionRow}
+          info={t.computerUse.isolationSessionInfo}
+          note={
+            props.result.isolationSession.available ? (
+              <span className="set-row-hint">
+                {t.computerUse.isolationSessionNode(
+                  props.result.isolationSession.nodeVersion,
+                  props.result.isolationSession.nodeOk,
+                )}
+              </span>
+            ) : (
+              <span className="set-row-hint">{props.result.isolationSession.reason}</span>
+            )
+          }
+        >
+          <span className="cu-state">
+            <Icon
+              name={props.result.isolationSession.available ? "shield-check" : "circle-off"}
+              size={14}
+            />
+            {props.result.isolationSession.available
+              ? t.computerUse.isolationSessionReady
+              : t.computerUse.probeNotReady}
+          </span>
+        </SettingRow>
+      )}
+      {/* WSL2 只在 Windows 上有意义；它不是隔离档，所以单独一行、措辞里明说这一点 */}
+      {props.result !== null && props.result.platformOk && (
+        <SettingRow name={t.computerUse.wsl2} info={t.computerUse.wsl2Info}>
+          <span className="cu-state">
+            <Icon name={WSL_VISUALS[props.result.wsl2].icon} size={14} />
+            {t.computerUse.wsl2States[props.result.wsl2]}
+          </span>
+        </SettingRow>
+      )}
+    </SettingGroup>
+  );
+}
+
+/**
+ * 「看一眼」：手动拍一张沙箱桌面。上一张图只活到沙箱离开 running——旧沙箱的图
+ * 留在新一局里会让人误读，PR1 不做跨实例的图缓存（面板切走再回来同样清空）。
+ */
+function LookGroup(props: { canScreenshot: boolean; running: boolean }) {
+  const t = useT();
+  const [shot, setShot] = useState<ShotView>({ kind: "idle" });
+
+  useEffect(() => {
+    if (!props.running) setShot((current) => (current.kind === "idle" ? current : { kind: "idle" }));
+  }, [props.running]);
+
+  const busy = shot.kind === "loading";
+  const capture = () => {
+    setShot({ kind: "loading" });
+    void api.computerUse
+      .screenshot()
+      .then((result) => setShot(shotFromResult(result)))
+      .catch((cause: unknown) =>
+        setShot({ kind: "failed", message: cause instanceof Error ? cause.message : String(cause) }),
+      );
+  };
+
+  return (
+    <SettingGroup label={t.computerUse.shotGroup}>
+      <SettingRow
+        name={t.computerUse.shotRow}
+        info={t.computerUse.shotRowInfo}
+        note={
+          shot.kind === "failed" ? (
+            <span role="alert" className="set-row-error">
+              {shot.message}
+            </span>
+          ) : props.running ? undefined : (
+            <span className="set-row-hint">{t.computerUse.shotNeedsRunning}</span>
+          )
+        }
+      >
+        <PanelButton onClick={capture} disabled={!props.canScreenshot || busy}>
+          {busy ? <Icon name="loader-circle" size={13} spin /> : <Icon name="eye" size={13} />} {" "}
+          {busy ? t.computerUse.shotBusy : t.computerUse.shot}
+        </PanelButton>
+      </SettingRow>
+      {shot.kind === "ok" && (
+        // 图片按内容面宽度缩放；原始桌面尺寸与拍摄时间是机器事实，进元信息条走 mono
+        <figure className="cu-shot">
+          <img src={shot.src} alt={t.computerUse.shotAlt} />
+          <figcaption className="cu-shot-meta">
+            <span>{t.computerUse.shotNativeSize}</span>
+            <code>{shotMeta(shot.width, shot.height, shot.takenAt, t)}</code>
+          </figcaption>
+        </figure>
+      )}
+    </SettingGroup>
   );
 }

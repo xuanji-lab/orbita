@@ -74,6 +74,13 @@ export const sessionApi = {
   setAutoCompact: (id: string, enabled: boolean): Promise<void> =>
     ipcRenderer.invoke(ipcChannels.sessionSetAutoCompact, id, enabled),
   /**
+   * 电脑使用的会话授权：**只用于撤销**（写回 unset，下一次电脑操作重新问）。
+   * 授权（allowed / denied）只能由主进程栅门在用户回答后落盘——renderer 没有第二条写通路，
+   * 模型更没有（它只能发工具请求）。撤销后主进程广播 `computerUseConsentState`。
+   */
+  setComputerUseConsent: (id: string): Promise<void> =>
+    ipcRenderer.invoke(ipcChannels.sessionSetComputerUseConsent, id, "unset"),
+  /**
    * 未读标记（后台跑完还没看）：标 `{ at, failed }`，null 清。落盘后重启仍在；
    * 侧栏竖条与铃铛清单都读 meta 上的它，不各存一份
    */
