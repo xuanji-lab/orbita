@@ -9,8 +9,9 @@
  * 编译本身仍是 PR1 的 `LatexRunner`：同一份并发记账、同一套 .log 解析，agent 的
  * `compile_latex` 与这里的按钮编的是同一个东西——「两边看到的是同一次编译」。
  */
-import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { copyFile, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { BrowserWindow, dialog, ipcMain } from "electron";
 import type { FileListRequest } from "../../shared/files.ts";
 import {
@@ -47,7 +48,11 @@ import { describeLatexProject, findLatexProjectDir, writeLatexProjectConfig } fr
 import { buildLatexIndex } from "./index.ts";
 import { buildLatexNav } from "./nav.ts";
 import { lintWithChktex, probeChktex } from "./chktex.ts";
-import { forwardSearch, insideProject, reverseSearch } from "./synctex.ts";
+import { forwardSearch, insideProject, reverseSearch, synctexCommand } from "./synctex.ts";
+import { createPandocProbe } from "../docx-export/probe.ts";
+import { formatPandocVersion } from "../../shared/docx-export.ts";
+import type { LatexEnvCheckItem, LatexEnvCheckResult } from "../../shared/latex.ts";
+import type { PdfAnnotationStore } from "../../shared/latex.ts";
 import { createLatexPackageLookup } from "./packages.ts";
 import { createLatexPackageNameIndex } from "./package-names.ts";
 import type { LatexRunner } from "./run.ts";
@@ -67,6 +72,38 @@ export function registerLatexIpc(
   ipcMain.handle(latexChannels.probe, (_event, req?: LatexProbeRequest) =>
     runner.probeEnvironment(req ?? {}),
   );
+
+  // 设置页 preflight：synctex / chktex / pandoc 的真实探测（latexmk 走 latex:probe）
+  ipcMain.handle(latexChannels.envCheck, async (): Promise<LatexEnvCheckResult> => {
+    const probe = await runner.probeEnvironment();
+    const latexmk = probe.latexmk;
+    const items: LatexEnvCheckItem[] = [];
+    // synctex：latexmk 同目录的候选或 PATH 上的命令
+    const syncCandidate = synctexCommand(latexmk, process.platform, existsSync);
+    const syncOk = syncCandidate !== "synctex" && existsSync(syncCandidate);
+    items.push({
+      id: "synctex",
+      ok: syncOk,
+      path: syncOk ? syncCandidate : null,
+    });
+    // chktex
+    const chktex = await probeChktex(latexmk);
+    items.push({
+      id: "chktex",
+      ok: chktex !== null,
+      path: chktex,
+    });
+    // pandoc（≥3.10.2 才支持公式编号 \\tag）
+    const pandoc = await createPandocProbe().probe();
+    items.push({
+      id: "pandoc",
+      ok: pandoc.supported,
+      path: pandoc.path,
+      version: pandoc.version === null ? null : formatPandocVersion(pandoc.version),
+      minVersion: pandoc.minVersion,
+    });
+    return { items };
+  });
 
   /**
    * 「指定位置」：系统文件选择器 → 现验 `--version` → 通过才写进设置。
@@ -135,6 +172,45 @@ export function registerLatexIpc(
       return packageNames.list(probe.latexmk);
     },
   );
+
+  // PDF 批注：读项目目录 .orbita/annotations.json（不存在 = 空）
+  ipcMain.handle(latexChannels.annotationsGet, async (_event, req: LatexFileContext) => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { version: 1, annotations: [] };
+    const file = join(located.dir, ".orbita", "annotations.json");
+    try {
+      const parsed = JSON.parse(await readFile(file, "utf8"));
+      if (parsed?.version !== 1 || !Array.isArray(parsed.annotations)) return { version: 1, annotations: [] };
+      return parsed;
+    } catch {
+      return { version: 1, annotations: [] };
+    }
+  });
+
+  // 原子写：临时文件 + rename（AGENTS「配置与会话元数据走原子写」）
+  ipcMain.handle(latexChannels.annotationsPut, async (_event, req: LatexFileContext & { store: PdfAnnotationStore }) => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { ok: false, error: "not-latex-project" };
+    const file = join(located.dir, ".orbita", "annotations.json");
+    await mkdir(dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+    await writeFile(tmp, JSON.stringify(req.store, null, 2), "utf8");
+    await rename(tmp, file);
+    return { ok: true, path: file };
+  });
+
+  // 改动裁决：把当前项目 PDF 备份到 .orbita/pdf-backups/（改前对照用）
+  ipcMain.handle(latexChannels.pdfBackup, async (_event, req: LatexFileContext) => {
+    const located = await locateLatexProject(req, workspaces, sessions);
+    if (located === null) return { ok: false, error: "not-latex-project" };
+    const project = describeLatexProject(located.dir);
+    if (project.pdf === null) return { ok: false, error: "no-pdf" };
+    const dir = join(located.dir, ".orbita", "pdf-backups");
+    await mkdir(dir, { recursive: true });
+    const dest = join(dir, `${Date.now()}.pdf`);
+    await copyFile(project.pdf.path, dest);
+    return { ok: true, path: dest };
+  });
 
   /**
    * 编一次。**当前文件（`path`）参与解析**：子文件里的 `% !TEX root` 从这里生效

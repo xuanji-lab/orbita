@@ -31,6 +31,7 @@ import { allShownTicked, importedFirst, setShown } from "./login-sites.ts";
 import { formatDay } from "./migration-groups.ts";
 import { MigrationView } from "./MigrationView";
 import { GuideSettings } from "./GuideSettings";
+import { LatexSettings } from "./LatexSettings";
 import { SettingGroup, SettingRow } from "./SettingRow";
 import { WordExportSettings } from "./WordExportSettings";
 import { Segmented, SelectButton, Switch } from "./SettingControls";
@@ -112,6 +113,9 @@ export function SettingsView(props: {
   onOpenOnboarding: (startAt: number) => void;
   /** 记忆库页签里「回到原文」：退出设置、打开出处会话并滚到那一轮 */
   onJumpToMemorySource: (view: MemoryEntryView) => void;
+  /** LaTeX 面板的「让 agent 装/修」：新建任务并把修复指令发给 agent */
+  /** 设置页 LaTeX 面板的「让 agent 修」：结局 false = 没能开好会话（面板据此说清楚） */
+  onRepairLatex: (item: string) => Promise<{ ok: boolean }>;
   /** 收起右栏；右栏没开就是 null。模型服务页的价格 · 能力图太窄时给「收起右栏」按钮用 */
   onCollapseRail: (() => void) | null;
 }) {
@@ -194,6 +198,8 @@ export function SettingsView(props: {
             props.onTab("general");
           }}
         />
+      ) : props.tab === "latex" ? (
+        <LatexSettings onRepair={props.onRepairLatex} />
       ) : props.tab === "experimental" ? (
         // 实验功能独立成 Tab（2026-10 用户裁决）：总开关与功能清单都住这里，通用页不再出现
         <div className="scroll" style={{ minHeight: 0, padding: "var(--space-6) var(--space-5)" }}>

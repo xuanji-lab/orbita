@@ -2047,6 +2047,16 @@ export function App() {
                 }}
                 onJumpToMemorySource={jumpToMemorySource}
                 onCollapseRail={rightPanel === null ? null : () => setRightPanel(null)}
+                onRepairLatex={async (item) => {
+                  // LaTeX 面板的「让 agent 装/修」：开一条新任务，把修复指令直接发出去。
+                  // **不再**「newTask 后等 400ms 再 submit」：新任务的会话 id 在首条消息提交时
+                  // 才现造，reset 之后 sessionId 恒为 null——旧写法要么不发，要么把消息发进
+                  // 还没 reset 掉的上一条会话（2026-11-27 Windows 实测确认）。
+                  setOverlay(null);
+                  setSidebarCollapsed(false);
+                  const ok = await session.startTaskAndSend(null, t.latexSettings.repairPrompt(item));
+                  return { ok };
+                }}
               />
             ) : (
               <ChatView

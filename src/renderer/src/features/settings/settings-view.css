@@ -96,6 +96,41 @@
 }
 
 /* 控件列：控件在上、效果预览在下，一律靠右 */
+/**
+ * LaTeX 自查清单的三列行（设置页 LaTeX 面板专用）。
+ *
+ * 为什么不用 `.set-row` 的两列网格：清单的中间一格是**长路径**，本来就该占满剩余宽度
+ * 并单行省略；两列网格会把它挤进名字下面（行高翻倍），或者更糟——像 2026-11-27 之前那样，
+ * 「标签 + 说明 + 按钮」三个子元素塞进两列，第三个落到第二行第一列（文件夹按钮掉在标签
+ * 下方，1600 宽全幅也一样）。这里显式三列：名字 / 路径 / 动作，路径可截断、动作钉右。
+ */
+.latex-env-row {
+  display: grid;
+  grid-template-columns: minmax(160px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--list-item-rich);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.latex-env-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-base);
+  font-weight: var(--weight-medium);
+  color: var(--color-text-primary);
+}
+.latex-env-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.set-group:last-child .latex-env-row:last-child {
+  border-bottom: 0;
+}
+
 .set-row-ctl {
   display: grid;
   /* 单列设成 minmax(0, 1fr)：隐式 auto 列的最小宽 = 控件自己的固有宽，控件列收窄（右栏开着）时
